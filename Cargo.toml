@@ -1,0 +1,45 @@
+[package]
+name = "rust-sqlpackage"
+version = "0.1.0"
+edition = "2021"
+description = "A fast Rust compiler for SQL Server database projects (.sqlproj to .dacpac)"
+license = "MIT"
+authors = ["Beth"]
+
+[dependencies]
+# T-SQL parsing
+sqlparser = { version = "0.54", features = ["visitor"] }
+
+# XML handling
+quick-xml = { version = "0.37", features = ["serialize"] }
+roxmltree = "0.20"
+
+# ZIP file creation
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# File system
+walkdir = "2"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+pretty_assertions = "1"
+
+[[bin]]
+name = "rust-sqlpackage"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

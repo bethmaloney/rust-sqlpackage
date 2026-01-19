@@ -1,0 +1,24 @@
+# Build artifacts
+/target/
+debug/
+release/
+
+# Cargo.lock for binaries, remove this line if building a library
+Cargo.lock
+
+# Backup files
+**/*.rs.bk
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.*
+
+# Claude
+.claude/settings.local.json

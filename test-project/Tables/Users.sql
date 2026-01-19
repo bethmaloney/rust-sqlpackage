@@ -1,0 +1,7 @@
+CREATE TABLE [dbo].[Users] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [Username] NVARCHAR(100) NOT NULL,
+    [Email] NVARCHAR(255) NOT NULL,
+    [CreatedAt] DATETIME2 NOT NULL DEFAULT GETDATE(),
+    CONSTRAINT [UQ_Users_Email] UNIQUE ([Email])
+);

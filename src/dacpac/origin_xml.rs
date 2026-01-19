@@ -1,0 +1,62 @@
+//! Generate Origin.xml for dacpac
+
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
+use quick_xml::Writer;
+use std::io::Write;
+
+const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
+
+pub fn generate_origin_xml<W: Write>(writer: W) -> anyhow::Result<()> {
+    let mut xml_writer = Writer::new_with_indent(writer, b' ', 2);
+
+    // XML declaration
+    xml_writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;
+
+    // Root element
+    let mut root = BytesStart::new("DacOrigin");
+    root.push_attribute(("xmlns", NAMESPACE));
+    xml_writer.write_event(Event::Start(root))?;
+
+    // PackageProperties
+    xml_writer.write_event(Event::Start(BytesStart::new("PackageProperties")))?;
+
+    write_element(&mut xml_writer, "Version", env!("CARGO_PKG_VERSION"))?;
+    write_element(&mut xml_writer, "ContainsExportedData", "false")?;
+    write_element(&mut xml_writer, "StreamVersions", "DatabaseCompare=1.0")?;
+
+    xml_writer.write_event(Event::End(BytesEnd::new("PackageProperties")))?;
+
+    // Checksums (empty for now)
+    let checksums = BytesStart::new("Checksums");
+    xml_writer.write_event(Event::Empty(checksums))?;
+
+    // Operation
+    xml_writer.write_event(Event::Start(BytesStart::new("Operation")))?;
+
+    write_element(&mut xml_writer, "Identity", "rust-sqlpackage")?;
+    write_element(&mut xml_writer, "Start", &chrono::Utc::now().to_rfc3339())?;
+    write_element(&mut xml_writer, "End", &chrono::Utc::now().to_rfc3339())?;
+
+    // ProductSchema (required for compatibility)
+    xml_writer.write_event(Event::Start(BytesStart::new("ProductSchema")))?;
+
+    let mut major = BytesStart::new("MajorVersion");
+    major.push_attribute(("Value", "160"));
+    xml_writer.write_event(Event::Empty(major))?;
+
+    xml_writer.write_event(Event::End(BytesEnd::new("ProductSchema")))?;
+
+    xml_writer.write_event(Event::End(BytesEnd::new("Operation")))?;
+
+    // Close root
+    xml_writer.write_event(Event::End(BytesEnd::new("DacOrigin")))?;
+
+    Ok(())
+}
+
+fn write_element<W: Write>(writer: &mut Writer<W>, name: &str, value: &str) -> anyhow::Result<()> {
+    writer.write_event(Event::Start(BytesStart::new(name)))?;
+    writer.write_event(Event::Text(quick_xml::events::BytesText::new(value)))?;
+    writer.write_event(Event::End(BytesEnd::new(name)))?;
+    Ok(())
+}
