@@ -21,10 +21,7 @@ fn test_successful_simple_build() {
         "Simple build should succeed. Errors: {:?}",
         result.errors
     );
-    assert!(
-        result.dacpac_path.is_some(),
-        "Should produce a dacpac file"
-    );
+    assert!(result.dacpac_path.is_some(), "Should produce a dacpac file");
 
     let dacpac_path = result.dacpac_path.unwrap();
     assert!(dacpac_path.exists(), "Dacpac file should exist");
@@ -88,11 +85,15 @@ fn test_build_with_constraints() {
         "Should contain ForeignKeyTable"
     );
     assert!(
-        info.tables.iter().any(|t| t.contains("UniqueConstraintTable")),
+        info.tables
+            .iter()
+            .any(|t| t.contains("UniqueConstraintTable")),
         "Should contain UniqueConstraintTable"
     );
     assert!(
-        info.tables.iter().any(|t| t.contains("CheckConstraintTable")),
+        info.tables
+            .iter()
+            .any(|t| t.contains("CheckConstraintTable")),
         "Should contain CheckConstraintTable"
     );
 }
@@ -440,10 +441,7 @@ fn test_build_with_sql150_target() {
 
     // Verify DSP name in model XML
     let model_xml = info.model_xml_content.expect("Should have model XML");
-    assert!(
-        model_xml.contains("Sql150"),
-        "Model should target Sql150"
-    );
+    assert!(model_xml.contains("Sql150"), "Model should target Sql150");
 }
 
 // ============================================================================
@@ -475,10 +473,19 @@ fn test_build_empty_project() {
     if result.success {
         let dacpac_path = result.dacpac_path.unwrap();
         let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-        assert!(info.is_valid(), "Even empty dacpac should have required files");
-        assert!(info.tables.is_empty(), "Empty project should have no tables");
+        assert!(
+            info.is_valid(),
+            "Even empty dacpac should have required files"
+        );
+        assert!(
+            info.tables.is_empty(),
+            "Empty project should have no tables"
+        );
     } else {
-        println!("Note: Empty project build failed (acceptable): {:?}", result.errors);
+        println!(
+            "Note: Empty project build failed (acceptable): {:?}",
+            result.errors
+        );
     }
 }
 

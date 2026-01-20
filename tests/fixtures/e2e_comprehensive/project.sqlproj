@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>E2EComprehensive</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultSchema>dbo</DefaultSchema>
+    <ProjectGuid>{E2E00000-0000-0000-0000-000000000001}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Schemas -->
+    <Build Include="Schemas/Sales.sql" />
+    <Build Include="Schemas/Inventory.sql" />
+    <!-- Tables -->
+    <Build Include="Tables/Categories.sql" />
+    <Build Include="Tables/Products.sql" />
+    <Build Include="Tables/Customers.sql" />
+    <Build Include="Tables/Orders.sql" />
+    <Build Include="Tables/OrderItems.sql" />
+    <Build Include="Tables/InventoryLog.sql" />
+    <!-- Views -->
+    <Build Include="Views/ActiveProducts.sql" />
+    <Build Include="Views/CustomerOrderSummary.sql" />
+    <!-- Indexes -->
+    <Build Include="Indexes/IX_Products_CategoryId.sql" />
+    <Build Include="Indexes/IX_Orders_CustomerId.sql" />
+    <Build Include="Indexes/IX_OrderItems_OrderId.sql" />
+    <!-- Stored Procedures -->
+    <Build Include="Procedures/GetProductsByCategory.sql" />
+    <Build Include="Procedures/CreateOrder.sql" />
+    <!-- Functions -->
+    <Build Include="Functions/GetProductCount.sql" />
+    <Build Include="Functions/GetOrderTotal.sql" />
+    <Build Include="Functions/GetProductsInPriceRange.sql" />
+    <!-- Sequences -->
+    <Build Include="Sequences/OrderNumberSequence.sql" />
+    <!-- User-Defined Types -->
+    <Build Include="Types/ProductTableType.sql" />
+    <Build Include="Types/OrderItemTableType.sql" />
+    <!-- Deployment Scripts -->
+    <PreDeploy Include="Scripts/PreDeployment.sql" />
+    <PostDeploy Include="Scripts/PostDeployment.sql" />
+  </ItemGroup>
+</Project>

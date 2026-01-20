@@ -1,0 +1,5 @@
+CREATE SEQUENCE [Sales].[OrderSequence]
+    AS INT
+    START WITH 1000
+    INCREMENT BY 1;
+GO

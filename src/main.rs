@@ -6,7 +6,11 @@ use rust_sqlpackage::{build_dacpac, BuildOptions};
 
 #[derive(Parser)]
 #[command(name = "rust-sqlpackage")]
-#[command(author, version, about = "Fast Rust compiler for SQL Server database projects")]
+#[command(
+    author,
+    version,
+    about = "Fast Rust compiler for SQL Server database projects"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

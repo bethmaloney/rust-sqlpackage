@@ -52,7 +52,11 @@ fn read_file_with_encoding_fallback(path: &Path) -> std::io::Result<String> {
 /// - A circular include is detected
 pub fn expand_includes(content: &str, source_file: &Path) -> Result<String> {
     let mut visited = HashSet::new();
-    visited.insert(source_file.canonicalize().unwrap_or_else(|_| source_file.to_path_buf()));
+    visited.insert(
+        source_file
+            .canonicalize()
+            .unwrap_or_else(|_| source_file.to_path_buf()),
+    );
     expand_includes_recursive(content, source_file, &mut visited)
 }
 
@@ -78,8 +82,7 @@ fn expand_includes_recursive(
     // Regex to match :r directives
     // Matches: :r path\to\file.sql or :r "path with spaces\file.sql"
     // The :r must be at the start of a line (possibly with leading whitespace)
-    let re = Regex::new(r#"(?m)^\s*:r\s+(?:"([^"]+)"|(\S+))\s*$"#)
-        .expect("Invalid regex pattern");
+    let re = Regex::new(r#"(?m)^\s*:r\s+(?:"([^"]+)"|(\S+))\s*$"#).expect("Invalid regex pattern");
 
     let source_dir = source_file.parent().unwrap_or(Path::new("."));
     let mut result = String::new();
@@ -122,12 +125,13 @@ fn expand_includes_recursive(
         };
 
         // Canonicalize for comparison (handles . and ..)
-        let canonical_path = resolved_path
-            .canonicalize()
-            .map_err(|_| SqlPackageError::SqlcmdIncludeNotFound {
-                path: resolved_path.clone(),
-                source_file: source_file.to_path_buf(),
-            })?;
+        let canonical_path =
+            resolved_path
+                .canonicalize()
+                .map_err(|_| SqlPackageError::SqlcmdIncludeNotFound {
+                    path: resolved_path.clone(),
+                    source_file: source_file.to_path_buf(),
+                })?;
 
         // Check for circular includes
         if visited.contains(&canonical_path) {
@@ -144,13 +148,12 @@ fn expand_includes_recursive(
         }
 
         // Read the included file (supports UTF-8 and Windows-1252 encodings)
-        let included_content =
-            read_file_with_encoding_fallback(&canonical_path).map_err(|_| {
-                SqlPackageError::SqlcmdIncludeNotFound {
-                    path: resolved_path.clone(),
-                    source_file: source_file.to_path_buf(),
-                }
-            })?;
+        let included_content = read_file_with_encoding_fallback(&canonical_path).map_err(|_| {
+            SqlPackageError::SqlcmdIncludeNotFound {
+                path: resolved_path.clone(),
+                source_file: source_file.to_path_buf(),
+            }
+        })?;
 
         // Strip UTF-8 BOM if present
         let included_content = included_content
@@ -164,10 +167,7 @@ fn expand_includes_recursive(
         let expanded = expand_includes_recursive(included_content, &canonical_path, visited)?;
 
         // Add a comment to show where the included content comes from
-        result.push_str(&format!(
-            "-- BEGIN :r {}\n",
-            include_path_str
-        ));
+        result.push_str(&format!("-- BEGIN :r {}\n", include_path_str));
         result.push_str(&expanded);
         if !expanded.ends_with('\n') {
             result.push('\n');
@@ -214,7 +214,11 @@ mod tests {
     fn test_simple_include() {
         let dir = TempDir::new().unwrap();
         let _included = create_test_file(dir.path(), "included.sql", "SELECT 2;");
-        let source = create_test_file(dir.path(), "main.sql", "SELECT 1;\n:r included.sql\nSELECT 3;");
+        let source = create_test_file(
+            dir.path(),
+            "main.sql",
+            "SELECT 1;\n:r included.sql\nSELECT 3;",
+        );
 
         let result = expand_includes("SELECT 1;\n:r included.sql\nSELECT 3;", &source).unwrap();
         assert!(result.contains("SELECT 1;"));
@@ -227,7 +231,8 @@ mod tests {
     #[test]
     fn test_include_with_backslash() {
         let dir = TempDir::new().unwrap();
-        let _included = create_test_file(dir.path(), "Scripts/seed.sql", "INSERT INTO t VALUES(1);");
+        let _included =
+            create_test_file(dir.path(), "Scripts/seed.sql", "INSERT INTO t VALUES(1);");
         let source = create_test_file(dir.path(), "main.sql", ":r Scripts\\seed.sql");
 
         let result = expand_includes(":r Scripts\\seed.sql", &source).unwrap();

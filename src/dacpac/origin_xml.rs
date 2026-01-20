@@ -44,7 +44,9 @@ pub fn generate_origin_xml<W: Write>(writer: W, model_xml_checksum: &str) -> any
     let mut checksum = BytesStart::new("Checksum");
     checksum.push_attribute(("Uri", "/model.xml"));
     xml_writer.write_event(Event::Start(checksum))?;
-    xml_writer.write_event(Event::Text(quick_xml::events::BytesText::new(model_xml_checksum)))?;
+    xml_writer.write_event(Event::Text(quick_xml::events::BytesText::new(
+        model_xml_checksum,
+    )))?;
     xml_writer.write_event(Event::End(BytesEnd::new("Checksum")))?;
     xml_writer.write_event(Event::End(BytesEnd::new("Checksums")))?;
 

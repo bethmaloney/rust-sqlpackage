@@ -118,10 +118,7 @@ fn test_generate_model_element() {
     let sql = "CREATE TABLE [dbo].[T] ([Id] INT NOT NULL);";
     let xml = generate_model_xml(sql);
 
-    assert!(
-        xml.contains("<Model>"),
-        "XML should have Model element"
-    );
+    assert!(xml.contains("<Model>"), "XML should have Model element");
     assert!(
         xml.contains("</Model>"),
         "XML should have closing Model tag"
@@ -152,10 +149,7 @@ fn test_generate_table_element() {
         xml.contains("Type=\"SqlTable\""),
         "XML should have SqlTable element type"
     );
-    assert!(
-        xml.contains("TestTable"),
-        "XML should contain table name"
-    );
+    assert!(xml.contains("TestTable"), "XML should contain table name");
 }
 
 #[test]
@@ -167,10 +161,7 @@ fn test_generate_column_element() {
         xml.contains("Type=\"SqlSimpleColumn\""),
         "XML should have SqlSimpleColumn element type"
     );
-    assert!(
-        xml.contains("MyColumn"),
-        "XML should contain column name"
-    );
+    assert!(xml.contains("MyColumn"), "XML should contain column name");
 }
 
 #[test]
@@ -182,10 +173,7 @@ fn test_generate_view_element() {
         xml.contains("Type=\"SqlView\""),
         "XML should have SqlView element type"
     );
-    assert!(
-        xml.contains("TestView"),
-        "XML should contain view name"
-    );
+    assert!(xml.contains("TestView"), "XML should contain view name");
 }
 
 #[test]
@@ -197,10 +185,7 @@ fn test_generate_index_element() {
         xml.contains("Type=\"SqlIndex\""),
         "XML should have SqlIndex element type"
     );
-    assert!(
-        xml.contains("IX_Test"),
-        "XML should contain index name"
-    );
+    assert!(xml.contains("IX_Test"), "XML should contain index name");
 }
 
 #[test]
@@ -292,10 +277,7 @@ END
         xml.contains("Type=\"SqlScalarFunction\""),
         "XML should have SqlScalarFunction element type"
     );
-    assert!(
-        xml.contains("GetValue"),
-        "XML should contain function name"
-    );
+    assert!(xml.contains("GetValue"), "XML should contain function name");
 }
 
 #[test]
@@ -316,14 +298,12 @@ CREATE TABLE [dbo].[T] (
 }
 
 // ============================================================================
-// Annotation Format Tests
+// Script Property Format Tests (QueryScript, BodyScript, etc.)
 // ============================================================================
 
 #[test]
-fn test_annotation_type_as_xml_attribute() {
-    // Annotations must have Type as an XML attribute, not as a nested Attribute element
-    // Correct: <Annotation Type="SqlInlineConstraintAnnotation">
-    // Wrong:   <Annotation><Attribute Name="Type" Value="SqlInlineConstraintAnnotation"/></Annotation>
+fn test_view_has_query_script_property() {
+    // Views should use QueryScript property with CDATA, not SqlInlineConstraintAnnotation
     let sql = r#"
 CREATE VIEW [dbo].[TestView]
 AS
@@ -331,22 +311,29 @@ SELECT 1 AS Value;
 "#;
     let xml = generate_model_xml(sql);
 
-    // Verify Type is an XML attribute on Annotation element
+    // Verify view has QueryScript property
     assert!(
-        xml.contains(r#"<Annotation Type="SqlInlineConstraintAnnotation">"#),
-        "Annotation should have Type as XML attribute. Got:\n{}",
+        xml.contains(r#"<Property Name="QueryScript">"#),
+        "View should have QueryScript property. Got:\n{}",
         xml
     );
 
-    // Verify we're NOT using the old nested Attribute format
+    // Verify QueryScript contains the view definition in CDATA
     assert!(
-        !xml.contains(r#"<Attribute Name="Type" Value="SqlInlineConstraintAnnotation"/>"#),
-        "Should NOT use nested Attribute element for Type"
+        xml.contains("<![CDATA["),
+        "QueryScript should contain CDATA section. Got:\n{}",
+        xml
+    );
+
+    // Verify we're NOT using the old SqlInlineConstraintAnnotation format
+    assert!(
+        !xml.contains("SqlInlineConstraintAnnotation"),
+        "View should NOT use SqlInlineConstraintAnnotation"
     );
 }
 
 #[test]
-fn test_procedure_annotation_format() {
+fn test_procedure_has_body_script_property() {
     let sql = r#"
 CREATE PROCEDURE [dbo].[TestProc]
 AS
@@ -356,21 +343,28 @@ END
 "#;
     let xml = generate_model_xml(sql);
 
-    // Procedures should have annotation with Type as attribute
+    // Procedures should have BodyScript property with CDATA
     assert!(
-        xml.contains(r#"<Annotation Type="SqlInlineConstraintAnnotation">"#),
-        "Procedure should have Annotation with Type attribute"
+        xml.contains(r#"<Property Name="BodyScript">"#),
+        "Procedure should have BodyScript property. Got:\n{}",
+        xml
     );
 
-    // Should have Script property inside annotation
+    // Should have CDATA section
     assert!(
-        xml.contains(r#"<Property Name="Script""#),
-        "Annotation should contain Script property"
+        xml.contains("<![CDATA["),
+        "BodyScript should contain CDATA section"
+    );
+
+    // Should NOT use old annotation format
+    assert!(
+        !xml.contains("SqlInlineConstraintAnnotation"),
+        "Procedure should NOT use SqlInlineConstraintAnnotation"
     );
 }
 
 #[test]
-fn test_function_annotation_format() {
+fn test_function_has_body_script_property() {
     let sql = r#"
 CREATE FUNCTION [dbo].[GetOne]()
 RETURNS INT
@@ -381,10 +375,17 @@ END
 "#;
     let xml = generate_model_xml(sql);
 
-    // Functions should have annotation with Type as attribute
+    // Functions should have BodyScript property with CDATA
     assert!(
-        xml.contains(r#"<Annotation Type="SqlInlineConstraintAnnotation">"#),
-        "Function should have Annotation with Type attribute"
+        xml.contains(r#"<Property Name="BodyScript">"#),
+        "Function should have BodyScript property. Got:\n{}",
+        xml
+    );
+
+    // Should NOT use old annotation format
+    assert!(
+        !xml.contains("SqlInlineConstraintAnnotation"),
+        "Function should NOT use SqlInlineConstraintAnnotation"
     );
 }
 
@@ -725,7 +726,8 @@ fn test_xml_is_well_formed() {
     assert!(xml.starts_with("<?xml") || xml.starts_with("<DataSchemaModel"));
 
     // Count opening and closing tags roughly match
-    let open_count = xml.matches('<').count() - xml.matches("</").count() - xml.matches("/>").count();
+    let open_count =
+        xml.matches('<').count() - xml.matches("</").count() - xml.matches("/>").count();
     let close_count = xml.matches("</").count();
 
     // Allow some tolerance for self-closing tags
@@ -829,8 +831,20 @@ INCLUDE ([TotalAmount], [Status]);
 
     // Verify all expected elements are present
     assert!(xml.contains("SqlIndex"), "XML should have SqlIndex element");
-    assert!(xml.contains("IsUnique"), "XML should have IsUnique property for unique index");
-    assert!(xml.contains("IndexedObject"), "XML should have IndexedObject relationship");
-    assert!(xml.contains("ColumnSpecifications"), "XML should have ColumnSpecifications");
-    assert!(xml.contains("IncludedColumns"), "XML should have IncludedColumns");
+    assert!(
+        xml.contains("IsUnique"),
+        "XML should have IsUnique property for unique index"
+    );
+    assert!(
+        xml.contains("IndexedObject"),
+        "XML should have IndexedObject relationship"
+    );
+    assert!(
+        xml.contains("ColumnSpecifications"),
+        "XML should have ColumnSpecifications"
+    );
+    assert!(
+        xml.contains("IncludedColumns"),
+        "XML should have IncludedColumns"
+    );
 }

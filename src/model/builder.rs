@@ -3,11 +3,11 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
-use sqlparser::ast::{
-    ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint,
-};
+use sqlparser::ast::{ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint};
 
-use crate::parser::{FallbackFunctionType, FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL};
+use crate::parser::{
+    FallbackFunctionType, FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL,
+};
 use crate::project::SqlProject;
 
 use super::{
@@ -122,7 +122,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 
         match statement {
             Statement::CreateTable(create_table) => {
-                let (schema, name) = extract_schema_and_name(&create_table.name, &project.default_schema);
+                let (schema, name) =
+                    extract_schema_and_name(&create_table.name, &project.default_schema);
                 schemas.insert(schema.clone());
 
                 let columns = create_table
@@ -139,9 +140,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 
                 // Extract constraints from table definition
                 for constraint in &create_table.constraints {
-                    if let Some(constraint_element) =
-                        constraint_from_table_constraint(constraint, &create_table.name, &project.default_schema)
-                    {
+                    if let Some(constraint_element) = constraint_from_table_constraint(
+                        constraint,
+                        &create_table.name,
+                        &project.default_schema,
+                    ) {
                         model.add_element(ModelElement::Constraint(constraint_element));
                     }
                 }
@@ -221,11 +224,17 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 
             // Handle functions that sqlparser successfully parsed (generic SQL syntax)
             Statement::CreateFunction(create_func) => {
-                let (schema, func_name) = extract_schema_and_name(&create_func.name, &project.default_schema);
+                let (schema, func_name) =
+                    extract_schema_and_name(&create_func.name, &project.default_schema);
                 schemas.insert(schema.clone());
 
                 // Detect function type from return type
-                let function_type = if create_func.return_type.as_ref().map(|t| t.to_string().to_uppercase().contains("TABLE")).unwrap_or(false) {
+                let function_type = if create_func
+                    .return_type
+                    .as_ref()
+                    .map(|t| t.to_string().to_uppercase().contains("TABLE"))
+                    .unwrap_or(false)
+                {
                     FunctionType::TableValued
                 } else {
                     FunctionType::Scalar
@@ -272,7 +281,10 @@ fn extract_schema_and_name(name: &ObjectName, default_schema: &str) -> (String, 
     match parts.len() {
         1 => (default_schema.to_string(), parts[0].clone()),
         2 => (parts[0].clone(), parts[1].clone()),
-        _ => (default_schema.to_string(), parts.last().cloned().unwrap_or_default()),
+        _ => (
+            default_schema.to_string(),
+            parts.last().cloned().unwrap_or_default(),
+        ),
     }
 }
 
@@ -309,7 +321,9 @@ fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option
     match data_type {
         DataType::Varchar(len) | DataType::Char(len) | DataType::Nvarchar(len) => {
             let max_length = len.as_ref().and_then(|l| match l {
-                sqlparser::ast::CharacterLength::IntegerLength { length, .. } => Some(*length as i32),
+                sqlparser::ast::CharacterLength::IntegerLength { length, .. } => {
+                    Some(*length as i32)
+                }
                 sqlparser::ast::CharacterLength::Max => Some(-1),
             });
             (max_length, None, None)
@@ -329,7 +343,9 @@ fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option
             let (precision, scale) = match info {
                 sqlparser::ast::ExactNumberInfo::None => (None, None),
                 sqlparser::ast::ExactNumberInfo::Precision(p) => (Some(*p as u8), None),
-                sqlparser::ast::ExactNumberInfo::PrecisionAndScale(p, s) => (Some(*p as u8), Some(*s as u8)),
+                sqlparser::ast::ExactNumberInfo::PrecisionAndScale(p, s) => {
+                    (Some(*p as u8), Some(*s as u8))
+                }
             };
             (None, precision, scale)
         }
@@ -382,7 +398,9 @@ fn constraint_from_table_constraint(
                 columns: columns.iter().map(|c| c.value.clone()).collect(),
                 definition: None,
                 referenced_table: Some(foreign_table.to_string()),
-                referenced_columns: Some(referred_columns.iter().map(|c| c.value.clone()).collect()),
+                referenced_columns: Some(
+                    referred_columns.iter().map(|c| c.value.clone()).collect(),
+                ),
             })
         }
         TableConstraint::Unique { name, columns, .. } => {

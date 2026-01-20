@@ -57,8 +57,12 @@ impl ModelElement {
             ModelElement::View(v) => format!("[{}].[{}]", v.schema, v.name),
             ModelElement::Procedure(p) => format!("[{}].[{}]", p.schema, p.name),
             ModelElement::Function(f) => format!("[{}].[{}]", f.schema, f.name),
-            ModelElement::Index(i) => format!("[{}].[{}].[{}]", i.table_schema, i.table_name, i.name),
-            ModelElement::Constraint(c) => format!("[{}].[{}].[{}]", c.table_schema, c.table_name, c.name),
+            ModelElement::Index(i) => {
+                format!("[{}].[{}].[{}]", i.table_schema, i.table_name, i.name)
+            }
+            ModelElement::Constraint(c) => {
+                format!("[{}].[{}].[{}]", c.table_schema, c.table_name, c.name)
+            }
             ModelElement::Sequence(s) => format!("[{}].[{}]", s.schema, s.name),
             ModelElement::UserDefinedType(u) => format!("[{}].[{}]", u.schema, u.name),
             ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),

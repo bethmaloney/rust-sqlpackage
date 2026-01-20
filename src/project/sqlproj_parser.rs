@@ -39,10 +39,18 @@ impl std::str::FromStr for SqlServerVersion {
 impl SqlServerVersion {
     pub fn dsp_name(&self) -> &'static str {
         match self {
-            SqlServerVersion::Sql130 => "Microsoft.Data.Tools.Schema.Sql.Sql130DatabaseSchemaProvider",
-            SqlServerVersion::Sql140 => "Microsoft.Data.Tools.Schema.Sql.Sql140DatabaseSchemaProvider",
-            SqlServerVersion::Sql150 => "Microsoft.Data.Tools.Schema.Sql.Sql150DatabaseSchemaProvider",
-            SqlServerVersion::Sql160 => "Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider",
+            SqlServerVersion::Sql130 => {
+                "Microsoft.Data.Tools.Schema.Sql.Sql130DatabaseSchemaProvider"
+            }
+            SqlServerVersion::Sql140 => {
+                "Microsoft.Data.Tools.Schema.Sql.Sql140DatabaseSchemaProvider"
+            }
+            SqlServerVersion::Sql150 => {
+                "Microsoft.Data.Tools.Schema.Sql.Sql150DatabaseSchemaProvider"
+            }
+            SqlServerVersion::Sql160 => {
+                "Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider"
+            }
         }
     }
 }
@@ -91,10 +99,7 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         source: e,
     })?;
 
-    let project_dir = path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let project_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     let project_name = path
         .file_stem()
@@ -110,7 +115,8 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         .unwrap_or_default();
 
     // Parse default schema
-    let default_schema = find_property_value(&root, "DefaultSchema").unwrap_or_else(|| "dbo".to_string());
+    let default_schema =
+        find_property_value(&root, "DefaultSchema").unwrap_or_else(|| "dbo".to_string());
 
     // Parse collation LCID
     let collation_lcid = find_property_value(&root, "DefaultCollation")
@@ -243,8 +249,11 @@ fn find_sql_files(root: &roxmltree::Node, project_dir: &Path) -> Result<Vec<Path
             if path.extension().map_or(false, |ext| ext == "sql") {
                 // Skip bin and obj directories
                 let path_str = path.to_string_lossy();
-                if !path_str.contains("/bin/") && !path_str.contains("/obj/")
-                   && !path_str.contains("\\bin\\") && !path_str.contains("\\obj\\") {
+                if !path_str.contains("/bin/")
+                    && !path_str.contains("/obj/")
+                    && !path_str.contains("\\bin\\")
+                    && !path_str.contains("\\obj\\")
+                {
                     sql_files.push(path.to_path_buf());
                 }
             }
@@ -344,8 +353,14 @@ mod tests {
 
     #[test]
     fn test_sql_server_version_from_str() {
-        assert_eq!("Sql160".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql160);
-        assert_eq!("sql150".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql150);
+        assert_eq!(
+            "Sql160".parse::<SqlServerVersion>().unwrap(),
+            SqlServerVersion::Sql160
+        );
+        assert_eq!(
+            "sql150".parse::<SqlServerVersion>().unwrap(),
+            SqlServerVersion::Sql150
+        );
     }
 
     #[test]

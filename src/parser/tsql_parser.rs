@@ -313,12 +313,13 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
 /// Extract schema and name from ALTER TABLE statement
 fn extract_alter_table_name(sql: &str) -> Option<(String, String)> {
-    let re = regex::Regex::new(
-        r"(?i)ALTER\s+TABLE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-    ).ok()?;
+    let re = regex::Regex::new(r"(?i)ALTER\s+TABLE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
 
     let caps = re.captures(sql)?;
-    let schema = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let schema = caps
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
     let name = caps.get(2)?.as_str().to_string();
 
     Some((schema, name))
@@ -326,13 +327,16 @@ fn extract_alter_table_name(sql: &str) -> Option<(String, String)> {
 
 /// Try to extract any CREATE statement as a generic fallback
 fn try_generic_create_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let re = regex::Regex::new(
-        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?(\w+)\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-    ).ok()?;
+    let re =
+        regex::Regex::new(r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?(\w+)\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?")
+            .ok()?;
 
     let caps = re.captures(sql)?;
     let object_type = caps.get(1)?.as_str().to_string();
-    let schema = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let schema = caps
+        .get(2)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
     let name = caps.get(3)?.as_str().to_string();
 
     Some(FallbackStatementType::RawStatement {
@@ -351,7 +355,10 @@ fn extract_generic_object_name(sql: &str, object_type: &str) -> Option<(String, 
     let re = regex::Regex::new(&pattern).ok()?;
 
     let caps = re.captures(sql)?;
-    let schema = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let schema = caps
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
     let name = caps.get(2)?.as_str().to_string();
 
     Some((schema, name))
@@ -362,12 +369,13 @@ fn extract_sequence_name(sql: &str) -> Option<(String, String)> {
     // Match patterns like:
     // CREATE SEQUENCE [dbo].[SeqName]
     // CREATE SEQUENCE dbo.SeqName
-    let re = regex::Regex::new(
-        r"(?i)CREATE\s+SEQUENCE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-    ).ok()?;
+    let re = regex::Regex::new(r"(?i)CREATE\s+SEQUENCE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
 
     let caps = re.captures(sql)?;
-    let schema = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let schema = caps
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
     let name = caps.get(2)?.as_str().to_string();
 
     Some((schema, name))
@@ -378,12 +386,13 @@ fn extract_type_name(sql: &str) -> Option<(String, String)> {
     // Match patterns like:
     // CREATE TYPE [dbo].[TypeName] AS TABLE
     // CREATE TYPE dbo.TypeName AS TABLE
-    let re = regex::Regex::new(
-        r"(?i)CREATE\s+TYPE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-    ).ok()?;
+    let re = regex::Regex::new(r"(?i)CREATE\s+TYPE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
 
     let caps = re.captures(sql)?;
-    let schema = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let schema = caps
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
     let name = caps.get(2)?.as_str().to_string();
 
     Some((schema, name))
@@ -397,11 +406,15 @@ fn extract_procedure_name(sql: &str) -> Option<(String, String)> {
     // CREATE OR ALTER PROCEDURE [schema].[name]
     // CREATE PROC [dbo].[name]
     let re = regex::Regex::new(
-        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?(?:PROCEDURE|PROC)\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-    ).ok()?;
+        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?(?:PROCEDURE|PROC)\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
+    )
+    .ok()?;
 
     let caps = re.captures(sql)?;
-    let schema = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let schema = caps
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
     let name = caps.get(2)?.as_str().to_string();
 
     Some((schema, name))
@@ -414,11 +427,15 @@ fn extract_function_name(sql: &str) -> Option<(String, String)> {
     // CREATE FUNCTION dbo.FuncName
     // CREATE OR ALTER FUNCTION [schema].[name]
     let re = regex::Regex::new(
-        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?FUNCTION\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-    ).ok()?;
+        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?FUNCTION\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
+    )
+    .ok()?;
 
     let caps = re.captures(sql)?;
-    let schema = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let schema = caps
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
     let name = caps.get(2)?.as_str().to_string();
 
     Some((schema, name))
@@ -450,11 +467,13 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     let caps = re.captures(sql)?;
 
     let is_unique = caps.get(1).is_some();
-    let is_clustered = caps.get(2)
+    let is_clustered = caps
+        .get(2)
         .map(|m| m.as_str().to_uppercase() == "CLUSTERED")
         .unwrap_or(false);
     let name = caps.get(3)?.as_str().to_string();
-    let table_schema = caps.get(4)
+    let table_schema = caps
+        .get(4)
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
     let table_name = caps.get(5)?.as_str().to_string();
@@ -651,8 +670,14 @@ mod tests {
 
     #[test]
     fn test_extract_line_from_error() {
-        assert_eq!(extract_line_from_error("Error at Line: 5, Column: 10"), Some(5));
-        assert_eq!(extract_line_from_error("Parse error at Line: 123, Column: 1"), Some(123));
+        assert_eq!(
+            extract_line_from_error("Error at Line: 5, Column: 10"),
+            Some(5)
+        );
+        assert_eq!(
+            extract_line_from_error("Parse error at Line: 123, Column: 1"),
+            Some(123)
+        );
         assert_eq!(extract_line_from_error("No line info here"), None);
         assert_eq!(extract_line_from_error("Line:42, Column: 1"), Some(42));
     }
@@ -679,7 +704,11 @@ mod tests {
         // Should still be valid SQL (parseable by sqlparser)
         let dialect = MsSqlDialect {};
         let parsed = Parser::parse_sql(&dialect, &result.sql);
-        assert!(parsed.is_ok(), "Preprocessed SQL should be parseable: {}", result.sql);
+        assert!(
+            parsed.is_ok(),
+            "Preprocessed SQL should be parseable: {}",
+            result.sql
+        );
     }
 
     #[test]
@@ -688,13 +717,19 @@ mod tests {
         let result = preprocess_tsql(sql);
 
         // Should replace MAX with sentinel
-        assert!(result.sql.contains(&format!("VARBINARY({})", BINARY_MAX_SENTINEL)));
+        assert!(result
+            .sql
+            .contains(&format!("VARBINARY({})", BINARY_MAX_SENTINEL)));
         assert!(!result.sql.contains("VARBINARY(MAX)"));
 
         // Should be parseable
         let dialect = MsSqlDialect {};
         let parsed = Parser::parse_sql(&dialect, &result.sql);
-        assert!(parsed.is_ok(), "Preprocessed SQL should be parseable: {}", result.sql);
+        assert!(
+            parsed.is_ok(),
+            "Preprocessed SQL should be parseable: {}",
+            result.sql
+        );
     }
 
     #[test]
@@ -731,16 +766,28 @@ CREATE TABLE [dbo].[Products] (
 
         println!("=== Extracted defaults ===");
         for d in &result.extracted_defaults {
-            println!("  Name: {}, Column: {}, Expression: {}", d.name, d.column, d.expression);
+            println!(
+                "  Name: {}, Column: {}, Expression: {}",
+                d.name, d.column, d.expression
+            );
         }
         println!("=== Preprocessed SQL ===\n{}", result.sql);
 
         // Should extract 2 default constraints
-        assert_eq!(result.extracted_defaults.len(), 2, "Should extract 2 default constraints");
+        assert_eq!(
+            result.extracted_defaults.len(),
+            2,
+            "Should extract 2 default constraints"
+        );
 
         // Should be parseable by sqlparser
         let dialect = MsSqlDialect {};
         let parsed = Parser::parse_sql(&dialect, &result.sql);
-        assert!(parsed.is_ok(), "Preprocessed SQL should be parseable. Error: {:?}\nSQL:\n{}", parsed.err(), result.sql);
+        assert!(
+            parsed.is_ok(),
+            "Preprocessed SQL should be parseable. Error: {:?}\nSQL:\n{}",
+            parsed.err(),
+            result.sql
+        );
     }
 }

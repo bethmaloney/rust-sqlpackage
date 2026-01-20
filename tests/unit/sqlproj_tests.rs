@@ -478,7 +478,8 @@ fn test_parse_invalid_xml_returns_error() {
 
 #[test]
 fn test_parse_missing_file_returns_error() {
-    let result = rust_sqlpackage::project::parse_sqlproj(&PathBuf::from("/nonexistent/path.sqlproj"));
+    let result =
+        rust_sqlpackage::project::parse_sqlproj(&PathBuf::from("/nonexistent/path.sqlproj"));
     assert!(result.is_err(), "Missing file should return error");
 }
 
@@ -532,33 +533,69 @@ fn test_dsp_name_sql130() {
 #[test]
 fn test_sql_server_version_from_str_sql160() {
     use rust_sqlpackage::project::SqlServerVersion;
-    assert_eq!("Sql160".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql160);
-    assert_eq!("sql160".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql160);
-    assert_eq!("160".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql160);
+    assert_eq!(
+        "Sql160".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql160
+    );
+    assert_eq!(
+        "sql160".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql160
+    );
+    assert_eq!(
+        "160".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql160
+    );
 }
 
 #[test]
 fn test_sql_server_version_from_str_sql150() {
     use rust_sqlpackage::project::SqlServerVersion;
-    assert_eq!("Sql150".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql150);
-    assert_eq!("sql150".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql150);
-    assert_eq!("150".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql150);
+    assert_eq!(
+        "Sql150".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql150
+    );
+    assert_eq!(
+        "sql150".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql150
+    );
+    assert_eq!(
+        "150".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql150
+    );
 }
 
 #[test]
 fn test_sql_server_version_from_str_sql140() {
     use rust_sqlpackage::project::SqlServerVersion;
-    assert_eq!("Sql140".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql140);
-    assert_eq!("sql140".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql140);
-    assert_eq!("140".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql140);
+    assert_eq!(
+        "Sql140".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql140
+    );
+    assert_eq!(
+        "sql140".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql140
+    );
+    assert_eq!(
+        "140".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql140
+    );
 }
 
 #[test]
 fn test_sql_server_version_from_str_sql130() {
     use rust_sqlpackage::project::SqlServerVersion;
-    assert_eq!("Sql130".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql130);
-    assert_eq!("sql130".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql130);
-    assert_eq!("130".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql130);
+    assert_eq!(
+        "Sql130".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql130
+    );
+    assert_eq!(
+        "sql130".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql130
+    );
+    assert_eq!(
+        "130".parse::<SqlServerVersion>().unwrap(),
+        SqlServerVersion::Sql130
+    );
 }
 
 #[test]
@@ -657,17 +694,35 @@ fn test_parse_multiple_dacpac_references() {
     assert_eq!(project.dacpac_references.len(), 3);
 
     // First reference: master.dacpac with suppress flag
-    assert!(project.dacpac_references[0].path.to_string_lossy().contains("master.dacpac"));
+    assert!(project.dacpac_references[0]
+        .path
+        .to_string_lossy()
+        .contains("master.dacpac"));
     assert!(project.dacpac_references[0].suppress_missing_dependencies);
 
     // Second reference: msdb.dacpac with database variable
-    assert!(project.dacpac_references[1].path.to_string_lossy().contains("msdb.dacpac"));
-    assert_eq!(project.dacpac_references[1].database_variable, Some("msdb".to_string()));
+    assert!(project.dacpac_references[1]
+        .path
+        .to_string_lossy()
+        .contains("msdb.dacpac"));
+    assert_eq!(
+        project.dacpac_references[1].database_variable,
+        Some("msdb".to_string())
+    );
 
     // Third reference: OtherProject.dacpac with both variables
-    assert!(project.dacpac_references[2].path.to_string_lossy().contains("OtherProject.dacpac"));
-    assert_eq!(project.dacpac_references[2].database_variable, Some("OtherDb".to_string()));
-    assert_eq!(project.dacpac_references[2].server_variable, Some("LinkedServer".to_string()));
+    assert!(project.dacpac_references[2]
+        .path
+        .to_string_lossy()
+        .contains("OtherProject.dacpac"));
+    assert_eq!(
+        project.dacpac_references[2].database_variable,
+        Some("OtherDb".to_string())
+    );
+    assert_eq!(
+        project.dacpac_references[2].server_variable,
+        Some("LinkedServer".to_string())
+    );
 }
 
 // ============================================================================
@@ -733,7 +788,10 @@ fn test_parse_multiple_property_groups() {
 
     let project = result.unwrap();
     // Should find properties across all PropertyGroups
-    assert_eq!(project.target_platform, rust_sqlpackage::project::SqlServerVersion::Sql160);
+    assert_eq!(
+        project.target_platform,
+        rust_sqlpackage::project::SqlServerVersion::Sql160
+    );
     assert_eq!(project.default_schema, "custom_schema");
 }
 
@@ -854,10 +912,7 @@ fn test_build_item_with_missing_file_is_skipped() {
   </ItemGroup>
 </Project>"#;
 
-    let temp_dir = create_test_project(
-        content,
-        &[("Exists.sql", "CREATE TABLE t1 (id INT)")],
-    );
+    let temp_dir = create_test_project(content, &[("Exists.sql", "CREATE TABLE t1 (id INT)")]);
     let sqlproj_path = temp_dir.path().join("project.sqlproj");
 
     let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);

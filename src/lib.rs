@@ -52,12 +52,18 @@ pub fn build_dacpac(options: BuildOptions) -> Result<PathBuf> {
     let database_model = model::build_model(&statements, &project)?;
 
     if options.verbose {
-        println!("Built model with {} elements", database_model.elements.len());
+        println!(
+            "Built model with {} elements",
+            database_model.elements.len()
+        );
     }
 
     // Step 4: Determine output path
     let output_path = options.output_path.unwrap_or_else(|| {
-        let project_dir = options.project_path.parent().unwrap_or(std::path::Path::new("."));
+        let project_dir = options
+            .project_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
         let project_name = options
             .project_path
             .file_stem()

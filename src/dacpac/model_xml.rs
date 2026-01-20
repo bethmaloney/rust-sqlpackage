@@ -1,13 +1,13 @@
 //! Generate model.xml for dacpac
 
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
+use quick_xml::events::{BytesCData, BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
 use std::io::Write;
 
 use crate::model::{
-    ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, FunctionElement,
-    IndexElement, ModelElement, ProcedureElement, RawElement, SchemaElement, SequenceElement,
-    TableElement, UserDefinedTypeElement, ViewElement,
+    ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, FunctionElement, IndexElement,
+    ModelElement, ProcedureElement, RawElement, SchemaElement, SequenceElement, TableElement,
+    UserDefinedTypeElement, ViewElement,
 };
 use crate::project::SqlProject;
 
@@ -51,10 +51,7 @@ pub fn generate_model_xml<W: Write>(
     Ok(())
 }
 
-fn write_element<W: Write>(
-    writer: &mut Writer<W>,
-    element: &ModelElement,
-) -> anyhow::Result<()> {
+fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> anyhow::Result<()> {
     match element {
         ModelElement::Schema(s) => write_schema(writer, s),
         ModelElement::Table(t) => write_table(writer, t),
@@ -120,14 +117,24 @@ fn write_column<W: Write>(
     writer.write_event(Event::Start(elem))?;
 
     // Properties
-    write_property(writer, "IsNullable", if column.is_nullable { "True" } else { "False" })?;
+    write_property(
+        writer,
+        "IsNullable",
+        if column.is_nullable { "True" } else { "False" },
+    )?;
 
     if column.is_identity {
         write_property(writer, "IsIdentity", "True")?;
     }
 
     // Data type relationship
-    write_type_specifier(writer, &column.data_type, column.max_length, column.precision, column.scale)?;
+    write_type_specifier(
+        writer,
+        &column.data_type,
+        column.max_length,
+        column.precision,
+        column.scale,
+    )?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -228,10 +235,10 @@ fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::R
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    write_relationship(writer, "Schema", &[&format!("[{}]", view.schema)])?;
+    // Write QueryScript property with CDATA containing the view definition
+    write_script_property(writer, "QueryScript", &view.definition)?;
 
-    // Write definition as annotation
-    write_script_annotation(writer, &view.definition)?;
+    write_relationship(writer, "Schema", &[&format!("[{}]", view.schema)])?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -248,18 +255,16 @@ fn write_procedure<W: Write>(
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    write_relationship(writer, "Schema", &[&format!("[{}]", proc.schema)])?;
+    // Write BodyScript property with CDATA containing the procedure definition
+    write_script_property(writer, "BodyScript", &proc.definition)?;
 
-    write_script_annotation(writer, &proc.definition)?;
+    write_relationship(writer, "Schema", &[&format!("[{}]", proc.schema)])?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
 }
 
-fn write_function<W: Write>(
-    writer: &mut Writer<W>,
-    func: &FunctionElement,
-) -> anyhow::Result<()> {
+fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", func.schema, func.name);
     let type_name = match func.function_type {
         crate::model::FunctionType::Scalar => "SqlScalarFunction",
@@ -272,9 +277,10 @@ fn write_function<W: Write>(
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    write_relationship(writer, "Schema", &[&format!("[{}]", func.schema)])?;
+    // Write BodyScript property with CDATA containing the function definition
+    write_script_property(writer, "BodyScript", &func.definition)?;
 
-    write_script_annotation(writer, &func.definition)?;
+    write_relationship(writer, "Schema", &[&format!("[{}]", func.schema)])?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -390,9 +396,16 @@ fn write_constraint<W: Write>(
         }
     }
 
-    // Check constraint expression
-    if let Some(ref definition) = constraint.definition {
-        write_script_annotation(writer, definition)?;
+    // Check constraint expression - use CheckExpressionScript property with CDATA
+    if constraint.constraint_type == ConstraintType::Check {
+        if let Some(ref definition) = constraint.definition {
+            write_script_property(writer, "CheckExpressionScript", definition)?;
+        }
+    } else if constraint.constraint_type == ConstraintType::Default {
+        // Default constraint expression
+        if let Some(ref definition) = constraint.definition {
+            write_script_property(writer, "DefaultExpressionScript", definition)?;
+        }
     }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -407,13 +420,22 @@ fn write_property<W: Write>(writer: &mut Writer<W>, name: &str, value: &str) -> 
     Ok(())
 }
 
-/// Write an annotation with the script as a property (for views/procs/functions)
-fn write_script_annotation<W: Write>(writer: &mut Writer<W>, script: &str) -> anyhow::Result<()> {
-    let mut annotation = BytesStart::new("Annotation");
-    annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
-    writer.write_event(Event::Start(annotation))?;
-    write_property(writer, "Script", script)?;
-    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+/// Write a property with a CDATA value (for script content like QueryScript, BodyScript)
+fn write_script_property<W: Write>(
+    writer: &mut Writer<W>,
+    name: &str,
+    script: &str,
+) -> anyhow::Result<()> {
+    let mut prop = BytesStart::new("Property");
+    prop.push_attribute(("Name", name));
+    writer.write_event(Event::Start(prop))?;
+
+    // Write Value element with CDATA content
+    writer.write_event(Event::Start(BytesStart::new("Value")))?;
+    writer.write_event(Event::CData(BytesCData::new(script)))?;
+    writer.write_event(Event::End(BytesEnd::new("Value")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Property")))?;
     Ok(())
 }
 
@@ -470,11 +492,11 @@ fn write_sequence<W: Write>(writer: &mut Writer<W>, seq: &SequenceElement) -> an
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
+    // Write BodyScript property with CDATA containing the sequence definition
+    write_script_property(writer, "BodyScript", &seq.definition)?;
+
     // Relationship to schema
     write_relationship(writer, "Schema", &[&format!("[{}]", seq.schema)])?;
-
-    // Store the definition as an annotation
-    write_script_annotation(writer, &seq.definition)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -491,11 +513,11 @@ fn write_user_defined_type<W: Write>(
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
+    // Write BodyScript property with CDATA containing the type definition
+    write_script_property(writer, "BodyScript", &udt.definition)?;
+
     // Relationship to schema
     write_relationship(writer, "Schema", &[&format!("[{}]", udt.schema)])?;
-
-    // Store the definition as an annotation
-    write_script_annotation(writer, &udt.definition)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -509,11 +531,11 @@ fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Resu
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
+    // Write BodyScript property with CDATA containing the definition
+    write_script_property(writer, "BodyScript", &raw.definition)?;
+
     // Relationship to schema
     write_relationship(writer, "Schema", &[&format!("[{}]", raw.schema)])?;
-
-    // Store the definition as an annotation
-    write_script_annotation(writer, &raw.definition)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())

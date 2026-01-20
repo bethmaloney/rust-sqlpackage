@@ -24,10 +24,7 @@ fn test_dacpac_is_valid_zip() {
     let file = File::open(&dacpac_path).expect("Should open file");
     let archive = ZipArchive::new(file);
 
-    assert!(
-        archive.is_ok(),
-        "Dacpac should be a valid ZIP archive"
-    );
+    assert!(archive.is_ok(), "Dacpac should be a valid ZIP archive");
 }
 
 #[test]
@@ -228,7 +225,8 @@ fn test_dacpac_file_names() {
     let dacpac_path = result.dacpac_path.unwrap();
 
     let mut file_names: Vec<String> = Vec::new();
-    let mut archive = ZipArchive::new(File::open(&dacpac_path).expect("Should open file")).expect("Should be valid ZIP");
+    let mut archive = ZipArchive::new(File::open(&dacpac_path).expect("Should open file"))
+        .expect("Should be valid ZIP");
     for i in 0..archive.len() {
         let name = archive.by_index(i).unwrap().name().to_string();
         file_names.push(name);
@@ -332,7 +330,10 @@ fn test_dacpac_with_constraints() {
     );
 
     // Log which constraints were found for debugging
-    println!("Found constraints - PK: {}, FK: {}, UQ: {}, CK: {}", has_pk, has_fk, has_uq, has_ck);
+    println!(
+        "Found constraints - PK: {}, FK: {}, UQ: {}, CK: {}",
+        has_pk, has_fk, has_uq, has_ck
+    );
 }
 
 // ============================================================================
@@ -510,7 +511,10 @@ fn test_table_has_schema_relationship() {
     let doc = parse_model_xml(&model_xml);
     let tables = find_elements_by_type(&doc, "SqlTable");
 
-    assert!(!tables.is_empty(), "Should have at least one SqlTable element");
+    assert!(
+        !tables.is_empty(),
+        "Should have at least one SqlTable element"
+    );
 
     for table in &tables {
         assert!(
@@ -535,7 +539,10 @@ fn test_table_has_columns_relationship() {
     let doc = parse_model_xml(&model_xml);
     let tables = find_elements_by_type(&doc, "SqlTable");
 
-    assert!(!tables.is_empty(), "Should have at least one SqlTable element");
+    assert!(
+        !tables.is_empty(),
+        "Should have at least one SqlTable element"
+    );
 
     // Find tables with Columns relationship
     let tables_with_columns: Vec<_> = tables
@@ -552,7 +559,9 @@ fn test_table_has_columns_relationship() {
     for table in tables_with_columns {
         let columns_rel = table
             .children()
-            .find(|c| c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("Columns"))
+            .find(|c| {
+                c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("Columns")
+            })
             .expect("Should have Columns relationship");
 
         let entries: Vec<_> = columns_rel
@@ -570,10 +579,7 @@ fn test_table_has_columns_relationship() {
             let has_column = entry.descendants().any(|d| {
                 d.tag_name().name() == "Element" && d.attribute("Type") == Some("SqlSimpleColumn")
             });
-            assert!(
-                has_column,
-                "Entry should contain SqlSimpleColumn element"
-            );
+            assert!(has_column, "Entry should contain SqlSimpleColumn element");
         }
     }
 }
@@ -592,7 +598,10 @@ fn test_view_has_schema_relationship() {
     let doc = parse_model_xml(&model_xml);
     let views = find_elements_by_type(&doc, "SqlView");
 
-    assert!(!views.is_empty(), "Should have at least one SqlView element");
+    assert!(
+        !views.is_empty(),
+        "Should have at least one SqlView element"
+    );
 
     for view in &views {
         assert!(
@@ -729,9 +738,7 @@ fn test_model_xml_has_model_element() {
     let root = doc.root_element();
 
     // Find the Model child element
-    let model_element = root
-        .children()
-        .find(|c| c.tag_name().name() == "Model");
+    let model_element = root.children().find(|c| c.tag_name().name() == "Model");
 
     assert!(
         model_element.is_some(),
@@ -793,9 +800,10 @@ fn test_model_contains_procedures() {
     );
 
     // Verify the GetUsers procedure exists
-    let has_get_users = procedures
-        .iter()
-        .any(|p| p.attribute("Name").map_or(false, |n| n.contains("GetUsers")));
+    let has_get_users = procedures.iter().any(|p| {
+        p.attribute("Name")
+            .map_or(false, |n| n.contains("GetUsers"))
+    });
     assert!(
         has_get_users,
         "Should have GetUsers procedure. Found: {:?}",
@@ -826,9 +834,10 @@ fn test_model_contains_scalar_functions() {
     );
 
     // Verify the GetUserCount function exists
-    let has_get_user_count = scalar_funcs
-        .iter()
-        .any(|f| f.attribute("Name").map_or(false, |n| n.contains("GetUserCount")));
+    let has_get_user_count = scalar_funcs.iter().any(|f| {
+        f.attribute("Name")
+            .map_or(false, |n| n.contains("GetUserCount"))
+    });
     assert!(
         has_get_user_count,
         "Should have GetUserCount scalar function. Found: {:?}",
@@ -883,9 +892,10 @@ fn test_model_contains_sequences() {
     );
 
     // Verify the OrderSequence exists
-    let has_order_sequence = sequences
-        .iter()
-        .any(|s| s.attribute("Name").map_or(false, |n| n.contains("OrderSequence")));
+    let has_order_sequence = sequences.iter().any(|s| {
+        s.attribute("Name")
+            .map_or(false, |n| n.contains("OrderSequence"))
+    });
     assert!(
         has_order_sequence,
         "Should have OrderSequence. Found: {:?}",
@@ -916,9 +926,10 @@ fn test_model_contains_user_defined_types() {
     );
 
     // Verify the UserTableType exists
-    let has_user_table_type = udts
-        .iter()
-        .any(|u| u.attribute("Name").map_or(false, |n| n.contains("UserTableType")));
+    let has_user_table_type = udts.iter().any(|u| {
+        u.attribute("Name")
+            .map_or(false, |n| n.contains("UserTableType"))
+    });
     assert!(
         has_user_table_type,
         "Should have UserTableType. Found: {:?}",
@@ -948,9 +959,10 @@ fn test_model_contains_triggers() {
     );
 
     // Verify the AuditTrigger exists
-    let has_audit_trigger = triggers
-        .iter()
-        .any(|t| t.attribute("Name").map_or(false, |n| n.contains("TR_Users_Audit")));
+    let has_audit_trigger = triggers.iter().any(|t| {
+        t.attribute("Name")
+            .map_or(false, |n| n.contains("TR_Users_Audit"))
+    });
     assert!(
         has_audit_trigger,
         "Should have TR_Users_Audit trigger. Found: {:?}",
@@ -1003,21 +1015,19 @@ fn find_column_by_name<'a>(
     doc: &'a roxmltree::Document,
     column_name: &str,
 ) -> Option<roxmltree::Node<'a, 'a>> {
-    doc.descendants()
-        .find(|n| {
-            n.tag_name().name() == "Element"
-                && n.attribute("Type") == Some("SqlSimpleColumn")
-                && n.attribute("Name").map_or(false, |name| name.contains(column_name))
-        })
+    doc.descendants().find(|n| {
+        n.tag_name().name() == "Element"
+            && n.attribute("Type") == Some("SqlSimpleColumn")
+            && n.attribute("Name")
+                .map_or(false, |name| name.contains(column_name))
+    })
 }
 
 /// Helper to get a property value from an element
 fn get_property_value(element: &roxmltree::Node, property_name: &str) -> Option<String> {
     element
         .children()
-        .find(|c| {
-            c.tag_name().name() == "Property" && c.attribute("Name") == Some(property_name)
-        })
+        .find(|c| c.tag_name().name() == "Property" && c.attribute("Name") == Some(property_name))
         .and_then(|p| p.attribute("Value").map(String::from))
 }
 
@@ -1026,7 +1036,9 @@ fn get_type_specifier_property(column: &roxmltree::Node, property_name: &str) ->
     // Navigate: Column -> TypeSpecifier relationship -> Entry -> SqlTypeSpecifier element -> Property
     column
         .children()
-        .find(|c| c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("TypeSpecifier"))
+        .find(|c| {
+            c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("TypeSpecifier")
+        })
         .and_then(|rel| rel.children().find(|c| c.tag_name().name() == "Entry"))
         .and_then(|entry| entry.children().find(|c| c.tag_name().name() == "Element"))
         .and_then(|elem| get_property_value(&elem, property_name))
@@ -1046,8 +1058,8 @@ fn test_column_nullable_property() {
     let doc = parse_model_xml(&model_xml);
 
     // Check required (NOT NULL) column
-    let required_col = find_column_by_name(&doc, "RequiredName")
-        .expect("Should find RequiredName column");
+    let required_col =
+        find_column_by_name(&doc, "RequiredName").expect("Should find RequiredName column");
     let required_nullable = get_property_value(&required_col, "IsNullable");
     assert_eq!(
         required_nullable,
@@ -1056,8 +1068,8 @@ fn test_column_nullable_property() {
     );
 
     // Check optional (NULL) column
-    let optional_col = find_column_by_name(&doc, "OptionalName")
-        .expect("Should find OptionalName column");
+    let optional_col =
+        find_column_by_name(&doc, "OptionalName").expect("Should find OptionalName column");
     let optional_nullable = get_property_value(&optional_col, "IsNullable");
     assert_eq!(
         optional_nullable,
@@ -1112,12 +1124,11 @@ fn test_column_type_specifier() {
     let doc = parse_model_xml(&model_xml);
 
     // Find a column and verify it has TypeSpecifier relationship
-    let code_col = find_column_by_name(&doc, "Code")
-        .expect("Should find Code column");
+    let code_col = find_column_by_name(&doc, "Code").expect("Should find Code column");
 
-    let has_type_specifier = code_col
-        .children()
-        .any(|c| c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("TypeSpecifier"));
+    let has_type_specifier = code_col.children().any(|c| {
+        c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("TypeSpecifier")
+    });
 
     assert!(
         has_type_specifier,
@@ -1127,7 +1138,9 @@ fn test_column_type_specifier() {
     // Verify the type reference
     let type_specifier_rel = code_col
         .children()
-        .find(|c| c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("TypeSpecifier"))
+        .find(|c| {
+            c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("TypeSpecifier")
+        })
         .expect("Should have TypeSpecifier relationship");
 
     let has_type_ref = type_specifier_rel.descendants().any(|d| {
@@ -1156,8 +1169,7 @@ fn test_column_length_property() {
     let doc = parse_model_xml(&model_xml);
 
     // Check varchar(10) column
-    let code_col = find_column_by_name(&doc, "Code")
-        .expect("Should find Code column");
+    let code_col = find_column_by_name(&doc, "Code").expect("Should find Code column");
     let length = get_type_specifier_property(&code_col, "Length");
     assert_eq!(
         length,
@@ -1166,8 +1178,8 @@ fn test_column_length_property() {
     );
 
     // Check varchar(50) column
-    let short_desc_col = find_column_by_name(&doc, "ShortDescription")
-        .expect("Should find ShortDescription column");
+    let short_desc_col =
+        find_column_by_name(&doc, "ShortDescription").expect("Should find ShortDescription column");
     let length = get_type_specifier_property(&short_desc_col, "Length");
     assert_eq!(
         length,
@@ -1176,8 +1188,8 @@ fn test_column_length_property() {
     );
 
     // Check char(2) column
-    let country_col = find_column_by_name(&doc, "CountryCode")
-        .expect("Should find CountryCode column");
+    let country_col =
+        find_column_by_name(&doc, "CountryCode").expect("Should find CountryCode column");
     let length = get_type_specifier_property(&country_col, "Length");
     assert_eq!(
         length,
@@ -1200,8 +1212,7 @@ fn test_column_precision_scale_properties() {
     let doc = parse_model_xml(&model_xml);
 
     // Check decimal(18, 2) column - Price
-    let price_col = find_column_by_name(&doc, "Price")
-        .expect("Should find Price column");
+    let price_col = find_column_by_name(&doc, "Price").expect("Should find Price column");
     let precision = get_type_specifier_property(&price_col, "Precision");
     let scale = get_type_specifier_property(&price_col, "Scale");
     assert_eq!(
@@ -1216,8 +1227,7 @@ fn test_column_precision_scale_properties() {
     );
 
     // Check decimal(5, 4) column - TaxRate
-    let tax_col = find_column_by_name(&doc, "TaxRate")
-        .expect("Should find TaxRate column");
+    let tax_col = find_column_by_name(&doc, "TaxRate").expect("Should find TaxRate column");
     let precision = get_type_specifier_property(&tax_col, "Precision");
     let scale = get_type_specifier_property(&tax_col, "Scale");
     assert_eq!(
@@ -1246,8 +1256,8 @@ fn test_column_max_property() {
     let doc = parse_model_xml(&model_xml);
 
     // Check varchar(max) column - LongDescription
-    let long_desc_col = find_column_by_name(&doc, "LongDescription")
-        .expect("Should find LongDescription column");
+    let long_desc_col =
+        find_column_by_name(&doc, "LongDescription").expect("Should find LongDescription column");
     let is_max = get_type_specifier_property(&long_desc_col, "IsMax");
     assert_eq!(
         is_max,
@@ -1256,8 +1266,7 @@ fn test_column_max_property() {
     );
 
     // Check nvarchar(max) column - Notes
-    let notes_col = find_column_by_name(&doc, "Notes")
-        .expect("Should find Notes column");
+    let notes_col = find_column_by_name(&doc, "Notes").expect("Should find Notes column");
     let is_max = get_type_specifier_property(&notes_col, "IsMax");
     assert_eq!(
         is_max,
@@ -1331,9 +1340,10 @@ fn test_primary_key_constraint() {
     }
 
     // Verify the named constraint exists
-    let has_pk_primary_key_table = pk_constraints
-        .iter()
-        .any(|pk| pk.attribute("Name").map_or(false, |n| n.contains("PK_PrimaryKeyTable")));
+    let has_pk_primary_key_table = pk_constraints.iter().any(|pk| {
+        pk.attribute("Name")
+            .map_or(false, |n| n.contains("PK_PrimaryKeyTable"))
+    });
     assert!(
         has_pk_primary_key_table,
         "Should have PK_PrimaryKeyTable constraint. Found: {:?}",
@@ -1382,9 +1392,10 @@ fn test_foreign_key_constraint_with_referenced_table() {
     }
 
     // Verify the named constraint exists
-    let has_fk_foreign_key_table = fk_constraints
-        .iter()
-        .any(|fk| fk.attribute("Name").map_or(false, |n| n.contains("FK_ForeignKeyTable_Parent")));
+    let has_fk_foreign_key_table = fk_constraints.iter().any(|fk| {
+        fk.attribute("Name")
+            .map_or(false, |n| n.contains("FK_ForeignKeyTable_Parent"))
+    });
     assert!(
         has_fk_foreign_key_table,
         "Should have FK_ForeignKeyTable_Parent constraint. Found: {:?}",
@@ -1423,22 +1434,24 @@ fn test_check_constraint_with_definition() {
         );
     }
 
-    // Verify check constraints have script annotation
+    // Verify check constraints have CheckExpressionScript property with CDATA
     for ck in &ck_constraints {
-        let has_annotation = ck
-            .children()
-            .any(|c| c.tag_name().name() == "Annotation");
+        let has_check_expression = ck.children().any(|c| {
+            c.tag_name().name() == "Property"
+                && c.attribute("Name") == Some("CheckExpressionScript")
+        });
         assert!(
-            has_annotation,
-            "SqlCheckConstraint '{}' should have an Annotation with the check expression",
+            has_check_expression,
+            "SqlCheckConstraint '{}' should have CheckExpressionScript property with the check expression",
             ck.attribute("Name").unwrap_or("unnamed")
         );
     }
 
     // Verify named constraints exist
-    let has_age_check = ck_constraints
-        .iter()
-        .any(|ck| ck.attribute("Name").map_or(false, |n| n.contains("CK_CheckConstraintTable_Age")));
+    let has_age_check = ck_constraints.iter().any(|ck| {
+        ck.attribute("Name")
+            .map_or(false, |n| n.contains("CK_CheckConstraintTable_Age"))
+    });
     assert!(
         has_age_check,
         "Should have CK_CheckConstraintTable_Age constraint"
@@ -1487,12 +1500,12 @@ fn find_index_by_name<'a>(
     doc: &'a roxmltree::Document,
     index_name: &str,
 ) -> Option<roxmltree::Node<'a, 'a>> {
-    doc.descendants()
-        .find(|n| {
-            n.tag_name().name() == "Element"
-                && n.attribute("Type") == Some("SqlIndex")
-                && n.attribute("Name").map_or(false, |name| name.contains(index_name))
-        })
+    doc.descendants().find(|n| {
+        n.tag_name().name() == "Element"
+            && n.attribute("Type") == Some("SqlIndex")
+            && n.attribute("Name")
+                .map_or(false, |name| name.contains(index_name))
+    })
 }
 
 /// Test that unique indexes have the IsUnique property set to True.
@@ -1583,7 +1596,8 @@ fn test_index_is_clustered_property() {
     let non_clustered_is_clustered = get_property_value(&nonclustered_index, "IsClustered");
     // Per XSD, property is only written when True, so None means not clustered
     assert!(
-        non_clustered_is_clustered.is_none() || non_clustered_is_clustered == Some("False".to_string()),
+        non_clustered_is_clustered.is_none()
+            || non_clustered_is_clustered == Some("False".to_string()),
         "IX_Products_Category should NOT have IsClustered=True. Got: {:?}",
         non_clustered_is_clustered
     );
@@ -1622,7 +1636,10 @@ fn test_index_column_specifications() {
     // Get the ColumnSpecifications relationship
     let col_specs_rel = multi_col_index
         .children()
-        .find(|c| c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("ColumnSpecifications"))
+        .find(|c| {
+            c.tag_name().name() == "Relationship"
+                && c.attribute("Name") == Some("ColumnSpecifications")
+        })
         .expect("Should have ColumnSpecifications relationship");
 
     // Count Entry elements (should have 2 for Category and Name key columns)
@@ -1697,7 +1714,9 @@ fn test_index_include_columns() {
     // Get the IncludedColumns relationship
     let include_rel = include_index
         .children()
-        .find(|c| c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("IncludedColumns"))
+        .find(|c| {
+            c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("IncludedColumns")
+        })
         .expect("Should have IncludedColumns relationship");
 
     // Count Entry elements (should have 2 for Price and Description)
@@ -1727,10 +1746,7 @@ fn test_index_include_columns() {
     );
 
     // Verify the column names are Price and Description
-    let ref_names: Vec<_> = refs
-        .iter()
-        .filter_map(|r| r.attribute("Name"))
-        .collect();
+    let ref_names: Vec<_> = refs.iter().filter_map(|r| r.attribute("Name")).collect();
 
     let has_price = ref_names.iter().any(|n| n.contains("Price"));
     let has_description = ref_names.iter().any(|n| n.contains("Description"));
@@ -1769,7 +1785,9 @@ fn test_origin_xml_has_package_properties() {
     let dacpac_path = result.dacpac_path.unwrap();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let origin_xml = info.origin_xml_content.expect("Should have Origin.xml content");
+    let origin_xml = info
+        .origin_xml_content
+        .expect("Should have Origin.xml content");
 
     let doc = roxmltree::Document::parse(&origin_xml).expect("Origin.xml should be valid XML");
 
@@ -1793,14 +1811,14 @@ fn test_origin_xml_has_version() {
     let dacpac_path = result.dacpac_path.unwrap();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let origin_xml = info.origin_xml_content.expect("Should have Origin.xml content");
+    let origin_xml = info
+        .origin_xml_content
+        .expect("Should have Origin.xml content");
 
     let doc = roxmltree::Document::parse(&origin_xml).expect("Origin.xml should be valid XML");
 
     // Find Version element within PackageProperties
-    let version = doc
-        .descendants()
-        .find(|n| n.tag_name().name() == "Version");
+    let version = doc.descendants().find(|n| n.tag_name().name() == "Version");
 
     assert!(
         version.is_some(),
@@ -1825,7 +1843,9 @@ fn test_origin_xml_has_contains_exported_data() {
     let dacpac_path = result.dacpac_path.unwrap();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let origin_xml = info.origin_xml_content.expect("Should have Origin.xml content");
+    let origin_xml = info
+        .origin_xml_content
+        .expect("Should have Origin.xml content");
 
     let doc = roxmltree::Document::parse(&origin_xml).expect("Origin.xml should be valid XML");
 
@@ -1862,14 +1882,15 @@ fn test_metadata_xml_has_name() {
     let dacpac_path = result.dacpac_path.unwrap();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let metadata_xml = info.metadata_xml_content.expect("Should have DacMetadata.xml content");
+    let metadata_xml = info
+        .metadata_xml_content
+        .expect("Should have DacMetadata.xml content");
 
-    let doc = roxmltree::Document::parse(&metadata_xml).expect("DacMetadata.xml should be valid XML");
+    let doc =
+        roxmltree::Document::parse(&metadata_xml).expect("DacMetadata.xml should be valid XML");
 
     // Find Name element
-    let name = doc
-        .descendants()
-        .find(|n| n.tag_name().name() == "Name");
+    let name = doc.descendants().find(|n| n.tag_name().name() == "Name");
 
     assert!(
         name.is_some(),
@@ -1879,10 +1900,7 @@ fn test_metadata_xml_has_name() {
     // Verify name has content
     let name_node = name.unwrap();
     let name_text = name_node.text().unwrap_or("");
-    assert!(
-        !name_text.is_empty(),
-        "Name element should have a value"
-    );
+    assert!(!name_text.is_empty(), "Name element should have a value");
 }
 
 #[test]
@@ -1894,14 +1912,15 @@ fn test_metadata_xml_has_version() {
     let dacpac_path = result.dacpac_path.unwrap();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let metadata_xml = info.metadata_xml_content.expect("Should have DacMetadata.xml content");
+    let metadata_xml = info
+        .metadata_xml_content
+        .expect("Should have DacMetadata.xml content");
 
-    let doc = roxmltree::Document::parse(&metadata_xml).expect("DacMetadata.xml should be valid XML");
+    let doc =
+        roxmltree::Document::parse(&metadata_xml).expect("DacMetadata.xml should be valid XML");
 
     // Find Version element
-    let version = doc
-        .descendants()
-        .find(|n| n.tag_name().name() == "Version");
+    let version = doc.descendants().find(|n| n.tag_name().name() == "Version");
 
     assert!(
         version.is_some(),
@@ -1930,9 +1949,12 @@ fn test_content_types_has_correct_mime_types() {
     let dacpac_path = result.dacpac_path.unwrap();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let content_types_xml = info.content_types_xml_content.expect("Should have [Content_Types].xml content");
+    let content_types_xml = info
+        .content_types_xml_content
+        .expect("Should have [Content_Types].xml content");
 
-    let doc = roxmltree::Document::parse(&content_types_xml).expect("[Content_Types].xml should be valid XML");
+    let doc = roxmltree::Document::parse(&content_types_xml)
+        .expect("[Content_Types].xml should be valid XML");
 
     // Find all Override elements with ContentType
     let overrides: Vec<_> = doc
@@ -1982,10 +2004,7 @@ fn test_empty_project() {
             info.tables.is_empty(),
             "Empty project should have no tables"
         );
-        assert!(
-            info.views.is_empty(),
-            "Empty project should have no views"
-        );
+        assert!(info.views.is_empty(), "Empty project should have no views");
     } else {
         // Document that empty projects fail to build
         println!(
@@ -2095,7 +2114,9 @@ fn test_large_table_many_columns() {
     // Count SqlSimpleColumn elements
     let columns: Vec<_> = doc
         .descendants()
-        .filter(|n| n.tag_name().name() == "Element" && n.attribute("Type") == Some("SqlSimpleColumn"))
+        .filter(|n| {
+            n.tag_name().name() == "Element" && n.attribute("Type") == Some("SqlSimpleColumn")
+        })
         .collect();
 
     // Should have many columns (fixture has 50+)
@@ -2170,7 +2191,10 @@ fn test_multiple_indexes_same_table() {
         .iter()
         .filter_map(|idx| {
             idx.children()
-                .find(|c| c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("IndexedObject"))
+                .find(|c| {
+                    c.tag_name().name() == "Relationship"
+                        && c.attribute("Name") == Some("IndexedObject")
+                })
                 .and_then(|rel| {
                     rel.descendants()
                         .find(|d| d.tag_name().name() == "References")
@@ -2211,14 +2235,25 @@ fn test_self_referencing_foreign_key() {
     let self_ref_fk = fk_constraints.iter().find(|fk| {
         let defining_table = fk
             .children()
-            .find(|c| c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("DefiningTable"))
-            .and_then(|rel| rel.descendants().find(|d| d.tag_name().name() == "References"))
+            .find(|c| {
+                c.tag_name().name() == "Relationship"
+                    && c.attribute("Name") == Some("DefiningTable")
+            })
+            .and_then(|rel| {
+                rel.descendants()
+                    .find(|d| d.tag_name().name() == "References")
+            })
             .and_then(|r| r.attribute("Name"));
 
         let foreign_table = fk
             .children()
-            .find(|c| c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("ForeignTable"))
-            .and_then(|rel| rel.descendants().find(|d| d.tag_name().name() == "References"))
+            .find(|c| {
+                c.tag_name().name() == "Relationship" && c.attribute("Name") == Some("ForeignTable")
+            })
+            .and_then(|rel| {
+                rel.descendants()
+                    .find(|d| d.tag_name().name() == "References")
+            })
             .and_then(|r| r.attribute("Name"));
 
         // Self-referencing: both should reference the same table
@@ -2339,7 +2374,11 @@ mod xsd_validation {
     #[test]
     fn test_model_xml_validates_against_xsd() {
         let xsd_path = Path::new(XSD_PATH);
-        assert!(xsd_path.exists(), "XSD schema file not found at {}", XSD_PATH);
+        assert!(
+            xsd_path.exists(),
+            "XSD schema file not found at {}",
+            XSD_PATH
+        );
 
         // Parse the XSD schema once
         let mut schema_parser = SchemaParserContext::from_file(xsd_path.to_str().unwrap());
@@ -2414,7 +2453,11 @@ mod xsd_validation {
                 Err(errors) => {
                     let error_msgs: Vec<String> = errors
                         .iter()
-                        .map(|e| e.message.clone().unwrap_or_else(|| "Unknown error".to_string()))
+                        .map(|e| {
+                            e.message
+                                .clone()
+                                .unwrap_or_else(|| "Unknown error".to_string())
+                        })
                         .collect();
                     failures.push(format!(
                         "{}: XSD validation failed with {} errors:\n  {}",

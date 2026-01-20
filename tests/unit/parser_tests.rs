@@ -56,7 +56,8 @@ GO
 
 #[test]
 fn test_split_batches_case_insensitive_go() {
-    let sql = "CREATE TABLE t1 (id INT)\ngo\nCREATE TABLE t2 (id INT)\nGO\nCREATE TABLE t3 (id INT)\nGo";
+    let sql =
+        "CREATE TABLE t1 (id INT)\ngo\nCREATE TABLE t2 (id INT)\nGO\nCREATE TABLE t3 (id INT)\nGo";
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
@@ -75,7 +76,11 @@ fn test_split_batches_no_go() {
     assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
 
     let statements = result.unwrap();
-    assert_eq!(statements.len(), 2, "Expected 2 statements without GO separator");
+    assert_eq!(
+        statements.len(),
+        2,
+        "Expected 2 statements without GO separator"
+    );
 }
 
 // ============================================================================
@@ -93,7 +98,11 @@ CREATE TABLE [dbo].[SimpleTable] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse simple table: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse simple table: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
@@ -118,7 +127,11 @@ CREATE TABLE [dbo].[TableWithPK] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse table with PK: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with PK: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -133,7 +146,11 @@ CREATE TABLE [dbo].[TableWithNamedPK] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse table with named PK: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with named PK: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -152,7 +169,11 @@ CREATE TABLE [dbo].[Child] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse table with FK: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with FK: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     assert_eq!(statements.len(), 2);
@@ -170,7 +191,11 @@ CREATE TABLE [dbo].[TableWithUnique] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse table with unique: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with unique: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -185,7 +210,11 @@ CREATE TABLE [dbo].[TableWithCheck] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse table with check: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with check: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -200,7 +229,11 @@ CREATE TABLE [dbo].[TableWithDefault] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse table with default: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with default: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -214,7 +247,11 @@ CREATE TABLE [dbo].[TableWithIdentity] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse table with identity: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with identity: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -250,7 +287,11 @@ CREATE TABLE [dbo].[AllTypes] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse table with all types: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with all types: {:?}",
+        result.err()
+    );
 }
 
 // ============================================================================
@@ -267,7 +308,11 @@ SELECT 1 AS [Value];
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse simple view: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse simple view: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
@@ -290,7 +335,11 @@ SELECT 1, 2;
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse view with columns: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse view with columns: {:?}",
+        result.err()
+    );
 }
 
 // ============================================================================
@@ -306,7 +355,11 @@ ON [dbo].[SomeTable] ([Column1]);
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse nonclustered index: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse nonclustered index: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -318,7 +371,11 @@ ON [dbo].[SomeTable] ([Column1]);
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse clustered index: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse clustered index: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -330,7 +387,11 @@ ON [dbo].[SomeTable] ([Column1]);
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse unique index: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse unique index: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -343,7 +404,11 @@ INCLUDE ([Column2], [Column3]);
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse index with include: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse index with include: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -394,7 +459,9 @@ INCLUDE ([B]);
 
     let statements = result.unwrap();
     match &statements[0].fallback_type {
-        Some(rust_sqlpackage::parser::FallbackStatementType::Index { include_columns, .. }) => {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Index {
+            include_columns, ..
+        }) => {
             assert_eq!(include_columns.len(), 1);
             assert_eq!(include_columns[0], "B");
         }
@@ -415,8 +482,13 @@ ON [dbo].[T] ([Col1], [Col2]);
 
     let statements = result.unwrap();
     match &statements[0].fallback_type {
-        Some(rust_sqlpackage::parser::FallbackStatementType::Index { include_columns, .. }) => {
-            assert!(include_columns.is_empty(), "Index without INCLUDE should have no include_columns");
+        Some(rust_sqlpackage::parser::FallbackStatementType::Index {
+            include_columns, ..
+        }) => {
+            assert!(
+                include_columns.is_empty(),
+                "Index without INCLUDE should have no include_columns"
+            );
         }
         _ => panic!("Expected Index fallback type"),
     }
@@ -458,7 +530,11 @@ fn test_parse_index_missing_whitespace_before_on() {
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Should parse index with missing whitespace: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Should parse index with missing whitespace: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     match &statements[0].fallback_type {
@@ -495,7 +571,8 @@ fn test_parse_invalid_sql_returns_error() {
 
 #[test]
 fn test_parse_file_not_found_error() {
-    let result = rust_sqlpackage::parser::parse_sql_file(&PathBuf::from("/nonexistent/path/file.sql"));
+    let result =
+        rust_sqlpackage::parser::parse_sql_file(&PathBuf::from("/nonexistent/path/file.sql"));
     assert!(result.is_err(), "Non-existent file should return error");
 }
 
@@ -517,10 +594,17 @@ fn test_parse_whitespace_only_file() {
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Whitespace-only file should parse successfully");
+    assert!(
+        result.is_ok(),
+        "Whitespace-only file should parse successfully"
+    );
 
     let statements = result.unwrap();
-    assert_eq!(statements.len(), 0, "Whitespace-only file should have no statements");
+    assert_eq!(
+        statements.len(),
+        0,
+        "Whitespace-only file should have no statements"
+    );
 }
 
 #[test]
@@ -537,7 +621,11 @@ fn test_parse_comment_only_file() {
     // Either is acceptable for a baseline test
     if result.is_ok() {
         let statements = result.unwrap();
-        assert_eq!(statements.len(), 0, "Comment-only file should have no statements");
+        assert_eq!(
+            statements.len(),
+            0,
+            "Comment-only file should have no statements"
+        );
     }
 }
 
@@ -564,7 +652,10 @@ fn test_split_batches_go_with_count() {
         );
     } else {
         // If parsing fails entirely, that's also acceptable behavior
-        println!("Note: GO with count causes parse failure: {:?}", result.err());
+        println!(
+            "Note: GO with count causes parse failure: {:?}",
+            result.err()
+        );
     }
 }
 
@@ -626,7 +717,11 @@ CREATE TABLE t2 (id INT)
     // it will fail. If it is comment-aware, it should produce 2 statements.
     if result.is_ok() {
         let statements = result.unwrap();
-        assert_eq!(statements.len(), 2, "GO in block comment should not cause split");
+        assert_eq!(
+            statements.len(),
+            2,
+            "GO in block comment should not cause split"
+        );
     } else {
         // Document that GO in block comments is not currently handled
         println!("Note: GO in block comments not handled: {:?}", result.err());
@@ -654,7 +749,10 @@ CREATE TABLE [dbo].[TableWithComputed] (
         let statements = result.unwrap();
         assert_eq!(statements.len(), 1);
     } else {
-        println!("Note: Computed columns not fully supported: {:?}", result.err());
+        println!(
+            "Note: Computed columns not fully supported: {:?}",
+            result.err()
+        );
     }
 }
 
@@ -675,7 +773,10 @@ CREATE TABLE [dbo].[TableWithPersistedComputed] (
         let statements = result.unwrap();
         assert_eq!(statements.len(), 1);
     } else {
-        println!("Note: PERSISTED computed columns not supported: {:?}", result.err());
+        println!(
+            "Note: PERSISTED computed columns not supported: {:?}",
+            result.err()
+        );
     }
 }
 
@@ -717,7 +818,11 @@ ON [dbo].[SomeTable] ([Column1]);
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Standard CREATE INDEX should be supported: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Standard CREATE INDEX should be supported: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
@@ -741,16 +846,24 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse simple procedure: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse simple procedure: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
 
     // Either sqlparser parsed it or fallback did
-    if let Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { schema, name }) = &statements[0].fallback_type {
+    if let Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { schema, name }) =
+        &statements[0].fallback_type
+    {
         assert_eq!(schema, "dbo");
         assert_eq!(name, "GetUsers");
-    } else if let Some(sqlparser::ast::Statement::CreateProcedure { name, .. }) = &statements[0].statement {
+    } else if let Some(sqlparser::ast::Statement::CreateProcedure { name, .. }) =
+        &statements[0].statement
+    {
         assert!(name.to_string().contains("GetUsers"));
     } else {
         panic!("Expected CreateProcedure statement or fallback type");
@@ -772,7 +885,11 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse procedure with parameters: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse procedure with parameters: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
@@ -805,7 +922,11 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse CREATE OR ALTER PROCEDURE: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse CREATE OR ALTER PROCEDURE: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     match &statements[0].fallback_type {
@@ -830,7 +951,11 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse PROC abbreviation: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse PROC abbreviation: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     match &statements[0].fallback_type {
@@ -855,14 +980,22 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse procedure without schema: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse procedure without schema: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     // Check either fallback or sqlparser parsing
-    if let Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { schema, name }) = &statements[0].fallback_type {
+    if let Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { schema, name }) =
+        &statements[0].fallback_type
+    {
         assert_eq!(schema, "dbo", "Should default to dbo schema");
         assert_eq!(name, "SimpleProc");
-    } else if let Some(sqlparser::ast::Statement::CreateProcedure { name, .. }) = &statements[0].statement {
+    } else if let Some(sqlparser::ast::Statement::CreateProcedure { name, .. }) =
+        &statements[0].statement
+    {
         assert!(name.to_string().contains("SimpleProc"));
     } else {
         panic!("Expected CreateProcedure statement or fallback type");
@@ -891,17 +1024,28 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse scalar function: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse scalar function: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
 
     // Functions always use fallback parsing with MsSqlDialect
     match &statements[0].fallback_type {
-        Some(rust_sqlpackage::parser::FallbackStatementType::Function { schema, name, function_type }) => {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function {
+            schema,
+            name,
+            function_type,
+        }) => {
             assert_eq!(schema, "dbo");
             assert_eq!(name, "GetFullName");
-            assert_eq!(*function_type, rust_sqlpackage::parser::FallbackFunctionType::Scalar);
+            assert_eq!(
+                *function_type,
+                rust_sqlpackage::parser::FallbackFunctionType::Scalar
+            );
         }
         _ => panic!("Expected Function fallback type"),
     }
@@ -924,14 +1068,25 @@ RETURN
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse table-valued function: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table-valued function: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     match &statements[0].fallback_type {
-        Some(rust_sqlpackage::parser::FallbackStatementType::Function { schema, name, function_type }) => {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function {
+            schema,
+            name,
+            function_type,
+        }) => {
             assert_eq!(schema, "dbo");
             assert_eq!(name, "GetUserOrders");
-            assert_eq!(*function_type, rust_sqlpackage::parser::FallbackFunctionType::TableValued);
+            assert_eq!(
+                *function_type,
+                rust_sqlpackage::parser::FallbackFunctionType::TableValued
+            );
         }
         _ => panic!("Expected Function fallback type"),
     }
@@ -959,15 +1114,26 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse multi-statement table function: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse multi-statement table function: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     match &statements[0].fallback_type {
-        Some(rust_sqlpackage::parser::FallbackStatementType::Function { schema, name, function_type }) => {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function {
+            schema,
+            name,
+            function_type,
+        }) => {
             assert_eq!(schema, "dbo");
             assert_eq!(name, "GetFilteredData");
             // RETURNS @ResultTable TABLE should be detected as table-valued
-            assert_eq!(*function_type, rust_sqlpackage::parser::FallbackFunctionType::TableValued);
+            assert_eq!(
+                *function_type,
+                rust_sqlpackage::parser::FallbackFunctionType::TableValued
+            );
         }
         _ => panic!("Expected Function fallback type"),
     }
@@ -989,7 +1155,11 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse CREATE OR ALTER FUNCTION: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse CREATE OR ALTER FUNCTION: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     match &statements[0].fallback_type {
@@ -1014,7 +1184,11 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse function without schema: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse function without schema: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     match &statements[0].fallback_type {
@@ -1059,22 +1233,35 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(result.is_ok(), "Failed to parse multiple procs/funcs: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse multiple procs/funcs: {:?}",
+        result.err()
+    );
 
     let statements = result.unwrap();
     assert_eq!(statements.len(), 3, "Should have 3 statements");
 
     // Verify each statement has fallback type (uses T-SQL syntax)
-    assert!(matches!(
-        &statements[0].fallback_type,
-        Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { name, .. }) if name == "Proc1"
-    ), "First should be Proc1");
-    assert!(matches!(
-        &statements[1].fallback_type,
-        Some(rust_sqlpackage::parser::FallbackStatementType::Function { name, .. }) if name == "Func1"
-    ), "Second should be Func1");
-    assert!(matches!(
-        &statements[2].fallback_type,
-        Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { name, .. }) if name == "Proc2"
-    ), "Third should be Proc2");
+    assert!(
+        matches!(
+            &statements[0].fallback_type,
+            Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { name, .. }) if name == "Proc1"
+        ),
+        "First should be Proc1"
+    );
+    assert!(
+        matches!(
+            &statements[1].fallback_type,
+            Some(rust_sqlpackage::parser::FallbackStatementType::Function { name, .. }) if name == "Func1"
+        ),
+        "Second should be Func1"
+    );
+    assert!(
+        matches!(
+            &statements[2].fallback_type,
+            Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { name, .. }) if name == "Proc2"
+        ),
+        "Third should be Proc2"
+    );
 }

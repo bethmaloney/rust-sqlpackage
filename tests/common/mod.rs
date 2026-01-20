@@ -26,8 +26,7 @@ impl TestContext {
         let project_dir = temp_dir.path().to_path_buf();
 
         // Copy fixture to temp directory
-        copy_dir_recursive(&fixture_path, &project_dir)
-            .expect("Failed to copy fixture");
+        copy_dir_recursive(&fixture_path, &project_dir).expect("Failed to copy fixture");
 
         Self {
             temp_dir,
@@ -43,7 +42,10 @@ impl TestContext {
 
     /// Get the expected output dacpac path
     pub fn output_dacpac_path(&self) -> PathBuf {
-        self.project_dir.join("bin").join("Debug").join("project.dacpac")
+        self.project_dir
+            .join("bin")
+            .join("Debug")
+            .join("project.dacpac")
     }
 
     /// Build the project using rust-sqlpackage library
@@ -101,16 +103,16 @@ pub struct DacpacInfo {
 impl DacpacInfo {
     /// Parse a dacpac file and extract information
     pub fn from_dacpac(path: &Path) -> Result<Self, String> {
-        let file = fs::File::open(path)
-            .map_err(|e| format!("Failed to open dacpac: {}", e))?;
+        let file = fs::File::open(path).map_err(|e| format!("Failed to open dacpac: {}", e))?;
 
-        let mut archive = ZipArchive::new(file)
-            .map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+        let mut archive =
+            ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
 
         let mut info = DacpacInfo::default();
 
         for i in 0..archive.len() {
-            let mut file = archive.by_index(i)
+            let mut file = archive
+                .by_index(i)
                 .map_err(|e| format!("Failed to read ZIP entry: {}", e))?;
 
             let name = file.name().to_string();
@@ -170,10 +172,7 @@ impl DacpacInfo {
 
     /// Check if dacpac has all required files
     pub fn is_valid(&self) -> bool {
-        self.has_model_xml
-            && self.has_metadata_xml
-            && self.has_origin_xml
-            && self.has_content_types
+        self.has_model_xml && self.has_metadata_xml && self.has_origin_xml && self.has_content_types
     }
 }
 
