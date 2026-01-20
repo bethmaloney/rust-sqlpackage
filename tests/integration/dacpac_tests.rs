@@ -2348,8 +2348,31 @@ mod xsd_validation {
 
         let xml_parser = Parser::default();
 
-        // Test fixtures to validate
-        let fixtures = ["simple_table", "constraints", "views", "indexes"];
+        // Test fixtures to validate - all fixtures that produce valid dacpacs
+        let fixtures = [
+            "all_constraints",
+            "build_with_exclude",
+            "column_properties",
+            "constraints",
+            "element_types",
+            "empty_project",
+            "external_reference",
+            "identity_column",
+            "index_properties",
+            "indexes",
+            "large_table",
+            "multiple_indexes",
+            "only_schemas",
+            "pre_post_deploy",
+            "reserved_keywords",
+            "self_ref_fk",
+            "simple_table",
+            "sqlcmd_includes",
+            "unicode_identifiers",
+            "unresolved_reference",
+            "varbinary_max",
+            "views",
+        ];
         let mut failures: Vec<String> = Vec::new();
 
         for fixture in fixtures {
