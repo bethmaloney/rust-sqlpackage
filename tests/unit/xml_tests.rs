@@ -316,6 +316,79 @@ CREATE TABLE [dbo].[T] (
 }
 
 // ============================================================================
+// Annotation Format Tests
+// ============================================================================
+
+#[test]
+fn test_annotation_type_as_xml_attribute() {
+    // Annotations must have Type as an XML attribute, not as a nested Attribute element
+    // Correct: <Annotation Type="SqlInlineConstraintAnnotation">
+    // Wrong:   <Annotation><Attribute Name="Type" Value="SqlInlineConstraintAnnotation"/></Annotation>
+    let sql = r#"
+CREATE VIEW [dbo].[TestView]
+AS
+SELECT 1 AS Value;
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Verify Type is an XML attribute on Annotation element
+    assert!(
+        xml.contains(r#"<Annotation Type="SqlInlineConstraintAnnotation">"#),
+        "Annotation should have Type as XML attribute. Got:\n{}",
+        xml
+    );
+
+    // Verify we're NOT using the old nested Attribute format
+    assert!(
+        !xml.contains(r#"<Attribute Name="Type" Value="SqlInlineConstraintAnnotation"/>"#),
+        "Should NOT use nested Attribute element for Type"
+    );
+}
+
+#[test]
+fn test_procedure_annotation_format() {
+    let sql = r#"
+CREATE PROCEDURE [dbo].[TestProc]
+AS
+BEGIN
+    SELECT 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Procedures should have annotation with Type as attribute
+    assert!(
+        xml.contains(r#"<Annotation Type="SqlInlineConstraintAnnotation">"#),
+        "Procedure should have Annotation with Type attribute"
+    );
+
+    // Should have Script property inside annotation
+    assert!(
+        xml.contains(r#"<Property Name="Script""#),
+        "Annotation should contain Script property"
+    );
+}
+
+#[test]
+fn test_function_annotation_format() {
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetOne]()
+RETURNS INT
+AS
+BEGIN
+    RETURN 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Functions should have annotation with Type as attribute
+    assert!(
+        xml.contains(r#"<Annotation Type="SqlInlineConstraintAnnotation">"#),
+        "Function should have Annotation with Type attribute"
+    );
+}
+
+// ============================================================================
 // Relationship Generation Tests
 // ============================================================================
 
@@ -514,21 +587,69 @@ fn test_generate_dac_metadata_version() {
 
 #[test]
 fn test_generate_origin_xml() {
-    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("checksum123");
+    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("ABCD1234");
 
     assert!(
-        origin.contains("<Origin") || origin.contains("Origin"),
-        "Should have Origin element"
+        origin.contains("<DacOrigin"),
+        "Should have DacOrigin root element"
+    );
+    assert!(
+        origin.contains("</DacOrigin>"),
+        "Should have closing DacOrigin element"
     );
 }
 
 #[test]
-fn test_generate_origin_checksum() {
-    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("abc123checksum");
+fn test_origin_xml_version_format() {
+    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("ABCD1234");
 
+    // Version should be 3.1.0.0 for DacFx compatibility
     assert!(
-        origin.contains("abc123checksum") || origin.contains("Checksum"),
-        "Should contain checksum information"
+        origin.contains("<Version>3.1.0.0</Version>"),
+        "Should have Version 3.1.0.0 for DacFx compatibility. Got:\n{}",
+        origin
+    );
+}
+
+#[test]
+fn test_origin_xml_stream_versions_format() {
+    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("ABCD1234");
+
+    // StreamVersions should have nested Version elements with StreamName attributes
+    assert!(
+        origin.contains("<StreamVersions>"),
+        "Should have StreamVersions element"
+    );
+    assert!(
+        origin.contains(r#"<Version StreamName="Data">2.0.0.0</Version>"#),
+        "Should have Data stream version. Got:\n{}",
+        origin
+    );
+    assert!(
+        origin.contains(r#"<Version StreamName="DeploymentContributors">1.0.0.0</Version>"#),
+        "Should have DeploymentContributors stream version. Got:\n{}",
+        origin
+    );
+}
+
+#[test]
+fn test_origin_xml_checksum_format() {
+    let checksum = "18AE866BF3C8C1B7729EB146103A79679CB967AF8D5A3F3D5C7DA8E029DE66D3";
+    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string(checksum);
+
+    // Checksum should be in Checksums section with Uri attribute
+    assert!(
+        origin.contains("<Checksums>"),
+        "Should have Checksums element"
+    );
+    assert!(
+        origin.contains(r#"<Checksum Uri="/model.xml">"#),
+        "Should have Checksum element with Uri attribute. Got:\n{}",
+        origin
+    );
+    assert!(
+        origin.contains(checksum),
+        "Should contain the actual checksum value"
     );
 }
 

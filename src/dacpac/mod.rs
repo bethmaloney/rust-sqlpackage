@@ -64,9 +64,9 @@ pub fn generate_dac_metadata_xml(name: &str, version: &str) -> String {
 }
 
 /// Generate Origin.xml as a string (for testing)
-pub fn generate_origin_xml_string(_checksum: &str) -> String {
+pub fn generate_origin_xml_string(checksum: &str) -> String {
     let mut buffer = Vec::new();
-    generate_origin_xml(&mut buffer).unwrap();
+    generate_origin_xml(&mut buffer, checksum).unwrap();
     String::from_utf8(buffer).unwrap()
 }
 

@@ -6,7 +6,7 @@ use std::io::Write;
 
 const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
 
-pub fn generate_origin_xml<W: Write>(writer: W) -> anyhow::Result<()> {
+pub fn generate_origin_xml<W: Write>(writer: W, model_xml_checksum: &str) -> anyhow::Result<()> {
     let mut xml_writer = Writer::new_with_indent(writer, b' ', 2);
 
     // XML declaration
@@ -20,15 +20,33 @@ pub fn generate_origin_xml<W: Write>(writer: W) -> anyhow::Result<()> {
     // PackageProperties
     xml_writer.write_event(Event::Start(BytesStart::new("PackageProperties")))?;
 
-    write_element(&mut xml_writer, "Version", env!("CARGO_PKG_VERSION"))?;
+    write_element(&mut xml_writer, "Version", "3.1.0.0")?;
     write_element(&mut xml_writer, "ContainsExportedData", "false")?;
-    write_element(&mut xml_writer, "StreamVersions", "DatabaseCompare=1.0")?;
+
+    // StreamVersions with nested Version elements
+    xml_writer.write_event(Event::Start(BytesStart::new("StreamVersions")))?;
+    let mut data_version = BytesStart::new("Version");
+    data_version.push_attribute(("StreamName", "Data"));
+    xml_writer.write_event(Event::Start(data_version))?;
+    xml_writer.write_event(Event::Text(quick_xml::events::BytesText::new("2.0.0.0")))?;
+    xml_writer.write_event(Event::End(BytesEnd::new("Version")))?;
+    let mut contrib_version = BytesStart::new("Version");
+    contrib_version.push_attribute(("StreamName", "DeploymentContributors"));
+    xml_writer.write_event(Event::Start(contrib_version))?;
+    xml_writer.write_event(Event::Text(quick_xml::events::BytesText::new("1.0.0.0")))?;
+    xml_writer.write_event(Event::End(BytesEnd::new("Version")))?;
+    xml_writer.write_event(Event::End(BytesEnd::new("StreamVersions")))?;
 
     xml_writer.write_event(Event::End(BytesEnd::new("PackageProperties")))?;
 
-    // Checksums (empty for now)
-    let checksums = BytesStart::new("Checksums");
-    xml_writer.write_event(Event::Empty(checksums))?;
+    // Checksums
+    xml_writer.write_event(Event::Start(BytesStart::new("Checksums")))?;
+    let mut checksum = BytesStart::new("Checksum");
+    checksum.push_attribute(("Uri", "/model.xml"));
+    xml_writer.write_event(Event::Start(checksum))?;
+    xml_writer.write_event(Event::Text(quick_xml::events::BytesText::new(model_xml_checksum)))?;
+    xml_writer.write_event(Event::End(BytesEnd::new("Checksum")))?;
+    xml_writer.write_event(Event::End(BytesEnd::new("Checksums")))?;
 
     // Operation
     xml_writer.write_event(Event::Start(BytesStart::new("Operation")))?;

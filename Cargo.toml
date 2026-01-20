@@ -33,6 +33,9 @@ uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 regex = "1"
 
+# Cryptography
+sha2 = "0.10"
+
 # Encoding
 encoding_rs = "0.8"
 

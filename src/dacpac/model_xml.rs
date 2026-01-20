@@ -231,10 +231,7 @@ fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::R
     write_relationship(writer, "Schema", &[&format!("[{}]", view.schema)])?;
 
     // Write definition as annotation
-    writer.write_event(Event::Start(BytesStart::new("Annotation")))?;
-    write_attribute(writer, "Type", "SqlInlineConstraintAnnotation")?;
-    write_property(writer, "Script", &view.definition)?;
-    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+    write_script_annotation(writer, &view.definition)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -253,10 +250,7 @@ fn write_procedure<W: Write>(
 
     write_relationship(writer, "Schema", &[&format!("[{}]", proc.schema)])?;
 
-    writer.write_event(Event::Start(BytesStart::new("Annotation")))?;
-    write_attribute(writer, "Type", "SqlInlineConstraintAnnotation")?;
-    write_property(writer, "Script", &proc.definition)?;
-    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+    write_script_annotation(writer, &proc.definition)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -280,10 +274,7 @@ fn write_function<W: Write>(
 
     write_relationship(writer, "Schema", &[&format!("[{}]", func.schema)])?;
 
-    writer.write_event(Event::Start(BytesStart::new("Annotation")))?;
-    write_attribute(writer, "Type", "SqlInlineConstraintAnnotation")?;
-    write_property(writer, "Script", &func.definition)?;
-    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+    write_script_annotation(writer, &func.definition)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -401,10 +392,7 @@ fn write_constraint<W: Write>(
 
     // Check constraint expression
     if let Some(ref definition) = constraint.definition {
-        writer.write_event(Event::Start(BytesStart::new("Annotation")))?;
-        write_attribute(writer, "Type", "SqlInlineConstraintAnnotation")?;
-        write_property(writer, "Script", definition)?;
-        writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+        write_script_annotation(writer, definition)?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -419,11 +407,13 @@ fn write_property<W: Write>(writer: &mut Writer<W>, name: &str, value: &str) -> 
     Ok(())
 }
 
-fn write_attribute<W: Write>(writer: &mut Writer<W>, name: &str, value: &str) -> anyhow::Result<()> {
-    let mut attr = BytesStart::new("Attribute");
-    attr.push_attribute(("Name", name));
-    attr.push_attribute(("Value", value));
-    writer.write_event(Event::Empty(attr))?;
+/// Write an annotation with the script as a property (for views/procs/functions)
+fn write_script_annotation<W: Write>(writer: &mut Writer<W>, script: &str) -> anyhow::Result<()> {
+    let mut annotation = BytesStart::new("Annotation");
+    annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
+    writer.write_event(Event::Start(annotation))?;
+    write_property(writer, "Script", script)?;
+    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
     Ok(())
 }
 
@@ -484,10 +474,7 @@ fn write_sequence<W: Write>(writer: &mut Writer<W>, seq: &SequenceElement) -> an
     write_relationship(writer, "Schema", &[&format!("[{}]", seq.schema)])?;
 
     // Store the definition as an annotation
-    writer.write_event(Event::Start(BytesStart::new("Annotation")))?;
-    write_attribute(writer, "Type", "SqlInlineConstraintAnnotation")?;
-    write_property(writer, "Script", &seq.definition)?;
-    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+    write_script_annotation(writer, &seq.definition)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -508,10 +495,7 @@ fn write_user_defined_type<W: Write>(
     write_relationship(writer, "Schema", &[&format!("[{}]", udt.schema)])?;
 
     // Store the definition as an annotation
-    writer.write_event(Event::Start(BytesStart::new("Annotation")))?;
-    write_attribute(writer, "Type", "SqlInlineConstraintAnnotation")?;
-    write_property(writer, "Script", &udt.definition)?;
-    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+    write_script_annotation(writer, &udt.definition)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -529,10 +513,7 @@ fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Resu
     write_relationship(writer, "Schema", &[&format!("[{}]", raw.schema)])?;
 
     // Store the definition as an annotation
-    writer.write_event(Event::Start(BytesStart::new("Annotation")))?;
-    write_attribute(writer, "Type", "SqlInlineConstraintAnnotation")?;
-    write_property(writer, "Script", &raw.definition)?;
-    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+    write_script_annotation(writer, &raw.definition)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())

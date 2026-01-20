@@ -5,6 +5,7 @@ use std::io::{Cursor, Write};
 use std::path::Path;
 
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
@@ -51,9 +52,14 @@ pub fn create_dacpac(
     zip.start_file("DacMetadata.xml", options)?;
     zip.write_all(metadata_buffer.get_ref())?;
 
+    // Compute SHA256 checksum of model.xml for Origin.xml
+    let mut hasher = Sha256::new();
+    hasher.update(model_buffer.get_ref());
+    let model_checksum = format!("{:X}", hasher.finalize());
+
     // Write Origin.xml
     let mut origin_buffer = Cursor::new(Vec::new());
-    origin_xml::generate_origin_xml(&mut origin_buffer)?;
+    origin_xml::generate_origin_xml(&mut origin_buffer, &model_checksum)?;
     zip.start_file("Origin.xml", options)?;
     zip.write_all(origin_buffer.get_ref())?;
 
