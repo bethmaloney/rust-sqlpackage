@@ -45,19 +45,48 @@ rust-sqlpackage build \
 | `-t, --target-platform` | SQL Server version: Sql130, Sql140, Sql150, Sql160 (default: Sql160) |
 | `-v, --verbose` | Enable verbose output |
 
-## Supported SQL Statements
+## Supported Features
 
-- `CREATE TABLE` (with columns, constraints, indexes)
-- `CREATE VIEW`
-- `CREATE INDEX`
-- `CREATE SCHEMA`
-- Primary Key, Foreign Key, Unique, Check constraints
+### SQL Objects
 
-### Coming Soon
+| Object | Support Level | Notes |
+|--------|---------------|-------|
+| Tables | ✅ Full | Columns, data types, nullable, defaults, identity |
+| Views | ✅ Full | Definition preserved as-is |
+| Stored Procedures | ✅ Partial | Schema/name extracted; parameters not parsed |
+| Functions | ✅ Partial | Scalar, table-valued, inline; parameters not parsed |
+| Indexes | ✅ Partial | Clustered/nonclustered, unique; INCLUDE clause not extracted |
+| Schemas | ✅ Full | Auto-created for all objects |
+| Sequences | ✅ Full | CREATE SEQUENCE statements |
+| User-Defined Types | ✅ Full | Table types and custom types |
 
-- `CREATE PROCEDURE`
-- `CREATE FUNCTION`
+### Constraints
+
+- Primary Key, Foreign Key, Unique, Check, Default
+
+### Deployment Scripts
+
+- Pre-deployment and post-deployment scripts
+- SQLCMD `:r` include directive (with nested includes)
+- SQLCMD `:setvar` variable substitution
+
+### Project File Features
+
+- Legacy `<Build Include="">` items
+- SDK-style glob patterns (`**/*.sql`)
+- `<Build Remove="">` exclusions
+- `<ArtifactReference>` dacpac references
+- Target platform detection (Sql130-Sql160)
+
+### Not Yet Supported
+
 - Triggers
+- Synonyms
+- Assembly/CLR objects
+- Full-text catalogs/indexes
+- Extended properties
+- Full procedure/function parameter extraction
+- Index INCLUDE column extraction
 
 ## Project File Support
 
@@ -75,11 +104,13 @@ Supports both legacy and SDK-style `.sqlproj` files:
 
 ## Output Format
 
-Generates standard `.dacpac` packages compatible with:
+Generates standard `.dacpac` packages (ZIP files containing `model.xml`, `DacMetadata.xml`, `Origin.xml`) compatible with:
+
 - SQL Server Management Studio
 - Azure Data Studio
 - SqlPackage CLI
 - DacFx API
+- SQL Server 2016-2022
 
 ## Development
 

@@ -72,3 +72,59 @@
 - [ ] Compare output dacpac with .NET-generated dacpac
 - [ ] Deploy Rust-generated dacpac to SQL Server
 - [ ] Performance benchmark vs .NET
+
+---
+
+## Phase 8: Index INCLUDE Clause Support
+- [ ] Update fallback index parsing regex to capture INCLUDE columns
+- [ ] Add `include_columns: Vec<String>` to index model element
+- [ ] Generate INCLUDE columns in model.xml output
+- [ ] Add test fixture with INCLUDE clause indexes
+- [ ] Unit tests for INCLUDE extraction
+
+## Phase 9: Procedure/Function Parameter Extraction
+- [ ] Parse parameter definitions from CREATE PROCEDURE
+- [ ] Parse parameter definitions from CREATE FUNCTION
+- [ ] Extract parameter name, data type, direction (IN/OUT/INOUT)
+- [ ] Extract default values
+- [ ] Add parameters to model elements
+- [ ] Generate parameter XML in model.xml
+- [ ] Unit tests for parameter extraction
+
+## Phase 10: Trigger Support
+- [ ] Add TriggerElement to model
+- [ ] Parse CREATE TRIGGER statements (fallback regex)
+- [ ] Extract trigger timing (AFTER/INSTEAD OF)
+- [ ] Extract trigger events (INSERT/UPDATE/DELETE)
+- [ ] Extract target table reference
+- [ ] Generate trigger XML in model.xml
+- [ ] Add test fixture with triggers
+- [ ] Unit tests for trigger parsing
+
+## Phase 11: Synonym Support
+- [ ] Add SynonymElement to model
+- [ ] Parse CREATE SYNONYM statements
+- [ ] Extract target object reference
+- [ ] Generate synonym XML in model.xml
+- [ ] Unit tests for synonym parsing
+
+## Phase 12: Database Properties
+- [ ] Parse DefaultFilegroup from sqlproj
+- [ ] Parse PermissionSet from sqlproj
+- [ ] Parse PageVerify from sqlproj
+- [ ] Parse suppressed warnings from sqlproj
+- [ ] Include database properties in model.xml header
+- [ ] Unit tests for property parsing
+
+## Phase 13: Extended Properties
+- [ ] Parse sp_addextendedproperty calls
+- [ ] Extract MS_Description and other properties
+- [ ] Associate properties with target objects
+- [ ] Generate extended property XML
+- [ ] Unit tests for extended properties
+
+## Future Considerations
+- [ ] Full-text catalogs and indexes
+- [ ] Assembly/CLR objects
+- [ ] Service Broker objects
+- [ ] Database users/roles/permissions
