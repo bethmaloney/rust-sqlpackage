@@ -49,8 +49,8 @@
 - [x] Generate DataSchemaModel root element
 - [x] Generate Element nodes for each object
 - [x] Generate Property and Relationship nodes
-- [ ] Match DacFx XML schema exactly (needs validation)
-- [ ] Unit tests for XML generation
+- [x] Match DacFx XML schema exactly (Relationship Name as attribute, ExternalSource for built-ins)
+- [x] Unit tests for XML generation (37 tests covering elements, relationships, types, properties)
 
 ## Phase 6: Dacpac Package Generator
 - [x] Create src/dacpac/packager.rs

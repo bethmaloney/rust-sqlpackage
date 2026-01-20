@@ -86,8 +86,9 @@ fn write_table<W: Write>(writer: &mut Writer<W>, table: &TableElement) -> anyhow
 
     // Relationship to columns
     if !table.columns.is_empty() {
-        writer.write_event(Event::Start(BytesStart::new("Relationship")))?;
-        write_attribute(writer, "Name", "Columns")?;
+        let mut rel = BytesStart::new("Relationship");
+        rel.push_attribute(("Name", "Columns"));
+        writer.write_event(Event::Start(rel))?;
 
         for col in &table.columns {
             write_column(writer, col, &full_name)?;
@@ -136,8 +137,9 @@ fn write_type_specifier<W: Write>(
     precision: Option<u8>,
     scale: Option<u8>,
 ) -> anyhow::Result<()> {
-    writer.write_event(Event::Start(BytesStart::new("Relationship")))?;
-    write_attribute(writer, "Name", "TypeSpecifier")?;
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "TypeSpecifier"));
+    writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
@@ -145,9 +147,9 @@ fn write_type_specifier<W: Write>(
     elem.push_attribute(("Type", "SqlTypeSpecifier"));
     writer.write_event(Event::Start(elem))?;
 
-    // Write type reference based on data type
+    // Write type reference based on data type (with ExternalSource for built-ins)
     let type_ref = sql_type_to_reference(data_type);
-    write_relationship(writer, "Type", &[&type_ref])?;
+    write_builtin_type_relationship(writer, "Type", &type_ref)?;
 
     // Write length/precision/scale if applicable
     if let Some(len) = max_length {
@@ -376,8 +378,9 @@ fn write_relationship<W: Write>(
     name: &str,
     references: &[&str],
 ) -> anyhow::Result<()> {
-    writer.write_event(Event::Start(BytesStart::new("Relationship")))?;
-    write_attribute(writer, "Name", name)?;
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", name));
+    writer.write_event(Event::Start(rel))?;
 
     for reference in references {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
@@ -388,6 +391,28 @@ fn write_relationship<W: Write>(
 
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+fn write_builtin_type_relationship<W: Write>(
+    writer: &mut Writer<W>,
+    name: &str,
+    type_ref: &str,
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", name));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut refs = BytesStart::new("References");
+    refs.push_attribute(("ExternalSource", "BuiltIns"));
+    refs.push_attribute(("Name", type_ref));
+    writer.write_event(Event::Empty(refs))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
 
     writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())

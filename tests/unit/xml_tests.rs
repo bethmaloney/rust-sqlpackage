@@ -253,6 +253,66 @@ CREATE TABLE [dbo].[T] (
     );
 }
 
+#[test]
+fn test_generate_procedure_element() {
+    let sql = r#"
+CREATE PROCEDURE [dbo].[TestProc]
+AS
+BEGIN
+    SELECT 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    assert!(
+        xml.contains("Type=\"SqlProcedure\""),
+        "XML should have SqlProcedure element type"
+    );
+    assert!(
+        xml.contains("TestProc"),
+        "XML should contain procedure name"
+    );
+}
+
+#[test]
+fn test_generate_scalar_function_element() {
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetValue]()
+RETURNS INT
+AS
+BEGIN
+    RETURN 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    assert!(
+        xml.contains("Type=\"SqlScalarFunction\""),
+        "XML should have SqlScalarFunction element type"
+    );
+    assert!(
+        xml.contains("GetValue"),
+        "XML should contain function name"
+    );
+}
+
+#[test]
+fn test_generate_check_constraint_element() {
+    let sql = r#"
+CREATE TABLE [dbo].[T] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [Age] INT NOT NULL,
+    CONSTRAINT [CK_T_Age] CHECK ([Age] >= 0)
+);
+"#;
+    let xml = generate_model_xml(sql);
+
+    assert!(
+        xml.contains("Type=\"SqlCheckConstraint\""),
+        "XML should have SqlCheckConstraint element type"
+    );
+}
+
 // ============================================================================
 // Relationship Generation Tests
 // ============================================================================
@@ -270,6 +330,43 @@ fn test_generate_schema_relationship() {
 }
 
 #[test]
+fn test_relationship_name_as_attribute() {
+    let sql = "CREATE TABLE [dbo].[T] ([Id] INT NOT NULL);";
+    let xml = generate_model_xml(sql);
+
+    // Name should be an attribute on Relationship, not a child Attribute element
+    assert!(
+        xml.contains("Relationship Name=\"Schema\""),
+        "Relationship should have Name as attribute: {xml}"
+    );
+    assert!(
+        xml.contains("Relationship Name=\"Columns\""),
+        "Columns relationship should have Name as attribute: {xml}"
+    );
+    // Should NOT have the old format with child Attribute element
+    assert!(
+        !xml.contains("<Attribute Name=\"Name\" Value=\"Schema\"/>"),
+        "Should not use child Attribute for relationship name"
+    );
+}
+
+#[test]
+fn test_builtin_type_has_external_source() {
+    let sql = "CREATE TABLE [dbo].[T] ([Id] INT NOT NULL);";
+    let xml = generate_model_xml(sql);
+
+    // Built-in types should have ExternalSource="BuiltIns" attribute
+    assert!(
+        xml.contains("ExternalSource=\"BuiltIns\""),
+        "Built-in type references should have ExternalSource attribute: {xml}"
+    );
+    assert!(
+        xml.contains("References ExternalSource=\"BuiltIns\" Name=\"[int]\""),
+        "INT type should reference BuiltIns: {xml}"
+    );
+}
+
+#[test]
 fn test_generate_columns_relationship() {
     let sql = "CREATE TABLE [dbo].[T] ([Id] INT NOT NULL, [Name] NVARCHAR(100) NULL);";
     let xml = generate_model_xml(sql);
@@ -278,6 +375,65 @@ fn test_generate_columns_relationship() {
     assert!(
         xml.contains("SqlSimpleColumn"),
         "XML should have column elements in relationship"
+    );
+}
+
+// ============================================================================
+// Data Type Tests
+// ============================================================================
+
+#[test]
+fn test_generate_varchar_type() {
+    let sql = "CREATE TABLE [dbo].[T] ([Name] VARCHAR(100) NOT NULL);";
+    let xml = generate_model_xml(sql);
+
+    assert!(
+        xml.contains("Name=\"[varchar]\""),
+        "XML should reference varchar type: {xml}"
+    );
+}
+
+#[test]
+fn test_generate_nvarchar_type() {
+    let sql = "CREATE TABLE [dbo].[T] ([Name] NVARCHAR(255) NOT NULL);";
+    let xml = generate_model_xml(sql);
+
+    assert!(
+        xml.contains("Name=\"[nvarchar]\""),
+        "XML should reference nvarchar type: {xml}"
+    );
+}
+
+#[test]
+fn test_generate_decimal_type() {
+    let sql = "CREATE TABLE [dbo].[T] ([Amount] DECIMAL(18,2) NOT NULL);";
+    let xml = generate_model_xml(sql);
+
+    assert!(
+        xml.contains("Name=\"[decimal]\""),
+        "XML should reference decimal type: {xml}"
+    );
+}
+
+#[test]
+fn test_generate_datetime_type() {
+    let sql = "CREATE TABLE [dbo].[T] ([Created] DATETIME NOT NULL);";
+    let xml = generate_model_xml(sql);
+
+    assert!(
+        xml.contains("Name=\"[datetime]\""),
+        "XML should reference datetime type: {xml}"
+    );
+}
+
+#[test]
+fn test_generate_uniqueidentifier_type() {
+    let sql = "CREATE TABLE [dbo].[T] ([Id] UNIQUEIDENTIFIER NOT NULL);";
+    let xml = generate_model_xml(sql);
+
+    assert!(
+        xml.contains("Name=\"[uniqueidentifier]\""),
+        "XML should reference uniqueidentifier type: {xml}"
     );
 }
 
