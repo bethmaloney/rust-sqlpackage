@@ -6,7 +6,8 @@ use std::io::Write;
 
 use crate::model::{
     ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, FunctionElement,
-    IndexElement, ModelElement, ProcedureElement, SchemaElement, TableElement, ViewElement,
+    IndexElement, ModelElement, ProcedureElement, RawElement, SchemaElement, SequenceElement,
+    TableElement, UserDefinedTypeElement, ViewElement,
 };
 use crate::project::SqlProject;
 
@@ -62,6 +63,9 @@ fn write_element<W: Write>(
         ModelElement::Function(f) => write_function(writer, f),
         ModelElement::Index(i) => write_index(writer, i),
         ModelElement::Constraint(c) => write_constraint(writer, c),
+        ModelElement::Sequence(s) => write_sequence(writer, s),
+        ModelElement::UserDefinedType(u) => write_user_defined_type(writer, u),
+        ModelElement::Raw(r) => write_raw(writer, r),
     }
 }
 
@@ -415,5 +419,71 @@ fn write_builtin_type_relationship<W: Write>(
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
 
     writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+fn write_sequence<W: Write>(writer: &mut Writer<W>, seq: &SequenceElement) -> anyhow::Result<()> {
+    let full_name = format!("[{}].[{}]", seq.schema, seq.name);
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlSequence"));
+    elem.push_attribute(("Name", full_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Relationship to schema
+    write_relationship(writer, "Schema", &[&format!("[{}]", seq.schema)])?;
+
+    // Store the definition as an annotation
+    writer.write_event(Event::Start(BytesStart::new("Annotation")))?;
+    write_attribute(writer, "Type", "SqlInlineConstraintAnnotation")?;
+    write_property(writer, "Script", &seq.definition)?;
+    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+fn write_user_defined_type<W: Write>(
+    writer: &mut Writer<W>,
+    udt: &UserDefinedTypeElement,
+) -> anyhow::Result<()> {
+    let full_name = format!("[{}].[{}]", udt.schema, udt.name);
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlUserDefinedTableType"));
+    elem.push_attribute(("Name", full_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Relationship to schema
+    write_relationship(writer, "Schema", &[&format!("[{}]", udt.schema)])?;
+
+    // Store the definition as an annotation
+    writer.write_event(Event::Start(BytesStart::new("Annotation")))?;
+    write_attribute(writer, "Type", "SqlInlineConstraintAnnotation")?;
+    write_property(writer, "Script", &udt.definition)?;
+    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {
+    let full_name = format!("[{}].[{}]", raw.schema, raw.name);
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", raw.sql_type.as_str()));
+    elem.push_attribute(("Name", full_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Relationship to schema
+    write_relationship(writer, "Schema", &[&format!("[{}]", raw.schema)])?;
+
+    // Store the definition as an annotation
+    writer.write_event(Event::Start(BytesStart::new("Annotation")))?;
+    write_attribute(writer, "Type", "SqlInlineConstraintAnnotation")?;
+    write_property(writer, "Script", &raw.definition)?;
+    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
 }

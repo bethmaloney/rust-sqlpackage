@@ -10,6 +10,10 @@ pub enum ModelElement {
     Function(FunctionElement),
     Index(IndexElement),
     Constraint(ConstraintElement),
+    Sequence(SequenceElement),
+    UserDefinedType(UserDefinedTypeElement),
+    /// Generic raw element for statements that couldn't be fully parsed
+    Raw(RawElement),
 }
 
 impl ModelElement {
@@ -33,6 +37,15 @@ impl ModelElement {
                 ConstraintType::Check => "SqlCheckConstraint",
                 ConstraintType::Default => "SqlDefaultConstraint",
             },
+            ModelElement::Sequence(_) => "SqlSequence",
+            ModelElement::UserDefinedType(_) => "SqlUserDefinedTableType",
+            ModelElement::Raw(r) => match r.sql_type.as_str() {
+                "SqlTable" => "SqlTable",
+                "SqlView" => "SqlView",
+                "SqlDmlTrigger" => "SqlDmlTrigger",
+                "SqlAlterTableStatement" => "SqlAlterTableStatement",
+                _ => "SqlUnknown",
+            },
         }
     }
 
@@ -46,6 +59,9 @@ impl ModelElement {
             ModelElement::Function(f) => format!("[{}].[{}]", f.schema, f.name),
             ModelElement::Index(i) => format!("[{}].[{}].[{}]", i.table_schema, i.table_name, i.name),
             ModelElement::Constraint(c) => format!("[{}].[{}].[{}]", c.table_schema, c.table_name, c.name),
+            ModelElement::Sequence(s) => format!("[{}].[{}]", s.schema, s.name),
+            ModelElement::UserDefinedType(u) => format!("[{}].[{}]", u.schema, u.name),
+            ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),
         }
     }
 }
@@ -156,4 +172,29 @@ pub struct ConstraintElement {
     pub referenced_table: Option<String>,
     /// For foreign keys: referenced columns
     pub referenced_columns: Option<Vec<String>>,
+}
+
+/// Sequence element
+#[derive(Debug, Clone)]
+pub struct SequenceElement {
+    pub schema: String,
+    pub name: String,
+    pub definition: String,
+}
+
+/// User-defined type element (table types, etc.)
+#[derive(Debug, Clone)]
+pub struct UserDefinedTypeElement {
+    pub schema: String,
+    pub name: String,
+    pub definition: String,
+}
+
+/// Generic raw element for statements that couldn't be fully parsed
+#[derive(Debug, Clone)]
+pub struct RawElement {
+    pub schema: String,
+    pub name: String,
+    pub sql_type: String,
+    pub definition: String,
 }

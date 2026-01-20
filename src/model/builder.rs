@@ -12,7 +12,8 @@ use crate::project::SqlProject;
 
 use super::{
     ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, FunctionElement, FunctionType,
-    IndexElement, ModelElement, ProcedureElement, SchemaElement, TableElement, ViewElement,
+    IndexElement, ModelElement, ProcedureElement, RawElement, SchemaElement, SequenceElement,
+    TableElement, UserDefinedTypeElement, ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -70,6 +71,42 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         columns: columns.clone(),
                         is_unique: *is_unique,
                         is_clustered: *is_clustered,
+                    }));
+                }
+                FallbackStatementType::Sequence { schema, name } => {
+                    schemas.insert(schema.clone());
+                    model.add_element(ModelElement::Sequence(SequenceElement {
+                        schema: schema.clone(),
+                        name: name.clone(),
+                        definition: parsed.sql_text.clone(),
+                    }));
+                }
+                FallbackStatementType::UserDefinedType { schema, name } => {
+                    schemas.insert(schema.clone());
+                    model.add_element(ModelElement::UserDefinedType(UserDefinedTypeElement {
+                        schema: schema.clone(),
+                        name: name.clone(),
+                        definition: parsed.sql_text.clone(),
+                    }));
+                }
+                FallbackStatementType::RawStatement {
+                    object_type,
+                    schema,
+                    name,
+                } => {
+                    schemas.insert(schema.clone());
+                    let sql_type = match object_type.to_uppercase().as_str() {
+                        "TABLE" => "SqlTable",
+                        "VIEW" => "SqlView",
+                        "TRIGGER" => "SqlDmlTrigger",
+                        "ALTERTABLE" => "SqlAlterTableStatement",
+                        _ => "SqlUnknown",
+                    };
+                    model.add_element(ModelElement::Raw(RawElement {
+                        schema: schema.clone(),
+                        name: name.clone(),
+                        sql_type: sql_type.to_string(),
+                        definition: parsed.sql_text.clone(),
                     }));
                 }
             }

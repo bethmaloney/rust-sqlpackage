@@ -164,23 +164,68 @@ fn extract_lcid_from_collation(collation: &str) -> Option<u32> {
 
 fn find_sql_files(root: &roxmltree::Node, project_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut sql_files = Vec::new();
+    let mut include_patterns: Vec<String> = Vec::new();
+    let mut exclude_patterns: Vec<String> = Vec::new();
 
-    // Look for Build items with .sql extension
+    // Collect Build Include and Remove patterns
     for node in root.descendants() {
         if node.tag_name().name() == "Build" {
             if let Some(include) = node.attribute("Include") {
-                if include.to_lowercase().ends_with(".sql") {
-                    let sql_path = project_dir.join(include.replace('\\', "/"));
-                    if sql_path.exists() {
-                        sql_files.push(sql_path);
-                    }
-                }
+                include_patterns.push(include.replace('\\', "/"));
+            }
+            if let Some(remove) = node.attribute("Remove") {
+                exclude_patterns.push(remove.replace('\\', "/"));
             }
         }
     }
 
-    // If no explicit Build items, glob for .sql files (SDK-style projects)
-    if sql_files.is_empty() {
+    // Process include patterns
+    for pattern in &include_patterns {
+        if pattern.contains('*') {
+            // Glob pattern - expand it
+            let glob_pattern = project_dir.join(pattern);
+            let glob_str = glob_pattern.to_string_lossy();
+            if let Ok(paths) = glob::glob(&glob_str) {
+                for entry in paths.filter_map(|p| p.ok()) {
+                    if entry.extension().map_or(false, |ext| ext == "sql") {
+                        sql_files.push(entry);
+                    }
+                }
+            }
+        } else if pattern.to_lowercase().ends_with(".sql") {
+            // Direct file path
+            let sql_path = project_dir.join(pattern);
+            if sql_path.exists() {
+                sql_files.push(sql_path);
+            }
+        }
+    }
+
+    // Apply exclusion patterns
+    if !exclude_patterns.is_empty() {
+        sql_files.retain(|file| {
+            for pattern in &exclude_patterns {
+                if pattern.contains('*') {
+                    let glob_pattern = project_dir.join(pattern);
+                    let glob_str = glob_pattern.to_string_lossy();
+                    if let Ok(matcher) = glob::Pattern::new(&glob_str) {
+                        if matcher.matches_path(file) {
+                            return false;
+                        }
+                    }
+                } else {
+                    let exclude_path = project_dir.join(pattern);
+                    if file == &exclude_path {
+                        return false;
+                    }
+                }
+            }
+            true
+        });
+    }
+
+    // If no explicit Build items, glob for .sql files in project directory (SDK-style default)
+    if sql_files.is_empty() && include_patterns.is_empty() {
         for entry in walkdir::WalkDir::new(project_dir)
             .into_iter()
             .filter_map(|e| e.ok())

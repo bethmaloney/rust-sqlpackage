@@ -42,6 +42,20 @@ pub enum FallbackStatementType {
         is_unique: bool,
         is_clustered: bool,
     },
+    Sequence {
+        schema: String,
+        name: String,
+    },
+    UserDefinedType {
+        schema: String,
+        name: String,
+    },
+    /// Generic fallback for any statement that can't be parsed
+    RawStatement {
+        object_type: String,
+        schema: String,
+        name: String,
+    },
 }
 
 /// Function type detected from SQL
@@ -96,8 +110,11 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
         source: e,
     })?;
 
+    // Strip UTF-8 BOM if present
+    let content = content.strip_prefix('\u{FEFF}').unwrap_or(&content);
+
     // Split on GO statements (batch separator)
-    let batches = split_batches(&content);
+    let batches = split_batches(content);
 
     let dialect = MsSqlDialect {};
     let mut statements = Vec::new();
@@ -128,18 +145,14 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
                         trimmed.to_string(),
                     ));
                 } else {
-                    // Calculate line number for error
-                    let line = content[..content.find(trimmed).unwrap_or(0)]
-                        .lines()
-                        .count()
-                        + 1;
-
-                    return Err(SqlPackageError::SqlParseError {
-                        path: path.to_path_buf(),
-                        line,
-                        message: e.to_string(),
-                    }
-                    .into());
+                    // Log unparseable statements for diagnostics
+                    let preview: String = trimmed.chars().take(80).collect();
+                    eprintln!(
+                        "Warning: Skipped unparseable SQL in {}: {} ... ({})",
+                        path.display(),
+                        preview.replace('\n', " "),
+                        e
+                    );
                 }
             }
         }
@@ -187,7 +200,126 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         }
     }
 
+    // Check for CREATE SEQUENCE (T-SQL multiline syntax not fully supported by sqlparser)
+    if sql_upper.contains("CREATE SEQUENCE") {
+        if let Some((schema, name)) = extract_sequence_name(sql) {
+            return Some(FallbackStatementType::Sequence { schema, name });
+        }
+    }
+
+    // Check for CREATE TYPE (user-defined table types)
+    if sql_upper.contains("CREATE TYPE") {
+        if let Some((schema, name)) = extract_type_name(sql) {
+            return Some(FallbackStatementType::UserDefinedType { schema, name });
+        }
+    }
+
+    // Generic fallback for CREATE TABLE statements that fail parsing
+    if sql_upper.contains("CREATE TABLE") {
+        if let Some((schema, name)) = extract_generic_object_name(sql, "TABLE") {
+            return Some(FallbackStatementType::RawStatement {
+                object_type: "Table".to_string(),
+                schema,
+                name,
+            });
+        }
+    }
+
+    // Generic fallback for any other CREATE statements
+    if let Some(fallback) = try_generic_create_fallback(sql) {
+        return Some(fallback);
+    }
+
+    // Generic fallback for ALTER TABLE statements that can't be parsed
+    if sql_upper.contains("ALTER TABLE") {
+        if let Some((schema, name)) = extract_alter_table_name(sql) {
+            return Some(FallbackStatementType::RawStatement {
+                object_type: "AlterTable".to_string(),
+                schema,
+                name,
+            });
+        }
+    }
+
     None
+}
+
+/// Extract schema and name from ALTER TABLE statement
+fn extract_alter_table_name(sql: &str) -> Option<(String, String)> {
+    let re = regex::Regex::new(
+        r"(?i)ALTER\s+TABLE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+    ).ok()?;
+
+    let caps = re.captures(sql)?;
+    let schema = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let name = caps.get(2)?.as_str().to_string();
+
+    Some((schema, name))
+}
+
+/// Try to extract any CREATE statement as a generic fallback
+fn try_generic_create_fallback(sql: &str) -> Option<FallbackStatementType> {
+    let re = regex::Regex::new(
+        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?(\w+)\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+    ).ok()?;
+
+    let caps = re.captures(sql)?;
+    let object_type = caps.get(1)?.as_str().to_string();
+    let schema = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let name = caps.get(3)?.as_str().to_string();
+
+    Some(FallbackStatementType::RawStatement {
+        object_type,
+        schema,
+        name,
+    })
+}
+
+/// Extract schema and name for a specific object type
+fn extract_generic_object_name(sql: &str, object_type: &str) -> Option<(String, String)> {
+    let pattern = format!(
+        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?{}\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
+        object_type
+    );
+    let re = regex::Regex::new(&pattern).ok()?;
+
+    let caps = re.captures(sql)?;
+    let schema = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let name = caps.get(2)?.as_str().to_string();
+
+    Some((schema, name))
+}
+
+/// Extract schema and name from CREATE SEQUENCE statement
+fn extract_sequence_name(sql: &str) -> Option<(String, String)> {
+    // Match patterns like:
+    // CREATE SEQUENCE [dbo].[SeqName]
+    // CREATE SEQUENCE dbo.SeqName
+    let re = regex::Regex::new(
+        r"(?i)CREATE\s+SEQUENCE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+    ).ok()?;
+
+    let caps = re.captures(sql)?;
+    let schema = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let name = caps.get(2)?.as_str().to_string();
+
+    Some((schema, name))
+}
+
+/// Extract schema and name from CREATE TYPE statement
+fn extract_type_name(sql: &str) -> Option<(String, String)> {
+    // Match patterns like:
+    // CREATE TYPE [dbo].[TypeName] AS TABLE
+    // CREATE TYPE dbo.TypeName AS TABLE
+    let re = regex::Regex::new(
+        r"(?i)CREATE\s+TYPE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+    ).ok()?;
+
+    let caps = re.captures(sql)?;
+    let schema = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| "dbo".to_string());
+    let name = caps.get(2)?.as_str().to_string();
+
+    Some((schema, name))
 }
 
 /// Extract schema and name from CREATE PROCEDURE statement
@@ -288,28 +420,35 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
 /// Split SQL content into batches by GO statement
 fn split_batches(content: &str) -> Vec<&str> {
     let mut batches = Vec::new();
-    let mut start = 0;
+    let mut current_pos = 0;
+    let mut batch_start = 0;
 
-    for (i, line) in content.lines().enumerate() {
+    for line in content.lines() {
         let trimmed = line.trim();
+        // Calculate actual line length in the original content (including line ending)
+        let line_end = current_pos + line.len();
+        let next_pos = if content[line_end..].starts_with("\r\n") {
+            line_end + 2
+        } else if content[line_end..].starts_with('\n') {
+            line_end + 1
+        } else {
+            line_end // End of file, no newline
+        };
+
         // GO must be on its own line (optionally with whitespace)
         if trimmed.eq_ignore_ascii_case("go") {
-            let line_start = content
-                .lines()
-                .take(i)
-                .map(|l| l.len() + 1) // +1 for newline
-                .sum::<usize>();
-
-            if line_start > start {
-                batches.push(&content[start..line_start]);
+            if current_pos > batch_start {
+                batches.push(&content[batch_start..current_pos]);
             }
-            start = line_start + line.len() + 1; // Skip past GO and newline
+            batch_start = next_pos;
         }
+
+        current_pos = next_pos;
     }
 
     // Add remaining content
-    if start < content.len() {
-        batches.push(&content[start..]);
+    if batch_start < content.len() {
+        batches.push(&content[batch_start..]);
     }
 
     batches
