@@ -57,7 +57,7 @@ pub fn create_dacpac(
     zip.write_all(origin_buffer.get_ref())?;
 
     // Write [Content_Types].xml (required for package format)
-    let content_types = generate_content_types();
+    let content_types = generate_content_types_xml();
     zip.start_file("[Content_Types].xml", options)?;
     zip.write_all(content_types.as_bytes())?;
 
@@ -66,7 +66,7 @@ pub fn create_dacpac(
     Ok(())
 }
 
-fn generate_content_types() -> String {
+pub(crate) fn generate_content_types_xml() -> String {
     r#"<?xml version="1.0" encoding="utf-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="xml" ContentType="text/xml" />
