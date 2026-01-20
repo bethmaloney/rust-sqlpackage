@@ -55,6 +55,23 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         return_type: None,  // Return type is in the definition
                     }));
                 }
+                FallbackStatementType::Index {
+                    name,
+                    table_schema,
+                    table_name,
+                    columns,
+                    is_unique,
+                    is_clustered,
+                } => {
+                    model.add_element(ModelElement::Index(IndexElement {
+                        name: name.clone(),
+                        table_schema: table_schema.clone(),
+                        table_name: table_name.clone(),
+                        columns: columns.clone(),
+                        is_unique: *is_unique,
+                        is_clustered: *is_clustered,
+                    }));
+                }
             }
             continue;
         }

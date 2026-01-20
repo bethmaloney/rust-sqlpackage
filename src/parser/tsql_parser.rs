@@ -34,6 +34,14 @@ pub enum FallbackStatementType {
         name: String,
         function_type: FallbackFunctionType,
     },
+    Index {
+        name: String,
+        table_schema: String,
+        table_name: String,
+        columns: Vec<String>,
+        is_unique: bool,
+        is_clustered: bool,
+    },
 }
 
 /// Function type detected from SQL
@@ -168,6 +176,17 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         }
     }
 
+    // Check for CREATE CLUSTERED/NONCLUSTERED INDEX (T-SQL specific syntax)
+    if sql_upper.contains("CREATE CLUSTERED INDEX")
+        || sql_upper.contains("CREATE NONCLUSTERED INDEX")
+        || sql_upper.contains("CREATE UNIQUE CLUSTERED INDEX")
+        || sql_upper.contains("CREATE UNIQUE NONCLUSTERED INDEX")
+    {
+        if let Some(index_info) = extract_index_info(sql) {
+            return Some(index_info);
+        }
+    }
+
     None
 }
 
@@ -216,6 +235,54 @@ fn detect_function_type(sql: &str) -> FallbackFunctionType {
     } else {
         FallbackFunctionType::Scalar
     }
+}
+
+/// Extract index information from CREATE CLUSTERED/NONCLUSTERED INDEX statement
+fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
+    // Match patterns like:
+    // CREATE CLUSTERED INDEX [IX_Name] ON [dbo].[Table] ([Col1], [Col2] DESC)
+    // CREATE NONCLUSTERED INDEX [IX_Name] ON [schema].[Table] ([Col]) INCLUDE ([Col2])
+    // CREATE UNIQUE CLUSTERED INDEX IX_Name ON dbo.Table (Col)
+    let re = regex::Regex::new(
+        r"(?i)CREATE\s+(UNIQUE\s+)?(CLUSTERED|NONCLUSTERED)\s+INDEX\s+\[?(\w+)\]?\s+ON\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?\s*\(([^)]+)\)"
+    ).ok()?;
+
+    let caps = re.captures(sql)?;
+
+    let is_unique = caps.get(1).is_some();
+    let is_clustered = caps.get(2)
+        .map(|m| m.as_str().to_uppercase() == "CLUSTERED")
+        .unwrap_or(false);
+    let name = caps.get(3)?.as_str().to_string();
+    let table_schema = caps.get(4)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
+    let table_name = caps.get(5)?.as_str().to_string();
+
+    // Parse column list, handling sort direction (ASC/DESC)
+    let columns_str = caps.get(6)?.as_str();
+    let columns: Vec<String> = columns_str
+        .split(',')
+        .map(|col| {
+            // Extract column name, stripping brackets and sort direction
+            let col = col.trim();
+            let re_col = regex::Regex::new(r"(?i)\[?(\w+)\]?(?:\s+(?:ASC|DESC))?").ok();
+            re_col
+                .and_then(|r| r.captures(col))
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_else(|| col.to_string())
+        })
+        .collect();
+
+    Some(FallbackStatementType::Index {
+        name,
+        table_schema,
+        table_name,
+        columns,
+        is_unique,
+        is_clustered,
+    })
 }
 
 /// Split SQL content into batches by GO statement
