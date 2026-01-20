@@ -73,6 +73,10 @@ pub struct SqlProject {
     pub dacpac_references: Vec<DacpacReference>,
     /// Project directory
     pub project_dir: PathBuf,
+    /// Pre-deployment script file (optional, at most one)
+    pub pre_deploy_script: Option<PathBuf>,
+    /// Post-deployment script file (optional, at most one)
+    pub post_deploy_script: Option<PathBuf>,
 }
 
 /// Parse a .sqlproj file
@@ -119,6 +123,9 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
     // Find dacpac references
     let dacpac_references = find_dacpac_references(&root, &project_dir);
 
+    // Find pre/post deployment scripts
+    let (pre_deploy_script, post_deploy_script) = find_deployment_scripts(&root, &project_dir);
+
     Ok(SqlProject {
         name: project_name,
         target_platform,
@@ -127,6 +134,8 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         sql_files,
         dacpac_references,
         project_dir,
+        pre_deploy_script,
+        post_deploy_script,
     })
 }
 
@@ -283,6 +292,50 @@ fn find_dacpac_references(root: &roxmltree::Node, project_dir: &Path) -> Vec<Dac
     }
 
     references
+}
+
+fn find_deployment_scripts(
+    root: &roxmltree::Node,
+    project_dir: &Path,
+) -> (Option<PathBuf>, Option<PathBuf>) {
+    let mut pre_deploy: Option<PathBuf> = None;
+    let mut post_deploy: Option<PathBuf> = None;
+
+    for node in root.descendants() {
+        match node.tag_name().name() {
+            "PreDeploy" => {
+                if let Some(include) = node.attribute("Include") {
+                    let script_path = project_dir.join(include.replace('\\', "/"));
+                    if script_path.exists() {
+                        if pre_deploy.is_some() {
+                            eprintln!(
+                                "Warning: Multiple PreDeploy scripts specified, using first one"
+                            );
+                        } else {
+                            pre_deploy = Some(script_path);
+                        }
+                    }
+                }
+            }
+            "PostDeploy" => {
+                if let Some(include) = node.attribute("Include") {
+                    let script_path = project_dir.join(include.replace('\\', "/"));
+                    if script_path.exists() {
+                        if post_deploy.is_some() {
+                            eprintln!(
+                                "Warning: Multiple PostDeploy scripts specified, using first one"
+                            );
+                        } else {
+                            post_deploy = Some(script_path);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (pre_deploy, post_deploy)
 }
 
 #[cfg(test)]

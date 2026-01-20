@@ -26,6 +26,8 @@ fn create_test_project() -> rust_sqlpackage::project::SqlProject {
         sql_files: vec![],
         dacpac_references: vec![],
         project_dir: PathBuf::new(),
+        pre_deploy_script: None,
+        post_deploy_script: None,
     }
 }
 

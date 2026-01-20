@@ -32,6 +32,8 @@ pub fn generate_model_xml_string(
         sql_files: vec![],
         dacpac_references: vec![],
         project_dir: PathBuf::new(),
+        pre_deploy_script: None,
+        post_deploy_script: None,
     };
 
     let mut buffer = Vec::new();
@@ -52,6 +54,8 @@ pub fn generate_dac_metadata_xml(name: &str, version: &str) -> String {
         sql_files: vec![],
         dacpac_references: vec![],
         project_dir: PathBuf::new(),
+        pre_deploy_script: None,
+        post_deploy_script: None,
     };
 
     let mut buffer = Vec::new();
@@ -68,5 +72,5 @@ pub fn generate_origin_xml_string(_checksum: &str) -> String {
 
 /// Generate [Content_Types].xml as a string (for testing)
 pub fn generate_content_types_xml() -> String {
-    packager::generate_content_types_xml()
+    packager::generate_content_types_xml(false)
 }

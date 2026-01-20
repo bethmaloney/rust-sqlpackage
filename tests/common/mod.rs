@@ -85,8 +85,12 @@ pub struct DacpacInfo {
     pub has_metadata_xml: bool,
     pub has_origin_xml: bool,
     pub has_content_types: bool,
+    pub has_predeploy: bool,
+    pub has_postdeploy: bool,
     pub model_xml_content: Option<String>,
     pub metadata_xml_content: Option<String>,
+    pub predeploy_content: Option<String>,
+    pub postdeploy_content: Option<String>,
     pub tables: Vec<String>,
     pub views: Vec<String>,
     pub schemas: Vec<String>,
@@ -132,6 +136,20 @@ impl DacpacInfo {
                 }
                 "[Content_Types].xml" => {
                     info.has_content_types = true;
+                }
+                "predeploy.sql" => {
+                    info.has_predeploy = true;
+                    let mut content = String::new();
+                    file.read_to_string(&mut content)
+                        .map_err(|e| format!("Failed to read predeploy.sql: {}", e))?;
+                    info.predeploy_content = Some(content);
+                }
+                "postdeploy.sql" => {
+                    info.has_postdeploy = true;
+                    let mut content = String::new();
+                    file.read_to_string(&mut content)
+                        .map_err(|e| format!("Failed to read postdeploy.sql: {}", e))?;
+                    info.postdeploy_content = Some(content);
                 }
                 _ => {}
             }

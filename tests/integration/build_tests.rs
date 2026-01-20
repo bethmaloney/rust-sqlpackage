@@ -226,22 +226,41 @@ fn test_build_with_pre_post_deploy_scripts() {
     let ctx = TestContext::with_fixture("pre_post_deploy");
     let result = ctx.build();
 
-    // This test documents current behavior for deployment scripts
-    // Pre/post deployment scripts may or may not be supported yet
-    if result.success {
-        let dacpac_path = result.dacpac_path.unwrap();
-        let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+    assert!(
+        result.success,
+        "Build with pre/post deploy should succeed. Errors: {:?}",
+        result.errors
+    );
 
-        assert!(
-            info.tables.iter().any(|t| t.contains("Table1")),
-            "Should contain Table1"
-        );
-    } else {
-        println!(
-            "Note: Build with pre/post deploy scripts failed (may not be implemented yet): {:?}",
-            result.errors
-        );
-    }
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    // Verify table is present
+    assert!(
+        info.tables.iter().any(|t| t.contains("Table1")),
+        "Should contain Table1"
+    );
+
+    // Verify deployment scripts are packaged
+    assert!(info.has_predeploy, "Dacpac should contain predeploy.sql");
+    assert!(info.has_postdeploy, "Dacpac should contain postdeploy.sql");
+
+    // Verify script contents
+    let predeploy = info
+        .predeploy_content
+        .expect("Should have predeploy content");
+    assert!(
+        predeploy.contains("Starting deployment"),
+        "Predeploy should contain expected content"
+    );
+
+    let postdeploy = info
+        .postdeploy_content
+        .expect("Should have postdeploy content");
+    assert!(
+        postdeploy.contains("Deployment complete"),
+        "Postdeploy should contain expected content"
+    );
 }
 
 // ============================================================================

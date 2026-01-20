@@ -57,19 +57,54 @@ pub fn create_dacpac(
     zip.write_all(origin_buffer.get_ref())?;
 
     // Write [Content_Types].xml (required for package format)
-    let content_types = generate_content_types_xml();
+    let has_deploy_scripts =
+        project.pre_deploy_script.is_some() || project.post_deploy_script.is_some();
+    let content_types = generate_content_types_xml(has_deploy_scripts);
     zip.start_file("[Content_Types].xml", options)?;
     zip.write_all(content_types.as_bytes())?;
+
+    // Write predeploy.sql (if present)
+    if let Some(pre_deploy_path) = &project.pre_deploy_script {
+        let content = std::fs::read_to_string(pre_deploy_path).map_err(|e| {
+            SqlPackageError::SqlFileReadError {
+                path: pre_deploy_path.clone(),
+                source: e,
+            }
+        })?;
+        zip.start_file("predeploy.sql", options)?;
+        zip.write_all(content.as_bytes())?;
+    }
+
+    // Write postdeploy.sql (if present)
+    if let Some(post_deploy_path) = &project.post_deploy_script {
+        let content = std::fs::read_to_string(post_deploy_path).map_err(|e| {
+            SqlPackageError::SqlFileReadError {
+                path: post_deploy_path.clone(),
+                source: e,
+            }
+        })?;
+        zip.start_file("postdeploy.sql", options)?;
+        zip.write_all(content.as_bytes())?;
+    }
 
     zip.finish()?;
 
     Ok(())
 }
 
-pub(crate) fn generate_content_types_xml() -> String {
-    r#"<?xml version="1.0" encoding="utf-8"?>
+pub(crate) fn generate_content_types_xml(include_sql: bool) -> String {
+    if include_sql {
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml" />
+  <Default Extension="sql" ContentType="text/plain" />
+</Types>"#
+            .to_string()
+    } else {
+        r#"<?xml version="1.0" encoding="utf-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="xml" ContentType="application/xml" />
 </Types>"#
-        .to_string()
+            .to_string()
+    }
 }
