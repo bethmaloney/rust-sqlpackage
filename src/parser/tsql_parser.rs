@@ -53,6 +53,8 @@ pub enum FallbackStatementType {
         table_schema: String,
         table_name: String,
         columns: Vec<String>,
+        /// Columns included in the index leaf level (INCLUDE clause)
+        include_columns: Vec<String>,
         is_unique: bool,
         is_clustered: bool,
     },
@@ -392,8 +394,9 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     // CREATE CLUSTERED INDEX [IX_Name] ON [dbo].[Table] ([Col1], [Col2] DESC)
     // CREATE NONCLUSTERED INDEX [IX_Name] ON [schema].[Table] ([Col]) INCLUDE ([Col2])
     // CREATE UNIQUE CLUSTERED INDEX IX_Name ON dbo.Table (Col)
+    // Also handles malformed SQL with missing whitespace (e.g., "]ON" instead of "] ON")
     let re = regex::Regex::new(
-        r"(?i)CREATE\s+(UNIQUE\s+)?(CLUSTERED|NONCLUSTERED)\s+INDEX\s+\[?(\w+)\]?\s+ON\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?\s*\(([^)]+)\)"
+        r"(?i)CREATE\s+(UNIQUE\s+)?(CLUSTERED|NONCLUSTERED)\s+INDEX\s+\[?(\w+)\]?\s*ON\s*(?:\[?(\w+)\]?\.)?\[?(\w+)\]?\s*\(([^)]+)\)"
     ).ok()?;
 
     let caps = re.captures(sql)?;
@@ -410,7 +413,25 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
 
     // Parse column list, handling sort direction (ASC/DESC)
     let columns_str = caps.get(6)?.as_str();
-    let columns: Vec<String> = columns_str
+    let columns: Vec<String> = parse_column_list(columns_str);
+
+    // Extract INCLUDE columns if present
+    let include_columns = extract_include_columns(sql);
+
+    Some(FallbackStatementType::Index {
+        name,
+        table_schema,
+        table_name,
+        columns,
+        include_columns,
+        is_unique,
+        is_clustered,
+    })
+}
+
+/// Parse a comma-separated column list, stripping brackets and sort direction
+fn parse_column_list(columns_str: &str) -> Vec<String> {
+    columns_str
         .split(',')
         .map(|col| {
             // Extract column name, stripping brackets and sort direction
@@ -422,16 +443,18 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_else(|| col.to_string())
         })
-        .collect();
+        .collect()
+}
 
-    Some(FallbackStatementType::Index {
-        name,
-        table_schema,
-        table_name,
-        columns,
-        is_unique,
-        is_clustered,
-    })
+/// Extract columns from INCLUDE clause if present
+fn extract_include_columns(sql: &str) -> Vec<String> {
+    // Match INCLUDE ([Col1], [Col2], ...)
+    let re = regex::Regex::new(r"(?i)INCLUDE\s*\(([^)]+)\)").ok();
+
+    re.and_then(|r| r.captures(sql))
+        .and_then(|caps| caps.get(1))
+        .map(|m| parse_column_list(m.as_str()))
+        .unwrap_or_default()
 }
 
 /// Split SQL content into batches by GO statement, tracking line numbers

@@ -65,7 +65,7 @@
 - [x] Add build command
 - [x] Add verbose flag
 - [x] Add output path option
-- [ ] Error reporting with line numbers
+- [x] Error reporting with line numbers
 - [ ] End-to-end test
 
 ## Verification
@@ -76,11 +76,11 @@
 ---
 
 ## Phase 8: Index INCLUDE Clause Support
-- [ ] Update fallback index parsing regex to capture INCLUDE columns
-- [ ] Add `include_columns: Vec<String>` to index model element
-- [ ] Generate INCLUDE columns in model.xml output
-- [ ] Add test fixture with INCLUDE clause indexes
-- [ ] Unit tests for INCLUDE extraction
+- [x] Update fallback index parsing regex to capture INCLUDE columns
+- [x] Add `include_columns: Vec<String>` to index model element
+- [x] Generate INCLUDE columns in model.xml output
+- [x] Add test fixture with INCLUDE clause indexes
+- [x] Unit tests for INCLUDE extraction
 
 ## Phase 9: Procedure/Function Parameter Extraction
 - [ ] Parse parameter definitions from CREATE PROCEDURE

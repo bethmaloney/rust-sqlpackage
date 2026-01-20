@@ -613,3 +613,103 @@ fn test_xml_is_well_formed() {
         "XML tags should roughly balance"
     );
 }
+
+// ============================================================================
+// Index INCLUDE Columns Tests
+// ============================================================================
+
+#[test]
+fn test_generate_index_with_include_columns() {
+    let sql = r#"
+CREATE NONCLUSTERED INDEX [IX_T_WithInclude]
+ON [dbo].[T] ([KeyCol])
+INCLUDE ([IncludeCol1], [IncludeCol2]);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Should have IncludedColumns relationship
+    assert!(
+        xml.contains("IncludedColumns"),
+        "XML should have IncludedColumns relationship: {xml}"
+    );
+
+    // Should reference the included columns
+    assert!(
+        xml.contains("IncludeCol1"),
+        "XML should reference IncludeCol1: {xml}"
+    );
+    assert!(
+        xml.contains("IncludeCol2"),
+        "XML should reference IncludeCol2: {xml}"
+    );
+}
+
+#[test]
+fn test_generate_index_include_columns_format() {
+    let sql = r#"
+CREATE NONCLUSTERED INDEX [IX_Users_Email]
+ON [dbo].[Users] ([Email])
+INCLUDE ([FirstName], [LastName]);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // IncludedColumns should be a Relationship with Name attribute
+    assert!(
+        xml.contains("Relationship Name=\"IncludedColumns\""),
+        "IncludedColumns should use Relationship Name attribute format: {xml}"
+    );
+}
+
+#[test]
+fn test_generate_index_without_include_columns() {
+    let sql = r#"
+CREATE NONCLUSTERED INDEX [IX_T_NoInclude]
+ON [dbo].[T] ([Column1]);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Should NOT have IncludedColumns relationship when no INCLUDE clause
+    assert!(
+        !xml.contains("IncludedColumns"),
+        "XML should NOT have IncludedColumns when index has no INCLUDE clause: {xml}"
+    );
+}
+
+#[test]
+fn test_generate_index_column_specifications() {
+    let sql = r#"
+CREATE NONCLUSTERED INDEX [IX_T_Multi]
+ON [dbo].[T] ([Col1], [Col2])
+INCLUDE ([Col3]);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Should have ColumnSpecifications relationship for key columns
+    assert!(
+        xml.contains("ColumnSpecifications"),
+        "XML should have ColumnSpecifications relationship: {xml}"
+    );
+
+    // Should have SqlIndexedColumnSpecification elements
+    assert!(
+        xml.contains("SqlIndexedColumnSpecification"),
+        "XML should have SqlIndexedColumnSpecification elements: {xml}"
+    );
+}
+
+#[test]
+fn test_generate_index_structure_complete() {
+    let sql = r#"
+CREATE UNIQUE NONCLUSTERED INDEX [IX_Orders_CustomerDate]
+ON [dbo].[Orders] ([CustomerId], [OrderDate] DESC)
+INCLUDE ([TotalAmount], [Status]);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Verify all expected elements are present
+    assert!(xml.contains("SqlIndex"), "XML should have SqlIndex element");
+    assert!(xml.contains("IsUnique"), "XML should have IsUnique property for unique index");
+    assert!(xml.contains("IndexedObject"), "XML should have IndexedObject relationship");
+    assert!(xml.contains("ColumnSpecifications"), "XML should have ColumnSpecifications");
+    assert!(xml.contains("IncludedColumns"), "XML should have IncludedColumns");
+}

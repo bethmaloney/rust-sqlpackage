@@ -55,7 +55,7 @@ rust-sqlpackage build \
 | Views | ✅ Full | Definition preserved as-is |
 | Stored Procedures | ✅ Partial | Schema/name extracted; parameters not parsed |
 | Functions | ✅ Partial | Scalar, table-valued, inline; parameters not parsed |
-| Indexes | ✅ Partial | Clustered/nonclustered, unique; INCLUDE clause not extracted |
+| Indexes | ✅ Full | Clustered/nonclustered, unique, INCLUDE columns |
 | Schemas | ✅ Full | Auto-created for all objects |
 | Sequences | ✅ Full | CREATE SEQUENCE statements |
 | User-Defined Types | ✅ Full | Table types and custom types |
@@ -86,7 +86,6 @@ rust-sqlpackage build \
 - Full-text catalogs/indexes
 - Extended properties
 - Full procedure/function parameter extraction
-- Index INCLUDE column extraction
 
 ## Project File Support
 

@@ -312,7 +312,57 @@ fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow
     let table_ref = format!("[{}].[{}]", index.table_schema, index.table_name);
     write_relationship(writer, "IndexedObject", &[&table_ref])?;
 
+    // Write ColumnSpecifications for key columns
+    if !index.columns.is_empty() {
+        write_index_column_specifications(writer, index, &table_ref)?;
+    }
+
+    // Write IncludedColumns relationship if present
+    if !index.include_columns.is_empty() {
+        let include_refs: Vec<String> = index
+            .include_columns
+            .iter()
+            .map(|col| format!("{}.[{}]", table_ref, col))
+            .collect();
+        let include_refs: Vec<&str> = include_refs.iter().map(|s| s.as_str()).collect();
+        write_relationship(writer, "IncludedColumns", &include_refs)?;
+    }
+
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+fn write_index_column_specifications<W: Write>(
+    writer: &mut Writer<W>,
+    index: &IndexElement,
+    table_ref: &str,
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "ColumnSpecifications"));
+    writer.write_event(Event::Start(rel))?;
+
+    for (i, col) in index.columns.iter().enumerate() {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let spec_name = format!(
+            "[{}].[{}].[{}].[{}]",
+            index.table_schema, index.table_name, index.name, i
+        );
+
+        let mut elem = BytesStart::new("Element");
+        elem.push_attribute(("Type", "SqlIndexedColumnSpecification"));
+        elem.push_attribute(("Name", spec_name.as_str()));
+        writer.write_event(Event::Start(elem))?;
+
+        // Reference to the column
+        let col_ref = format!("{}.[{}]", table_ref, col);
+        write_relationship(writer, "Column", &[&col_ref])?;
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }
 

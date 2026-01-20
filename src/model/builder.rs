@@ -61,6 +61,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     table_schema,
                     table_name,
                     columns,
+                    include_columns,
                     is_unique,
                     is_clustered,
                 } => {
@@ -69,6 +70,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         table_schema: table_schema.clone(),
                         table_name: table_name.clone(),
                         columns: columns.clone(),
+                        include_columns: include_columns.clone(),
                         is_unique: *is_unique,
                         is_clustered: *is_clustered,
                     }));
@@ -172,11 +174,19 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     .map(|c| c.expr.to_string())
                     .collect();
 
+                // Extract INCLUDE columns if available from sqlparser
+                let include_columns: Vec<String> = create_index
+                    .include
+                    .iter()
+                    .map(|c| c.value.clone())
+                    .collect();
+
                 model.add_element(ModelElement::Index(IndexElement {
                     name: index_name,
                     table_schema,
                     table_name,
                     columns,
+                    include_columns,
                     is_unique: create_index.unique,
                     is_clustered: false, // sqlparser doesn't expose this directly
                 }));

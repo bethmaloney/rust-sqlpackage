@@ -145,6 +145,8 @@ pub struct IndexElement {
     pub table_schema: String,
     pub table_name: String,
     pub columns: Vec<String>,
+    /// Columns included in the index leaf level (INCLUDE clause)
+    pub include_columns: Vec<String>,
     pub is_unique: bool,
     pub is_clustered: bool,
 }
