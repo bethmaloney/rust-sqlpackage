@@ -59,12 +59,10 @@ The codebase follows a pipeline architecture:
 
 ## Known Parser Limitations
 
-The `sqlparser-rs` crate has incomplete T-SQL support:
+The `sqlparser-rs` crate has incomplete T-SQL support. Fallback regex-based parsing is used for:
 
-- **Index syntax**: `CREATE CLUSTERED/NONCLUSTERED INDEX` not recognized, INCLUDE clause fails
-- **Procedures/Functions**: Use fallback regex parsing, full parameter extraction not implemented
-
-Tests affected: `test_build_with_indexes`, `test_model_contains_indexes`
+- **Index syntax**: `CREATE CLUSTERED/NONCLUSTERED INDEX` uses fallback parsing (INCLUDE clause not extracted)
+- **Procedures/Functions**: Fallback regex parsing extracts schema and name; full parameter extraction not implemented
 
 ## Test Fixtures
 
@@ -74,7 +72,7 @@ Test fixtures in `tests/fixtures/` are self-contained SQL projects:
 |---------|-------|
 | `simple_table/` | Basic single table |
 | `constraints/` | PK, FK, unique, check constraints |
-| `indexes/` | Index definitions (some failing due to parser) |
+| `indexes/` | Index definitions with clustered/nonclustered indexes |
 | `views/` | View definitions |
 | `pre_post_deploy/` | Deployment scripts |
 | `build_with_exclude/` | SDK-style project with exclusions |
