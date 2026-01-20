@@ -39,7 +39,7 @@
 - [x] Build ProcedureElement from AST
 - [x] Build FunctionElement from AST
 - [x] Handle constraints and indexes
-- [ ] Unit tests for model builder
+- [x] Unit tests for model builder
 
 ## Phase 5: Model XML Generator
 - [x] Create src/dacpac/mod.rs
