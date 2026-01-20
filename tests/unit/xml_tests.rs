@@ -131,12 +131,18 @@ fn test_generate_model_element() {
 
 #[test]
 fn test_generate_schema_element() {
-    let sql = "CREATE TABLE [dbo].[T] ([Id] INT NOT NULL);";
+    // Use a custom schema (not dbo) since built-in schemas like dbo don't generate
+    // SqlSchema elements - they're referenced with ExternalSource="BuiltIns"
+    let sql = "CREATE TABLE [sales].[T] ([Id] INT NOT NULL);";
     let xml = generate_model_xml(sql);
 
     assert!(
         xml.contains("Type=\"SqlSchema\""),
         "XML should have SqlSchema element type"
+    );
+    assert!(
+        xml.contains("[sales]"),
+        "XML should contain the custom schema name"
     );
 }
 

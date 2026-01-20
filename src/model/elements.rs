@@ -38,7 +38,7 @@ impl ModelElement {
                 ConstraintType::Default => "SqlDefaultConstraint",
             },
             ModelElement::Sequence(_) => "SqlSequence",
-            ModelElement::UserDefinedType(_) => "SqlUserDefinedTableType",
+            ModelElement::UserDefinedType(_) => "SqlTableType",
             ModelElement::Raw(r) => match r.sql_type.as_str() {
                 "SqlTable" => "SqlTable",
                 "SqlView" => "SqlView",
@@ -194,6 +194,8 @@ pub struct UserDefinedTypeElement {
     pub schema: String,
     pub name: String,
     pub definition: String,
+    /// Columns for table types (if parsed)
+    pub columns: Vec<ColumnElement>,
 }
 
 /// Generic raw element for statements that couldn't be fully parsed

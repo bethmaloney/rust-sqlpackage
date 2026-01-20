@@ -13,6 +13,19 @@ use crate::project::SqlProject;
 
 const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
 
+/// Built-in schemas that exist by default in SQL Server
+const BUILTIN_SCHEMAS: &[&str] = &[
+    "dbo", "guest", "INFORMATION_SCHEMA", "sys", "db_owner",
+    "db_accessadmin", "db_securityadmin", "db_ddladmin",
+    "db_backupoperator", "db_datareader", "db_datawriter",
+    "db_denydatareader", "db_denydatawriter",
+];
+
+/// Check if a schema name is a built-in SQL Server schema
+fn is_builtin_schema(schema: &str) -> bool {
+    BUILTIN_SCHEMAS.iter().any(|&s| s.eq_ignore_ascii_case(schema))
+}
+
 pub fn generate_model_xml<W: Write>(
     writer: W,
     model: &DatabaseModel,
@@ -67,6 +80,12 @@ fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> an
 }
 
 fn write_schema<W: Write>(writer: &mut Writer<W>, schema: &SchemaElement) -> anyhow::Result<()> {
+    // Skip built-in schemas - they exist by default in SQL Server and are referenced
+    // with ExternalSource="BuiltIns" in relationships
+    if is_builtin_schema(&schema.name) {
+        return Ok(());
+    }
+
     let mut elem = BytesStart::new("Element");
     elem.push_attribute(("Type", "SqlSchema"));
     elem.push_attribute(("Name", format!("[{}]", schema.name).as_str()));
@@ -83,7 +102,7 @@ fn write_table<W: Write>(writer: &mut Writer<W>, table: &TableElement) -> anyhow
     writer.write_event(Event::Start(elem))?;
 
     // Relationship to schema
-    write_relationship(writer, "Schema", &[&format!("[{}]", table.schema)])?;
+    write_schema_relationship(writer, &table.schema)?;
 
     // Relationship to columns
     if !table.columns.is_empty() {
@@ -107,12 +126,30 @@ fn write_column<W: Write>(
     column: &ColumnElement,
     table_name: &str,
 ) -> anyhow::Result<()> {
-    let col_name = format!("{}.[{}]", table_name, column.name);
+    write_column_with_type(writer, column, table_name, "SqlSimpleColumn")
+}
+
+/// Write a table type column (uses SqlSimpleColumn - same as tables)
+fn write_table_type_column<W: Write>(
+    writer: &mut Writer<W>,
+    column: &ColumnElement,
+    type_name: &str,
+) -> anyhow::Result<()> {
+    write_column_with_type(writer, column, type_name, "SqlSimpleColumn")
+}
+
+fn write_column_with_type<W: Write>(
+    writer: &mut Writer<W>,
+    column: &ColumnElement,
+    parent_name: &str,
+    column_type: &str,
+) -> anyhow::Result<()> {
+    let col_name = format!("{}.[{}]", parent_name, column.name);
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlSimpleColumn"));
+    elem.push_attribute(("Type", column_type));
     elem.push_attribute(("Name", col_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
@@ -235,13 +272,39 @@ fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::R
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    // Write QueryScript property with CDATA containing the view definition
-    write_script_property(writer, "QueryScript", &view.definition)?;
+    // Extract just the query part (after AS) from the view definition
+    // QueryScript should not include the CREATE VIEW ... AS prefix
+    let query_script = extract_view_query(&view.definition);
+    write_script_property(writer, "QueryScript", &query_script)?;
 
-    write_relationship(writer, "Schema", &[&format!("[{}]", view.schema)])?;
+    write_schema_relationship(writer, &view.schema)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
+}
+
+/// Extract the query part from a CREATE VIEW definition
+/// Strips the "CREATE VIEW [name] AS" prefix, leaving just the SELECT statement
+fn extract_view_query(definition: &str) -> String {
+    // Find the AS keyword that separates the view header from the query
+    // Pattern: CREATE VIEW [schema].[name] AS SELECT ...
+    let def_upper = definition.to_uppercase();
+    if let Some(as_pos) = def_upper.find("\nAS\n")
+        .or_else(|| def_upper.find("\nAS "))
+        .or_else(|| def_upper.find(" AS\n"))
+        .or_else(|| def_upper.find(" AS "))
+    {
+        // Find the "AS" in the original string and skip past it
+        let after_as = &definition[as_pos..];
+        // Skip whitespace and "AS"
+        let trimmed = after_as.trim_start();
+        if trimmed.to_uppercase().starts_with("AS") {
+            let query = trimmed[2..].trim_start();
+            return query.to_string();
+        }
+    }
+    // Fallback: return the original definition if we can't find AS
+    definition.to_string()
 }
 
 fn write_procedure<W: Write>(
@@ -255,13 +318,254 @@ fn write_procedure<W: Write>(
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    // Write BodyScript property with CDATA containing the procedure definition
-    write_script_property(writer, "BodyScript", &proc.definition)?;
+    // For procedures, BodyScript should contain only the body after the final AS keyword
+    // Parameters must be defined as separate SqlSubroutineParameter elements
+    // First, extract and write parameters
+    let params = extract_procedure_parameters(&proc.definition);
+    if !params.is_empty() {
+        let mut param_rel = BytesStart::new("Relationship");
+        param_rel.push_attribute(("Name", "Parameters"));
+        writer.write_event(Event::Start(param_rel))?;
 
-    write_relationship(writer, "Schema", &[&format!("[{}]", proc.schema)])?;
+        for param in params.iter() {
+            writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+            // Parameter name must include @ prefix
+            let param_name_with_at = if param.name.starts_with('@') {
+                param.name.clone()
+            } else {
+                format!("@{}", param.name)
+            };
+            let param_name = format!("{}.[{}]", full_name, param_name_with_at);
+            let mut param_elem = BytesStart::new("Element");
+            param_elem.push_attribute(("Type", "SqlSubroutineParameter"));
+            param_elem.push_attribute(("Name", param_name.as_str()));
+            writer.write_event(Event::Start(param_elem))?;
+
+            // IsOutput property if applicable
+            if param.is_output {
+                write_property(writer, "IsOutput", "True")?;
+            }
+
+            // Data type relationship
+            write_data_type_relationship(writer, &param.data_type)?;
+
+            writer.write_event(Event::End(BytesEnd::new("Element")))?;
+            writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // Extract just the body part (after final AS)
+    let body = extract_procedure_body_only(&proc.definition);
+    write_script_property(writer, "BodyScript", &body)?;
+
+    write_schema_relationship(writer, &proc.schema)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
+}
+
+/// Represents an extracted procedure parameter
+#[derive(Debug)]
+struct ProcedureParameter {
+    name: String,
+    data_type: String,
+    is_output: bool,
+    #[allow(dead_code)] // Captured for potential future use
+    default_value: Option<String>,
+}
+
+/// Extract parameters from a CREATE PROCEDURE definition
+fn extract_procedure_parameters(definition: &str) -> Vec<ProcedureParameter> {
+    let mut params = Vec::new();
+
+    // Find the procedure name and the parameters that follow
+    let def_upper = definition.to_uppercase();
+    let proc_start = def_upper.find("CREATE PROCEDURE")
+        .or_else(|| def_upper.find("CREATE PROC"));
+
+    if proc_start.is_none() {
+        return params;
+    }
+
+    let after_create = &definition[proc_start.unwrap()..];
+
+    // Find the AS keyword that ends the parameter section
+    // Parameters are between procedure name and AS
+    let as_pos = find_standalone_as(after_create);
+    if as_pos.is_none() {
+        return params;
+    }
+
+    let header = &after_create[..as_pos.unwrap()];
+
+    // Find parameters - they start with @
+    // Parameters can be on the same line or multiple lines
+    let param_regex = regex::Regex::new(
+        r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:\s*=\s*([^,@]+?))?(?:\s+(OUTPUT|OUT))?(?:,|$|\s*\n)"
+    ).unwrap();
+
+    for cap in param_regex.captures_iter(header) {
+        let name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+        let data_type = cap.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+        let default_value = cap.get(3).map(|m| m.as_str().trim().to_string());
+        let is_output = cap.get(4).is_some();
+
+        if !name.is_empty() && !data_type.is_empty() {
+            // Clean up data type (remove trailing keywords like NULL, OUTPUT)
+            let clean_type = clean_data_type(&data_type);
+            params.push(ProcedureParameter {
+                name,
+                data_type: clean_type,
+                is_output,
+                default_value,
+            });
+        }
+    }
+
+    params
+}
+
+/// Find the standalone AS keyword that separates procedure header from body
+fn find_standalone_as(s: &str) -> Option<usize> {
+    let upper = s.to_uppercase();
+    let chars: Vec<char> = upper.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        // Look for AS preceded by whitespace/newline and followed by whitespace/newline
+        if i + 2 <= chars.len() && chars[i] == 'A' && chars[i + 1] == 'S' {
+            let prev_ok = i == 0 || chars[i - 1].is_whitespace();
+            let next_ok = i + 2 >= chars.len() || chars[i + 2].is_whitespace();
+            if prev_ok && next_ok {
+                // Make sure this isn't part of a longer word
+                let next_next_ok = i + 3 >= chars.len() || !chars[i + 2].is_alphanumeric();
+                if next_next_ok {
+                    return Some(i);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Clean up a data type string removing trailing keywords
+fn clean_data_type(dt: &str) -> String {
+    let trimmed = dt.trim().to_uppercase();
+    // Remove trailing NULL, NOT NULL, etc.
+    let cleaned = trimmed
+        .trim_end_matches(" NULL")
+        .trim_end_matches(" NOT")
+        .trim();
+    cleaned.to_string()
+}
+
+/// Extract just the body after AS from a procedure definition
+fn extract_procedure_body_only(definition: &str) -> String {
+    // Find the AS keyword that separates header from body
+    let as_pos = find_standalone_as(definition);
+    if let Some(pos) = as_pos {
+        let after_as = &definition[pos..];
+        // Skip "AS" and any following whitespace
+        let trimmed = after_as.trim_start();
+        if trimmed.to_uppercase().starts_with("AS") {
+            let body = trimmed[2..].trim_start();
+            return body.to_string();
+        }
+    }
+    definition.to_string()
+}
+
+/// Write the data type relationship for a parameter with inline type specifier
+fn write_data_type_relationship<W: Write>(writer: &mut Writer<W>, data_type: &str) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "Type"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    // Parse the data type and write an inline SqlTypeSpecifier element
+    let (base_type, length, precision, scale) = parse_data_type(data_type);
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTypeSpecifier"));
+    writer.write_event(Event::Start(elem))?;
+
+    // Write length/precision/scale if applicable
+    if let Some(len) = length {
+        if len == -1 {
+            write_property(writer, "IsMax", "True")?;
+        } else {
+            write_property(writer, "Length", &len.to_string())?;
+        }
+    }
+    if let Some(prec) = precision {
+        write_property(writer, "Precision", &prec.to_string())?;
+    }
+    if let Some(sc) = scale {
+        write_property(writer, "Scale", &sc.to_string())?;
+    }
+
+    // Write the base type as a reference
+    let type_ref = format!("[{}]", base_type.to_lowercase());
+    let mut type_rel = BytesStart::new("Relationship");
+    type_rel.push_attribute(("Name", "Type"));
+    writer.write_event(Event::Start(type_rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+    let mut refs = BytesStart::new("References");
+    refs.push_attribute(("ExternalSource", "BuiltIns"));
+    refs.push_attribute(("Name", type_ref.as_str()));
+    writer.write_event(Event::Empty(refs))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    Ok(())
+}
+
+/// Parse a SQL data type into (base_type, length, precision, scale)
+fn parse_data_type(data_type: &str) -> (String, Option<i32>, Option<i32>, Option<i32>) {
+    let dt_upper = data_type.to_uppercase().trim().to_string();
+
+    // Handle types with parameters like VARCHAR(50), DECIMAL(10,2), VARCHAR(MAX)
+    if let Some(paren_pos) = dt_upper.find('(') {
+        let base_type = dt_upper[..paren_pos].to_string();
+        let params_end = dt_upper.rfind(')').unwrap_or(dt_upper.len());
+        let params = &dt_upper[paren_pos + 1..params_end];
+
+        // Check for MAX
+        if params.trim().eq_ignore_ascii_case("MAX") {
+            return (base_type, Some(-1), None, None);
+        }
+
+        // Parse numeric parameters
+        let parts: Vec<&str> = params.split(',').collect();
+        if parts.len() == 1 {
+            // Single parameter (length or precision)
+            let val: i32 = parts[0].trim().parse().unwrap_or(0);
+            match base_type.as_str() {
+                "DECIMAL" | "NUMERIC" => (base_type, None, Some(val), Some(0)),
+                _ => (base_type, Some(val), None, None),
+            }
+        } else if parts.len() == 2 {
+            // Two parameters (precision, scale)
+            let prec: i32 = parts[0].trim().parse().unwrap_or(0);
+            let scale: i32 = parts[1].trim().parse().unwrap_or(0);
+            (base_type, None, Some(prec), Some(scale))
+        } else {
+            (base_type, None, None, None)
+        }
+    } else {
+        (dt_upper, None, None, None)
+    }
 }
 
 fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> anyhow::Result<()> {
@@ -277,13 +581,70 @@ fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> a
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    // Write BodyScript property with CDATA containing the function definition
-    write_script_property(writer, "BodyScript", &func.definition)?;
+    // Write FunctionBody relationship with SqlScriptFunctionImplementation
+    // Extract just the body (after final AS)
+    let body = extract_function_body(&func.definition);
+    write_function_body(writer, &body)?;
 
-    write_relationship(writer, "Schema", &[&format!("[{}]", func.schema)])?;
+    write_schema_relationship(writer, &func.schema)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
+}
+
+/// Write FunctionBody relationship for functions with nested SqlScriptFunctionImplementation
+fn write_function_body<W: Write>(writer: &mut Writer<W>, definition: &str) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "FunctionBody"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlScriptFunctionImplementation"));
+    writer.write_event(Event::Start(elem))?;
+
+    // Extract just the body part from the function definition
+    let body = extract_function_body(definition);
+    write_script_property(writer, "BodyScript", &body)?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    Ok(())
+}
+
+/// Extract the body part from a CREATE FUNCTION definition
+/// Returns just the body (BEGIN...END) without the CREATE FUNCTION header
+fn extract_function_body(definition: &str) -> String {
+    let def_upper = definition.to_uppercase();
+
+    // Find RETURNS and then AS after it
+    // Pattern: CREATE FUNCTION [name](...) RETURNS type AS BEGIN ... END
+    // AS can be preceded by space or newline
+    if let Some(returns_pos) = def_upper.find("RETURNS") {
+        let after_returns = &def_upper[returns_pos..];
+        // Find AS (could be "\nAS" or " AS")
+        if let Some(as_pos) = after_returns.find("\nAS")
+            .or_else(|| after_returns.find(" AS"))
+        {
+            // Calculate absolute position in original string
+            let abs_as_pos = returns_pos + as_pos;
+            // Skip the newline/space and "AS"
+            let as_keyword_start = abs_as_pos + 1; // skip \n or space
+            let remaining = &definition[as_keyword_start..];
+            // Skip "AS" and any following whitespace
+            let trimmed = remaining.trim_start();
+            if trimmed.to_uppercase().starts_with("AS") {
+                let body = trimmed[2..].trim_start().to_string();
+                return body;
+            }
+        }
+    }
+
+    // Fallback: return the original definition
+    definition.to_string()
 }
 
 fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow::Result<()> {
@@ -389,10 +750,65 @@ fn write_constraint<W: Write>(
     let table_ref = format!("[{}].[{}]", constraint.table_schema, constraint.table_name);
     write_relationship(writer, "DefiningTable", &[&table_ref])?;
 
-    // For foreign keys, add reference to foreign table
+    // Write column relationships based on constraint type
+    if !constraint.columns.is_empty() {
+        let table_ref = format!("[{}].[{}]", constraint.table_schema, constraint.table_name);
+
+        match constraint.constraint_type {
+            ConstraintType::PrimaryKey | ConstraintType::Unique => {
+                // Primary keys and unique constraints use ColumnSpecifications with inline elements
+                let mut rel = BytesStart::new("Relationship");
+                rel.push_attribute(("Name", "ColumnSpecifications"));
+                writer.write_event(Event::Start(rel))?;
+
+                for col in &constraint.columns {
+                    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+                    let mut elem = BytesStart::new("Element");
+                    elem.push_attribute(("Type", "SqlIndexedColumnSpecification"));
+                    writer.write_event(Event::Start(elem))?;
+
+                    // Reference to the actual column
+                    let col_ref = format!("{}.[{}]", table_ref, col);
+                    write_relationship(writer, "Column", &[&col_ref])?;
+
+                    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+                    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+                }
+
+                writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+            }
+            ConstraintType::ForeignKey => {
+                // Foreign keys use Columns relationship with references
+                let column_refs: Vec<String> = constraint
+                    .columns
+                    .iter()
+                    .map(|c| format!("{}.[{}]", table_ref, c))
+                    .collect();
+                let column_refs_str: Vec<&str> = column_refs.iter().map(|s| s.as_str()).collect();
+                write_relationship(writer, "Columns", &column_refs_str)?;
+            }
+            _ => {}
+        }
+    }
+
+    // For foreign keys, add reference to foreign table and foreign columns
     if constraint.constraint_type == ConstraintType::ForeignKey {
         if let Some(ref foreign_table) = constraint.referenced_table {
             write_relationship(writer, "ForeignTable", &[foreign_table])?;
+
+            // Write ForeignColumns relationship
+            if let Some(ref foreign_columns) = constraint.referenced_columns {
+                if !foreign_columns.is_empty() {
+                    let foreign_col_refs: Vec<String> = foreign_columns
+                        .iter()
+                        .map(|c| format!("{}.[{}]", foreign_table, c))
+                        .collect();
+                    let foreign_col_refs_str: Vec<&str> =
+                        foreign_col_refs.iter().map(|s| s.as_str()).collect();
+                    write_relationship(writer, "ForeignColumns", &foreign_col_refs_str)?;
+                }
+            }
         }
     }
 
@@ -484,6 +900,31 @@ fn write_builtin_type_relationship<W: Write>(
     Ok(())
 }
 
+/// Write a Schema relationship, using ExternalSource="BuiltIns" for built-in schemas
+fn write_schema_relationship<W: Write>(
+    writer: &mut Writer<W>,
+    schema: &str,
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "Schema"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let schema_ref = format!("[{}]", schema);
+    let mut refs = BytesStart::new("References");
+    if is_builtin_schema(schema) {
+        refs.push_attribute(("ExternalSource", "BuiltIns"));
+    }
+    refs.push_attribute(("Name", schema_ref.as_str()));
+    writer.write_event(Event::Empty(refs))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
 fn write_sequence<W: Write>(writer: &mut Writer<W>, seq: &SequenceElement) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", seq.schema, seq.name);
 
@@ -492,11 +933,8 @@ fn write_sequence<W: Write>(writer: &mut Writer<W>, seq: &SequenceElement) -> an
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    // Write BodyScript property with CDATA containing the sequence definition
-    write_script_property(writer, "BodyScript", &seq.definition)?;
-
     // Relationship to schema
-    write_relationship(writer, "Schema", &[&format!("[{}]", seq.schema)])?;
+    write_schema_relationship(writer, &seq.schema)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -509,15 +947,25 @@ fn write_user_defined_type<W: Write>(
     let full_name = format!("[{}].[{}]", udt.schema, udt.name);
 
     let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlUserDefinedTableType"));
+    elem.push_attribute(("Type", "SqlTableType"));
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    // Write BodyScript property with CDATA containing the type definition
-    write_script_property(writer, "BodyScript", &udt.definition)?;
-
     // Relationship to schema
-    write_relationship(writer, "Schema", &[&format!("[{}]", udt.schema)])?;
+    write_schema_relationship(writer, &udt.schema)?;
+
+    // Relationship to columns (table types use SqlTableTypeColumn instead of SqlSimpleColumn)
+    if !udt.columns.is_empty() {
+        let mut rel = BytesStart::new("Relationship");
+        rel.push_attribute(("Name", "Columns"));
+        writer.write_event(Event::Start(rel))?;
+
+        for col in &udt.columns {
+            write_table_type_column(writer, col, &full_name)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -535,7 +983,7 @@ fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Resu
     write_script_property(writer, "BodyScript", &raw.definition)?;
 
     // Relationship to schema
-    write_relationship(writer, "Schema", &[&format!("[{}]", raw.schema)])?;
+    write_schema_relationship(writer, &raw.schema)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())

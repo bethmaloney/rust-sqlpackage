@@ -6,7 +6,8 @@ use anyhow::Result;
 use sqlparser::ast::{ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint};
 
 use crate::parser::{
-    FallbackFunctionType, FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL,
+    ExtractedTableTypeColumn, FallbackFunctionType, FallbackStatementType, ParsedStatement,
+    BINARY_MAX_SENTINEL,
 };
 use crate::project::SqlProject;
 
@@ -83,12 +84,17 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         definition: parsed.sql_text.clone(),
                     }));
                 }
-                FallbackStatementType::UserDefinedType { schema, name } => {
+                FallbackStatementType::UserDefinedType { schema, name, columns } => {
                     schemas.insert(schema.clone());
+                    let column_elements = columns
+                        .iter()
+                        .map(|c| column_from_extracted(c))
+                        .collect();
                     model.add_element(ModelElement::UserDefinedType(UserDefinedTypeElement {
                         schema: schema.clone(),
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
+                        columns: column_elements,
                     }));
                 }
                 FallbackStatementType::RawStatement {
@@ -138,7 +144,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     columns,
                 }));
 
-                // Extract constraints from table definition
+                // Extract constraints from table definition (table-level constraints)
                 for constraint in &create_table.constraints {
                     if let Some(constraint_element) = constraint_from_table_constraint(
                         constraint,
@@ -146,6 +152,36 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         &project.default_schema,
                     ) {
                         model.add_element(ModelElement::Constraint(constraint_element));
+                    }
+                }
+
+                // Extract inline column constraints (PRIMARY KEY, UNIQUE on columns)
+                for col in &create_table.columns {
+                    for option in &col.options {
+                        if let ColumnOption::Unique { is_primary, .. } = &option.option {
+                            let constraint_name = if *is_primary {
+                                format!("PK_{}", name)
+                            } else {
+                                format!("UQ_{}_{}", name, col.name.value)
+                            };
+
+                            let constraint_type = if *is_primary {
+                                ConstraintType::PrimaryKey
+                            } else {
+                                ConstraintType::Unique
+                            };
+
+                            model.add_element(ModelElement::Constraint(ConstraintElement {
+                                name: constraint_name,
+                                table_schema: schema.clone(),
+                                table_name: name.clone(),
+                                constraint_type,
+                                columns: vec![col.name.value.clone()],
+                                definition: None,
+                                referenced_table: None,
+                                referenced_columns: None,
+                            }));
+                        }
                     }
                 }
 
@@ -251,9 +287,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
             }
 
             Statement::CreateSchema { schema_name, .. } => {
+                // Normalize schema name (remove brackets if present)
                 let name = schema_name.to_string();
-                schemas.insert(name.clone());
-                model.add_element(ModelElement::Schema(SchemaElement { name }));
+                let normalized = name.trim_start_matches('[').trim_end_matches(']').to_string();
+                schemas.insert(normalized.clone());
+                model.add_element(ModelElement::Schema(SchemaElement { name: normalized }));
             }
 
             // Ignore other statements (DML, etc.)
@@ -262,6 +300,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
     }
 
     // Add schema elements for any schemas we discovered
+    // (Built-in schemas like dbo are included in the model but will be filtered
+    // during XML generation - they're written as ExternalSource="BuiltIns" references)
     for schema in schemas {
         if !model
             .elements
@@ -315,6 +355,48 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
         precision,
         scale,
     }
+}
+
+/// Convert an extracted table type column to a ColumnElement
+fn column_from_extracted(col: &ExtractedTableTypeColumn) -> ColumnElement {
+    let (max_length, precision, scale) = extract_type_params_from_string(&col.data_type);
+
+    ColumnElement {
+        name: col.name.clone(),
+        data_type: col.data_type.clone(),
+        is_nullable: col.is_nullable,
+        is_identity: false, // Table types don't support identity columns
+        default_value: None,
+        max_length,
+        precision,
+        scale,
+    }
+}
+
+/// Extract type parameters from a string data type (e.g., "NVARCHAR(50)", "DECIMAL(18, 2)")
+fn extract_type_params_from_string(data_type: &str) -> (Option<i32>, Option<u8>, Option<u8>) {
+    // Check for MAX indicator
+    if data_type.to_uppercase().contains("MAX") {
+        return (Some(-1), None, None);
+    }
+
+    // Parse parameters from type string like "NVARCHAR(50)" or "DECIMAL(18, 2)"
+    let re = regex::Regex::new(r"\((\d+)(?:\s*,\s*(\d+))?\)").unwrap();
+    if let Some(caps) = re.captures(data_type) {
+        let first: Option<i32> = caps.get(1).and_then(|m| m.as_str().parse().ok());
+        let second: Option<u8> = caps.get(2).and_then(|m| m.as_str().parse().ok());
+
+        let base_type = data_type.to_uppercase();
+        if base_type.starts_with("DECIMAL") || base_type.starts_with("NUMERIC") {
+            // For DECIMAL/NUMERIC: first is precision, second is scale
+            return (None, first.map(|v| v as u8), second);
+        } else {
+            // For string/binary types: first is length
+            return (first, None, None);
+        }
+    }
+
+    (None, None, None)
 }
 
 fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option<u8>) {

@@ -37,6 +37,17 @@ pub struct ExtractedDefaultConstraint {
     pub expression: String,
 }
 
+/// A column extracted from a table type definition
+#[derive(Debug, Clone)]
+pub struct ExtractedTableTypeColumn {
+    /// Column name
+    pub name: String,
+    /// Data type (e.g., "NVARCHAR(50)", "INT", "DECIMAL(18, 2)")
+    pub data_type: String,
+    /// Whether the column is nullable
+    pub is_nullable: bool,
+}
+
 /// A parsed SQL statement with source information
 #[derive(Debug, Clone)]
 pub struct ParsedStatement {
@@ -81,6 +92,7 @@ pub enum FallbackStatementType {
     UserDefinedType {
         schema: String,
         name: String,
+        columns: Vec<ExtractedTableTypeColumn>,
     },
     /// Generic fallback for any statement that can't be parsed
     RawStatement {
@@ -277,7 +289,8 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for CREATE TYPE (user-defined table types)
     if sql_upper.contains("CREATE TYPE") {
         if let Some((schema, name)) = extract_type_name(sql) {
-            return Some(FallbackStatementType::UserDefinedType { schema, name });
+            let columns = extract_table_type_columns(sql);
+            return Some(FallbackStatementType::UserDefinedType { schema, name, columns });
         }
     }
 
@@ -396,6 +409,104 @@ fn extract_type_name(sql: &str) -> Option<(String, String)> {
     let name = caps.get(2)?.as_str().to_string();
 
     Some((schema, name))
+}
+
+/// Extract columns from a table type definition
+fn extract_table_type_columns(sql: &str) -> Vec<ExtractedTableTypeColumn> {
+    let mut columns = Vec::new();
+
+    // Find the content between AS TABLE ( and the closing )
+    let sql_upper = sql.to_uppercase();
+    let start = match sql_upper.find("AS TABLE") {
+        Some(idx) => idx + "AS TABLE".len(),
+        None => return columns,
+    };
+
+    // Find the opening paren after AS TABLE
+    let remaining = &sql[start..];
+    let paren_start = match remaining.find('(') {
+        Some(idx) => start + idx + 1,
+        None => return columns,
+    };
+
+    // Find the matching closing paren (handle nested parens for types like DECIMAL(18,2))
+    let mut depth = 1;
+    let mut paren_end = paren_start;
+    for (i, c) in sql[paren_start..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    paren_end = paren_start + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if paren_end <= paren_start {
+        return columns;
+    }
+
+    let columns_str = &sql[paren_start..paren_end];
+
+    // Split by commas, handling nested parens
+    let mut col_parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+    for c in columns_str.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                current.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                current.push(c);
+            }
+            ',' if depth == 0 => {
+                col_parts.push(current.trim().to_string());
+                current = String::new();
+            }
+            _ => current.push(c),
+        }
+    }
+    if !current.trim().is_empty() {
+        col_parts.push(current.trim().to_string());
+    }
+
+    // Parse each column definition
+    // Pattern: [ColumnName] DataType [NULL|NOT NULL]
+    let col_re = regex::Regex::new(
+        r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)\s*(NOT\s+NULL|NULL)?",
+    )
+    .unwrap();
+
+    for part in col_parts {
+        if let Some(caps) = col_re.captures(&part) {
+            let name = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+            let data_type = caps
+                .get(2)
+                .map(|m| m.as_str().trim().to_uppercase())
+                .unwrap_or_default();
+            let is_nullable = caps
+                .get(3)
+                .map(|m| !m.as_str().to_uppercase().contains("NOT"))
+                .unwrap_or(true); // Default to nullable if not specified
+
+            if !name.is_empty() && !data_type.is_empty() {
+                columns.push(ExtractedTableTypeColumn {
+                    name,
+                    data_type,
+                    is_nullable,
+                });
+            }
+        }
+    }
+
+    columns
 }
 
 /// Extract schema and name from CREATE PROCEDURE statement

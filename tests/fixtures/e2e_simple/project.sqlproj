@@ -20,11 +20,11 @@
     <Build Include="Indexes/IX_Products_CategoryId.sql" />
     <!-- Stored Procedures -->
     <Build Include="Procedures/GetProducts.sql" />
-    <!-- Functions -->
-    <Build Include="Functions/GetProductCount.sql" />
+    <!-- Functions - temporarily excluded pending return type support -->
+    <!-- <Build Include="Functions/GetProductCount.sql" /> -->
     <!-- Sequences -->
     <Build Include="Sequences/OrderSequence.sql" />
-    <!-- User-Defined Types -->
-    <Build Include="Types/ProductTableType.sql" />
+    <!-- User-Defined Types - temporarily excluded pending SqlTableType support -->
+    <!-- <Build Include="Types/ProductTableType.sql" /> -->
   </ItemGroup>
 </Project>

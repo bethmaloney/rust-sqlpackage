@@ -918,11 +918,11 @@ fn test_model_contains_user_defined_types() {
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
     let doc = parse_model_xml(&model_xml);
-    let udts = find_elements_by_type(&doc, "SqlUserDefinedTableType");
+    let udts = find_elements_by_type(&doc, "SqlTableType");
 
     assert!(
         !udts.is_empty(),
-        "Model should contain at least one SqlUserDefinedTableType element"
+        "Model should contain at least one SqlTableType element"
     );
 
     // Verify the UserTableType exists
