@@ -1,0 +1,4 @@
+CREATE TABLE [dbo].[IdentityTable] (
+    [Id] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    [Name] NVARCHAR(100) NOT NULL
+);

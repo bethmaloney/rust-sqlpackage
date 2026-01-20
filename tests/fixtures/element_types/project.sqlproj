@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>ElementTypes</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultSchema>dbo</DefaultSchema>
+    <ProjectGuid>{00000000-0000-0000-0000-000000000000}</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Include="Schemas/CustomSchema.sql" />
+    <Build Include="Tables/BaseTable.sql" />
+    <Build Include="Procedures/GetUsers.sql" />
+    <Build Include="Functions/ScalarFunction.sql" />
+    <Build Include="Functions/TableValuedFunction.sql" />
+    <Build Include="Functions/InlineTableValuedFunction.sql" />
+    <Build Include="Sequences/OrderSequence.sql" />
+    <Build Include="Types/UserTableType.sql" />
+    <Build Include="Triggers/AuditTrigger.sql" />
+  </ItemGroup>
+</Project>

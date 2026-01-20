@@ -39,6 +39,14 @@ sha2 = "0.10"
 # Encoding
 encoding_rs = "0.8"
 
+[features]
+default = []
+xsd-validation = ["libxml"]
+
+[dependencies.libxml]
+version = "0.3"
+optional = true
+
 [dev-dependencies]
 tempfile = "3"
 pretty_assertions = "1"
