@@ -55,7 +55,7 @@ pub fn generate_dac_metadata_xml(name: &str, version: &str) -> String {
     };
 
     let mut buffer = Vec::new();
-    generate_metadata_xml(&mut buffer, &project).unwrap();
+    generate_metadata_xml(&mut buffer, &project, version).unwrap();
     String::from_utf8(buffer).unwrap()
 }
 

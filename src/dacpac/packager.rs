@@ -46,7 +46,7 @@ pub fn create_dacpac(
 
     // Write DacMetadata.xml
     let mut metadata_buffer = Cursor::new(Vec::new());
-    metadata_xml::generate_metadata_xml(&mut metadata_buffer, project)?;
+    metadata_xml::generate_metadata_xml(&mut metadata_buffer, project, "1.0.0.0")?;
     zip.start_file("DacMetadata.xml", options)?;
     zip.write_all(metadata_buffer.get_ref())?;
 
@@ -69,7 +69,7 @@ pub fn create_dacpac(
 pub(crate) fn generate_content_types_xml() -> String {
     r#"<?xml version="1.0" encoding="utf-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="xml" ContentType="text/xml" />
+  <Default Extension="xml" ContentType="application/xml" />
 </Types>"#
         .to_string()
 }
