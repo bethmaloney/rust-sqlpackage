@@ -3,11 +3,25 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use regex::Regex;
 use sqlparser::ast::Statement;
 use sqlparser::dialect::MsSqlDialect;
 use sqlparser::parser::Parser;
 
 use crate::error::SqlPackageError;
+
+/// A SQL batch with its content and source location
+struct Batch<'a> {
+    content: &'a str,
+    start_line: usize, // 1-based line number
+}
+
+/// Extract line number from sqlparser error message (format: "... at Line: X, Column: Y")
+fn extract_line_from_error(error_msg: &str) -> Option<usize> {
+    let re = Regex::new(r"Line:\s*(\d+)").ok()?;
+    let caps = re.captures(error_msg)?;
+    caps.get(1)?.as_str().parse().ok()
+}
 
 /// A parsed SQL statement with source information
 #[derive(Debug, Clone)]
@@ -120,7 +134,7 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
     let mut statements = Vec::new();
 
     for batch in batches {
-        let trimmed = batch.trim();
+        let trimmed = batch.content.trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -145,14 +159,17 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
                         trimmed.to_string(),
                     ));
                 } else {
-                    // Log unparseable statements for diagnostics
-                    let preview: String = trimmed.chars().take(80).collect();
-                    eprintln!(
-                        "Warning: Skipped unparseable SQL in {}: {} ... ({})",
-                        path.display(),
-                        preview.replace('\n', " "),
-                        e
-                    );
+                    // Calculate absolute line number from batch offset and error line
+                    let error_msg = e.to_string();
+                    let relative_line = extract_line_from_error(&error_msg).unwrap_or(1);
+                    let absolute_line = batch.start_line + relative_line - 1;
+
+                    return Err(SqlPackageError::SqlParseError {
+                        path: path.to_path_buf(),
+                        line: absolute_line,
+                        message: error_msg,
+                    }
+                    .into());
                 }
             }
         }
@@ -417,11 +434,13 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     })
 }
 
-/// Split SQL content into batches by GO statement
-fn split_batches(content: &str) -> Vec<&str> {
+/// Split SQL content into batches by GO statement, tracking line numbers
+fn split_batches(content: &str) -> Vec<Batch<'_>> {
     let mut batches = Vec::new();
     let mut current_pos = 0;
     let mut batch_start = 0;
+    let mut current_line = 1; // 1-based line numbers
+    let mut batch_start_line = 1;
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -438,17 +457,25 @@ fn split_batches(content: &str) -> Vec<&str> {
         // GO must be on its own line (optionally with whitespace)
         if trimmed.eq_ignore_ascii_case("go") {
             if current_pos > batch_start {
-                batches.push(&content[batch_start..current_pos]);
+                batches.push(Batch {
+                    content: &content[batch_start..current_pos],
+                    start_line: batch_start_line,
+                });
             }
             batch_start = next_pos;
+            batch_start_line = current_line + 1; // Next line after GO
         }
 
         current_pos = next_pos;
+        current_line += 1;
     }
 
     // Add remaining content
     if batch_start < content.len() {
-        batches.push(&content[batch_start..]);
+        batches.push(Batch {
+            content: &content[batch_start..],
+            start_line: batch_start_line,
+        });
     }
 
     batches
@@ -463,6 +490,8 @@ mod tests {
         let sql = "CREATE TABLE t1 (id INT)\nGO\nCREATE TABLE t2 (id INT)";
         let batches = split_batches(sql);
         assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].start_line, 1);
+        assert_eq!(batches[1].start_line, 3);
     }
 
     #[test]
@@ -470,5 +499,35 @@ mod tests {
         let sql = "CREATE TABLE t1 (id INT)";
         let batches = split_batches(sql);
         assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].start_line, 1);
+    }
+
+    #[test]
+    fn test_split_batches_line_numbers_multiline() {
+        let sql = "-- Comment line 1\n-- Comment line 2\nCREATE TABLE t1 (id INT)\nGO\n-- Comment line 5\nCREATE TABLE t2 (id INT)";
+        let batches = split_batches(sql);
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].start_line, 1);
+        assert!(batches[0].content.contains("CREATE TABLE t1"));
+        assert_eq!(batches[1].start_line, 5);
+        assert!(batches[1].content.contains("CREATE TABLE t2"));
+    }
+
+    #[test]
+    fn test_split_batches_multiple_go() {
+        let sql = "SELECT 1\nGO\nSELECT 2\nGO\nSELECT 3";
+        let batches = split_batches(sql);
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches[0].start_line, 1);
+        assert_eq!(batches[1].start_line, 3);
+        assert_eq!(batches[2].start_line, 5);
+    }
+
+    #[test]
+    fn test_extract_line_from_error() {
+        assert_eq!(extract_line_from_error("Error at Line: 5, Column: 10"), Some(5));
+        assert_eq!(extract_line_from_error("Parse error at Line: 123, Column: 1"), Some(123));
+        assert_eq!(extract_line_from_error("No line info here"), None);
+        assert_eq!(extract_line_from_error("Line:42, Column: 1"), Some(42));
     }
 }

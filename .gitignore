@@ -3,6 +3,11 @@
 debug/
 release/
 
+# .NET/SQL project build outputs
+**/bin/
+**/obj/
+*.dacpac
+
 # Cargo.lock for binaries, remove this line if building a library
 Cargo.lock
 
