@@ -55,6 +55,12 @@ pub enum SqlPackageError {
 
     #[error("ZIP creation error: {message}")]
     ZipError { message: String },
+
+    #[error("SQLCMD include file not found: {path} (referenced from {source_file})")]
+    SqlcmdIncludeNotFound { path: PathBuf, source_file: PathBuf },
+
+    #[error("Circular SQLCMD include detected: {path} (include chain: {chain})")]
+    SqlcmdCircularInclude { path: PathBuf, chain: String },
 }
 
 impl From<zip::result::ZipError> for SqlPackageError {

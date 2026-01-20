@@ -264,6 +264,73 @@ fn test_build_with_pre_post_deploy_scripts() {
 }
 
 // ============================================================================
+// SQLCMD :r Include Tests
+// ============================================================================
+
+#[test]
+fn test_build_with_sqlcmd_includes() {
+    let ctx = TestContext::with_fixture("sqlcmd_includes");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with SQLCMD :r includes should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    // Verify tables are present
+    assert!(
+        info.tables.iter().any(|t| t.contains("Users")),
+        "Should contain Users table"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("Orders")),
+        "Should contain Orders table"
+    );
+
+    // Verify deployment scripts are packaged with expanded includes
+    assert!(info.has_predeploy, "Dacpac should contain predeploy.sql");
+    assert!(info.has_postdeploy, "Dacpac should contain postdeploy.sql");
+
+    // Verify pre-deploy script has expanded :r content
+    let predeploy = info
+        .predeploy_content
+        .expect("Should have predeploy content");
+    assert!(
+        predeploy.contains("Starting pre-deployment"),
+        "Predeploy should contain main script content"
+    );
+    assert!(
+        predeploy.contains("Creating application settings"),
+        "Predeploy should contain expanded CreateSettings.sql content"
+    );
+    assert!(
+        predeploy.contains("-- BEGIN :r"),
+        "Predeploy should contain include markers"
+    );
+
+    // Verify post-deploy script has expanded :r content
+    let postdeploy = info
+        .postdeploy_content
+        .expect("Should have postdeploy content");
+    assert!(
+        postdeploy.contains("Starting post-deployment"),
+        "Postdeploy should contain main script content"
+    );
+    assert!(
+        postdeploy.contains("Seeding users"),
+        "Postdeploy should contain expanded SeedUsers.sql content"
+    );
+    assert!(
+        postdeploy.contains("Seeding orders"),
+        "Postdeploy should contain expanded SeedOrders.sql content"
+    );
+}
+
+// ============================================================================
 // Multiple Tables Test
 // ============================================================================
 

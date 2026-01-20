@@ -10,6 +10,7 @@ use zip::ZipWriter;
 
 use crate::error::SqlPackageError;
 use crate::model::DatabaseModel;
+use crate::parser::expand_includes;
 use crate::project::SqlProject;
 
 use super::{metadata_xml, model_xml, origin_xml};
@@ -64,6 +65,7 @@ pub fn create_dacpac(
     zip.write_all(content_types.as_bytes())?;
 
     // Write predeploy.sql (if present)
+    // Expands SQLCMD :r include directives to inline referenced files
     if let Some(pre_deploy_path) = &project.pre_deploy_script {
         let content = std::fs::read_to_string(pre_deploy_path).map_err(|e| {
             SqlPackageError::SqlFileReadError {
@@ -71,11 +73,13 @@ pub fn create_dacpac(
                 source: e,
             }
         })?;
+        let expanded = expand_includes(&content, pre_deploy_path)?;
         zip.start_file("predeploy.sql", options)?;
-        zip.write_all(content.as_bytes())?;
+        zip.write_all(expanded.as_bytes())?;
     }
 
     // Write postdeploy.sql (if present)
+    // Expands SQLCMD :r include directives to inline referenced files
     if let Some(post_deploy_path) = &project.post_deploy_script {
         let content = std::fs::read_to_string(post_deploy_path).map_err(|e| {
             SqlPackageError::SqlFileReadError {
@@ -83,8 +87,9 @@ pub fn create_dacpac(
                 source: e,
             }
         })?;
+        let expanded = expand_includes(&content, post_deploy_path)?;
         zip.start_file("postdeploy.sql", options)?;
-        zip.write_all(content.as_bytes())?;
+        zip.write_all(expanded.as_bytes())?;
     }
 
     zip.finish()?;
