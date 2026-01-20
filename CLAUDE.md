@@ -1,7 +1,3 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
 rust-sqlpackage is a Rust implementation of the SQL Server database project compiler. It converts `.sqlproj` files to `.dacpac` packages, providing faster builds than the .NET DacFx toolchain.
@@ -56,13 +52,6 @@ The codebase follows a pipeline architecture:
 2. `parse_sql_file()` splits on GO, parses with sqlparser-rs or falls back to regex for procedures/functions
 3. `build_model()` transforms AST statements into `ModelElement` variants (Table, View, Index, etc.)
 4. `create_dacpac()` generates XML files and packages into ZIP
-
-## Known Parser Limitations
-
-The `sqlparser-rs` crate has incomplete T-SQL support. Fallback regex-based parsing is used for:
-
-- **Index syntax**: `CREATE CLUSTERED/NONCLUSTERED INDEX` uses fallback parsing (INCLUDE clause not extracted)
-- **Procedures/Functions**: Fallback regex parsing extracts schema and name; full parameter extraction not implemented
 
 ## Test Fixtures
 
