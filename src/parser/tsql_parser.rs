@@ -10,6 +10,9 @@ use sqlparser::parser::Parser;
 
 use crate::error::SqlPackageError;
 
+/// Sentinel value used to represent MAX in binary types (since sqlparser expects u64)
+pub const BINARY_MAX_SENTINEL: u64 = 2_147_483_647;
+
 /// A SQL batch with its content and source location
 struct Batch<'a> {
     content: &'a str,
@@ -23,6 +26,17 @@ fn extract_line_from_error(error_msg: &str) -> Option<usize> {
     caps.get(1)?.as_str().parse().ok()
 }
 
+/// A default constraint extracted during preprocessing
+#[derive(Debug, Clone)]
+pub struct ExtractedDefaultConstraint {
+    /// Constraint name (e.g., "DF_Products_IsActive")
+    pub name: String,
+    /// Column the default applies to
+    pub column: String,
+    /// Default value expression (e.g., "(1)" or "(GETDATE())")
+    pub expression: String,
+}
+
 /// A parsed SQL statement with source information
 #[derive(Debug, Clone)]
 pub struct ParsedStatement {
@@ -34,6 +48,8 @@ pub struct ParsedStatement {
     pub sql_text: String,
     /// Fallback-parsed statement type (for procedures/functions that sqlparser can't handle)
     pub fallback_type: Option<FallbackStatementType>,
+    /// Default constraints extracted during preprocessing (T-SQL DEFAULT FOR syntax)
+    pub extracted_defaults: Vec<ExtractedDefaultConstraint>,
 }
 
 /// Statement types that require fallback parsing due to sqlparser limitations
@@ -89,6 +105,23 @@ impl ParsedStatement {
             source_file,
             sql_text,
             fallback_type: None,
+            extracted_defaults: Vec::new(),
+        }
+    }
+
+    /// Create a new ParsedStatement from a sqlparser Statement with extracted defaults
+    pub fn from_statement_with_defaults(
+        statement: Statement,
+        source_file: PathBuf,
+        sql_text: String,
+        extracted_defaults: Vec<ExtractedDefaultConstraint>,
+    ) -> Self {
+        Self {
+            statement: Some(statement),
+            source_file,
+            sql_text,
+            fallback_type: None,
+            extracted_defaults,
         }
     }
 
@@ -103,6 +136,7 @@ impl ParsedStatement {
             source_file,
             sql_text,
             fallback_type: Some(fallback_type),
+            extracted_defaults: Vec::new(),
         }
     }
 }
@@ -141,14 +175,28 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
             continue;
         }
 
-        match Parser::parse_sql(&dialect, trimmed) {
+        // Preprocess T-SQL to handle syntax that sqlparser doesn't support
+        let preprocessed = preprocess_tsql(trimmed);
+
+        match Parser::parse_sql(&dialect, &preprocessed.sql) {
             Ok(parsed) => {
                 for stmt in parsed {
-                    statements.push(ParsedStatement::from_statement(
-                        stmt,
-                        path.to_path_buf(),
-                        trimmed.to_string(),
-                    ));
+                    // Use the original SQL text, not preprocessed, for storage
+                    // but include any extracted defaults
+                    if preprocessed.extracted_defaults.is_empty() {
+                        statements.push(ParsedStatement::from_statement(
+                            stmt,
+                            path.to_path_buf(),
+                            trimmed.to_string(),
+                        ));
+                    } else {
+                        statements.push(ParsedStatement::from_statement_with_defaults(
+                            stmt,
+                            path.to_path_buf(),
+                            trimmed.to_string(),
+                            preprocessed.extracted_defaults.clone(),
+                        ));
+                    }
                 }
             }
             Err(e) => {
@@ -457,6 +505,61 @@ fn extract_include_columns(sql: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Result of preprocessing T-SQL for sqlparser compatibility
+struct PreprocessResult {
+    /// SQL with T-SQL-specific syntax converted for sqlparser
+    sql: String,
+    /// Default constraints extracted from the SQL
+    extracted_defaults: Vec<ExtractedDefaultConstraint>,
+}
+
+/// Preprocess T-SQL to handle syntax that sqlparser doesn't support:
+/// 1. Replace VARBINARY(MAX) and BINARY(MAX) with sentinel values
+/// 2. Extract and remove CONSTRAINT [name] DEFAULT (value) FOR [column] patterns
+fn preprocess_tsql(sql: &str) -> PreprocessResult {
+    let mut result = sql.to_string();
+    let mut extracted_defaults = Vec::new();
+
+    // 1. Replace VARBINARY(MAX) and BINARY(MAX) with sentinel value
+    // sqlparser expects a numeric literal, not MAX for these types
+    let binary_max_re = Regex::new(r"(?i)\b(VARBINARY|BINARY)\s*\(\s*MAX\s*\)").unwrap();
+    result = binary_max_re
+        .replace_all(&result, |caps: &regex::Captures| {
+            format!("{}({})", &caps[1], BINARY_MAX_SENTINEL)
+        })
+        .to_string();
+
+    // 2. Extract and remove CONSTRAINT [name] DEFAULT (value) FOR [column] patterns
+    // This T-SQL syntax for named default constraints isn't supported by sqlparser
+    // Pattern: CONSTRAINT [name] DEFAULT (expression) FOR [column]
+    // The expression can contain nested parentheses, so we need careful matching
+    let default_for_re = Regex::new(
+        r"(?i),?\s*CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))\s+FOR\s+\[?(\w+)\]?"
+    ).unwrap();
+
+    // Extract all matches first
+    for caps in default_for_re.captures_iter(sql) {
+        extracted_defaults.push(ExtractedDefaultConstraint {
+            name: caps[1].to_string(),
+            column: caps[3].to_string(),
+            expression: caps[2].to_string(),
+        });
+    }
+
+    // Remove the DEFAULT FOR constraints from the SQL
+    result = default_for_re.replace_all(&result, "").to_string();
+
+    // Clean up any trailing commas before closing parenthesis that might result
+    // This handles commas followed by whitespace, comments (-- or /* */), and newlines
+    let trailing_comma_re = Regex::new(r",(\s*(--[^\n]*\n)?)*\s*\)").unwrap();
+    result = trailing_comma_re.replace_all(&result, ")").to_string();
+
+    PreprocessResult {
+        sql: result,
+        extracted_defaults,
+    }
+}
+
 /// Split SQL content into batches by GO statement, tracking line numbers
 fn split_batches(content: &str) -> Vec<Batch<'_>> {
     let mut batches = Vec::new();
@@ -552,5 +655,92 @@ mod tests {
         assert_eq!(extract_line_from_error("Parse error at Line: 123, Column: 1"), Some(123));
         assert_eq!(extract_line_from_error("No line info here"), None);
         assert_eq!(extract_line_from_error("Line:42, Column: 1"), Some(42));
+    }
+
+    #[test]
+    fn test_preprocess_default_for() {
+        let sql = r#"CREATE TABLE [dbo].[Products] (
+    [Id] INT NOT NULL,
+    [IsActive] BIT NOT NULL,
+    CONSTRAINT [PK_Products] PRIMARY KEY ([Id]),
+    CONSTRAINT [DF_Products_IsActive] DEFAULT (1) FOR [IsActive]
+);"#;
+        let result = preprocess_tsql(sql);
+
+        // Should extract the default constraint
+        assert_eq!(result.extracted_defaults.len(), 1);
+        assert_eq!(result.extracted_defaults[0].name, "DF_Products_IsActive");
+        assert_eq!(result.extracted_defaults[0].column, "IsActive");
+        assert_eq!(result.extracted_defaults[0].expression, "(1)");
+
+        // Should not contain DEFAULT FOR in preprocessed SQL
+        assert!(!result.sql.contains("DEFAULT (1) FOR"));
+
+        // Should still be valid SQL (parseable by sqlparser)
+        let dialect = MsSqlDialect {};
+        let parsed = Parser::parse_sql(&dialect, &result.sql);
+        assert!(parsed.is_ok(), "Preprocessed SQL should be parseable: {}", result.sql);
+    }
+
+    #[test]
+    fn test_preprocess_varbinary_max() {
+        let sql = "CREATE TABLE [dbo].[Test] ([Data] VARBINARY(MAX) NULL);";
+        let result = preprocess_tsql(sql);
+
+        // Should replace MAX with sentinel
+        assert!(result.sql.contains(&format!("VARBINARY({})", BINARY_MAX_SENTINEL)));
+        assert!(!result.sql.contains("VARBINARY(MAX)"));
+
+        // Should be parseable
+        let dialect = MsSqlDialect {};
+        let parsed = Parser::parse_sql(&dialect, &result.sql);
+        assert!(parsed.is_ok(), "Preprocessed SQL should be parseable: {}", result.sql);
+    }
+
+    #[test]
+    fn test_preprocess_full_products_table() {
+        let sql = r#"-- Table with ALL constraint types: PK, FK, UQ, CK, DF
+CREATE TABLE [dbo].[Products] (
+    [Id] INT NOT NULL,
+    [SKU] NVARCHAR(50) NOT NULL,
+    [Name] NVARCHAR(200) NOT NULL,
+    [CategoryId] INT NOT NULL,
+    [Price] DECIMAL(18,2) NOT NULL,
+    [Quantity] INT NOT NULL,
+    [IsActive] BIT NOT NULL,
+    [CreatedAt] DATETIME NOT NULL,
+
+    -- PK: Primary Key Constraint
+    CONSTRAINT [PK_Products] PRIMARY KEY ([Id]),
+
+    -- FK: Foreign Key Constraint
+    CONSTRAINT [FK_Products_Categories] FOREIGN KEY ([CategoryId]) REFERENCES [dbo].[Categories]([Id]),
+
+    -- UQ: Unique Constraint
+    CONSTRAINT [UQ_Products_SKU] UNIQUE ([SKU]),
+
+    -- CK: Check Constraint
+    CONSTRAINT [CK_Products_Price] CHECK ([Price] >= 0),
+    CONSTRAINT [CK_Products_Quantity] CHECK ([Quantity] >= 0),
+
+    -- DF: Default Constraint
+    CONSTRAINT [DF_Products_IsActive] DEFAULT (1) FOR [IsActive],
+    CONSTRAINT [DF_Products_CreatedAt] DEFAULT (GETDATE()) FOR [CreatedAt]
+);"#;
+        let result = preprocess_tsql(sql);
+
+        println!("=== Extracted defaults ===");
+        for d in &result.extracted_defaults {
+            println!("  Name: {}, Column: {}, Expression: {}", d.name, d.column, d.expression);
+        }
+        println!("=== Preprocessed SQL ===\n{}", result.sql);
+
+        // Should extract 2 default constraints
+        assert_eq!(result.extracted_defaults.len(), 2, "Should extract 2 default constraints");
+
+        // Should be parseable by sqlparser
+        let dialect = MsSqlDialect {};
+        let parsed = Parser::parse_sql(&dialect, &result.sql);
+        assert!(parsed.is_ok(), "Preprocessed SQL should be parseable. Error: {:?}\nSQL:\n{}", parsed.err(), result.sql);
     }
 }

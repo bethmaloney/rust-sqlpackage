@@ -7,7 +7,7 @@ use sqlparser::ast::{
     ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint,
 };
 
-use crate::parser::{FallbackFunctionType, FallbackStatementType, ParsedStatement};
+use crate::parser::{FallbackFunctionType, FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL};
 use crate::project::SqlProject;
 
 use super::{
@@ -132,8 +132,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     .collect();
 
                 model.add_element(ModelElement::Table(TableElement {
-                    schema,
-                    name,
+                    schema: schema.clone(),
+                    name: name.clone(),
                     columns,
                 }));
 
@@ -144,6 +144,20 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     {
                         model.add_element(ModelElement::Constraint(constraint_element));
                     }
+                }
+
+                // Add extracted default constraints (from T-SQL DEFAULT FOR syntax)
+                for default_constraint in &parsed.extracted_defaults {
+                    model.add_element(ModelElement::Constraint(ConstraintElement {
+                        name: default_constraint.name.clone(),
+                        table_schema: schema.clone(),
+                        table_name: name.clone(),
+                        constraint_type: ConstraintType::Default,
+                        columns: vec![default_constraint.column.clone()],
+                        definition: Some(default_constraint.expression.clone()),
+                        referenced_table: None,
+                        referenced_columns: None,
+                    }));
                 }
             }
 
@@ -264,7 +278,7 @@ fn extract_schema_and_name(name: &ObjectName, default_schema: &str) -> (String, 
 
 fn column_from_def(col: &ColumnDef) -> ColumnElement {
     let mut is_nullable = true;
-    let is_identity = false;
+    let mut is_identity = false;
     let mut default_value = None;
 
     for option in &col.options {
@@ -272,6 +286,7 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
             ColumnOption::NotNull => is_nullable = false,
             ColumnOption::Null => is_nullable = true,
             ColumnOption::Default(expr) => default_value = Some(expr.to_string()),
+            ColumnOption::Identity(_) => is_identity = true,
             _ => {}
         }
     }
@@ -296,6 +311,17 @@ fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option
             let max_length = len.as_ref().and_then(|l| match l {
                 sqlparser::ast::CharacterLength::IntegerLength { length, .. } => Some(*length as i32),
                 sqlparser::ast::CharacterLength::Max => Some(-1),
+            });
+            (max_length, None, None)
+        }
+        DataType::Varbinary(len) | DataType::Binary(len) => {
+            // Handle VARBINARY(MAX) and BINARY(MAX) - preprocessor replaces MAX with sentinel value
+            let max_length = len.map(|l| {
+                if l == BINARY_MAX_SENTINEL {
+                    -1 // Indicates MAX
+                } else {
+                    l as i32
+                }
             });
             (max_length, None, None)
         }
