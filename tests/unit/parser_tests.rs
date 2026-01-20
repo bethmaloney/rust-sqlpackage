@@ -100,7 +100,7 @@ CREATE TABLE [dbo].[SimpleTable] (
 
     // Verify it's a CREATE TABLE statement
     match &statements[0].statement {
-        sqlparser::ast::Statement::CreateTable(create) => {
+        Some(sqlparser::ast::Statement::CreateTable(create)) => {
             assert!(create.name.to_string().contains("SimpleTable"));
         }
         _ => panic!("Expected CREATE TABLE statement"),
@@ -273,7 +273,7 @@ SELECT 1 AS [Value];
     assert_eq!(statements.len(), 1);
 
     match &statements[0].statement {
-        sqlparser::ast::Statement::CreateView { name, .. } => {
+        Some(sqlparser::ast::Statement::CreateView { name, .. }) => {
             assert!(name.to_string().contains("SimpleView"));
         }
         _ => panic!("Expected CREATE VIEW statement"),
@@ -581,4 +581,360 @@ ON [dbo].[SomeTable] ([Column1]);
 
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
+}
+
+// ============================================================================
+// CREATE PROCEDURE Parsing Tests (using fallback parser for T-SQL syntax)
+// ============================================================================
+
+#[test]
+fn test_parse_simple_procedure() {
+    // This syntax MAY be parsed by sqlparser (if it has BEGIN...END and parenthesized params)
+    // or may use fallback parsing. Either way, it should parse successfully.
+    let sql = r#"
+CREATE PROCEDURE [dbo].[GetUsers]
+AS
+BEGIN
+    SELECT * FROM Users
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse simple procedure: {:?}", result.err());
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+
+    // Either sqlparser parsed it or fallback did
+    if let Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { schema, name }) = &statements[0].fallback_type {
+        assert_eq!(schema, "dbo");
+        assert_eq!(name, "GetUsers");
+    } else if let Some(sqlparser::ast::Statement::CreateProcedure { name, .. }) = &statements[0].statement {
+        assert!(name.to_string().contains("GetUsers"));
+    } else {
+        panic!("Expected CreateProcedure statement or fallback type");
+    }
+}
+
+#[test]
+fn test_parse_procedure_with_parameters() {
+    // T-SQL style parameters (@param) will use fallback parsing
+    let sql = r#"
+CREATE PROCEDURE [dbo].[GetUserById]
+    @UserId INT,
+    @IncludeDeleted BIT = 0
+AS
+BEGIN
+    SELECT * FROM Users WHERE Id = @UserId
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse procedure with parameters: {:?}", result.err());
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+
+    // T-SQL @param syntax requires fallback parsing
+    match &statements[0].fallback_type {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { schema, name }) => {
+            assert_eq!(schema, "dbo");
+            assert_eq!(name, "GetUserById");
+        }
+        _ => panic!("Expected Procedure fallback type for T-SQL @param syntax"),
+    }
+
+    // Verify original SQL is preserved
+    assert!(statements[0].sql_text.contains("@UserId INT"));
+}
+
+#[test]
+fn test_parse_procedure_or_alter() {
+    // CREATE OR ALTER with T-SQL @params will use fallback
+    let sql = r#"
+CREATE OR ALTER PROCEDURE [sales].[UpdateOrder]
+    @OrderId INT,
+    @Status VARCHAR(50)
+AS
+BEGIN
+    UPDATE Orders SET Status = @Status WHERE Id = @OrderId
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse CREATE OR ALTER PROCEDURE: {:?}", result.err());
+
+    let statements = result.unwrap();
+    match &statements[0].fallback_type {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { schema, name }) => {
+            assert_eq!(schema, "sales");
+            assert_eq!(name, "UpdateOrder");
+        }
+        _ => panic!("Expected Procedure fallback type for CREATE OR ALTER with @params"),
+    }
+}
+
+#[test]
+fn test_parse_procedure_short_form() {
+    // T-SQL PROC abbreviation - uses fallback parsing
+    let sql = r#"
+CREATE PROC [dbo].[QuickProc]
+AS
+BEGIN
+    SELECT 1
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse PROC abbreviation: {:?}", result.err());
+
+    let statements = result.unwrap();
+    match &statements[0].fallback_type {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { schema, name }) => {
+            assert_eq!(schema, "dbo");
+            assert_eq!(name, "QuickProc");
+        }
+        _ => panic!("Expected Procedure fallback type for PROC abbreviation"),
+    }
+}
+
+#[test]
+fn test_parse_procedure_no_schema() {
+    // No schema specified - uses fallback, defaults to dbo
+    let sql = r#"
+CREATE PROCEDURE SimpleProc
+AS
+BEGIN
+    SELECT 1
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse procedure without schema: {:?}", result.err());
+
+    let statements = result.unwrap();
+    // Check either fallback or sqlparser parsing
+    if let Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { schema, name }) = &statements[0].fallback_type {
+        assert_eq!(schema, "dbo", "Should default to dbo schema");
+        assert_eq!(name, "SimpleProc");
+    } else if let Some(sqlparser::ast::Statement::CreateProcedure { name, .. }) = &statements[0].statement {
+        assert!(name.to_string().contains("SimpleProc"));
+    } else {
+        panic!("Expected CreateProcedure statement or fallback type");
+    }
+}
+
+// ============================================================================
+// CREATE FUNCTION Parsing Tests (using fallback parser for T-SQL syntax)
+// ============================================================================
+
+#[test]
+fn test_parse_scalar_function() {
+    // T-SQL function syntax uses fallback parsing since MsSqlDialect doesn't support CREATE FUNCTION
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetFullName]
+(
+    @FirstName NVARCHAR(50),
+    @LastName NVARCHAR(50)
+)
+RETURNS NVARCHAR(101)
+AS
+BEGIN
+    RETURN @FirstName + ' ' + @LastName
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse scalar function: {:?}", result.err());
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+
+    // Functions always use fallback parsing with MsSqlDialect
+    match &statements[0].fallback_type {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function { schema, name, function_type }) => {
+            assert_eq!(schema, "dbo");
+            assert_eq!(name, "GetFullName");
+            assert_eq!(*function_type, rust_sqlpackage::parser::FallbackFunctionType::Scalar);
+        }
+        _ => panic!("Expected Function fallback type"),
+    }
+}
+
+#[test]
+fn test_parse_table_valued_function() {
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetUserOrders]
+(
+    @UserId INT
+)
+RETURNS TABLE
+AS
+RETURN
+(
+    SELECT * FROM Orders WHERE UserId = @UserId
+)
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse table-valued function: {:?}", result.err());
+
+    let statements = result.unwrap();
+    match &statements[0].fallback_type {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function { schema, name, function_type }) => {
+            assert_eq!(schema, "dbo");
+            assert_eq!(name, "GetUserOrders");
+            assert_eq!(*function_type, rust_sqlpackage::parser::FallbackFunctionType::TableValued);
+        }
+        _ => panic!("Expected Function fallback type"),
+    }
+}
+
+#[test]
+fn test_parse_multi_statement_table_function() {
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetFilteredData]
+(
+    @MinValue INT
+)
+RETURNS @ResultTable TABLE
+(
+    Id INT,
+    Value INT
+)
+AS
+BEGIN
+    INSERT INTO @ResultTable
+    SELECT Id, Value FROM Data WHERE Value >= @MinValue
+    RETURN
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse multi-statement table function: {:?}", result.err());
+
+    let statements = result.unwrap();
+    match &statements[0].fallback_type {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function { schema, name, function_type }) => {
+            assert_eq!(schema, "dbo");
+            assert_eq!(name, "GetFilteredData");
+            // RETURNS @ResultTable TABLE should be detected as table-valued
+            assert_eq!(*function_type, rust_sqlpackage::parser::FallbackFunctionType::TableValued);
+        }
+        _ => panic!("Expected Function fallback type"),
+    }
+}
+
+#[test]
+fn test_parse_function_or_alter() {
+    let sql = r#"
+CREATE OR ALTER FUNCTION [utils].[FormatDate]
+(
+    @Date DATETIME
+)
+RETURNS VARCHAR(10)
+AS
+BEGIN
+    RETURN CONVERT(VARCHAR(10), @Date, 120)
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse CREATE OR ALTER FUNCTION: {:?}", result.err());
+
+    let statements = result.unwrap();
+    match &statements[0].fallback_type {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function { schema, name, .. }) => {
+            assert_eq!(schema, "utils");
+            assert_eq!(name, "FormatDate");
+        }
+        _ => panic!("Expected Function fallback type"),
+    }
+}
+
+#[test]
+fn test_parse_function_no_schema() {
+    let sql = r#"
+CREATE FUNCTION SimpleFunc()
+RETURNS INT
+AS
+BEGIN
+    RETURN 42
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse function without schema: {:?}", result.err());
+
+    let statements = result.unwrap();
+    match &statements[0].fallback_type {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function { schema, name, .. }) => {
+            assert_eq!(schema, "dbo", "Should default to dbo schema");
+            assert_eq!(name, "SimpleFunc");
+        }
+        _ => panic!("Expected Function fallback type"),
+    }
+}
+
+// ============================================================================
+// Mixed Procedures and Functions in Same File
+// ============================================================================
+
+#[test]
+fn test_parse_multiple_procedures_and_functions() {
+    // All batches use T-SQL syntax that requires fallback parsing
+    let sql = r#"
+CREATE PROCEDURE [dbo].[Proc1]
+    @Id INT
+AS
+BEGIN
+    SELECT @Id
+END
+GO
+
+CREATE FUNCTION [dbo].[Func1]()
+RETURNS INT
+AS
+BEGIN
+    RETURN 1
+END
+GO
+
+CREATE PROC [dbo].[Proc2]
+AS
+BEGIN
+    SELECT 2
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(result.is_ok(), "Failed to parse multiple procs/funcs: {:?}", result.err());
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 3, "Should have 3 statements");
+
+    // Verify each statement has fallback type (uses T-SQL syntax)
+    assert!(matches!(
+        &statements[0].fallback_type,
+        Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { name, .. }) if name == "Proc1"
+    ), "First should be Proc1");
+    assert!(matches!(
+        &statements[1].fallback_type,
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function { name, .. }) if name == "Func1"
+    ), "Second should be Func1");
+    assert!(matches!(
+        &statements[2].fallback_type,
+        Some(rust_sqlpackage::parser::FallbackStatementType::Procedure { name, .. }) if name == "Proc2"
+    ), "Third should be Proc2");
 }

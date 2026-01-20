@@ -17,7 +17,7 @@
 - [x] Parse target platform from sqlproj
 - [x] Extract SQL file paths (Build items)
 - [x] Extract database references
-- [ ] Unit tests for parser
+- [x] Unit tests for parser
 
 ## Phase 3: T-SQL Parser Integration
 - [x] Create src/parser/mod.rs
@@ -25,9 +25,9 @@
 - [x] Handle GO batch separator preprocessing
 - [x] Parse CREATE TABLE statements
 - [x] Parse CREATE VIEW statements
-- [ ] Parse CREATE PROCEDURE statements (TODO: API differences)
-- [ ] Parse CREATE FUNCTION statements (TODO: API differences)
-- [ ] Unit tests for parser
+- [x] Parse CREATE PROCEDURE statements (fallback parsing for T-SQL syntax)
+- [x] Parse CREATE FUNCTION statements (fallback parsing for T-SQL syntax)
+- [x] Unit tests for parser
 
 ## Phase 4: Database Model Builder
 - [x] Create src/model/mod.rs
@@ -36,8 +36,8 @@
 - [x] Create src/model/builder.rs
 - [x] Build TableElement from AST
 - [x] Build ViewElement from AST
-- [ ] Build ProcedureElement from AST (TODO)
-- [ ] Build FunctionElement from AST (TODO)
+- [x] Build ProcedureElement from AST
+- [x] Build FunctionElement from AST
 - [x] Handle constraints and indexes
 - [ ] Unit tests for model builder
 

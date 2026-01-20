@@ -524,3 +524,371 @@ fn test_dsp_name_sql130() {
     let dsp = SqlServerVersion::Sql130.dsp_name();
     assert!(dsp.contains("Sql130"));
 }
+
+// ============================================================================
+// SqlServerVersion FromStr Tests
+// ============================================================================
+
+#[test]
+fn test_sql_server_version_from_str_sql160() {
+    use rust_sqlpackage::project::SqlServerVersion;
+    assert_eq!("Sql160".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql160);
+    assert_eq!("sql160".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql160);
+    assert_eq!("160".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql160);
+}
+
+#[test]
+fn test_sql_server_version_from_str_sql150() {
+    use rust_sqlpackage::project::SqlServerVersion;
+    assert_eq!("Sql150".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql150);
+    assert_eq!("sql150".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql150);
+    assert_eq!("150".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql150);
+}
+
+#[test]
+fn test_sql_server_version_from_str_sql140() {
+    use rust_sqlpackage::project::SqlServerVersion;
+    assert_eq!("Sql140".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql140);
+    assert_eq!("sql140".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql140);
+    assert_eq!("140".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql140);
+}
+
+#[test]
+fn test_sql_server_version_from_str_sql130() {
+    use rust_sqlpackage::project::SqlServerVersion;
+    assert_eq!("Sql130".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql130);
+    assert_eq!("sql130".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql130);
+    assert_eq!("130".parse::<SqlServerVersion>().unwrap(), SqlServerVersion::Sql130);
+}
+
+#[test]
+fn test_sql_server_version_from_str_invalid() {
+    use rust_sqlpackage::project::SqlServerVersion;
+    assert!("Sql120".parse::<SqlServerVersion>().is_err());
+    assert!("invalid".parse::<SqlServerVersion>().is_err());
+    assert!("".parse::<SqlServerVersion>().is_err());
+}
+
+// ============================================================================
+// Additional Dacpac Reference Tests
+// ============================================================================
+
+#[test]
+fn test_parse_dacpac_reference_suppress_missing_dependencies() {
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+  <ItemGroup>
+    <ArtifactReference Include="master.dacpac">
+      <SuppressMissingDependenciesErrors>True</SuppressMissingDependenciesErrors>
+    </ArtifactReference>
+  </ItemGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.dacpac_references.len(), 1);
+    assert!(project.dacpac_references[0].suppress_missing_dependencies);
+}
+
+#[test]
+fn test_parse_dacpac_reference_suppress_missing_dependencies_false() {
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+  <ItemGroup>
+    <ArtifactReference Include="master.dacpac">
+      <SuppressMissingDependenciesErrors>False</SuppressMissingDependenciesErrors>
+    </ArtifactReference>
+  </ItemGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.dacpac_references.len(), 1);
+    assert!(!project.dacpac_references[0].suppress_missing_dependencies);
+}
+
+#[test]
+fn test_parse_multiple_dacpac_references() {
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+  <ItemGroup>
+    <ArtifactReference Include="master.dacpac">
+      <SuppressMissingDependenciesErrors>True</SuppressMissingDependenciesErrors>
+    </ArtifactReference>
+    <ArtifactReference Include="msdb.dacpac">
+      <DatabaseVariableLiteralValue>msdb</DatabaseVariableLiteralValue>
+    </ArtifactReference>
+    <ArtifactReference Include="OtherProject.dacpac">
+      <DatabaseVariableLiteralValue>OtherDb</DatabaseVariableLiteralValue>
+      <ServerVariableLiteralValue>LinkedServer</ServerVariableLiteralValue>
+    </ArtifactReference>
+  </ItemGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.dacpac_references.len(), 3);
+
+    // First reference: master.dacpac with suppress flag
+    assert!(project.dacpac_references[0].path.to_string_lossy().contains("master.dacpac"));
+    assert!(project.dacpac_references[0].suppress_missing_dependencies);
+
+    // Second reference: msdb.dacpac with database variable
+    assert!(project.dacpac_references[1].path.to_string_lossy().contains("msdb.dacpac"));
+    assert_eq!(project.dacpac_references[1].database_variable, Some("msdb".to_string()));
+
+    // Third reference: OtherProject.dacpac with both variables
+    assert!(project.dacpac_references[2].path.to_string_lossy().contains("OtherProject.dacpac"));
+    assert_eq!(project.dacpac_references[2].database_variable, Some("OtherDb".to_string()));
+    assert_eq!(project.dacpac_references[2].server_variable, Some("LinkedServer".to_string()));
+}
+
+// ============================================================================
+// Path Handling Tests
+// ============================================================================
+
+#[test]
+fn test_windows_path_backslash_conversion() {
+    // Windows-style paths with backslashes should be converted to forward slashes
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Include="Tables\SubFolder\Table1.sql" />
+  </ItemGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(
+        content,
+        &[("Tables/SubFolder/Table1.sql", "CREATE TABLE t1 (id INT)")],
+    );
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+    let project = result.unwrap();
+    assert_eq!(project.sql_files.len(), 1);
+    // Path should exist and be properly resolved
+    assert!(project.sql_files[0].exists());
+}
+
+// ============================================================================
+// Multiple PropertyGroup Tests
+// ============================================================================
+
+#[test]
+fn test_parse_multiple_property_groups() {
+    // Real sqlproj files often have multiple PropertyGroups
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Name>TestProject</Name>
+  </PropertyGroup>
+  <PropertyGroup>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultSchema>custom_schema</DefaultSchema>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <OutputPath>bin\Release\</OutputPath>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    // Should find properties across all PropertyGroups
+    assert_eq!(project.target_platform, rust_sqlpackage::project::SqlServerVersion::Sql160);
+    assert_eq!(project.default_schema, "custom_schema");
+}
+
+// ============================================================================
+// Collation Tests
+// ============================================================================
+
+#[test]
+fn test_parse_collation_latin1_general() {
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DefaultCollation>Latin1_General_CI_AS</DefaultCollation>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    // Latin1_General should map to LCID 1033
+    assert_eq!(project.collation_lcid, 1033);
+}
+
+#[test]
+fn test_parse_collation_default_when_missing() {
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    // Should default to 1033 (US English)
+    assert_eq!(project.collation_lcid, 1033);
+}
+
+// ============================================================================
+// SQL File Edge Cases
+// ============================================================================
+
+#[test]
+fn test_empty_project_no_sql_files() {
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>EmptyProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.sql_files.len(), 0);
+}
+
+#[test]
+fn test_case_insensitive_sql_extension() {
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Include="Table1.SQL" />
+    <Build Include="Table2.Sql" />
+  </ItemGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(
+        content,
+        &[
+            ("Table1.SQL", "CREATE TABLE t1 (id INT)"),
+            ("Table2.Sql", "CREATE TABLE t2 (id INT)"),
+        ],
+    );
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+    let project = result.unwrap();
+    // Should find both files regardless of extension case
+    assert_eq!(project.sql_files.len(), 2);
+}
+
+#[test]
+fn test_build_item_with_missing_file_is_skipped() {
+    // Build items pointing to non-existent files should be skipped
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Include="Exists.sql" />
+    <Build Include="DoesNotExist.sql" />
+  </ItemGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(
+        content,
+        &[("Exists.sql", "CREATE TABLE t1 (id INT)")],
+    );
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    // Only existing file should be included
+    assert_eq!(project.sql_files.len(), 1);
+    assert!(project.sql_files[0].to_string_lossy().contains("Exists"));
+}
+
+// ============================================================================
+// Project Directory Tests
+// ============================================================================
+
+#[test]
+fn test_project_dir_is_set_correctly() {
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.project_dir, temp_dir.path());
+}

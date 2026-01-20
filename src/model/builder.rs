@@ -7,12 +7,12 @@ use sqlparser::ast::{
     ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint,
 };
 
-use crate::parser::ParsedStatement;
+use crate::parser::{FallbackFunctionType, FallbackStatementType, ParsedStatement};
 use crate::project::SqlProject;
 
 use super::{
-    ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, IndexElement, ModelElement,
-    SchemaElement, TableElement, ViewElement,
+    ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, FunctionElement, FunctionType,
+    IndexElement, ModelElement, ProcedureElement, SchemaElement, TableElement, ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -24,7 +24,47 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
     schemas.insert("dbo".to_string());
 
     for parsed in statements {
-        match &parsed.statement {
+        // Handle fallback-parsed statements (procedures and functions with T-SQL syntax)
+        if let Some(fallback) = &parsed.fallback_type {
+            match fallback {
+                FallbackStatementType::Procedure { schema, name } => {
+                    schemas.insert(schema.clone());
+                    model.add_element(ModelElement::Procedure(ProcedureElement {
+                        schema: schema.clone(),
+                        name: name.clone(),
+                        definition: parsed.sql_text.clone(),
+                        parameters: vec![], // T-SQL params not extracted - stored in definition
+                    }));
+                }
+                FallbackStatementType::Function {
+                    schema,
+                    name,
+                    function_type,
+                } => {
+                    schemas.insert(schema.clone());
+                    let func_type = match function_type {
+                        FallbackFunctionType::Scalar => FunctionType::Scalar,
+                        FallbackFunctionType::TableValued => FunctionType::TableValued,
+                    };
+                    model.add_element(ModelElement::Function(FunctionElement {
+                        schema: schema.clone(),
+                        name: name.clone(),
+                        definition: parsed.sql_text.clone(),
+                        function_type: func_type,
+                        parameters: vec![], // T-SQL params not extracted - stored in definition
+                        return_type: None,  // Return type is in the definition
+                    }));
+                }
+            }
+            continue;
+        }
+
+        // Handle regular sqlparser-parsed statements
+        let Some(statement) = &parsed.statement else {
+            continue;
+        };
+
+        match statement {
             Statement::CreateTable(create_table) => {
                 let (schema, name) = extract_schema_and_name(&create_table.name, &project.default_schema);
                 schemas.insert(schema.clone());
@@ -88,16 +128,39 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }));
             }
 
-            // CreateFunction has a complex struct in sqlparser - store as raw SQL for now
-            Statement::CreateFunction { .. } => {
-                // TODO: Parse function details when needed
-                // For now, we store the raw SQL definition
-                // This requires extracting schema/name from the SQL text
+            // Handle procedures that sqlparser successfully parsed (generic SQL syntax)
+            Statement::CreateProcedure { name, .. } => {
+                let (schema, proc_name) = extract_schema_and_name(name, &project.default_schema);
+                schemas.insert(schema.clone());
+
+                model.add_element(ModelElement::Procedure(ProcedureElement {
+                    schema,
+                    name: proc_name,
+                    definition: parsed.sql_text.clone(),
+                    parameters: vec![], // Parameters stored in definition
+                }));
             }
 
-            // CreateProcedure also has version-specific API
-            Statement::CreateProcedure { .. } => {
-                // TODO: Parse procedure details when needed
+            // Handle functions that sqlparser successfully parsed (generic SQL syntax)
+            Statement::CreateFunction(create_func) => {
+                let (schema, func_name) = extract_schema_and_name(&create_func.name, &project.default_schema);
+                schemas.insert(schema.clone());
+
+                // Detect function type from return type
+                let function_type = if create_func.return_type.as_ref().map(|t| t.to_string().to_uppercase().contains("TABLE")).unwrap_or(false) {
+                    FunctionType::TableValued
+                } else {
+                    FunctionType::Scalar
+                };
+
+                model.add_element(ModelElement::Function(FunctionElement {
+                    schema,
+                    name: func_name,
+                    definition: parsed.sql_text.clone(),
+                    function_type,
+                    parameters: vec![], // Parameters stored in definition
+                    return_type: create_func.return_type.as_ref().map(|t| t.to_string()),
+                }));
             }
 
             Statement::CreateSchema { schema_name, .. } => {
