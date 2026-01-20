@@ -459,9 +459,9 @@ pub fn compare_dacpacs(rust_dacpac: &Path, dotnet_dacpac: &Path) -> ComparisonRe
 ## Baseline Test Results (2026-01-20)
 
 ### Summary
-- **Unit Tests**: 83 passed, 12 failed
-- **Integration Tests**: 28 passed, 3 failed
-- **Total**: 111 passed, 15 failed (88% passing)
+- **Unit Tests**: 94 passed, 12 failed (106 total)
+- **Integration Tests**: 28 passed, 3 failed (31 total)
+- **Total**: 122 passed, 15 failed (89% passing)
 
 ### Known Failures
 
@@ -471,12 +471,19 @@ The sqlparser-rs crate doesn't support T-SQL-specific index syntax:
 - `test_parse_clustered_index` - `CREATE CLUSTERED INDEX` not supported
 - `test_parse_unique_index` - `CREATE UNIQUE NONCLUSTERED INDEX` not supported
 - `test_parse_index_with_include` - INCLUDE clause parsing fails
-- Related model/build tests also fail due to this
+- Related model/build tests also fail due to this:
+  - `test_build_index_element`
+  - `test_build_clustered_index`
+  - `test_build_index_with_included_columns`
+  - `test_generate_isclustered_property`
+  - `test_build_with_indexes` (integration)
+  - `test_model_contains_indexes` (integration)
 
 #### XML Generation Differences
 - `test_generate_dac_metadata` - Uses `<DacType>` root, not `<DacMetadata>`
 - `test_generate_dac_metadata_version` - Version not included in current output
 - `test_generate_content_types` - Uses `text/xml` instead of `application/xml`
+- `test_metadata_xml_structure` (integration) - Same as above
 
 #### Model Building
 - `test_extract_dbo_schema` - Schema element format needs adjustment

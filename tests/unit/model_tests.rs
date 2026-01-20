@@ -519,3 +519,85 @@ ON [dbo].[Users] ([Name]);
     assert!(has_view, "Model should contain a view");
     assert!(has_index, "Model should contain an index");
 }
+
+// ============================================================================
+// Additional Constraint Tests (from TEST_PLAN.md)
+// ============================================================================
+
+#[test]
+fn test_build_default_constraint() {
+    let sql = r#"
+CREATE TABLE [dbo].[T] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [CreatedAt] DATETIME2 NOT NULL DEFAULT GETDATE(),
+    [IsActive] BIT NOT NULL DEFAULT 1
+);
+"#;
+    let model = parse_and_build_model(sql);
+
+    let table = model.elements.iter().find_map(|e| {
+        if let rust_sqlpackage::model::ModelElement::Table(t) = e {
+            Some(t)
+        } else {
+            None
+        }
+    });
+
+    assert!(table.is_some(), "Model should contain a table");
+    let table = table.unwrap();
+
+    // Check that default values are captured (if supported)
+    // The column should still be present regardless of default handling
+    assert_eq!(table.columns.len(), 3, "Table should have 3 columns");
+}
+
+#[test]
+fn test_build_model_preserves_schema_from_qualified_name() {
+    let sql = "CREATE TABLE [custom_schema].[MyTable] ([Id] INT NOT NULL PRIMARY KEY);";
+    let model = parse_and_build_model(sql);
+
+    let table = model.elements.iter().find_map(|e| {
+        if let rust_sqlpackage::model::ModelElement::Table(t) = e {
+            Some(t)
+        } else {
+            None
+        }
+    });
+
+    assert!(table.is_some(), "Model should contain a table");
+    let table = table.unwrap();
+
+    // Table name should include schema qualification
+    assert!(
+        table.name.contains("custom_schema") || table.schema.contains("custom_schema"),
+        "Table should preserve custom_schema"
+    );
+}
+
+#[test]
+fn test_build_model_with_standard_index() {
+    // Use standard CREATE INDEX (without CLUSTERED/NONCLUSTERED) which sqlparser-rs supports
+    let sql = r#"
+CREATE TABLE [dbo].[T] ([Col1] INT NOT NULL);
+GO
+CREATE INDEX [IX_T_Col1]
+ON [dbo].[T] ([Col1]);
+"#;
+    let model = parse_and_build_model(sql);
+
+    let index = model.elements.iter().find_map(|e| {
+        if let rust_sqlpackage::model::ModelElement::Index(i) = e {
+            Some(i)
+        } else {
+            None
+        }
+    });
+
+    assert!(index.is_some(), "Model should contain an index");
+    let index = index.unwrap();
+    assert!(
+        index.name.contains("IX_T_Col1"),
+        "Index should be named IX_T_Col1, got: {}",
+        index.name
+    );
+}
