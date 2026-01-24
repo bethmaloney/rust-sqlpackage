@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo-audit:*)",
+      "Bash(cargo-deny:*)",
+      "Bash(cargo-expand:*)",
+      "Bash(cargo-machete:*)",
+      "Bash(cargo-nextest:*)",
+      "Bash(cargo-outdated:*)",
+      "Bash(cargo-watch:*)",
+      "Bash(cargo:*)",
+      "Bash(clippy-driver:*)",
+      "Bash(git:*)",
+      "Bash(rust-analyzer:*)",
+      "Bash(rustc:*)",
+      "Bash(rustfmt:*)",
+      "Bash(rustup:*)",
+      "Bash(trunk:*)",
+      "Bash(wasm-pack:*)",
+      "WebFetch(domain:doc.rust-lang.org)",
+      "WebFetch(domain:git-scm.com)",
+      "WebFetch(domain:rust-lang.org)"
+    ],
+    "deny": [
+      "Read(./.cargo/credentials.toml)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./.git-credentials)",
+      "Read(./.git/config)",
+      "Read(./**/Secrets.toml)",
+      "Read(./**/secrets/**)",
+      "Read(./Secrets.toml)",
+      "Read(./secrets/**)",
+      "Read(~/.cargo/credentials.toml)",
+      "Read(~/.git-credentials)",
+      "Read(~/.gitconfig)"
+    ]
+  }
+}
