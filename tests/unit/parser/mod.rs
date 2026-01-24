@@ -21,3 +21,4 @@ mod procedure_tests;
 mod function_tests;
 mod alter_tests;
 mod drop_tests;
+mod execute_as_tests;

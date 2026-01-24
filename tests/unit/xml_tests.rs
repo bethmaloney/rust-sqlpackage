@@ -854,3 +854,188 @@ INCLUDE ([TotalAmount], [Status]);
         "XML should have IncludedColumns"
     );
 }
+
+// ============================================================================
+// Native Compilation XML Tests
+// ============================================================================
+
+#[test]
+fn test_generate_natively_compiled_procedure_has_property() {
+    let sql = r#"
+CREATE PROCEDURE [dbo].[NativeProc]
+    @Id INT
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'English')
+    SELECT [Id] FROM [dbo].[MemTable] WHERE [Id] = @Id;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Should have IsNativelyCompiled property
+    assert!(
+        xml.contains(r#"<Property Name="IsNativelyCompiled" Value="True"/>"#),
+        "Natively compiled procedure should have IsNativelyCompiled=True property. Got:\n{}",
+        xml
+    );
+
+    // Should be a SqlProcedure element
+    assert!(
+        xml.contains("Type=\"SqlProcedure\""),
+        "Should have SqlProcedure element type"
+    );
+}
+
+#[test]
+fn test_generate_regular_procedure_no_native_property() {
+    let sql = r#"
+CREATE PROCEDURE [dbo].[RegularProc]
+AS
+BEGIN
+    SELECT 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Should NOT have IsNativelyCompiled property
+    assert!(
+        !xml.contains("IsNativelyCompiled"),
+        "Regular procedure should NOT have IsNativelyCompiled property. Got:\n{}",
+        xml
+    );
+}
+
+#[test]
+fn test_generate_natively_compiled_function_has_property() {
+    let sql = r#"
+CREATE FUNCTION [dbo].[NativeFunc]
+(
+    @Value INT
+)
+RETURNS INT
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'English')
+    RETURN @Value * 2;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Should have IsNativelyCompiled property
+    assert!(
+        xml.contains(r#"<Property Name="IsNativelyCompiled" Value="True"/>"#),
+        "Natively compiled function should have IsNativelyCompiled=True property. Got:\n{}",
+        xml
+    );
+
+    // Should be a SqlScalarFunction element
+    assert!(
+        xml.contains("Type=\"SqlScalarFunction\""),
+        "Should have SqlScalarFunction element type"
+    );
+}
+
+#[test]
+fn test_generate_regular_function_no_native_property() {
+    let sql = r#"
+CREATE FUNCTION [dbo].[RegularFunc]()
+RETURNS INT
+AS
+BEGIN
+    RETURN 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Should NOT have IsNativelyCompiled property
+    assert!(
+        !xml.contains("IsNativelyCompiled"),
+        "Regular function should NOT have IsNativelyCompiled property. Got:\n{}",
+        xml
+    );
+}
+
+// ============================================================================
+// FILESTREAM Column XML Tests
+// ============================================================================
+
+#[test]
+fn test_generate_filestream_column_has_property() {
+    let sql = r#"
+CREATE TABLE [dbo].[Documents] (
+    [Id] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL,
+    [FileData] VARBINARY(MAX) FILESTREAM NULL
+);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Should have IsFileStream property for the FILESTREAM column
+    assert!(
+        xml.contains(r#"<Property Name="IsFileStream" Value="True"/>"#),
+        "FILESTREAM column should have IsFileStream=True property. Got:\n{}",
+        xml
+    );
+}
+
+#[test]
+fn test_generate_regular_varbinary_no_filestream_property() {
+    let sql = r#"
+CREATE TABLE [dbo].[RegularBinary] (
+    [Id] INT NOT NULL,
+    [Data] VARBINARY(MAX) NULL
+);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Should NOT have IsFileStream property for regular VARBINARY(MAX)
+    assert!(
+        !xml.contains("IsFileStream"),
+        "Regular VARBINARY(MAX) should NOT have IsFileStream property. Got:\n{}",
+        xml
+    );
+}
+
+#[test]
+fn test_generate_filestream_column_structure() {
+    let sql = r#"
+CREATE TABLE [dbo].[FileArchive] (
+    [FileId] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL,
+    [Content] VARBINARY(MAX) FILESTREAM NOT NULL
+);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Verify overall structure
+    assert!(xml.contains("SqlTable"), "Should have SqlTable element");
+    assert!(xml.contains("SqlSimpleColumn"), "Should have SqlSimpleColumn elements");
+    assert!(
+        xml.contains(r#"<Property Name="IsFileStream" Value="True"/>"#),
+        "FILESTREAM column should have IsFileStream property"
+    );
+    // Verify data type reference
+    assert!(
+        xml.contains("Name=\"[varbinary]\""),
+        "Should reference varbinary type"
+    );
+}
+
+#[test]
+fn test_generate_multiple_filestream_columns() {
+    let sql = r#"
+CREATE TABLE [dbo].[MediaFiles] (
+    [Id] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL,
+    [Thumbnail] VARBINARY(MAX) FILESTREAM NULL,
+    [FullSize] VARBINARY(MAX) FILESTREAM NULL,
+    [Name] NVARCHAR(100) NOT NULL
+);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Count IsFileStream properties - should be 2
+    let filestream_count = xml.matches(r#"<Property Name="IsFileStream" Value="True"/>"#).count();
+    assert!(
+        filestream_count == 2,
+        "Should have exactly 2 IsFileStream=True properties for 2 FILESTREAM columns. Got: {}",
+        filestream_count
+    );
+}

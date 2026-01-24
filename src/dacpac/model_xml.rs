@@ -175,6 +175,10 @@ fn write_column_with_type<W: Write>(
         write_property(writer, "IsIdentity", "True")?;
     }
 
+    if column.is_filestream {
+        write_property(writer, "IsFileStream", "True")?;
+    }
+
     // Data type relationship
     write_type_specifier(
         writer,
@@ -329,6 +333,11 @@ fn write_procedure<W: Write>(
     elem.push_attribute(("Type", "SqlProcedure"));
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
+
+    // Write IsNativelyCompiled property if true
+    if proc.is_natively_compiled {
+        write_property(writer, "IsNativelyCompiled", "True")?;
+    }
 
     // For procedures, BodyScript should contain only the body after the final AS keyword
     // Parameters must be defined as separate SqlSubroutineParameter elements
@@ -603,6 +612,11 @@ fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> a
     elem.push_attribute(("Type", type_name));
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
+
+    // Write IsNativelyCompiled property if true
+    if func.is_natively_compiled {
+        write_property(writer, "IsNativelyCompiled", "True")?;
+    }
 
     // Write FunctionBody relationship with SqlScriptFunctionImplementation
     // Extract just the body (after final AS)

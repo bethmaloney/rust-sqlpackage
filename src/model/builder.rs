@@ -31,11 +31,13 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
             match fallback {
                 FallbackStatementType::Procedure { schema, name } => {
                     schemas.insert(schema.clone());
+                    let is_natively_compiled = is_natively_compiled(&parsed.sql_text);
                     model.add_element(ModelElement::Procedure(ProcedureElement {
                         schema: schema.clone(),
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
                         parameters: vec![], // T-SQL params not extracted - stored in definition
+                        is_natively_compiled,
                     }));
                 }
                 FallbackStatementType::Function {
@@ -48,6 +50,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         FallbackFunctionType::Scalar => FunctionType::Scalar,
                         FallbackFunctionType::TableValued => FunctionType::TableValued,
                     };
+                    let is_natively_compiled = is_natively_compiled(&parsed.sql_text);
                     model.add_element(ModelElement::Function(FunctionElement {
                         schema: schema.clone(),
                         name: name.clone(),
@@ -55,6 +58,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         function_type: func_type,
                         parameters: vec![], // T-SQL params not extracted - stored in definition
                         return_type: None,  // Return type is in the definition
+                        is_natively_compiled,
                     }));
                 }
                 FallbackStatementType::Index {
@@ -397,12 +401,14 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
             Statement::CreateProcedure { name, .. } => {
                 let (schema, proc_name) = extract_schema_and_name(name, &project.default_schema);
                 schemas.insert(schema.clone());
+                let is_native = is_natively_compiled(&parsed.sql_text);
 
                 model.add_element(ModelElement::Procedure(ProcedureElement {
                     schema,
                     name: proc_name,
                     definition: parsed.sql_text.clone(),
                     parameters: vec![], // Parameters stored in definition
+                    is_natively_compiled: is_native,
                 }));
             }
 
@@ -424,6 +430,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     FunctionType::Scalar
                 };
 
+                let is_native = is_natively_compiled(&parsed.sql_text);
+
                 model.add_element(ModelElement::Function(FunctionElement {
                     schema,
                     name: func_name,
@@ -431,6 +439,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     function_type,
                     parameters: vec![], // Parameters stored in definition
                     return_type: create_func.return_type.as_ref().map(|t| t.to_string()),
+                    is_natively_compiled: is_native,
                 }));
             }
 
@@ -494,6 +503,25 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
         }
     }
 
+    // Check for ROWGUIDCOL - sqlparser doesn't have native support, so check the column options text
+    // This is a T-SQL specific feature that may appear in the original SQL
+    let is_rowguidcol = col
+        .options
+        .iter()
+        .any(|opt| format!("{:?}", opt.option).to_uppercase().contains("ROWGUIDCOL"));
+
+    // Check for SPARSE - T-SQL specific feature
+    let is_sparse = col
+        .options
+        .iter()
+        .any(|opt| format!("{:?}", opt.option).to_uppercase().contains("SPARSE"));
+
+    // Check for FILESTREAM - T-SQL specific feature for VARBINARY(MAX) columns
+    let is_filestream = col
+        .options
+        .iter()
+        .any(|opt| format!("{:?}", opt.option).to_uppercase().contains("FILESTREAM"));
+
     let (max_length, precision, scale) = extract_type_params(&col.data_type);
 
     ColumnElement {
@@ -501,6 +529,9 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
         data_type: col.data_type.to_string(),
         is_nullable,
         is_identity,
+        is_rowguidcol,
+        is_sparse,
+        is_filestream,
         default_value,
         max_length,
         precision,
@@ -516,7 +547,10 @@ fn column_from_extracted(col: &ExtractedTableTypeColumn) -> ColumnElement {
         name: col.name.clone(),
         data_type: col.data_type.clone(),
         is_nullable: col.is_nullable,
-        is_identity: false, // Table types don't support identity columns
+        is_identity: false,    // Table types don't support identity columns
+        is_rowguidcol: false,  // Table types don't support ROWGUIDCOL
+        is_sparse: false,      // Table types don't support SPARSE
+        is_filestream: false,  // Table types don't support FILESTREAM
         default_value: None,
         max_length,
         precision,
@@ -595,6 +629,9 @@ fn column_from_fallback_table(col: &ExtractedTableColumn) -> ColumnElement {
         data_type: col.data_type.clone(),
         is_nullable: col.is_nullable,
         is_identity: col.is_identity,
+        is_rowguidcol: col.is_rowguidcol,
+        is_sparse: col.is_sparse,
+        is_filestream: col.is_filestream,
         default_value: col.default_value.clone(),
         max_length,
         precision,
@@ -782,4 +819,12 @@ fn constraint_from_table_constraint(
         }
         _ => None,
     }
+}
+
+/// Check if a procedure or function definition uses NATIVE_COMPILATION
+fn is_natively_compiled(definition: &str) -> bool {
+    let upper = definition.to_uppercase();
+    // Look for WITH NATIVE_COMPILATION in the definition
+    // It can appear as "WITH NATIVE_COMPILATION" or "WITH NATIVE_COMPILATION, SCHEMABINDING" etc.
+    upper.contains("NATIVE_COMPILATION")
 }

@@ -578,3 +578,421 @@ CREATE TABLE [dbo].[JsonTable] (
         "Should be a CREATE TABLE statement"
     );
 }
+
+// ============================================================================
+// ROWGUIDCOL Column Tests
+// ============================================================================
+
+#[test]
+fn test_parse_table_with_rowguidcol() {
+    let sql = r#"
+CREATE TABLE [dbo].[TableWithRowGuid] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [RowGuid] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL DEFAULT NEWID()
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with ROWGUIDCOL: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+    assert!(
+        statements[0].sql_text.contains("ROWGUIDCOL"),
+        "Should preserve ROWGUIDCOL keyword"
+    );
+}
+
+#[test]
+fn test_parse_table_with_rowguidcol_and_constraint() {
+    // ROWGUIDCOL with named default constraint
+    let sql = r#"
+CREATE TABLE [dbo].[Documents] (
+    [DocumentId] INT NOT NULL PRIMARY KEY,
+    [DocumentGuid] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL CONSTRAINT [DF_Documents_Guid] DEFAULT NEWSEQUENTIALID(),
+    [Name] NVARCHAR(255) NOT NULL
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with ROWGUIDCOL and constraint: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("ROWGUIDCOL"),
+        "Should preserve ROWGUIDCOL"
+    );
+    assert!(
+        statements[0].sql_text.contains("NEWSEQUENTIALID"),
+        "Should preserve NEWSEQUENTIALID default"
+    );
+}
+
+#[test]
+fn test_parse_table_with_rowguidcol_nullable() {
+    // ROWGUIDCOL can be nullable (though typically NOT NULL)
+    let sql = r#"
+CREATE TABLE [dbo].[OptionalGuid] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [TrackingGuid] UNIQUEIDENTIFIER NULL ROWGUIDCOL
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with nullable ROWGUIDCOL: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("ROWGUIDCOL"),
+        "Should preserve ROWGUIDCOL keyword"
+    );
+}
+
+#[test]
+fn test_parse_table_rowguidcol_unique_constraint() {
+    // ROWGUIDCOL with unique constraint
+    let sql = r#"
+CREATE TABLE [dbo].[UniqueGuidTable] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [RowGuid] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL DEFAULT NEWID(),
+    CONSTRAINT [UQ_UniqueGuidTable_RowGuid] UNIQUE ([RowGuid])
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with ROWGUIDCOL and unique constraint: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_parse_table_rowguidcol_with_index() {
+    // ROWGUIDCOL column used in an index
+    let sql = r#"
+CREATE TABLE [dbo].[IndexedGuidTable] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [ExternalId] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL DEFAULT NEWID()
+);
+GO
+CREATE NONCLUSTERED INDEX [IX_IndexedGuidTable_ExternalId] ON [dbo].[IndexedGuidTable] ([ExternalId]);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with ROWGUIDCOL and index: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 2, "Should have table and index statements");
+}
+
+// ============================================================================
+// SPARSE Column Tests
+// ============================================================================
+
+#[test]
+fn test_parse_table_with_sparse_column() {
+    let sql = r#"
+CREATE TABLE [dbo].[TableWithSparse] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [OptionalData] NVARCHAR(100) SPARSE NULL
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with SPARSE column: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+    assert!(
+        statements[0].sql_text.contains("SPARSE"),
+        "Should preserve SPARSE keyword"
+    );
+}
+
+#[test]
+fn test_parse_table_with_multiple_sparse_columns() {
+    // Wide table pattern with multiple SPARSE columns
+    let sql = r#"
+CREATE TABLE [dbo].[WideTable] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [RequiredField] NVARCHAR(50) NOT NULL,
+    [Attribute1] NVARCHAR(100) SPARSE NULL,
+    [Attribute2] INT SPARSE NULL,
+    [Attribute3] DATETIME2 SPARSE NULL,
+    [Attribute4] DECIMAL(18, 2) SPARSE NULL
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with multiple SPARSE columns: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+}
+
+#[test]
+fn test_parse_table_with_sparse_and_column_set() {
+    // SPARSE columns with XML COLUMN_SET for wide table pattern
+    let sql = r#"
+CREATE TABLE [dbo].[DocumentStore] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [DocType] NVARCHAR(50) NOT NULL,
+    [Attr1] NVARCHAR(100) SPARSE NULL,
+    [Attr2] NVARCHAR(100) SPARSE NULL,
+    [Attr3] INT SPARSE NULL,
+    [SparseColumns] XML COLUMN_SET FOR ALL_SPARSE_COLUMNS
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with SPARSE and COLUMN_SET: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+    assert!(
+        statements[0].sql_text.contains("COLUMN_SET"),
+        "Should preserve COLUMN_SET clause"
+    );
+    assert!(
+        statements[0].sql_text.contains("ALL_SPARSE_COLUMNS"),
+        "Should preserve ALL_SPARSE_COLUMNS clause"
+    );
+}
+
+#[test]
+fn test_parse_table_sparse_with_different_types() {
+    // SPARSE columns with various data types
+    let sql = r#"
+CREATE TABLE [dbo].[SparseTypesTable] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [SparseInt] INT SPARSE NULL,
+    [SparseBigInt] BIGINT SPARSE NULL,
+    [SparseNVarChar] NVARCHAR(200) SPARSE NULL,
+    [SparseDecimal] DECIMAL(18, 4) SPARSE NULL,
+    [SparseDateTime] DATETIME2 SPARSE NULL,
+    [SparseUniqueId] UNIQUEIDENTIFIER SPARSE NULL,
+    [SparseBit] BIT SPARSE NULL
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse SPARSE columns with different types: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_parse_table_sparse_with_constraints() {
+    // SPARSE columns in a table with other constraints
+    let sql = r#"
+CREATE TABLE [dbo].[SparseWithConstraints] (
+    [Id] INT NOT NULL,
+    [Category] INT NOT NULL,
+    [SparseData] NVARCHAR(MAX) SPARSE NULL,
+    [SparseValue] INT SPARSE NULL,
+    CONSTRAINT [PK_SparseWithConstraints] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [UQ_SparseWithConstraints_Category] UNIQUE ([Category])
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse SPARSE table with constraints: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("SPARSE"),
+        "Should preserve SPARSE keyword"
+    );
+    assert!(
+        statements[0].sql_text.contains("PRIMARY KEY"),
+        "Should preserve PRIMARY KEY constraint"
+    );
+}
+
+// ============================================================================
+// FILESTREAM Column Tests
+// ============================================================================
+
+#[test]
+fn test_parse_table_with_filestream_column() {
+    // Basic FILESTREAM column with VARBINARY(MAX)
+    let sql = r#"
+CREATE TABLE [dbo].[Documents] (
+    [Id] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL DEFAULT NEWID(),
+    [FileName] NVARCHAR(255) NOT NULL,
+    [FileData] VARBINARY(MAX) FILESTREAM NULL,
+    CONSTRAINT [PK_Documents] PRIMARY KEY CLUSTERED ([Id])
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with FILESTREAM column: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+    assert!(
+        statements[0].sql_text.contains("FILESTREAM"),
+        "Should preserve FILESTREAM keyword"
+    );
+}
+
+#[test]
+fn test_parse_table_with_filestream_and_rowguidcol() {
+    // FILESTREAM requires a ROWGUIDCOL column in the table
+    let sql = r#"
+CREATE TABLE [dbo].[FileArchive] (
+    [FileId] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL DEFAULT NEWSEQUENTIALID(),
+    [Content] VARBINARY(MAX) FILESTREAM NOT NULL,
+    [Description] NVARCHAR(1000) NULL,
+    CONSTRAINT [PK_FileArchive] PRIMARY KEY CLUSTERED ([FileId])
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with FILESTREAM and ROWGUIDCOL: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("ROWGUIDCOL"),
+        "Should preserve ROWGUIDCOL"
+    );
+    assert!(
+        statements[0].sql_text.contains("FILESTREAM"),
+        "Should preserve FILESTREAM"
+    );
+}
+
+#[test]
+fn test_parse_table_with_multiple_filestream_columns() {
+    // Table with multiple FILESTREAM columns
+    let sql = r#"
+CREATE TABLE [dbo].[MediaFiles] (
+    [MediaId] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL DEFAULT NEWID(),
+    [Thumbnail] VARBINARY(MAX) FILESTREAM NULL,
+    [FullResolution] VARBINARY(MAX) FILESTREAM NULL,
+    [Metadata] NVARCHAR(MAX) NULL,
+    CONSTRAINT [PK_MediaFiles] PRIMARY KEY ([MediaId])
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with multiple FILESTREAM columns: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+}
+
+#[test]
+fn test_parse_table_filestream_not_null() {
+    // FILESTREAM column with NOT NULL constraint
+    let sql = r#"
+CREATE TABLE [dbo].[RequiredFiles] (
+    [FileId] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL DEFAULT NEWID(),
+    [FileContent] VARBINARY(MAX) FILESTREAM NOT NULL,
+    CONSTRAINT [PK_RequiredFiles] PRIMARY KEY ([FileId])
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with NOT NULL FILESTREAM column: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_parse_table_with_filestream_and_other_columns() {
+    // FILESTREAM mixed with regular columns
+    let sql = r#"
+CREATE TABLE [dbo].[Attachments] (
+    [AttachmentId] INT IDENTITY(1,1) NOT NULL,
+    [RowGuid] UNIQUEIDENTIFIER NOT NULL ROWGUIDCOL DEFAULT NEWID(),
+    [Name] NVARCHAR(255) NOT NULL,
+    [ContentType] NVARCHAR(100) NOT NULL,
+    [Size] BIGINT NOT NULL,
+    [Data] VARBINARY(MAX) FILESTREAM NULL,
+    [CreatedAt] DATETIME2 NOT NULL DEFAULT GETDATE(),
+    CONSTRAINT [PK_Attachments] PRIMARY KEY CLUSTERED ([AttachmentId])
+);
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse table with FILESTREAM and other columns: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("IDENTITY"),
+        "Should preserve IDENTITY"
+    );
+    assert!(
+        statements[0].sql_text.contains("FILESTREAM"),
+        "Should preserve FILESTREAM"
+    );
+}

@@ -578,3 +578,178 @@ END
         result.err()
     );
 }
+
+// ============================================================================
+// Native Compilation Tests
+// ============================================================================
+
+#[test]
+fn test_parse_natively_compiled_procedure() {
+    // Natively compiled procedure with NATIVE_COMPILATION and SCHEMABINDING
+    let sql = r#"
+CREATE PROCEDURE [dbo].[NativeCompiled]
+    @Id INT
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'English')
+    SELECT [Id], [Action], [Timestamp]
+    FROM [dbo].[AuditLog]
+    WHERE [Id] = @Id;
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse natively compiled procedure: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+
+    // Verify the SQL text contains NATIVE_COMPILATION
+    assert!(
+        statements[0].sql_text.contains("NATIVE_COMPILATION"),
+        "SQL text should preserve NATIVE_COMPILATION"
+    );
+    assert!(
+        statements[0].sql_text.contains("SCHEMABINDING"),
+        "SQL text should preserve SCHEMABINDING"
+    );
+    assert!(
+        statements[0].sql_text.contains("BEGIN ATOMIC"),
+        "SQL text should preserve BEGIN ATOMIC"
+    );
+}
+
+#[test]
+fn test_parse_natively_compiled_procedure_with_execute_as() {
+    // Native compilation requires EXECUTE AS clause
+    let sql = r#"
+CREATE PROCEDURE [dbo].[NativeWithExecuteAs]
+    @Id INT,
+    @Value NVARCHAR(100)
+WITH NATIVE_COMPILATION, SCHEMABINDING, EXECUTE AS OWNER
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'us_english')
+    INSERT INTO [dbo].[MemOptTable] ([Id], [Value])
+    VALUES (@Id, @Value);
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse natively compiled procedure with EXECUTE AS: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("EXECUTE AS OWNER"),
+        "SQL text should preserve EXECUTE AS OWNER"
+    );
+}
+
+#[test]
+fn test_parse_natively_compiled_procedure_serializable() {
+    // Native compilation with SERIALIZABLE isolation level
+    let sql = r#"
+CREATE PROCEDURE [dbo].[NativeSerializable]
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SERIALIZABLE, LANGUAGE = 'English')
+    UPDATE [dbo].[Counter]
+    SET [Value] = [Value] + 1
+    WHERE [Id] = 1;
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse natively compiled procedure with SERIALIZABLE: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("SERIALIZABLE"),
+        "SQL text should preserve SERIALIZABLE isolation level"
+    );
+}
+
+#[test]
+fn test_parse_natively_compiled_procedure_repeatable_read() {
+    // Native compilation with REPEATABLE READ isolation level
+    let sql = r#"
+CREATE PROCEDURE [dbo].[NativeRepeatableRead]
+    @StartId INT,
+    @EndId INT
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = REPEATABLE READ, LANGUAGE = N'English')
+    SELECT [Id], [Name]
+    FROM [dbo].[Items]
+    WHERE [Id] BETWEEN @StartId AND @EndId;
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse natively compiled procedure with REPEATABLE READ: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("REPEATABLE READ"),
+        "SQL text should preserve REPEATABLE READ isolation level"
+    );
+}
+
+#[test]
+fn test_parse_natively_compiled_procedure_multiple_statements() {
+    // Native compilation with multiple statements in body
+    let sql = r#"
+CREATE PROCEDURE [dbo].[NativeMultiStatement]
+    @Id INT,
+    @NewValue INT
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'English')
+    DECLARE @OldValue INT;
+
+    SELECT @OldValue = [Value]
+    FROM [dbo].[Values]
+    WHERE [Id] = @Id;
+
+    UPDATE [dbo].[Values]
+    SET [Value] = @NewValue
+    WHERE [Id] = @Id;
+
+    INSERT INTO [dbo].[ValueHistory] ([Id], [OldValue], [NewValue], [ChangedAt])
+    VALUES (@Id, @OldValue, @NewValue, SYSDATETIME());
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse natively compiled procedure with multiple statements: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("DECLARE @OldValue"),
+        "SQL text should preserve DECLARE statement"
+    );
+}

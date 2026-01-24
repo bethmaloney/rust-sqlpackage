@@ -313,3 +313,153 @@ RETURN
         result.err()
     );
 }
+
+// ============================================================================
+// Native Compilation Function Tests
+// ============================================================================
+
+#[test]
+fn test_parse_natively_compiled_scalar_function() {
+    // Natively compiled scalar function for memory-optimized tables
+    let sql = r#"
+CREATE FUNCTION [dbo].[NativeScalarFunc]
+(
+    @Value INT
+)
+RETURNS INT
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'English')
+    RETURN @Value * 2;
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse natively compiled scalar function: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert_eq!(statements.len(), 1);
+
+    // Verify the SQL text contains NATIVE_COMPILATION
+    assert!(
+        statements[0].sql_text.contains("NATIVE_COMPILATION"),
+        "SQL text should preserve NATIVE_COMPILATION"
+    );
+    assert!(
+        statements[0].sql_text.contains("BEGIN ATOMIC"),
+        "SQL text should preserve BEGIN ATOMIC"
+    );
+}
+
+#[test]
+fn test_parse_natively_compiled_function_with_execute_as() {
+    // Native compilation with EXECUTE AS clause
+    let sql = r#"
+CREATE FUNCTION [dbo].[NativeFuncWithExecuteAs]
+(
+    @Id INT,
+    @Multiplier INT
+)
+RETURNS INT
+WITH NATIVE_COMPILATION, SCHEMABINDING, EXECUTE AS OWNER
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'us_english')
+    DECLARE @Result INT;
+    SELECT @Result = [Value] * @Multiplier
+    FROM [dbo].[MemOptTable]
+    WHERE [Id] = @Id;
+    RETURN @Result;
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse natively compiled function with EXECUTE AS: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("EXECUTE AS OWNER"),
+        "SQL text should preserve EXECUTE AS OWNER"
+    );
+}
+
+#[test]
+fn test_parse_natively_compiled_inline_tvf() {
+    // Natively compiled inline table-valued function
+    let sql = r#"
+CREATE FUNCTION [dbo].[NativeInlineTVF]
+(
+    @MinId INT
+)
+RETURNS TABLE
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+RETURN
+(
+    SELECT [Id], [Name], [Value]
+    FROM [dbo].[MemOptTable]
+    WHERE [Id] >= @MinId
+)
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse natively compiled inline TVF: {:?}",
+        result.err()
+    );
+
+    let statements = result.unwrap();
+    assert!(
+        statements[0].sql_text.contains("NATIVE_COMPILATION"),
+        "SQL text should preserve NATIVE_COMPILATION"
+    );
+
+    // Verify it's detected as table-valued
+    match &statements[0].fallback_type {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function { function_type, .. }) => {
+            assert_eq!(
+                *function_type,
+                rust_sqlpackage::parser::FallbackFunctionType::TableValued
+            );
+        }
+        _ => panic!("Expected Function fallback type"),
+    }
+}
+
+#[test]
+fn test_parse_natively_compiled_function_with_string_ops() {
+    // Natively compiled function with string operations
+    let sql = r#"
+CREATE FUNCTION [dbo].[NativeStringConcat]
+(
+    @FirstName NVARCHAR(50),
+    @LastName NVARCHAR(50),
+    @Separator NVARCHAR(5)
+)
+RETURNS NVARCHAR(105)
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'English')
+    RETURN @FirstName + @Separator + @LastName;
+END
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    assert!(
+        result.is_ok(),
+        "Failed to parse natively compiled function with string operations: {:?}",
+        result.err()
+    );
+}

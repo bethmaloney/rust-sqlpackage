@@ -91,6 +91,9 @@ pub struct ColumnElement {
     pub data_type: String,
     pub is_nullable: bool,
     pub is_identity: bool,
+    pub is_rowguidcol: bool,
+    pub is_sparse: bool,
+    pub is_filestream: bool,
     pub default_value: Option<String>,
     pub max_length: Option<i32>,
     pub precision: Option<u8>,
@@ -112,6 +115,8 @@ pub struct ProcedureElement {
     pub name: String,
     pub definition: String,
     pub parameters: Vec<ParameterElement>,
+    /// Whether this procedure is natively compiled (WITH NATIVE_COMPILATION)
+    pub is_natively_compiled: bool,
 }
 
 /// Parameter element
@@ -140,6 +145,8 @@ pub struct FunctionElement {
     pub function_type: FunctionType,
     pub parameters: Vec<ParameterElement>,
     pub return_type: Option<String>,
+    /// Whether this function is natively compiled (WITH NATIVE_COMPILATION)
+    pub is_natively_compiled: bool,
 }
 
 /// Index element

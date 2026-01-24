@@ -400,3 +400,165 @@ END
     let func = func.unwrap();
     assert!(func.definition.contains("@Amount * @Rate / 100"));
 }
+
+// ============================================================================
+// Native Compilation Tests
+// ============================================================================
+
+#[test]
+fn test_build_natively_compiled_procedure() {
+    let sql = r#"
+CREATE PROCEDURE [dbo].[NativeProc]
+    @Id INT
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'English')
+    SELECT [Id], [Name] FROM [dbo].[MemTable] WHERE [Id] = @Id;
+END
+"#;
+    let model = parse_and_build_model(sql);
+
+    let proc = model.elements.iter().find_map(|e| {
+        if let rust_sqlpackage::model::ModelElement::Procedure(p) = e {
+            Some(p)
+        } else {
+            None
+        }
+    });
+
+    assert!(proc.is_some(), "Model should contain a procedure");
+    let proc = proc.unwrap();
+    assert_eq!(proc.name, "NativeProc");
+    assert!(
+        proc.is_natively_compiled,
+        "Procedure should be marked as natively compiled"
+    );
+}
+
+#[test]
+fn test_build_regular_procedure_not_natively_compiled() {
+    let sql = r#"
+CREATE PROCEDURE [dbo].[RegularProc]
+    @Id INT
+AS
+BEGIN
+    SELECT [Id], [Name] FROM [dbo].[Table] WHERE [Id] = @Id;
+END
+"#;
+    let model = parse_and_build_model(sql);
+
+    let proc = model.elements.iter().find_map(|e| {
+        if let rust_sqlpackage::model::ModelElement::Procedure(p) = e {
+            Some(p)
+        } else {
+            None
+        }
+    });
+
+    assert!(proc.is_some(), "Model should contain a procedure");
+    let proc = proc.unwrap();
+    assert_eq!(proc.name, "RegularProc");
+    assert!(
+        !proc.is_natively_compiled,
+        "Regular procedure should NOT be marked as natively compiled"
+    );
+}
+
+#[test]
+fn test_build_natively_compiled_function() {
+    let sql = r#"
+CREATE FUNCTION [dbo].[NativeFunc]
+(
+    @Value INT
+)
+RETURNS INT
+WITH NATIVE_COMPILATION, SCHEMABINDING
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'English')
+    RETURN @Value * 2;
+END
+"#;
+    let model = parse_and_build_model(sql);
+
+    let func = model.elements.iter().find_map(|e| {
+        if let rust_sqlpackage::model::ModelElement::Function(f) = e {
+            Some(f)
+        } else {
+            None
+        }
+    });
+
+    assert!(func.is_some(), "Model should contain a function");
+    let func = func.unwrap();
+    assert_eq!(func.name, "NativeFunc");
+    assert!(
+        func.is_natively_compiled,
+        "Function should be marked as natively compiled"
+    );
+}
+
+#[test]
+fn test_build_regular_function_not_natively_compiled() {
+    let sql = r#"
+CREATE FUNCTION [dbo].[RegularFunc]
+(
+    @Value INT
+)
+RETURNS INT
+AS
+BEGIN
+    RETURN @Value * 2;
+END
+"#;
+    let model = parse_and_build_model(sql);
+
+    let func = model.elements.iter().find_map(|e| {
+        if let rust_sqlpackage::model::ModelElement::Function(f) = e {
+            Some(f)
+        } else {
+            None
+        }
+    });
+
+    assert!(func.is_some(), "Model should contain a function");
+    let func = func.unwrap();
+    assert_eq!(func.name, "RegularFunc");
+    assert!(
+        !func.is_natively_compiled,
+        "Regular function should NOT be marked as natively compiled"
+    );
+}
+
+#[test]
+fn test_build_natively_compiled_procedure_with_execute_as() {
+    let sql = r#"
+CREATE PROCEDURE [dbo].[NativeProcWithExecuteAs]
+    @Id INT,
+    @Value NVARCHAR(100)
+WITH NATIVE_COMPILATION, SCHEMABINDING, EXECUTE AS OWNER
+AS
+BEGIN ATOMIC WITH (TRANSACTION ISOLATION LEVEL = SNAPSHOT, LANGUAGE = N'us_english')
+    INSERT INTO [dbo].[MemOptTable] ([Id], [Value]) VALUES (@Id, @Value);
+END
+"#;
+    let model = parse_and_build_model(sql);
+
+    let proc = model.elements.iter().find_map(|e| {
+        if let rust_sqlpackage::model::ModelElement::Procedure(p) = e {
+            Some(p)
+        } else {
+            None
+        }
+    });
+
+    assert!(proc.is_some(), "Model should contain a procedure");
+    let proc = proc.unwrap();
+    assert!(
+        proc.is_natively_compiled,
+        "Procedure with EXECUTE AS should still be marked as natively compiled"
+    );
+    assert!(
+        proc.definition.contains("EXECUTE AS OWNER"),
+        "Definition should preserve EXECUTE AS OWNER"
+    );
+}

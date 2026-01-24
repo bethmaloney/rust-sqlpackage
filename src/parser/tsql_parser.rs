@@ -59,6 +59,12 @@ pub struct ExtractedTableColumn {
     pub is_nullable: bool,
     /// Whether the column has IDENTITY
     pub is_identity: bool,
+    /// Whether the column has ROWGUIDCOL
+    pub is_rowguidcol: bool,
+    /// Whether the column has SPARSE attribute
+    pub is_sparse: bool,
+    /// Whether the column has FILESTREAM attribute
+    pub is_filestream: bool,
     /// Default constraint name (if any)
     pub default_constraint_name: Option<String>,
     /// Default value expression (if any)
@@ -408,6 +414,188 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
                 name,
             });
         }
+    }
+
+    // Fallback for DROP statements that sqlparser doesn't support
+    if let Some(fallback) = try_drop_fallback(sql) {
+        return Some(fallback);
+    }
+
+    // Fallback for CTE with DELETE/UPDATE/INSERT/MERGE
+    if let Some(fallback) = try_cte_dml_fallback(sql) {
+        return Some(fallback);
+    }
+
+    // Fallback for MERGE with OUTPUT clause
+    if let Some(fallback) = try_merge_output_fallback(sql) {
+        return Some(fallback);
+    }
+
+    // Fallback for UPDATE with XML methods (.modify(), .value(), etc.)
+    if let Some(fallback) = try_xml_method_fallback(sql) {
+        return Some(fallback);
+    }
+
+    None
+}
+
+/// Fallback for DROP statements that sqlparser doesn't support
+/// Handles: DROP SYNONYM, DROP TRIGGER, DROP INDEX ... ON, DROP PROC
+fn try_drop_fallback(sql: &str) -> Option<FallbackStatementType> {
+    let sql_upper = sql.to_uppercase();
+
+    // Check for DROP SYNONYM
+    if sql_upper.contains("DROP SYNONYM") {
+        let re = regex::Regex::new(
+            r"(?i)DROP\s+SYNONYM\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+        ).ok()?;
+        let caps = re.captures(sql)?;
+        let schema = caps.get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "dbo".to_string());
+        let name = caps.get(2)?.as_str().to_string();
+        return Some(FallbackStatementType::RawStatement {
+            object_type: "DropSynonym".to_string(),
+            schema,
+            name,
+        });
+    }
+
+    // Check for DROP TRIGGER
+    if sql_upper.contains("DROP TRIGGER") {
+        let re = regex::Regex::new(
+            r"(?i)DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+        ).ok()?;
+        let caps = re.captures(sql)?;
+        let schema = caps.get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "dbo".to_string());
+        let name = caps.get(2)?.as_str().to_string();
+        return Some(FallbackStatementType::RawStatement {
+            object_type: "DropTrigger".to_string(),
+            schema,
+            name,
+        });
+    }
+
+    // Check for DROP INDEX ... ON (T-SQL specific syntax)
+    if sql_upper.contains("DROP INDEX") && sql_upper.contains(" ON ") {
+        let re = regex::Regex::new(
+            r"(?i)DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?\[?(\w+)\]?\s+ON\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+        ).ok()?;
+        let caps = re.captures(sql)?;
+        let index_name = caps.get(1)?.as_str().to_string();
+        let schema = caps.get(2)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "dbo".to_string());
+        let table_name = caps.get(3)?.as_str().to_string();
+        return Some(FallbackStatementType::RawStatement {
+            object_type: "DropIndex".to_string(),
+            schema,
+            name: format!("{}_{}", table_name, index_name),
+        });
+    }
+
+    // Check for DROP PROC (abbreviation for DROP PROCEDURE)
+    // Only match PROC that's not followed by EDURE (to avoid matching PROCEDURE)
+    if sql_upper.contains("DROP PROC") && !sql_upper.contains("DROP PROCEDURE") {
+        let re = regex::Regex::new(
+            r"(?i)DROP\s+PROC\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+        ).ok()?;
+        let caps = re.captures(sql)?;
+        let schema = caps.get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "dbo".to_string());
+        let name = caps.get(2)?.as_str().to_string();
+        return Some(FallbackStatementType::RawStatement {
+            object_type: "DropProcedure".to_string(),
+            schema,
+            name,
+        });
+    }
+
+    None
+}
+
+/// Fallback for CTEs followed by DELETE, UPDATE, INSERT, or MERGE
+/// sqlparser only supports CTEs followed by SELECT
+fn try_cte_dml_fallback(sql: &str) -> Option<FallbackStatementType> {
+    let sql_upper = sql.to_uppercase();
+
+    // Check if this is a CTE (starts with WITH)
+    let trimmed_upper = sql_upper.trim();
+    if !trimmed_upper.starts_with("WITH ") && !trimmed_upper.starts_with("WITH\n") {
+        return None;
+    }
+
+    // Check if followed by DELETE, UPDATE, INSERT, or MERGE (after the CTE definition)
+    // Look for these keywords after a closing parenthesis
+    let dml_pattern = regex::Regex::new(r"(?i)\)\s*(DELETE|UPDATE|INSERT|MERGE)\b").ok()?;
+    if dml_pattern.is_match(sql) {
+        // Extract the DML type
+        let caps = dml_pattern.captures(sql)?;
+        let dml_type = caps.get(1)?.as_str().to_uppercase();
+
+        return Some(FallbackStatementType::RawStatement {
+            object_type: format!("CteWith{}", dml_type),
+            schema: "dbo".to_string(),
+            name: "anonymous".to_string(),
+        });
+    }
+
+    None
+}
+
+/// Fallback for MERGE statements with OUTPUT clause
+/// sqlparser doesn't support the OUTPUT clause on MERGE
+fn try_merge_output_fallback(sql: &str) -> Option<FallbackStatementType> {
+    let sql_upper = sql.to_uppercase();
+
+    // Check for MERGE ... OUTPUT
+    if sql_upper.contains("MERGE") && sql_upper.contains("OUTPUT") {
+        // Extract target table name
+        let re = regex::Regex::new(
+            r"(?i)MERGE\s+(?:INTO\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+        ).ok()?;
+        let caps = re.captures(sql)?;
+        let schema = caps.get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "dbo".to_string());
+        let name = caps.get(2)?.as_str().to_string();
+
+        return Some(FallbackStatementType::RawStatement {
+            object_type: "MergeWithOutput".to_string(),
+            schema,
+            name,
+        });
+    }
+
+    None
+}
+
+/// Fallback for UPDATE statements with XML methods (.modify(), .value(), etc.)
+/// sqlparser doesn't support XML method call syntax
+fn try_xml_method_fallback(sql: &str) -> Option<FallbackStatementType> {
+    let sql_upper = sql.to_uppercase();
+
+    // Check for UPDATE with XML method call pattern
+    // Pattern: UPDATE ... SET [column].modify(...) or [column].value(...)
+    if sql_upper.contains("UPDATE") && (sql_upper.contains(".MODIFY(") || sql_upper.contains(".VALUE(")) {
+        // Extract target table name
+        let re = regex::Regex::new(
+            r"(?i)UPDATE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+        ).ok()?;
+        let caps = re.captures(sql)?;
+        let schema = caps.get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "dbo".to_string());
+        let name = caps.get(2)?.as_str().to_string();
+
+        return Some(FallbackStatementType::RawStatement {
+            object_type: "UpdateWithXmlMethod".to_string(),
+            schema,
+            name,
+        });
     }
 
     None
@@ -937,6 +1125,15 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     // Check for IDENTITY
     let is_identity = col_def.to_uppercase().contains("IDENTITY");
 
+    // Check for ROWGUIDCOL
+    let is_rowguidcol = col_def.to_uppercase().contains("ROWGUIDCOL");
+
+    // Check for SPARSE
+    let is_sparse = col_def.to_uppercase().contains("SPARSE");
+
+    // Check for FILESTREAM
+    let is_filestream = col_def.to_uppercase().contains("FILESTREAM");
+
     // Check for nullability - look for NOT NULL or NULL
     // NOT NULL takes precedence, default is nullable
     let upper = col_def.to_uppercase();
@@ -1022,6 +1219,9 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
         data_type,
         is_nullable,
         is_identity,
+        is_rowguidcol,
+        is_sparse,
+        is_filestream,
         default_constraint_name,
         default_value,
         check_constraint_name,
