@@ -53,6 +53,7 @@ pretty_assertions = "1"
 tiberius = { version = "0.12", default-features = false, features = ["tds73", "rustls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 tokio-util = { version = "0.7", features = ["compat"] }
+dotenvy = "0.15"
 
 [[bin]]
 name = "rust-sqlpackage"

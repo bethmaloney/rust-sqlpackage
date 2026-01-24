@@ -4,12 +4,19 @@
 //! then verify the deployment was successful by querying the database.
 //!
 //! Prerequisites:
-//! - SQL Server 2022 running at localhost with sa/Password1
+//! - SQL Server 2022 running (configured via .env or environment variables)
 //! - SqlPackage CLI available in PATH or as a .NET global tool
+//!
+//! Environment variables (with defaults):
+//! - SQL_SERVER_HOST (default: localhost)
+//! - SQL_SERVER_PORT (default: 1433)
+//! - SQL_SERVER_USER (default: sa)
+//! - SQL_SERVER_PASSWORD (default: Password1)
 //!
 //! Run with: cargo test --test e2e_tests -- --ignored
 
 use std::process::Command;
+use std::sync::LazyLock;
 
 use tiberius::{AuthMethod, Client, Config, Row};
 use tokio::net::TcpStream;
@@ -17,10 +24,32 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 use crate::common::{DacpacInfo, TestContext};
 
-const SQL_SERVER_HOST: &str = "localhost";
-const SQL_SERVER_PORT: u16 = 1433;
-const SQL_SERVER_USER: &str = "sa";
-const SQL_SERVER_PASSWORD: &str = "Password1";
+/// Load environment variables from .env file (if present)
+fn load_env() {
+    let _ = dotenvy::dotenv();
+}
+
+/// SQL Server connection configuration loaded from environment
+static SQL_CONFIG: LazyLock<SqlServerConfig> = LazyLock::new(|| {
+    load_env();
+    SqlServerConfig {
+        host: std::env::var("SQL_SERVER_HOST").unwrap_or_else(|_| "localhost".to_string()),
+        port: std::env::var("SQL_SERVER_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(1433),
+        user: std::env::var("SQL_SERVER_USER").unwrap_or_else(|_| "sa".to_string()),
+        password: std::env::var("SQL_SERVER_PASSWORD").unwrap_or_else(|_| "Password1".to_string()),
+    }
+});
+
+struct SqlServerConfig {
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+}
+
 const TEST_DATABASE: &str = "E2ESimple_Test";
 
 /// Type alias for the SQL client
@@ -62,9 +91,9 @@ fn sqlpackage_available() -> bool {
 /// Create a tiberius client config
 fn create_config(database: Option<&str>) -> Config {
     let mut config = Config::new();
-    config.host(SQL_SERVER_HOST);
-    config.port(SQL_SERVER_PORT);
-    config.authentication(AuthMethod::sql_server(SQL_SERVER_USER, SQL_SERVER_PASSWORD));
+    config.host(&SQL_CONFIG.host);
+    config.port(SQL_CONFIG.port);
+    config.authentication(AuthMethod::sql_server(&SQL_CONFIG.user, &SQL_CONFIG.password));
     config.trust_cert();
 
     if let Some(db) = database {
@@ -109,7 +138,7 @@ fn deploy_dacpac(dacpac_path: &std::path::Path) -> Result<(), String> {
     // Include database name in connection string
     let connection_string = format!(
         "Server={},{};Database={};User Id={};Password={};TrustServerCertificate=True;",
-        SQL_SERVER_HOST, SQL_SERVER_PORT, TEST_DATABASE, SQL_SERVER_USER, SQL_SERVER_PASSWORD
+        SQL_CONFIG.host, SQL_CONFIG.port, TEST_DATABASE, SQL_CONFIG.user, SQL_CONFIG.password
     );
 
     let output = Command::new(&sqlpackage)
@@ -362,7 +391,7 @@ fn test_e2e_build_comprehensive_dacpac() {
 // ============================================================================
 
 #[tokio::test]
-#[ignore = "Requires SQL Server 2022 at localhost with sa/Password1"]
+#[ignore = "Requires SQL Server (configure via .env or environment variables)"]
 async fn test_e2e_sql_server_connectivity() {
     // Test basic connectivity to SQL Server
     let mut client = connect(None).await.expect("Should connect to SQL Server");
@@ -409,9 +438,9 @@ async fn test_e2e_sql_server_connectivity() {
 /// - Stored procedures exist
 /// - Foreign key constraints exist
 ///
-/// Requires SQL Server 2022 at localhost with sa/Password1 and SqlPackage CLI.
+/// Requires SQL Server and SqlPackage CLI (configure via .env or environment variables).
 #[tokio::test]
-#[ignore = "Requires SQL Server 2022 at localhost with sa/Password1 and SqlPackage CLI"]
+#[ignore = "Requires SQL Server and SqlPackage CLI (configure via .env)"]
 async fn test_e2e_deploy_to_sql_server() {
     if !sqlpackage_available() {
         eprintln!("Skipping: SqlPackage CLI not found");
@@ -544,9 +573,9 @@ const TEST_DATABASE_COMPREHENSIVE: &str = "E2EComprehensive_Test";
 /// - Post-deployment script ran (seed data exists)
 /// - More complex table structures with IDENTITY, defaults, etc.
 ///
-/// Requires SQL Server 2022 at localhost with sa/Password1 and SqlPackage CLI.
+/// Requires SQL Server and SqlPackage CLI (configure via .env or environment variables).
 #[tokio::test]
-#[ignore = "Requires SQL Server 2022 at localhost with sa/Password1 and SqlPackage CLI"]
+#[ignore = "Requires SQL Server and SqlPackage CLI (configure via .env)"]
 async fn test_e2e_deploy_comprehensive_with_post_deploy() {
     if !sqlpackage_available() {
         eprintln!("Skipping: SqlPackage CLI not found");
@@ -723,11 +752,11 @@ fn deploy_dacpac_comprehensive(dacpac_path: &std::path::Path) -> Result<(), Stri
 
     let connection_string = format!(
         "Server={},{};Database={};User Id={};Password={};TrustServerCertificate=True;",
-        SQL_SERVER_HOST,
-        SQL_SERVER_PORT,
+        SQL_CONFIG.host,
+        SQL_CONFIG.port,
         TEST_DATABASE_COMPREHENSIVE,
-        SQL_SERVER_USER,
-        SQL_SERVER_PASSWORD
+        SQL_CONFIG.user,
+        SQL_CONFIG.password
     );
 
     let output = Command::new(&sqlpackage)
