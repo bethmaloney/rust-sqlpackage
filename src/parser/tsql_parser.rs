@@ -159,6 +159,10 @@ pub enum FallbackStatementType {
         name: String,
         columns: Vec<ExtractedTableColumn>,
         constraints: Vec<ExtractedTableConstraint>,
+        /// Whether this is a graph node table (CREATE TABLE AS NODE)
+        is_node: bool,
+        /// Whether this is a graph edge table (CREATE TABLE AS EDGE)
+        is_edge: bool,
     },
     /// Generic fallback for any statement that can't be parsed
     RawStatement {
@@ -990,6 +994,11 @@ fn extract_include_columns(sql: &str) -> Vec<String> {
 fn extract_table_structure(sql: &str) -> Option<FallbackStatementType> {
     let (schema, name) = extract_generic_object_name(sql, "TABLE")?;
 
+    // Check for graph table syntax (AS NODE or AS EDGE)
+    let sql_upper = sql.to_uppercase();
+    let is_node = sql_upper.contains("AS NODE");
+    let is_edge = sql_upper.contains("AS EDGE");
+
     // Find the opening parenthesis after CREATE TABLE [schema].[name]
     let table_name_pattern = format!(
         r"(?i)CREATE\s+TABLE\s+(?:\[?{}\]?\.)?\[?{}\]?\s*\(",
@@ -1011,6 +1020,8 @@ fn extract_table_structure(sql: &str) -> Option<FallbackStatementType> {
         name,
         columns,
         constraints,
+        is_node,
+        is_edge,
     })
 }
 

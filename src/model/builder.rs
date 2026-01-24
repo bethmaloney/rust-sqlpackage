@@ -108,6 +108,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     name,
                     columns,
                     constraints,
+                    is_node,
+                    is_edge,
                 } => {
                     schemas.insert(schema.clone());
 
@@ -122,6 +124,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         schema: schema.clone(),
                         name: name.clone(),
                         columns: model_columns,
+                        is_node: *is_node,
+                        is_edge: *is_edge,
                     }));
 
                     // Add constraints as separate elements
@@ -221,6 +225,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     schema: schema.clone(),
                     name: name.clone(),
                     columns,
+                    is_node: false,
+                    is_edge: false,
                 }));
 
                 // Extract constraints from table definition (table-level constraints)

@@ -82,6 +82,10 @@ pub struct TableElement {
     pub schema: String,
     pub name: String,
     pub columns: Vec<ColumnElement>,
+    /// Whether this is a graph node table (CREATE TABLE AS NODE)
+    pub is_node: bool,
+    /// Whether this is a graph edge table (CREATE TABLE AS EDGE)
+    pub is_edge: bool,
 }
 
 /// Column element

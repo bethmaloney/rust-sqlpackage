@@ -11,6 +11,7 @@ mod column_type_tests;
 mod constraint_tests;
 mod element_tests;
 mod execute_as_tests;
+mod graph_table_tests;
 mod index_tests;
 mod routine_tests;
 mod schema_tests;
