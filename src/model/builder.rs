@@ -147,6 +147,27 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                             }));
                         }
                     }
+
+                    // Add inline CHECK constraints from column definitions
+                    for col in columns {
+                        if let Some(check_expr) = &col.check_expression {
+                            let constraint_name = col
+                                .check_constraint_name
+                                .clone()
+                                .unwrap_or_else(|| format!("CK_{}_{}", name, col.name));
+                            model.add_element(ModelElement::Constraint(ConstraintElement {
+                                name: constraint_name,
+                                table_schema: schema.clone(),
+                                table_name: name.clone(),
+                                constraint_type: ConstraintType::Check,
+                                columns: vec![ConstraintColumn::new(col.name.clone())],
+                                definition: Some(check_expr.clone()),
+                                referenced_table: None,
+                                referenced_columns: None,
+                                is_clustered: None,
+                            }));
+                        }
+                    }
                 }
                 FallbackStatementType::RawStatement {
                     object_type,
@@ -232,6 +253,77 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 constraint_type,
                                 columns: vec![ConstraintColumn::new(col.name.value.clone())],
                                 definition: None,
+                                referenced_table: None,
+                                referenced_columns: None,
+                                is_clustered: None,
+                            }));
+                        }
+                    }
+                }
+
+                // Extract inline named default constraints from column definitions
+                // Note: sqlparser may associate the constraint name with NOT NULL when SQL is
+                // written as "CONSTRAINT [name] NOT NULL DEFAULT (value)" - we need to handle
+                // this by looking for a named NOT NULL/NULL followed by an unnamed DEFAULT
+                for col in &create_table.columns {
+                    let mut pending_constraint_name: Option<String> = None;
+
+                    for option in &col.options {
+                        match &option.option {
+                            ColumnOption::NotNull | ColumnOption::Null => {
+                                // If this null option has a name, save it for potential DEFAULT
+                                if let Some(constraint_name) = &option.name {
+                                    pending_constraint_name = Some(constraint_name.value.clone());
+                                }
+                            }
+                            ColumnOption::Default(expr) => {
+                                // Use explicit name on DEFAULT, or pending name from NOT NULL
+                                let constraint_name = option
+                                    .name
+                                    .as_ref()
+                                    .map(|n| n.value.clone())
+                                    .or(pending_constraint_name.take());
+
+                                if let Some(constraint_name) = constraint_name {
+                                    model.add_element(ModelElement::Constraint(ConstraintElement {
+                                        name: constraint_name,
+                                        table_schema: schema.clone(),
+                                        table_name: name.clone(),
+                                        constraint_type: ConstraintType::Default,
+                                        columns: vec![ConstraintColumn::new(col.name.value.clone())],
+                                        definition: Some(expr.to_string()),
+                                        referenced_table: None,
+                                        referenced_columns: None,
+                                        is_clustered: None,
+                                    }));
+                                }
+                                // Reset pending name
+                                pending_constraint_name = None;
+                            }
+                            _ => {
+                                // Reset pending name for other options
+                                pending_constraint_name = None;
+                            }
+                        }
+                    }
+                }
+
+                // Extract inline CHECK constraints from column definitions
+                for col in &create_table.columns {
+                    for option in &col.options {
+                        if let ColumnOption::Check(expr) = &option.option {
+                            let constraint_name = option
+                                .name
+                                .as_ref()
+                                .map(|n| n.value.clone())
+                                .unwrap_or_else(|| format!("CK_{}_{}", name, col.name.value));
+                            model.add_element(ModelElement::Constraint(ConstraintElement {
+                                name: constraint_name,
+                                table_schema: schema.clone(),
+                                table_name: name.clone(),
+                                constraint_type: ConstraintType::Check,
+                                columns: vec![ConstraintColumn::new(col.name.value.clone())],
+                                definition: Some(expr.to_string()),
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,

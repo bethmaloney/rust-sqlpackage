@@ -63,6 +63,10 @@ pub struct ExtractedTableColumn {
     pub default_constraint_name: Option<String>,
     /// Default value expression (if any)
     pub default_value: Option<String>,
+    /// Inline CHECK constraint name (if any)
+    pub check_constraint_name: Option<String>,
+    /// Inline CHECK constraint expression (if any)
+    pub check_expression: Option<String>,
 }
 
 /// A column reference in a constraint with optional sort direction
@@ -574,17 +578,26 @@ fn extract_procedure_name(sql: &str) -> Option<(String, String)> {
     // CREATE PROCEDURE dbo.ProcName
     // CREATE OR ALTER PROCEDURE [schema].[name]
     // CREATE PROC [dbo].[name]
+    // CREATE PROCEDURE [dbo].[Name&With&Special]
+    // Use [^\]]+ for bracketed identifiers to capture special characters like &
     let re = regex::Regex::new(
-        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?(?:PROCEDURE|PROC)\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
+        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?(?:PROCEDURE|PROC)\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
     )
     .ok()?;
 
     let caps = re.captures(sql)?;
+    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
     let schema = caps
         .get(1)
+        .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(2)?.as_str().to_string();
+    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
+    let name = caps
+        .get(3)
+        .or_else(|| caps.get(4))?
+        .as_str()
+        .to_string();
 
     Some((schema, name))
 }
@@ -842,30 +855,73 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     };
 
     // Extract inline DEFAULT constraint
-    // Pattern: CONSTRAINT [name] DEFAULT (value) or just DEFAULT (value)
+    // Pattern: CONSTRAINT [name] [NOT NULL|NULL] DEFAULT (value) or just DEFAULT (value)
+    // Note: The CONSTRAINT name can appear before or with NOT NULL/NULL interleaved
     let default_constraint_name;
     let default_value;
 
-    // Try named constraint first: CONSTRAINT [name] DEFAULT (value)
-    let named_default_re = Regex::new(
-        r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))"
+    // Try named constraint with parenthesized value: CONSTRAINT [name] [NOT NULL|NULL] DEFAULT ((value))
+    let named_default_paren_re = Regex::new(
+        r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+(?:NOT\s+NULL\s+|NULL\s+)?DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))"
     ).ok()?;
 
-    if let Some(caps) = named_default_re.captures(col_def) {
-        default_constraint_name = Some(caps.get(1)?.as_str().to_string());
-        default_value = Some(caps.get(2)?.as_str().to_string());
+    // Try named constraint with function call: CONSTRAINT [name] [NOT NULL|NULL] DEFAULT GETDATE()
+    let named_default_func_re = Regex::new(
+        r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+(?:NOT\s+NULL\s+|NULL\s+)?DEFAULT\s+(\w+\(\))"
+    ).ok()?;
+
+    if let Some(caps) = named_default_paren_re.captures(col_def) {
+        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
+        default_value = caps.get(2).map(|m| m.as_str().to_string());
+    } else if let Some(caps) = named_default_func_re.captures(col_def) {
+        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
+        default_value = caps.get(2).map(|m| m.as_str().to_string());
     } else {
-        // Try unnamed default: DEFAULT (value)
-        let unnamed_default_re = Regex::new(
+        // Try unnamed default with parenthesized value: DEFAULT ((value))
+        let unnamed_default_paren_re = Regex::new(
             r"(?i)DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))"
         ).ok()?;
 
-        if let Some(caps) = unnamed_default_re.captures(col_def) {
+        // Try unnamed default with function call: DEFAULT GETDATE()
+        let unnamed_default_func_re = Regex::new(
+            r"(?i)DEFAULT\s+(\w+\(\))"
+        ).ok()?;
+
+        if let Some(caps) = unnamed_default_paren_re.captures(col_def) {
             default_constraint_name = None;
-            default_value = Some(caps.get(1)?.as_str().to_string());
+            default_value = caps.get(1).map(|m| m.as_str().to_string());
+        } else if let Some(caps) = unnamed_default_func_re.captures(col_def) {
+            default_constraint_name = None;
+            default_value = caps.get(1).map(|m| m.as_str().to_string());
         } else {
             default_constraint_name = None;
             default_value = None;
+        }
+    }
+
+    // Extract inline CHECK constraint
+    // Pattern: [CONSTRAINT name] CHECK (expression)
+    let check_constraint_name;
+    let check_expression;
+
+    // Try named check constraint: CONSTRAINT [name] CHECK (expression)
+    let named_check_re = Regex::new(
+        r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+CHECK\s*\((.+)\)"
+    ).ok();
+
+    if let Some(caps) = named_check_re.and_then(|re| re.captures(col_def)) {
+        check_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
+        check_expression = caps.get(2).map(|m| m.as_str().to_string());
+    } else {
+        // Try unnamed check constraint: CHECK (expression)
+        let unnamed_check_re = Regex::new(r"(?i)\bCHECK\s*\((.+)\)").ok();
+
+        if let Some(caps) = unnamed_check_re.and_then(|re| re.captures(col_def)) {
+            check_constraint_name = None;
+            check_expression = caps.get(1).map(|m| m.as_str().to_string());
+        } else {
+            check_constraint_name = None;
+            check_expression = None;
         }
     }
 
@@ -876,6 +932,8 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
         is_identity,
         default_constraint_name,
         default_value,
+        check_constraint_name,
+        check_expression,
     })
 }
 
