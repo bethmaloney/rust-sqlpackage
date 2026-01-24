@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build">
+  <Sdk Name="Microsoft.Build.Sql" Version="2.0.0" />
+  <PropertyGroup>
+    <Name>HeaderSection</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql150DatabaseSchemaProvider</DSP>
+    <ModelCollation>1033, CI</ModelCollation>
+    <AnsiNulls>True</AnsiNulls>
+    <QuotedIdentifier>True</QuotedIdentifier>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Include="Tables.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SqlServer.Dacpacs.Master" Version="150.0.0" />
+  </ItemGroup>
+</Project>

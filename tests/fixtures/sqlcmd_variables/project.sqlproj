@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build">
+  <Sdk Name="Microsoft.Build.Sql" Version="2.0.0" />
+  <PropertyGroup>
+    <Name>SqlCmdVariables</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Include="Tables.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <SqlCmdVariable Include="Environment">
+      <Value>$(SqlCmdVar__1)</Value>
+      <DefaultValue>Development</DefaultValue>
+    </SqlCmdVariable>
+    <SqlCmdVariable Include="ServerName">
+      <Value>$(SqlCmdVar__2)</Value>
+      <DefaultValue>localhost</DefaultValue>
+    </SqlCmdVariable>
+    <SqlCmdVariable Include="MaxConnections">
+      <Value>$(SqlCmdVar__3)</Value>
+      <DefaultValue>100</DefaultValue>
+    </SqlCmdVariable>
+  </ItemGroup>
+</Project>

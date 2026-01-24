@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>DatabaseOptions</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultCollation>Latin1_General_CI_AS</DefaultCollation>
+    <DefaultFilegroup>PRIMARY</DefaultFilegroup>
+    <PageVerify>CHECKSUM</PageVerify>
+    <AnsiNullDefaultOn>True</AnsiNullDefaultOn>
+    <AnsiNullsOn>True</AnsiNullsOn>
+    <AnsiWarningsOn>True</AnsiWarningsOn>
+    <ArithAbortOn>True</ArithAbortOn>
+    <ConcatNullYieldsNullOn>True</ConcatNullYieldsNullOn>
+    <FullTextEnabled>True</FullTextEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Include="Tables.sql" />
+  </ItemGroup>
+</Project>

@@ -13,3 +13,6 @@ mod model_tests;
 
 #[path = "unit/xml_tests.rs"]
 mod xml_tests;
+
+#[path = "unit/dacpac_comparison_tests.rs"]
+mod dacpac_comparison_tests;

@@ -10,3 +10,6 @@ mod build_tests;
 
 #[path = "integration/dacpac_tests.rs"]
 mod dacpac_tests;
+
+#[path = "integration/dacpac_compatibility_tests.rs"]
+mod dacpac_compatibility_tests;
