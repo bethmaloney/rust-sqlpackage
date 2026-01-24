@@ -75,3 +75,5 @@ A `.dacpac` is a ZIP containing:
 - `[Content_Types].xml` - MIME types
 
 Compatible with SSMS, Azure Data Studio, SqlPackage CLI, and DacFx API.
+
+See `docs/MS-DACPAC.md` for the complete XML schema specification (element structures, key patterns, data types, and examples).
