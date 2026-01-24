@@ -918,3 +918,76 @@ fn test_build_with_composite_fk() {
         "Model should contain foreign key constraints"
     );
 }
+
+// ============================================================================
+// OUTPUT Parameter Tests
+// ============================================================================
+
+#[test]
+fn test_build_with_output_parameters() {
+    let ctx = TestContext::with_fixture("procedure_parameters");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with OUTPUT parameters should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    // Verify model XML contains procedure definitions with parameters
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    // Verify SqlSubroutineParameter elements exist
+    assert!(
+        model_xml.contains("SqlSubroutineParameter"),
+        "Model should contain SqlSubroutineParameter elements"
+    );
+
+    // Verify IsOutput property is present for OUTPUT parameters
+    assert!(
+        model_xml.contains("IsOutput"),
+        "Model should contain IsOutput property for OUTPUT parameters"
+    );
+
+    // Count IsOutput occurrences - we have 3 OUTPUT params in the fixture:
+    // CreateUser has 1, ComplexProcedure has 2
+    let is_output_count = model_xml.matches("IsOutput").count();
+    assert!(
+        is_output_count >= 3,
+        "Should have at least 3 IsOutput properties, found {}",
+        is_output_count
+    );
+}
+
+#[test]
+fn test_output_parameter_model_xml_structure() {
+    let ctx = TestContext::with_fixture("procedure_parameters");
+    let result = ctx.build();
+
+    assert!(result.success, "Build should succeed. Errors: {:?}", result.errors);
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    // Verify the IsOutput property has the correct value "True"
+    assert!(
+        model_xml.contains(r#""IsOutput""#) && model_xml.contains(r#""True""#),
+        "IsOutput property should have value True"
+    );
+
+    // Verify CreateUser procedure has OUTPUT parameter
+    assert!(
+        model_xml.contains("CreateUser"),
+        "Model should contain CreateUser procedure"
+    );
+
+    // Verify ComplexProcedure with multiple OUTPUT parameters
+    assert!(
+        model_xml.contains("ComplexProcedure"),
+        "Model should contain ComplexProcedure"
+    );
+}

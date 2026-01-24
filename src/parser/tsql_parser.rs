@@ -316,9 +316,30 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         }
     }
 
+    // Check for ALTER PROCEDURE or ALTER PROC (T-SQL shorthand)
+    // Note: sqlparser doesn't support ALTER PROCEDURE, so we use fallback
+    if sql_upper.contains("ALTER PROCEDURE") || sql_upper.contains("ALTER PROC") {
+        if let Some((schema, name)) = extract_alter_procedure_name(sql) {
+            return Some(FallbackStatementType::Procedure { schema, name });
+        }
+    }
+
     // Check for CREATE FUNCTION
     if sql_upper.contains("CREATE FUNCTION") || sql_upper.contains("CREATE OR ALTER FUNCTION") {
         if let Some((schema, name)) = extract_function_name(sql) {
+            let function_type = detect_function_type(sql);
+            return Some(FallbackStatementType::Function {
+                schema,
+                name,
+                function_type,
+            });
+        }
+    }
+
+    // Check for ALTER FUNCTION
+    // Note: sqlparser doesn't support ALTER FUNCTION, so we use fallback
+    if sql_upper.contains("ALTER FUNCTION") {
+        if let Some((schema, name)) = extract_alter_function_name(sql) {
             let function_type = detect_function_type(sql);
             return Some(FallbackStatementType::Function {
                 schema,
@@ -342,6 +363,14 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for CREATE SEQUENCE (T-SQL multiline syntax not fully supported by sqlparser)
     if sql_upper.contains("CREATE SEQUENCE") {
         if let Some((schema, name)) = extract_sequence_name(sql) {
+            return Some(FallbackStatementType::Sequence { schema, name });
+        }
+    }
+
+    // Check for ALTER SEQUENCE
+    // Note: sqlparser doesn't support ALTER SEQUENCE, so we use fallback
+    if sql_upper.contains("ALTER SEQUENCE") {
+        if let Some((schema, name)) = extract_alter_sequence_name(sql) {
             return Some(FallbackStatementType::Sequence { schema, name });
         }
     }
@@ -598,6 +627,69 @@ fn extract_procedure_name(sql: &str) -> Option<(String, String)> {
         .or_else(|| caps.get(4))?
         .as_str()
         .to_string();
+
+    Some((schema, name))
+}
+
+/// Extract schema and name from ALTER PROCEDURE statement
+fn extract_alter_procedure_name(sql: &str) -> Option<(String, String)> {
+    // Match patterns like:
+    // ALTER PROCEDURE [dbo].[ProcName]
+    // ALTER PROCEDURE dbo.ProcName
+    // ALTER PROC [dbo].[name]
+    let re = regex::Regex::new(
+        r"(?i)ALTER\s+(?:PROCEDURE|PROC)\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
+    )
+    .ok()?;
+
+    let caps = re.captures(sql)?;
+    let schema = caps
+        .get(1)
+        .or_else(|| caps.get(2))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
+    let name = caps
+        .get(3)
+        .or_else(|| caps.get(4))?
+        .as_str()
+        .to_string();
+
+    Some((schema, name))
+}
+
+/// Extract schema and name from ALTER FUNCTION statement
+fn extract_alter_function_name(sql: &str) -> Option<(String, String)> {
+    // Match patterns like:
+    // ALTER FUNCTION [dbo].[FuncName]
+    // ALTER FUNCTION dbo.FuncName
+    let re = regex::Regex::new(
+        r"(?i)ALTER\s+FUNCTION\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
+    )
+    .ok()?;
+
+    let caps = re.captures(sql)?;
+    let schema = caps
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
+    let name = caps.get(2)?.as_str().to_string();
+
+    Some((schema, name))
+}
+
+/// Extract schema and name from ALTER SEQUENCE statement
+fn extract_alter_sequence_name(sql: &str) -> Option<(String, String)> {
+    // Match patterns like:
+    // ALTER SEQUENCE [dbo].[SeqName]
+    // ALTER SEQUENCE dbo.SeqName
+    let re = regex::Regex::new(r"(?i)ALTER\s+SEQUENCE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
+
+    let caps = re.captures(sql)?;
+    let schema = caps
+        .get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
+    let name = caps.get(2)?.as_str().to_string();
 
     Some((schema, name))
 }
