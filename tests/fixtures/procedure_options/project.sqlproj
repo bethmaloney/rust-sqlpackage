@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>ProcedureOptions</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultSchema>dbo</DefaultSchema>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Include="Tables/AuditLog.sql" />
+    <Build Include="Procedures/GetDataRecompile.sql" />
+    <Build Include="Procedures/GetDataEncrypted.sql" />
+    <Build Include="Procedures/GetDataMultipleOptions.sql" />
+    <Build Include="Procedures/NativeCompiled.sql" />
+  </ItemGroup>
+</Project>

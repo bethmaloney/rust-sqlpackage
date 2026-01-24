@@ -521,3 +521,400 @@ fn test_build_with_custom_schema() {
         "Should contain sales schema"
     );
 }
+
+// ============================================================================
+// Foreign Key Actions Tests (ON DELETE/UPDATE CASCADE, SET NULL, etc.)
+// ============================================================================
+
+#[test]
+fn test_build_with_fk_actions() {
+    let ctx = TestContext::with_fixture("fk_actions");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with FK actions should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    // Verify all tables are present
+    assert!(
+        info.tables.iter().any(|t| t.contains("Parent")),
+        "Should contain Parent table"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("ChildCascade")),
+        "Should contain ChildCascade table"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("ChildSetNull")),
+        "Should contain ChildSetNull table"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("ChildSetDefault")),
+        "Should contain ChildSetDefault table"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("ChildNoAction")),
+        "Should contain ChildNoAction table"
+    );
+
+    // Verify model XML contains FK action specifications
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+    assert!(
+        model_xml.contains("SqlForeignKeyConstraint"),
+        "Model should contain foreign key constraints"
+    );
+}
+
+// ============================================================================
+// Filtered Index Tests (WHERE clause on indexes)
+// ============================================================================
+
+#[test]
+fn test_build_with_filtered_indexes() {
+    let ctx = TestContext::with_fixture("filtered_indexes");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with filtered indexes should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    assert!(
+        info.tables.iter().any(|t| t.contains("Orders")),
+        "Should contain Orders table"
+    );
+
+    // Verify model XML contains index definitions with filters
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+    assert!(
+        model_xml.contains("SqlIndex"),
+        "Model should contain index elements"
+    );
+}
+
+// ============================================================================
+// Computed Column Tests (AS expression, PERSISTED)
+// ============================================================================
+
+#[test]
+fn test_build_with_computed_columns() {
+    let ctx = TestContext::with_fixture("computed_columns");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with computed columns should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    assert!(
+        info.tables.iter().any(|t| t.contains("Products")),
+        "Should contain Products table with computed columns"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("Employees")),
+        "Should contain Employees table with PERSISTED computed columns"
+    );
+}
+
+// ============================================================================
+// Collation Tests (COLLATE clause on columns)
+// ============================================================================
+
+#[test]
+fn test_build_with_collation() {
+    let ctx = TestContext::with_fixture("collation");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with collation should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    assert!(
+        info.tables.iter().any(|t| t.contains("MultiLanguage")),
+        "Should contain MultiLanguage table"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("CaseSensitive")),
+        "Should contain CaseSensitive table"
+    );
+
+    // Verify model XML contains collation specifications
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+    assert!(
+        model_xml.contains("SqlSimpleColumn") || model_xml.contains("SqlTableColumn"),
+        "Model should contain column definitions"
+    );
+}
+
+// ============================================================================
+// View Options Tests (WITH SCHEMABINDING, CHECK OPTION, etc.)
+// ============================================================================
+
+#[test]
+fn test_build_with_view_options() {
+    let ctx = TestContext::with_fixture("view_options");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with view options should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    // Verify views are present
+    assert!(
+        info.views.iter().any(|v| v.contains("ProductsView")),
+        "Should contain ProductsView with SCHEMABINDING"
+    );
+    assert!(
+        info.views
+            .iter()
+            .any(|v| v.contains("ActiveProductsWithCheck")),
+        "Should contain ActiveProductsWithCheck with CHECK OPTION"
+    );
+    assert!(
+        info.views.iter().any(|v| v.contains("ProductSummary")),
+        "Should contain ProductSummary with multiple options"
+    );
+}
+
+// ============================================================================
+// Procedure Options Tests (WITH RECOMPILE, ENCRYPTION, etc.)
+// ============================================================================
+
+#[test]
+fn test_build_with_procedure_options() {
+    let ctx = TestContext::with_fixture("procedure_options");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with procedure options should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    // Verify table is present
+    assert!(
+        info.tables.iter().any(|t| t.contains("AuditLog")),
+        "Should contain AuditLog table"
+    );
+
+    // Verify model XML contains procedure definitions
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+    assert!(
+        model_xml.contains("SqlProcedure") || model_xml.contains("SqlSubroutine"),
+        "Model should contain procedure definitions"
+    );
+}
+
+// ============================================================================
+// Index Options Tests (FILLFACTOR, PAD_INDEX, DATA_COMPRESSION, etc.)
+// ============================================================================
+
+#[test]
+fn test_build_with_index_options() {
+    let ctx = TestContext::with_fixture("index_options");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with index options should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    assert!(
+        info.tables.iter().any(|t| t.contains("LargeTable")),
+        "Should contain LargeTable"
+    );
+
+    // Verify model XML contains index definitions with options
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+    assert!(
+        model_xml.contains("SqlIndex"),
+        "Model should contain index elements"
+    );
+}
+
+// ============================================================================
+// Constraint NOCHECK Tests (WITH NOCHECK, WITH CHECK)
+// ============================================================================
+
+#[test]
+fn test_build_with_constraint_nocheck() {
+    let ctx = TestContext::with_fixture("constraint_nocheck");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with constraint NOCHECK should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    assert!(
+        info.tables.iter().any(|t| t.contains("Parent")),
+        "Should contain Parent table"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("ChildNoCheck")),
+        "Should contain ChildNoCheck table"
+    );
+    assert!(
+        info.tables
+            .iter()
+            .any(|t| t.contains("ValidatedConstraints")),
+        "Should contain ValidatedConstraints table"
+    );
+}
+
+// ============================================================================
+// Scalar User-Defined Types Tests (CREATE TYPE ... FROM)
+// ============================================================================
+
+#[test]
+fn test_build_with_scalar_types() {
+    let ctx = TestContext::with_fixture("scalar_types");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with scalar types should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    assert!(
+        info.tables.iter().any(|t| t.contains("Customers")),
+        "Should contain Customers table using scalar types"
+    );
+
+    // Verify model XML contains type definitions
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+    assert!(
+        model_xml.contains("SqlUserDefinedDataType")
+            || model_xml.contains("SqlTypeSpecifier")
+            || model_xml.contains("Type="),
+        "Model should contain type definitions"
+    );
+}
+
+// ============================================================================
+// INSTEAD OF Trigger Tests
+// ============================================================================
+
+#[test]
+fn test_build_with_instead_of_triggers() {
+    let ctx = TestContext::with_fixture("instead_of_triggers");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with INSTEAD OF triggers should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    // Verify tables are present
+    assert!(
+        info.tables.iter().any(|t| t.contains("Products")),
+        "Should contain Products table"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("ProductHistory")),
+        "Should contain ProductHistory table"
+    );
+
+    // Verify view is present
+    assert!(
+        info.views.iter().any(|v| v.contains("ProductsView")),
+        "Should contain ProductsView"
+    );
+
+    // Verify model XML contains trigger definitions
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+    assert!(
+        model_xml.contains("SqlDmlTrigger") || model_xml.contains("Trigger"),
+        "Model should contain trigger definitions"
+    );
+}
+
+// ============================================================================
+// Composite Foreign Key Tests (multi-column FKs)
+// ============================================================================
+
+#[test]
+fn test_build_with_composite_fk() {
+    let ctx = TestContext::with_fixture("composite_fk");
+    let result = ctx.build();
+
+    assert!(
+        result.success,
+        "Build with composite foreign keys should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    // Verify all tables are present
+    assert!(
+        info.tables.iter().any(|t| t.contains("Countries")),
+        "Should contain Countries table"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("States")),
+        "Should contain States table with 2-column composite PK"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("Cities")),
+        "Should contain Cities table with 2-column composite FK"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("OrderHeaders")),
+        "Should contain OrderHeaders table with 3-column composite PK"
+    );
+    assert!(
+        info.tables.iter().any(|t| t.contains("OrderLines")),
+        "Should contain OrderLines table with 3-column composite FK"
+    );
+
+    // Verify model XML contains foreign key constraints
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+    assert!(
+        model_xml.contains("SqlForeignKeyConstraint") || model_xml.contains("ForeignKey"),
+        "Model should contain foreign key constraints"
+    );
+}

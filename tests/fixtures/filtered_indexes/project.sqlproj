@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>FilteredIndexes</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultSchema>dbo</DefaultSchema>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Include="Tables/Orders.sql" />
+    <Build Include="Indexes/IX_Orders_Active.sql" />
+    <Build Include="Indexes/IX_Orders_HighValue.sql" />
+    <Build Include="Indexes/IX_Orders_Recent.sql" />
+  </ItemGroup>
+</Project>

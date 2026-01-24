@@ -1,0 +1,7 @@
+CREATE TABLE [dbo].[AuditLog] (
+    [Id] INT NOT NULL IDENTITY(1,1),
+    [Action] NVARCHAR(100) NOT NULL,
+    [Timestamp] DATETIME NOT NULL DEFAULT GETDATE(),
+    CONSTRAINT [PK_AuditLog] PRIMARY KEY ([Id])
+);
+GO

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>InsteadOfTriggers</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultSchema>dbo</DefaultSchema>
+  </PropertyGroup>
+  <ItemGroup>
+    <Build Include="Tables/Products.sql" />
+    <Build Include="Tables/ProductHistory.sql" />
+    <Build Include="Views/ProductsView.sql" />
+    <Build Include="Triggers/TR_ProductsView_Insert.sql" />
+    <Build Include="Triggers/TR_ProductsView_Update.sql" />
+    <Build Include="Triggers/TR_ProductsView_Delete.sql" />
+  </ItemGroup>
+</Project>
