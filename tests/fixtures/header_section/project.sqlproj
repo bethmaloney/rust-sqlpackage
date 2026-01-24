@@ -7,6 +7,7 @@
     <ModelCollation>1033, CI</ModelCollation>
     <AnsiNulls>True</AnsiNulls>
     <QuotedIdentifier>True</QuotedIdentifier>
+    <ProjectGuid>{00000000-0000-0000-0000-000000000000}</ProjectGuid>
   </PropertyGroup>
   <ItemGroup>
     <Build Include="Tables.sql" />
