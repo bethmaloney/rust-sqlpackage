@@ -26,7 +26,7 @@ impl ModelElement {
             ModelElement::Procedure(_) => "SqlProcedure",
             ModelElement::Function(f) => match f.function_type {
                 FunctionType::Scalar => "SqlScalarFunction",
-                FunctionType::TableValued => "SqlTableValuedFunction",
+                FunctionType::TableValued => "SqlMultiStatementTableValuedFunction",
                 FunctionType::InlineTableValued => "SqlInlineTableValuedFunction",
             },
             ModelElement::Index(_) => "SqlIndex",
@@ -155,6 +155,41 @@ pub struct IndexElement {
     pub is_clustered: bool,
 }
 
+/// Sort direction for constraint/index columns
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortDirection {
+    #[default]
+    Ascending,
+    Descending,
+}
+
+/// A column in a constraint with optional sort direction
+#[derive(Debug, Clone)]
+pub struct ConstraintColumn {
+    pub name: String,
+    pub sort_direction: SortDirection,
+}
+
+impl ConstraintColumn {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            sort_direction: SortDirection::Ascending,
+        }
+    }
+
+    pub fn with_direction(name: String, descending: bool) -> Self {
+        Self {
+            name,
+            sort_direction: if descending {
+                SortDirection::Descending
+            } else {
+                SortDirection::Ascending
+            },
+        }
+    }
+}
+
 /// Constraint type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConstraintType {
@@ -172,12 +207,14 @@ pub struct ConstraintElement {
     pub table_schema: String,
     pub table_name: String,
     pub constraint_type: ConstraintType,
-    pub columns: Vec<String>,
+    pub columns: Vec<ConstraintColumn>,
     pub definition: Option<String>,
     /// For foreign keys: referenced table
     pub referenced_table: Option<String>,
     /// For foreign keys: referenced columns
     pub referenced_columns: Option<Vec<String>>,
+    /// Whether this constraint is clustered (for PK/unique)
+    pub is_clustered: Option<bool>,
 }
 
 /// Sequence element

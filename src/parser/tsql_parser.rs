@@ -48,6 +48,55 @@ pub struct ExtractedTableTypeColumn {
     pub is_nullable: bool,
 }
 
+/// A column extracted from a table definition (with additional properties)
+#[derive(Debug, Clone)]
+pub struct ExtractedTableColumn {
+    /// Column name
+    pub name: String,
+    /// Data type (e.g., "NVARCHAR(50)", "INT", "DECIMAL(18, 2)")
+    pub data_type: String,
+    /// Whether the column is nullable
+    pub is_nullable: bool,
+    /// Whether the column has IDENTITY
+    pub is_identity: bool,
+    /// Default constraint name (if any)
+    pub default_constraint_name: Option<String>,
+    /// Default value expression (if any)
+    pub default_value: Option<String>,
+}
+
+/// A column reference in a constraint with optional sort direction
+#[derive(Debug, Clone)]
+pub struct ExtractedConstraintColumn {
+    pub name: String,
+    pub descending: bool,
+}
+
+/// Extracted table constraint
+#[derive(Debug, Clone)]
+pub enum ExtractedTableConstraint {
+    PrimaryKey {
+        name: String,
+        columns: Vec<ExtractedConstraintColumn>,
+        is_clustered: bool,
+    },
+    ForeignKey {
+        name: String,
+        columns: Vec<String>,
+        referenced_table: String,
+        referenced_columns: Vec<String>,
+    },
+    Unique {
+        name: String,
+        columns: Vec<ExtractedConstraintColumn>,
+        is_clustered: bool,
+    },
+    Check {
+        name: String,
+        expression: String,
+    },
+}
+
 /// A parsed SQL statement with source information
 #[derive(Debug, Clone)]
 pub struct ParsedStatement {
@@ -93,6 +142,13 @@ pub enum FallbackStatementType {
         schema: String,
         name: String,
         columns: Vec<ExtractedTableTypeColumn>,
+    },
+    /// Fallback for CREATE TABLE statements with T-SQL syntax not supported by sqlparser
+    Table {
+        schema: String,
+        name: String,
+        columns: Vec<ExtractedTableColumn>,
+        constraints: Vec<ExtractedTableConstraint>,
     },
     /// Generic fallback for any statement that can't be parsed
     RawStatement {
@@ -290,18 +346,18 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     if sql_upper.contains("CREATE TYPE") {
         if let Some((schema, name)) = extract_type_name(sql) {
             let columns = extract_table_type_columns(sql);
-            return Some(FallbackStatementType::UserDefinedType { schema, name, columns });
+            return Some(FallbackStatementType::UserDefinedType {
+                schema,
+                name,
+                columns,
+            });
         }
     }
 
-    // Generic fallback for CREATE TABLE statements that fail parsing
+    // Fallback for CREATE TABLE statements that fail parsing
     if sql_upper.contains("CREATE TABLE") {
-        if let Some((schema, name)) = extract_generic_object_name(sql, "TABLE") {
-            return Some(FallbackStatementType::RawStatement {
-                object_type: "Table".to_string(),
-                schema,
-                name,
-            });
+        if let Some(table_info) = extract_table_structure(sql) {
+            return Some(table_info);
         }
     }
 
@@ -479,14 +535,16 @@ fn extract_table_type_columns(sql: &str) -> Vec<ExtractedTableTypeColumn> {
 
     // Parse each column definition
     // Pattern: [ColumnName] DataType [NULL|NOT NULL]
-    let col_re = regex::Regex::new(
-        r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)\s*(NOT\s+NULL|NULL)?",
-    )
-    .unwrap();
+    let col_re =
+        regex::Regex::new(r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)\s*(NOT\s+NULL|NULL)?")
+            .unwrap();
 
     for part in col_parts {
         if let Some(caps) = col_re.captures(&part) {
-            let name = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+            let name = caps
+                .get(1)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
             let data_type = caps
                 .get(2)
                 .map(|m| m.as_str().trim().to_uppercase())
@@ -633,6 +691,332 @@ fn extract_include_columns(sql: &str) -> Vec<String> {
         .and_then(|caps| caps.get(1))
         .map(|m| parse_column_list(m.as_str()))
         .unwrap_or_default()
+}
+
+/// Extract full table structure from CREATE TABLE statement
+fn extract_table_structure(sql: &str) -> Option<FallbackStatementType> {
+    let (schema, name) = extract_generic_object_name(sql, "TABLE")?;
+
+    // Find the opening parenthesis after CREATE TABLE [schema].[name]
+    let table_name_pattern = format!(
+        r"(?i)CREATE\s+TABLE\s+(?:\[?{}\]?\.)?\[?{}\]?\s*\(",
+        regex::escape(&schema),
+        regex::escape(&name)
+    );
+    let table_re = Regex::new(&table_name_pattern).ok()?;
+    let table_match = table_re.find(sql)?;
+    let paren_start = table_match.end() - 1; // Position of the opening '('
+
+    // Find matching closing parenthesis
+    let table_body = extract_balanced_parens(&sql[paren_start..])?;
+
+    // Parse columns and constraints from the table body
+    let (columns, constraints) = parse_table_body(&table_body, &name);
+
+    Some(FallbackStatementType::Table {
+        schema,
+        name,
+        columns,
+        constraints,
+    })
+}
+
+/// Extract content between balanced parentheses (returns content without the outer parens)
+fn extract_balanced_parens(sql: &str) -> Option<String> {
+    if !sql.starts_with('(') {
+        return None;
+    }
+
+    let mut depth = 0;
+    let mut end_pos = 0;
+
+    for (i, c) in sql.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    end_pos = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if end_pos > 1 {
+        Some(sql[1..end_pos].to_string())
+    } else {
+        None
+    }
+}
+
+/// Parse table body to extract columns and constraints
+fn parse_table_body(body: &str, table_name: &str) -> (Vec<ExtractedTableColumn>, Vec<ExtractedTableConstraint>) {
+    let mut columns = Vec::new();
+    let mut constraints = Vec::new();
+
+    // Split by top-level commas (not inside parentheses)
+    let parts = split_by_top_level_comma(body);
+
+    for part in parts {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let upper = trimmed.to_uppercase();
+
+        // Check if this is a table-level constraint
+        if upper.starts_with("CONSTRAINT") || upper.starts_with("PRIMARY KEY")
+            || upper.starts_with("FOREIGN KEY") || upper.starts_with("UNIQUE")
+            || upper.starts_with("CHECK")
+        {
+            if let Some(constraint) = parse_table_constraint(trimmed, table_name) {
+                constraints.push(constraint);
+            }
+        } else {
+            // This is a column definition
+            if let Some(column) = parse_column_definition(trimmed) {
+                columns.push(column);
+            }
+        }
+    }
+
+    (columns, constraints)
+}
+
+/// Split string by commas at the top level (not inside parentheses)
+fn split_by_top_level_comma(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+
+    for c in s.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                current.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                current.push(c);
+            }
+            ',' if depth == 0 => {
+                parts.push(current.trim().to_string());
+                current = String::new();
+            }
+            _ => current.push(c),
+        }
+    }
+
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+
+    parts
+}
+
+/// Parse a column definition
+fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
+    // Column pattern: [Name] TYPE [IDENTITY] [CONSTRAINT name DEFAULT (value)] [NOT NULL|NULL]
+    // The order can vary, so we need to be flexible
+
+    // First extract the column name and type
+    let col_re = Regex::new(r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)").ok()?;
+    let caps = col_re.captures(col_def)?;
+
+    let name = caps.get(1)?.as_str().to_string();
+    let data_type = caps.get(2)?.as_str().trim().to_uppercase();
+
+    // Check for IDENTITY
+    let is_identity = col_def.to_uppercase().contains("IDENTITY");
+
+    // Check for nullability - look for NOT NULL or NULL
+    // NOT NULL takes precedence, default is nullable
+    let upper = col_def.to_uppercase();
+    let is_nullable = if upper.contains("NOT NULL") {
+        false
+    } else {
+        true // Default to nullable
+    };
+
+    // Extract inline DEFAULT constraint
+    // Pattern: CONSTRAINT [name] DEFAULT (value) or just DEFAULT (value)
+    let default_constraint_name;
+    let default_value;
+
+    // Try named constraint first: CONSTRAINT [name] DEFAULT (value)
+    let named_default_re = Regex::new(
+        r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))"
+    ).ok()?;
+
+    if let Some(caps) = named_default_re.captures(col_def) {
+        default_constraint_name = Some(caps.get(1)?.as_str().to_string());
+        default_value = Some(caps.get(2)?.as_str().to_string());
+    } else {
+        // Try unnamed default: DEFAULT (value)
+        let unnamed_default_re = Regex::new(
+            r"(?i)DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))"
+        ).ok()?;
+
+        if let Some(caps) = unnamed_default_re.captures(col_def) {
+            default_constraint_name = None;
+            default_value = Some(caps.get(1)?.as_str().to_string());
+        } else {
+            default_constraint_name = None;
+            default_value = None;
+        }
+    }
+
+    Some(ExtractedTableColumn {
+        name,
+        data_type,
+        is_nullable,
+        is_identity,
+        default_constraint_name,
+        default_value,
+    })
+}
+
+/// Parse a table-level constraint
+fn parse_table_constraint(constraint_def: &str, table_name: &str) -> Option<ExtractedTableConstraint> {
+    let upper = constraint_def.to_uppercase();
+
+    // Extract constraint name if present
+    let name_re = Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?").ok()?;
+    let constraint_name = name_re
+        .captures(constraint_def)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string());
+
+    if upper.contains("PRIMARY KEY") {
+        let is_clustered = !upper.contains("NONCLUSTERED");
+        let columns = extract_constraint_columns(constraint_def);
+        let name = constraint_name.unwrap_or_else(|| format!("PK_{}", table_name));
+
+        Some(ExtractedTableConstraint::PrimaryKey {
+            name,
+            columns,
+            is_clustered,
+        })
+    } else if upper.contains("FOREIGN KEY") {
+        let columns = extract_fk_columns(constraint_def);
+        let (referenced_table, referenced_columns) = extract_fk_references(constraint_def)?;
+        let name = constraint_name.unwrap_or_else(|| format!("FK_{}", table_name));
+
+        Some(ExtractedTableConstraint::ForeignKey {
+            name,
+            columns,
+            referenced_table,
+            referenced_columns,
+        })
+    } else if upper.contains("UNIQUE") {
+        let is_clustered = upper.contains("CLUSTERED") && !upper.contains("NONCLUSTERED");
+        let columns = extract_constraint_columns(constraint_def);
+        let name = constraint_name.unwrap_or_else(|| format!("UQ_{}", table_name));
+
+        Some(ExtractedTableConstraint::Unique {
+            name,
+            columns,
+            is_clustered,
+        })
+    } else if upper.contains("CHECK") {
+        // Extract CHECK expression
+        let check_re = Regex::new(r"(?i)CHECK\s*\((.+)\)\s*$").ok()?;
+        let expression = check_re
+            .captures(constraint_def)
+            .and_then(|caps| caps.get(1))
+            .map(|m| m.as_str().to_string())?;
+        let name = constraint_name.unwrap_or_else(|| format!("CK_{}", table_name));
+
+        Some(ExtractedTableConstraint::Check { name, expression })
+    } else {
+        None
+    }
+}
+
+/// Extract columns from PRIMARY KEY or UNIQUE constraint with ASC/DESC info
+fn extract_constraint_columns(constraint_def: &str) -> Vec<ExtractedConstraintColumn> {
+    // Find the column list in parentheses after PRIMARY KEY or UNIQUE
+    // Pattern: PRIMARY KEY [CLUSTERED|NONCLUSTERED] ([Col1] [ASC|DESC], [Col2] [ASC|DESC])
+    let pk_re = Regex::new(r"(?i)(?:PRIMARY\s+KEY|UNIQUE)\s*(?:CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)").unwrap();
+
+    pk_re
+        .captures(constraint_def)
+        .and_then(|caps| caps.get(1))
+        .map(|m| {
+            let cols_str = m.as_str();
+            cols_str
+                .split(',')
+                .filter_map(|col| {
+                    let col = col.trim();
+                    if col.is_empty() {
+                        return None;
+                    }
+
+                    // Parse column name and optional ASC/DESC
+                    let col_upper = col.to_uppercase();
+                    let descending = col_upper.contains("DESC");
+
+                    // Extract just the column name (remove brackets and ASC/DESC)
+                    let name_re = Regex::new(r"(?i)\[?(\w+)\]?").unwrap();
+                    name_re.captures(col).and_then(|caps| caps.get(1)).map(|m| {
+                        ExtractedConstraintColumn {
+                            name: m.as_str().to_string(),
+                            descending,
+                        }
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Extract column names from FOREIGN KEY constraint
+fn extract_fk_columns(constraint_def: &str) -> Vec<String> {
+    // Pattern: FOREIGN KEY ([Col1], [Col2])
+    let fk_re = Regex::new(r"(?i)FOREIGN\s+KEY\s*\(([^)]+)\)").unwrap();
+
+    fk_re
+        .captures(constraint_def)
+        .and_then(|caps| caps.get(1))
+        .map(|m| parse_column_list(m.as_str()))
+        .unwrap_or_default()
+}
+
+/// Extract REFERENCES table and columns from FOREIGN KEY constraint
+fn extract_fk_references(constraint_def: &str) -> Option<(String, Vec<String>)> {
+    // Pattern: REFERENCES [schema].[table] ([Col1], [Col2]) or REFERENCES [table] ([Col1])
+    let ref_re = Regex::new(r"(?i)REFERENCES\s+(\[?\w+\]?(?:\.\[?\w+\]?)?)\s*\(([^)]+)\)").ok()?;
+
+    let caps = ref_re.captures(constraint_def)?;
+    let raw_table = caps.get(1)?.as_str();
+    let columns = caps.get(2).map(|m| parse_column_list(m.as_str())).unwrap_or_default();
+
+    // Normalize the table reference to [schema].[table] format
+    let table = normalize_table_reference(raw_table);
+
+    Some((table, columns))
+}
+
+/// Normalize a table reference to [schema].[table] format
+/// Handles: Table, [Table], dbo.Table, [dbo].[Table], etc.
+fn normalize_table_reference(raw: &str) -> String {
+    // Check if it already has a schema (contains a dot)
+    if raw.contains('.') {
+        // Split by dot and normalize each part
+        let parts: Vec<&str> = raw.split('.').collect();
+        if parts.len() == 2 {
+            let schema = parts[0].trim_matches(|c| c == '[' || c == ']');
+            let table = parts[1].trim_matches(|c| c == '[' || c == ']');
+            return format!("[{}].[{}]", schema, table);
+        }
+    }
+
+    // No schema - assume dbo
+    let table = raw.trim_matches(|c| c == '[' || c == ']');
+    format!("[dbo].[{}]", table)
 }
 
 /// Result of preprocessing T-SQL for sqlparser compatibility

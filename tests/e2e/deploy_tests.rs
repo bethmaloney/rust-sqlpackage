@@ -55,7 +55,6 @@ fn get_sqlpackage_path() -> Option<String> {
 }
 
 /// Check if SqlPackage is available
-#[allow(dead_code)]
 fn sqlpackage_available() -> bool {
     get_sqlpackage_path().is_some()
 }
@@ -104,7 +103,6 @@ async fn drop_database_if_exists(client: &mut SqlClient) -> Result<(), Box<dyn s
 }
 
 /// Deploy a dacpac using SqlPackage CLI
-#[allow(dead_code)]
 fn deploy_dacpac(dacpac_path: &std::path::Path) -> Result<(), String> {
     let sqlpackage = get_sqlpackage_path().ok_or_else(|| "SqlPackage not found".to_string())?;
 
@@ -135,7 +133,6 @@ fn deploy_dacpac(dacpac_path: &std::path::Path) -> Result<(), String> {
 }
 
 /// Query to check if a table exists
-#[allow(dead_code)]
 async fn table_exists(
     client: &mut SqlClient,
     schema: &str,
@@ -147,6 +144,95 @@ async fn table_exists(
         .await?
         .into_row()
         .await?;
+    Ok(get_count(row) > 0)
+}
+
+/// Query to check if a view exists
+async fn view_exists(
+    client: &mut SqlClient,
+    schema: &str,
+    view: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let query = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = @P1 AND TABLE_NAME = @P2";
+    let row = client
+        .query(query, &[&schema, &view])
+        .await?
+        .into_row()
+        .await?;
+    Ok(get_count(row) > 0)
+}
+
+/// Query to check if a stored procedure exists
+async fn procedure_exists(
+    client: &mut SqlClient,
+    schema: &str,
+    procedure: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let query = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = @P1 AND ROUTINE_NAME = @P2 AND ROUTINE_TYPE = 'PROCEDURE'";
+    let row = client
+        .query(query, &[&schema, &procedure])
+        .await?
+        .into_row()
+        .await?;
+    Ok(get_count(row) > 0)
+}
+
+/// Get column names for a table
+async fn get_columns_for_table(
+    client: &mut SqlClient,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let query = format!(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{}' AND TABLE_NAME = '{}' ORDER BY ORDINAL_POSITION",
+        schema, table
+    );
+    let stream = client.simple_query(&query).await?;
+    let rows: Vec<Row> = stream.into_first_result().await?;
+    let columns: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r.get::<&str, _>(0).map(|s| s.to_string()))
+        .collect();
+    Ok(columns)
+}
+
+/// Check if a foreign key constraint exists
+async fn foreign_key_exists(
+    client: &mut SqlClient,
+    constraint_name: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let query = format!(
+        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE CONSTRAINT_NAME = '{}' AND CONSTRAINT_TYPE = 'FOREIGN KEY'",
+        constraint_name
+    );
+    let row = client.simple_query(&query).await?.into_row().await?;
+    Ok(get_count(row) > 0)
+}
+
+/// Get row count from a table
+async fn get_row_count(
+    client: &mut SqlClient,
+    schema: &str,
+    table: &str,
+) -> Result<i32, Box<dyn std::error::Error>> {
+    let query = format!("SELECT COUNT(*) FROM [{}].[{}]", schema, table);
+    let row = client.simple_query(&query).await?.into_row().await?;
+    Ok(get_count(row))
+}
+
+/// Check if specific seed data exists (by checking for a value in a column)
+async fn seed_data_exists(
+    client: &mut SqlClient,
+    schema: &str,
+    table: &str,
+    column: &str,
+    value: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let query = format!(
+        "SELECT COUNT(*) FROM [{}].[{}] WHERE [{}] = '{}'",
+        schema, table, column, value
+    );
+    let row = client.simple_query(&query).await?.into_row().await?;
     Ok(get_count(row) > 0)
 }
 
@@ -314,9 +400,15 @@ async fn test_e2e_sql_server_connectivity() {
 // E2E Tests - Full Deployment (requires SQL Server and SqlPackage CLI)
 // ============================================================================
 
-/// Full deployment test.
+/// Full deployment test for e2e_simple fixture.
 ///
-/// This test builds a dacpac and deploys it to SQL Server using SqlPackage CLI.
+/// This test builds a dacpac and deploys it to SQL Server using SqlPackage CLI,
+/// then verifies:
+/// - Tables exist with correct columns
+/// - Views exist
+/// - Stored procedures exist
+/// - Foreign key constraints exist
+///
 /// Requires SQL Server 2022 at localhost with sa/Password1 and SqlPackage CLI.
 #[tokio::test]
 #[ignore = "Requires SQL Server 2022 at localhost with sa/Password1 and SqlPackage CLI"]
@@ -332,16 +424,328 @@ async fn test_e2e_deploy_to_sql_server() {
 
     let dacpac_path = result.dacpac_path.expect("Should have dacpac path");
 
+    // Setup: drop any existing test database
     let mut client = connect(None).await.expect("Should connect");
     drop_database_if_exists(&mut client)
         .await
         .expect("Should drop if exists");
 
+    // Deploy the dacpac
     deploy_dacpac(&dacpac_path).expect("Deploy should succeed");
 
-    // Verification code would go here once deployment works
+    // Connect to the deployed database for verification
+    let mut client = connect(Some(TEST_DATABASE))
+        .await
+        .expect("Should connect to test database");
+
+    // ========================================================================
+    // Verify Tables Exist
+    // ========================================================================
+    println!("Verifying tables...");
+
+    assert!(
+        table_exists(&mut client, "dbo", "Categories")
+            .await
+            .expect("Query should succeed"),
+        "Categories table should exist"
+    );
+    assert!(
+        table_exists(&mut client, "dbo", "Products")
+            .await
+            .expect("Query should succeed"),
+        "Products table should exist"
+    );
+    assert!(
+        table_exists(&mut client, "dbo", "Customers")
+            .await
+            .expect("Query should succeed"),
+        "Customers table should exist"
+    );
+    assert!(
+        table_exists(&mut client, "dbo", "Orders")
+            .await
+            .expect("Query should succeed"),
+        "Orders table should exist"
+    );
+
+    // ========================================================================
+    // Verify Table Structure (columns)
+    // ========================================================================
+    println!("Verifying table columns...");
+
+    let products_columns = get_columns_for_table(&mut client, "dbo", "Products")
+        .await
+        .expect("Should get columns");
+    let expected_products_columns = vec!["Id", "SKU", "Name", "CategoryId", "Price", "Quantity"];
+    assert_eq!(
+        products_columns, expected_products_columns,
+        "Products table should have correct columns"
+    );
+
+    let categories_columns = get_columns_for_table(&mut client, "dbo", "Categories")
+        .await
+        .expect("Should get columns");
+    let expected_categories_columns = vec!["Id", "Name", "Description"];
+    assert_eq!(
+        categories_columns, expected_categories_columns,
+        "Categories table should have correct columns"
+    );
+
+    // ========================================================================
+    // Verify Views Exist
+    // ========================================================================
+    println!("Verifying views...");
+
+    assert!(
+        view_exists(&mut client, "dbo", "ActiveProducts")
+            .await
+            .expect("Query should succeed"),
+        "ActiveProducts view should exist"
+    );
+
+    // ========================================================================
+    // Verify Stored Procedures Exist
+    // ========================================================================
+    println!("Verifying stored procedures...");
+
+    assert!(
+        procedure_exists(&mut client, "dbo", "GetProducts")
+            .await
+            .expect("Query should succeed"),
+        "GetProducts stored procedure should exist"
+    );
+
+    // ========================================================================
+    // Verify Foreign Key Constraints Exist
+    // ========================================================================
+    println!("Verifying foreign key constraints...");
+
+    assert!(
+        foreign_key_exists(&mut client, "FK_Products_Categories")
+            .await
+            .expect("Query should succeed"),
+        "FK_Products_Categories constraint should exist"
+    );
+
+    println!("All e2e_simple deployment verifications passed!");
+
+    // Cleanup
     let mut client = connect(None).await.expect("Should reconnect");
     drop_database_if_exists(&mut client)
         .await
         .expect("Should cleanup");
+}
+
+const TEST_DATABASE_COMPREHENSIVE: &str = "E2EComprehensive_Test";
+
+/// Full deployment test for e2e_comprehensive fixture.
+///
+/// This test verifies everything from the simple test plus:
+/// - Post-deployment script ran (seed data exists)
+/// - More complex table structures with IDENTITY, defaults, etc.
+///
+/// Requires SQL Server 2022 at localhost with sa/Password1 and SqlPackage CLI.
+#[tokio::test]
+#[ignore = "Requires SQL Server 2022 at localhost with sa/Password1 and SqlPackage CLI"]
+async fn test_e2e_deploy_comprehensive_with_post_deploy() {
+    if !sqlpackage_available() {
+        eprintln!("Skipping: SqlPackage CLI not found");
+        return;
+    }
+
+    let ctx = TestContext::with_fixture("e2e_comprehensive");
+    let result = ctx.build();
+    assert!(
+        result.success,
+        "Build should succeed. Errors: {:?}",
+        result.errors
+    );
+
+    let dacpac_path = result.dacpac_path.expect("Should have dacpac path");
+
+    // Setup: drop any existing test database
+    let mut client = connect(None).await.expect("Should connect");
+    drop_database_comprehensive_if_exists(&mut client)
+        .await
+        .expect("Should drop if exists");
+
+    // Deploy the dacpac
+    deploy_dacpac_comprehensive(&dacpac_path).expect("Deploy should succeed");
+
+    // Connect to the deployed database for verification
+    let mut client = connect(Some(TEST_DATABASE_COMPREHENSIVE))
+        .await
+        .expect("Should connect to test database");
+
+    // ========================================================================
+    // Verify Tables Exist
+    // ========================================================================
+    println!("Verifying comprehensive tables...");
+
+    let expected_tables = [
+        "Categories",
+        "Products",
+        "Customers",
+        "Orders",
+        "OrderItems",
+        "InventoryLog",
+    ];
+    for table in &expected_tables {
+        assert!(
+            table_exists(&mut client, "dbo", table)
+                .await
+                .expect("Query should succeed"),
+            "{} table should exist",
+            table
+        );
+    }
+
+    // ========================================================================
+    // Verify Table Structure (more complex columns with IDENTITY, etc.)
+    // ========================================================================
+    println!("Verifying comprehensive table columns...");
+
+    let categories_columns = get_columns_for_table(&mut client, "dbo", "Categories")
+        .await
+        .expect("Should get columns");
+    // e2e_comprehensive Categories has: Id, Name, Description, IsActive, CreatedAt
+    assert!(
+        categories_columns.contains(&"Id".to_string()),
+        "Categories should have Id column"
+    );
+    assert!(
+        categories_columns.contains(&"IsActive".to_string()),
+        "Categories should have IsActive column"
+    );
+    assert!(
+        categories_columns.contains(&"CreatedAt".to_string()),
+        "Categories should have CreatedAt column"
+    );
+
+    // ========================================================================
+    // Verify Views Exist
+    // ========================================================================
+    println!("Verifying comprehensive views...");
+
+    assert!(
+        view_exists(&mut client, "dbo", "ActiveProducts")
+            .await
+            .expect("Query should succeed"),
+        "ActiveProducts view should exist"
+    );
+    assert!(
+        view_exists(&mut client, "dbo", "CustomerOrderSummary")
+            .await
+            .expect("Query should succeed"),
+        "CustomerOrderSummary view should exist"
+    );
+
+    // ========================================================================
+    // Verify Stored Procedures Exist
+    // ========================================================================
+    println!("Verifying comprehensive stored procedures...");
+
+    assert!(
+        procedure_exists(&mut client, "dbo", "GetProductsByCategory")
+            .await
+            .expect("Query should succeed"),
+        "GetProductsByCategory stored procedure should exist"
+    );
+    assert!(
+        procedure_exists(&mut client, "dbo", "CreateOrder")
+            .await
+            .expect("Query should succeed"),
+        "CreateOrder stored procedure should exist"
+    );
+
+    // ========================================================================
+    // Verify Post-Deployment Script Ran (Seed Data)
+    // ========================================================================
+    println!("Verifying post-deployment script (seed data)...");
+
+    // The post-deployment script inserts Electronics, Clothing, Books into Categories
+    assert!(
+        seed_data_exists(&mut client, "dbo", "Categories", "Name", "Electronics")
+            .await
+            .expect("Query should succeed"),
+        "Post-deploy seed data 'Electronics' should exist in Categories"
+    );
+    assert!(
+        seed_data_exists(&mut client, "dbo", "Categories", "Name", "Clothing")
+            .await
+            .expect("Query should succeed"),
+        "Post-deploy seed data 'Clothing' should exist in Categories"
+    );
+    assert!(
+        seed_data_exists(&mut client, "dbo", "Categories", "Name", "Books")
+            .await
+            .expect("Query should succeed"),
+        "Post-deploy seed data 'Books' should exist in Categories"
+    );
+
+    // Verify the count matches expected seed data
+    let category_count = get_row_count(&mut client, "dbo", "Categories")
+        .await
+        .expect("Should get count");
+    assert_eq!(
+        category_count, 3,
+        "Categories should have exactly 3 seed rows from post-deploy script"
+    );
+
+    println!("All e2e_comprehensive deployment verifications passed!");
+
+    // Cleanup
+    let mut client = connect(None).await.expect("Should reconnect");
+    drop_database_comprehensive_if_exists(&mut client)
+        .await
+        .expect("Should cleanup");
+}
+
+/// Drop the comprehensive test database if it exists
+async fn drop_database_comprehensive_if_exists(
+    client: &mut SqlClient,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let query = format!(
+        "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '{}') \
+         BEGIN \
+             ALTER DATABASE [{}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; \
+             DROP DATABASE [{}]; \
+         END",
+        TEST_DATABASE_COMPREHENSIVE, TEST_DATABASE_COMPREHENSIVE, TEST_DATABASE_COMPREHENSIVE
+    );
+    client.execute(&query, &[]).await?;
+    Ok(())
+}
+
+/// Deploy a dacpac to the comprehensive test database
+fn deploy_dacpac_comprehensive(dacpac_path: &std::path::Path) -> Result<(), String> {
+    let sqlpackage = get_sqlpackage_path().ok_or_else(|| "SqlPackage not found".to_string())?;
+
+    let connection_string = format!(
+        "Server={},{};Database={};User Id={};Password={};TrustServerCertificate=True;",
+        SQL_SERVER_HOST,
+        SQL_SERVER_PORT,
+        TEST_DATABASE_COMPREHENSIVE,
+        SQL_SERVER_USER,
+        SQL_SERVER_PASSWORD
+    );
+
+    let output = Command::new(&sqlpackage)
+        .arg("/Action:Publish")
+        .arg(format!("/SourceFile:{}", dacpac_path.display()))
+        .arg(format!("/TargetConnectionString:{}", connection_string))
+        .arg("/p:BlockOnPossibleDataLoss=False")
+        .output()
+        .map_err(|e| format!("Failed to run sqlpackage: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "SqlPackage failed:\nstdout: {}\nstderr: {}",
+            stdout, stderr
+        ));
+    }
+
+    Ok(())
 }

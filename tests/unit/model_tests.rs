@@ -1534,7 +1534,7 @@ RETURN (SELECT 1 AS [Val])
         .find(|e| matches!(e, rust_sqlpackage::model::ModelElement::Function(_)));
 
     assert!(func.is_some());
-    assert_eq!(func.unwrap().type_name(), "SqlTableValuedFunction");
+    assert_eq!(func.unwrap().type_name(), "SqlMultiStatementTableValuedFunction");
 }
 
 #[test]

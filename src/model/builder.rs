@@ -6,15 +6,15 @@ use anyhow::Result;
 use sqlparser::ast::{ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint};
 
 use crate::parser::{
-    ExtractedTableTypeColumn, FallbackFunctionType, FallbackStatementType, ParsedStatement,
-    BINARY_MAX_SENTINEL,
+    ExtractedTableColumn, ExtractedTableConstraint, ExtractedTableTypeColumn, FallbackFunctionType,
+    FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL,
 };
 use crate::project::SqlProject;
 
 use super::{
-    ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, FunctionElement, FunctionType,
-    IndexElement, ModelElement, ProcedureElement, RawElement, SchemaElement, SequenceElement,
-    TableElement, UserDefinedTypeElement, ViewElement,
+    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
+    FunctionElement, FunctionType, IndexElement, ModelElement, ProcedureElement, RawElement,
+    SchemaElement, SequenceElement, TableElement, UserDefinedTypeElement, ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -84,18 +84,69 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         definition: parsed.sql_text.clone(),
                     }));
                 }
-                FallbackStatementType::UserDefinedType { schema, name, columns } => {
+                FallbackStatementType::UserDefinedType {
+                    schema,
+                    name,
+                    columns,
+                } => {
                     schemas.insert(schema.clone());
-                    let column_elements = columns
-                        .iter()
-                        .map(|c| column_from_extracted(c))
-                        .collect();
+                    let column_elements =
+                        columns.iter().map(|c| column_from_extracted(c)).collect();
                     model.add_element(ModelElement::UserDefinedType(UserDefinedTypeElement {
                         schema: schema.clone(),
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
                         columns: column_elements,
                     }));
+                }
+                FallbackStatementType::Table {
+                    schema,
+                    name,
+                    columns,
+                    constraints,
+                } => {
+                    schemas.insert(schema.clone());
+
+                    // Convert extracted columns to model columns
+                    let model_columns: Vec<ColumnElement> = columns
+                        .iter()
+                        .map(|c| column_from_fallback_table(c))
+                        .collect();
+
+                    // Add the table element
+                    model.add_element(ModelElement::Table(TableElement {
+                        schema: schema.clone(),
+                        name: name.clone(),
+                        columns: model_columns,
+                    }));
+
+                    // Add constraints as separate elements
+                    for constraint in constraints {
+                        if let Some(constraint_element) =
+                            constraint_from_extracted(constraint, schema, name)
+                        {
+                            model.add_element(ModelElement::Constraint(constraint_element));
+                        }
+                    }
+
+                    // Add inline default constraints from column definitions
+                    for col in columns {
+                        if let (Some(constraint_name), Some(default_value)) =
+                            (&col.default_constraint_name, &col.default_value)
+                        {
+                            model.add_element(ModelElement::Constraint(ConstraintElement {
+                                name: constraint_name.clone(),
+                                table_schema: schema.clone(),
+                                table_name: name.clone(),
+                                constraint_type: ConstraintType::Default,
+                                columns: vec![ConstraintColumn::new(col.name.clone())],
+                                definition: Some(default_value.clone()),
+                                referenced_table: None,
+                                referenced_columns: None,
+                                is_clustered: None,
+                            }));
+                        }
+                    }
                 }
                 FallbackStatementType::RawStatement {
                     object_type,
@@ -104,18 +155,21 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 } => {
                     schemas.insert(schema.clone());
                     let sql_type = match object_type.to_uppercase().as_str() {
-                        "TABLE" => "SqlTable",
-                        "VIEW" => "SqlView",
-                        "TRIGGER" => "SqlDmlTrigger",
-                        "ALTERTABLE" => "SqlAlterTableStatement",
-                        _ => "SqlUnknown",
+                        "TABLE" => Some("SqlTable"),
+                        "VIEW" => Some("SqlView"),
+                        "TRIGGER" => Some("SqlDmlTrigger"),
+                        // Skip other object types - they would cause deployment failures
+                        // ALTER TABLE, INDEX, FULLTEXT INDEX, etc. are not supported as raw elements
+                        _ => None,
                     };
-                    model.add_element(ModelElement::Raw(RawElement {
-                        schema: schema.clone(),
-                        name: name.clone(),
-                        sql_type: sql_type.to_string(),
-                        definition: parsed.sql_text.clone(),
-                    }));
+                    if let Some(sql_type) = sql_type {
+                        model.add_element(ModelElement::Raw(RawElement {
+                            schema: schema.clone(),
+                            name: name.clone(),
+                            sql_type: sql_type.to_string(),
+                            definition: parsed.sql_text.clone(),
+                        }));
+                    }
                 }
             }
             continue;
@@ -176,10 +230,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 table_schema: schema.clone(),
                                 table_name: name.clone(),
                                 constraint_type,
-                                columns: vec![col.name.value.clone()],
+                                columns: vec![ConstraintColumn::new(col.name.value.clone())],
                                 definition: None,
                                 referenced_table: None,
                                 referenced_columns: None,
+                                is_clustered: None,
                             }));
                         }
                     }
@@ -192,10 +247,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         table_schema: schema.clone(),
                         table_name: name.clone(),
                         constraint_type: ConstraintType::Default,
-                        columns: vec![default_constraint.column.clone()],
+                        columns: vec![ConstraintColumn::new(default_constraint.column.clone())],
                         definition: Some(default_constraint.expression.clone()),
                         referenced_table: None,
                         referenced_columns: None,
+                        is_clustered: None,
                     }));
                 }
             }
@@ -289,7 +345,10 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
             Statement::CreateSchema { schema_name, .. } => {
                 // Normalize schema name (remove brackets if present)
                 let name = schema_name.to_string();
-                let normalized = name.trim_start_matches('[').trim_end_matches(']').to_string();
+                let normalized = name
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_string();
                 schemas.insert(normalized.clone());
                 model.add_element(ModelElement::Schema(SchemaElement { name: normalized }));
             }
@@ -435,6 +494,98 @@ fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option
     }
 }
 
+/// Convert an extracted table column (from fallback parser) to a model column
+fn column_from_fallback_table(col: &ExtractedTableColumn) -> ColumnElement {
+    let (max_length, precision, scale) = extract_type_params_from_string(&col.data_type);
+
+    ColumnElement {
+        name: col.name.clone(),
+        data_type: col.data_type.clone(),
+        is_nullable: col.is_nullable,
+        is_identity: col.is_identity,
+        default_value: col.default_value.clone(),
+        max_length,
+        precision,
+        scale,
+    }
+}
+
+/// Convert an extracted table constraint (from fallback parser) to a model constraint
+fn constraint_from_extracted(
+    constraint: &ExtractedTableConstraint,
+    table_schema: &str,
+    table_name: &str,
+) -> Option<ConstraintElement> {
+    match constraint {
+        ExtractedTableConstraint::PrimaryKey {
+            name,
+            columns,
+            is_clustered,
+        } => Some(ConstraintElement {
+            name: name.clone(),
+            table_schema: table_schema.to_string(),
+            table_name: table_name.to_string(),
+            constraint_type: ConstraintType::PrimaryKey,
+            columns: columns
+                .iter()
+                .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
+                .collect(),
+            definition: None,
+            referenced_table: None,
+            referenced_columns: None,
+            is_clustered: Some(*is_clustered),
+        }),
+        ExtractedTableConstraint::ForeignKey {
+            name,
+            columns,
+            referenced_table,
+            referenced_columns,
+        } => Some(ConstraintElement {
+            name: name.clone(),
+            table_schema: table_schema.to_string(),
+            table_name: table_name.to_string(),
+            constraint_type: ConstraintType::ForeignKey,
+            columns: columns
+                .iter()
+                .map(|c| ConstraintColumn::new(c.clone()))
+                .collect(),
+            definition: None,
+            referenced_table: Some(referenced_table.clone()),
+            referenced_columns: Some(referenced_columns.clone()),
+            is_clustered: None,
+        }),
+        ExtractedTableConstraint::Unique {
+            name,
+            columns,
+            is_clustered,
+        } => Some(ConstraintElement {
+            name: name.clone(),
+            table_schema: table_schema.to_string(),
+            table_name: table_name.to_string(),
+            constraint_type: ConstraintType::Unique,
+            columns: columns
+                .iter()
+                .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
+                .collect(),
+            definition: None,
+            referenced_table: None,
+            referenced_columns: None,
+            is_clustered: Some(*is_clustered),
+        }),
+        ExtractedTableConstraint::Check { name, expression } => Some(ConstraintElement {
+            name: name.clone(),
+            table_schema: table_schema.to_string(),
+            table_name: table_name.to_string(),
+            constraint_type: ConstraintType::Check,
+            columns: vec![],
+            definition: Some(expression.clone()),
+            referenced_table: None,
+            referenced_columns: None,
+            is_clustered: None,
+        }),
+    }
+}
+
 fn constraint_from_table_constraint(
     constraint: &TableConstraint,
     table_name: &ObjectName,
@@ -454,10 +605,14 @@ fn constraint_from_table_constraint(
                 table_schema,
                 table_name: table_name_str,
                 constraint_type: ConstraintType::PrimaryKey,
-                columns: columns.iter().map(|c| c.value.clone()).collect(),
+                columns: columns
+                    .iter()
+                    .map(|c| ConstraintColumn::new(c.value.clone()))
+                    .collect(),
                 definition: None,
                 referenced_table: None,
                 referenced_columns: None,
+                is_clustered: None,
             })
         }
         TableConstraint::ForeignKey {
@@ -472,17 +627,26 @@ fn constraint_from_table_constraint(
                 .map(|n| n.value.clone())
                 .unwrap_or_else(|| format!("FK_{}_{}", table_name_str, foreign_table));
 
+            // Format the foreign table reference with brackets: [schema].[table]
+            let (foreign_schema, foreign_table_name) =
+                extract_schema_and_name(foreign_table, default_schema);
+            let formatted_foreign_table = format!("[{}].[{}]", foreign_schema, foreign_table_name);
+
             Some(ConstraintElement {
                 name: constraint_name,
                 table_schema: table_schema.clone(),
                 table_name: table_name_str,
                 constraint_type: ConstraintType::ForeignKey,
-                columns: columns.iter().map(|c| c.value.clone()).collect(),
+                columns: columns
+                    .iter()
+                    .map(|c| ConstraintColumn::new(c.value.clone()))
+                    .collect(),
                 definition: None,
-                referenced_table: Some(foreign_table.to_string()),
+                referenced_table: Some(formatted_foreign_table),
                 referenced_columns: Some(
                     referred_columns.iter().map(|c| c.value.clone()).collect(),
                 ),
+                is_clustered: None,
             })
         }
         TableConstraint::Unique { name, columns, .. } => {
@@ -496,10 +660,14 @@ fn constraint_from_table_constraint(
                 table_schema,
                 table_name: table_name_str,
                 constraint_type: ConstraintType::Unique,
-                columns: columns.iter().map(|c| c.value.clone()).collect(),
+                columns: columns
+                    .iter()
+                    .map(|c| ConstraintColumn::new(c.value.clone()))
+                    .collect(),
                 definition: None,
                 referenced_table: None,
                 referenced_columns: None,
+                is_clustered: None,
             })
         }
         TableConstraint::Check { name, expr } => {
@@ -517,6 +685,7 @@ fn constraint_from_table_constraint(
                 definition: Some(expr.to_string()),
                 referenced_table: None,
                 referenced_columns: None,
+                is_clustered: None,
             })
         }
         _ => None,

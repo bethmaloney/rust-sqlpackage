@@ -15,15 +15,26 @@ const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serializatio
 
 /// Built-in schemas that exist by default in SQL Server
 const BUILTIN_SCHEMAS: &[&str] = &[
-    "dbo", "guest", "INFORMATION_SCHEMA", "sys", "db_owner",
-    "db_accessadmin", "db_securityadmin", "db_ddladmin",
-    "db_backupoperator", "db_datareader", "db_datawriter",
-    "db_denydatareader", "db_denydatawriter",
+    "dbo",
+    "guest",
+    "INFORMATION_SCHEMA",
+    "sys",
+    "db_owner",
+    "db_accessadmin",
+    "db_securityadmin",
+    "db_ddladmin",
+    "db_backupoperator",
+    "db_datareader",
+    "db_datawriter",
+    "db_denydatareader",
+    "db_denydatawriter",
 ];
 
 /// Check if a schema name is a built-in SQL Server schema
 fn is_builtin_schema(schema: &str) -> bool {
-    BUILTIN_SCHEMAS.iter().any(|&s| s.eq_ignore_ascii_case(schema))
+    BUILTIN_SCHEMAS
+        .iter()
+        .any(|&s| s.eq_ignore_ascii_case(schema))
 }
 
 pub fn generate_model_xml<W: Write>(
@@ -289,7 +300,8 @@ fn extract_view_query(definition: &str) -> String {
     // Find the AS keyword that separates the view header from the query
     // Pattern: CREATE VIEW [schema].[name] AS SELECT ...
     let def_upper = definition.to_uppercase();
-    if let Some(as_pos) = def_upper.find("\nAS\n")
+    if let Some(as_pos) = def_upper
+        .find("\nAS\n")
         .or_else(|| def_upper.find("\nAS "))
         .or_else(|| def_upper.find(" AS\n"))
         .or_else(|| def_upper.find(" AS "))
@@ -383,7 +395,8 @@ fn extract_procedure_parameters(definition: &str) -> Vec<ProcedureParameter> {
 
     // Find the procedure name and the parameters that follow
     let def_upper = definition.to_uppercase();
-    let proc_start = def_upper.find("CREATE PROCEDURE")
+    let proc_start = def_upper
+        .find("CREATE PROCEDURE")
         .or_else(|| def_upper.find("CREATE PROC"));
 
     if proc_start.is_none() {
@@ -404,12 +417,19 @@ fn extract_procedure_parameters(definition: &str) -> Vec<ProcedureParameter> {
     // Find parameters - they start with @
     // Parameters can be on the same line or multiple lines
     let param_regex = regex::Regex::new(
-        r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:\s*=\s*([^,@]+?))?(?:\s+(OUTPUT|OUT))?(?:,|$|\s*\n)"
-    ).unwrap();
+        r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:\s*=\s*([^,@]+?))?(?:\s+(OUTPUT|OUT))?(?:,|$|\s*\n)",
+    )
+    .unwrap();
 
     for cap in param_regex.captures_iter(header) {
-        let name = cap.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
-        let data_type = cap.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+        let name = cap
+            .get(1)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
+        let data_type = cap
+            .get(2)
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_default();
         let default_value = cap.get(3).map(|m| m.as_str().trim().to_string());
         let is_output = cap.get(4).is_some();
 
@@ -480,7 +500,10 @@ fn extract_procedure_body_only(definition: &str) -> String {
 }
 
 /// Write the data type relationship for a parameter with inline type specifier
-fn write_data_type_relationship<W: Write>(writer: &mut Writer<W>, data_type: &str) -> anyhow::Result<()> {
+fn write_data_type_relationship<W: Write>(
+    writer: &mut Writer<W>,
+    data_type: &str,
+) -> anyhow::Result<()> {
     let mut rel = BytesStart::new("Relationship");
     rel.push_attribute(("Name", "Type"));
     writer.write_event(Event::Start(rel))?;
@@ -572,7 +595,7 @@ fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> a
     let full_name = format!("[{}].[{}]", func.schema, func.name);
     let type_name = match func.function_type {
         crate::model::FunctionType::Scalar => "SqlScalarFunction",
-        crate::model::FunctionType::TableValued => "SqlTableValuedFunction",
+        crate::model::FunctionType::TableValued => "SqlMultiStatementTableValuedFunction",
         crate::model::FunctionType::InlineTableValued => "SqlInlineTableValuedFunction",
     };
 
@@ -626,7 +649,8 @@ fn extract_function_body(definition: &str) -> String {
     if let Some(returns_pos) = def_upper.find("RETURNS") {
         let after_returns = &def_upper[returns_pos..];
         // Find AS (could be "\nAS" or " AS")
-        if let Some(as_pos) = after_returns.find("\nAS")
+        if let Some(as_pos) = after_returns
+            .find("\nAS")
             .or_else(|| after_returns.find(" AS"))
         {
             // Calculate absolute position in original string
@@ -746,6 +770,20 @@ fn write_constraint<W: Write>(
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
+    // Write IsClustered property for primary keys and unique constraints
+    if matches!(
+        constraint.constraint_type,
+        ConstraintType::PrimaryKey | ConstraintType::Unique
+    ) {
+        if let Some(is_clustered) = constraint.is_clustered {
+            write_property(
+                writer,
+                "IsClustered",
+                if is_clustered { "True" } else { "False" },
+            )?;
+        }
+    }
+
     // Reference to table
     let table_ref = format!("[{}].[{}]", constraint.table_schema, constraint.table_name);
     write_relationship(writer, "DefiningTable", &[&table_ref])?;
@@ -764,12 +802,16 @@ fn write_constraint<W: Write>(
                 for col in &constraint.columns {
                     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-                    let mut elem = BytesStart::new("Element");
-                    elem.push_attribute(("Type", "SqlIndexedColumnSpecification"));
-                    writer.write_event(Event::Start(elem))?;
+                    let mut col_elem = BytesStart::new("Element");
+                    col_elem.push_attribute(("Type", "SqlIndexedColumnSpecification"));
+                    writer.write_event(Event::Start(col_elem))?;
+
+                    // Note: DacFx SqlIndexedColumnSpecification doesn't have a property for
+                    // descending sort order - columns default to ascending. The sort direction
+                    // is stored in the model for potential future use.
 
                     // Reference to the actual column
-                    let col_ref = format!("{}.[{}]", table_ref, col);
+                    let col_ref = format!("{}.[{}]", table_ref, col.name);
                     write_relationship(writer, "Column", &[&col_ref])?;
 
                     writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -783,7 +825,7 @@ fn write_constraint<W: Write>(
                 let column_refs: Vec<String> = constraint
                     .columns
                     .iter()
-                    .map(|c| format!("{}.[{}]", table_ref, c))
+                    .map(|c| format!("{}.[{}]", table_ref, c.name))
                     .collect();
                 let column_refs_str: Vec<&str> = column_refs.iter().map(|s| s.as_str()).collect();
                 write_relationship(writer, "Columns", &column_refs_str)?;
@@ -901,10 +943,7 @@ fn write_builtin_type_relationship<W: Write>(
 }
 
 /// Write a Schema relationship, using ExternalSource="BuiltIns" for built-in schemas
-fn write_schema_relationship<W: Write>(
-    writer: &mut Writer<W>,
-    schema: &str,
-) -> anyhow::Result<()> {
+fn write_schema_relationship<W: Write>(writer: &mut Writer<W>, schema: &str) -> anyhow::Result<()> {
     let mut rel = BytesStart::new("Relationship");
     rel.push_attribute(("Name", "Schema"));
     writer.write_event(Event::Start(rel))?;

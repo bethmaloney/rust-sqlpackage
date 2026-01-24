@@ -861,14 +861,14 @@ fn test_model_contains_table_valued_functions() {
 
     let doc = parse_model_xml(&model_xml);
 
-    // Check for multi-statement TVF (SqlTableValuedFunction)
-    let tvfs = find_elements_by_type(&doc, "SqlTableValuedFunction");
+    // Check for multi-statement TVF (SqlMultiStatementTableValuedFunction)
+    let tvfs = find_elements_by_type(&doc, "SqlMultiStatementTableValuedFunction");
     // Check for inline TVF (SqlInlineTableValuedFunction)
     let inline_tvfs = find_elements_by_type(&doc, "SqlInlineTableValuedFunction");
 
     assert!(
         !tvfs.is_empty() || !inline_tvfs.is_empty(),
-        "Model should contain at least one table-valued function (SqlTableValuedFunction or SqlInlineTableValuedFunction)"
+        "Model should contain at least one table-valued function (SqlMultiStatementTableValuedFunction or SqlInlineTableValuedFunction)"
     );
 }
 
