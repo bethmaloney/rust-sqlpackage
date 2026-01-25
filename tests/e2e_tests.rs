@@ -14,6 +14,9 @@
 #[path = "common/mod.rs"]
 mod common;
 
+#[path = "e2e/dacpac_compare.rs"]
+mod dacpac_compare;
+
 #[path = "e2e/deploy_tests.rs"]
 mod deploy_tests;
 

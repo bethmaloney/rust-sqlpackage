@@ -90,18 +90,31 @@ SQL_TEST_PROJECT=/path/to/YourProject.sqlproj cargo test --test e2e_tests -- --i
 
 These tests require:
 - DotNet SDK with Microsoft.Build.Sql
+- (Optional) SqlPackage CLI for Layer 3 tests
 
 By default, tests use the `tests/fixtures/e2e_comprehensive` fixture. You can specify a custom project via the `SQL_TEST_PROJECT` environment variable.
 
+### Layered Comparison Approach
+
+The E2E tests use a three-layer comparison approach for thorough validation:
+
+| Layer | What it Tests | Error Messages |
+|-------|---------------|----------------|
+| **Layer 1** | Element inventory - all elements exist with correct names | "MISSING in Rust: SqlTable [dbo].[Users]" |
+| **Layer 2** | Property comparison - element properties match | "PROPERTY MISMATCH: SqlSimpleColumn.[dbo].[Users].[Id] - IsNullable (Rust: None, DotNet: Some("False"))" |
+| **Layer 3** | SqlPackage DeployReport - deployment equivalence | Shows actual DDL script of differences |
+
+### Test Functions
+
 | Test | Purpose |
 |------|---------|
-| test_compare_dacpacs | Full comparison report |
-| test_missing_header_section | Verify Header is generated |
-| test_missing_database_options | Verify SqlDatabaseOptions |
-| test_ampersand_encoding_bug | Verify & not truncated |
-| test_index_double_bracket_bug | Verify [[ not in names |
-| test_missing_inline_constraint_annotations | Verify annotations |
-| test_default_constraint_coverage | Verify >90% coverage |
+| test_layered_dacpac_comparison | Full 3-layer comparison (main test) |
+| test_layer1_element_inventory | Layer 1 only with detailed grouping |
+| test_layer2_property_comparison | Layer 2 only with property details |
+| test_layer3_sqlpackage_comparison | Layer 3 only (requires SqlPackage) |
+| test_print_element_summary | Print element counts by type |
+| test_ampersand_encoding | Verify & in names is handled correctly |
+| test_index_naming | Verify no double brackets in names |
 
 ## Priority Order for Fixes
 

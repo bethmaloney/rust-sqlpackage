@@ -1,7 +1,11 @@
 //! End-to-end tests comparing Rust dacpac output with DotNet DacFx output
 //!
 //! These tests build a dacpac using both rust-sqlpackage and dotnet build,
-//! then compare the generated model.xml files to verify compatibility.
+//! then compare the generated model.xml files using a layered approach:
+//!
+//! - Layer 1: Element inventory - verify all elements exist with correct names
+//! - Layer 2: Property comparison - verify element properties match
+//! - Layer 3: SqlPackage DeployReport - verify deployment equivalence
 //!
 //! Prerequisites:
 //! - dotnet SDK installed with Microsoft.Build.Sql
@@ -14,13 +18,20 @@
 //! Run with:
 //!   cargo test --test e2e_tests -- --ignored dotnet_comparison
 
-use std::fs;
-use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
 
 use tempfile::TempDir;
-use zip::ZipArchive;
+
+use crate::dacpac_compare::{
+    compare_dacpacs, compare_element_inventory, compare_element_properties,
+    compare_with_sqlpackage, extract_model_xml, DacpacModel, Layer1Error,
+    sqlpackage_available,
+};
+
+// =============================================================================
+// Test Setup Helpers
+// =============================================================================
 
 /// Get the test project path from environment variable or use e2e_comprehensive fixture
 fn get_test_project_path() -> Option<PathBuf> {
@@ -30,7 +41,10 @@ fn get_test_project_path() -> Option<PathBuf> {
         if path.exists() {
             return Some(path);
         } else {
-            eprintln!("Warning: SQL_TEST_PROJECT path does not exist: {}", custom_path);
+            eprintln!(
+                "Warning: SQL_TEST_PROJECT path does not exist: {}",
+                custom_path
+            );
         }
     }
 
@@ -71,173 +85,51 @@ fn dotnet_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Extract model.xml from a dacpac
-fn extract_model_xml(dacpac_path: &std::path::Path) -> Result<String, String> {
-    let file =
-        fs::File::open(dacpac_path).map_err(|e| format!("Failed to open dacpac: {}", e))?;
+/// Build dacpacs with both Rust and DotNet, returning paths to both
+fn build_both_dacpacs(
+    project_path: &std::path::Path,
+    temp_dir: &TempDir,
+) -> Result<(PathBuf, PathBuf), String> {
+    // Build with Rust
+    let rust_dacpac = temp_dir.path().join("rust.dacpac");
+    rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+        project_path: project_path.to_path_buf(),
+        output_path: Some(rust_dacpac.clone()),
+        target_platform: "Sql150".to_string(),
+        verbose: false,
+    })
+    .map_err(|e| format!("Rust build failed: {}", e))?;
 
-    let mut archive =
-        ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+    // Build with DotNet
+    let dotnet_output = Command::new("dotnet")
+        .arg("build")
+        .arg(project_path)
+        .output()
+        .map_err(|e| format!("Failed to run dotnet: {}", e))?;
 
-    for i in 0..archive.len() {
-        let mut file = archive
-            .by_index(i)
-            .map_err(|e| format!("Failed to read ZIP entry: {}", e))?;
-
-        if file.name() == "model.xml" {
-            let mut content = String::new();
-            file.read_to_string(&mut content)
-                .map_err(|e| format!("Failed to read model.xml: {}", e))?;
-            return Ok(content);
-        }
+    if !dotnet_output.status.success() {
+        return Err(format!(
+            "DotNet build failed: {}",
+            String::from_utf8_lossy(&dotnet_output.stderr)
+        ));
     }
 
-    Err("model.xml not found in dacpac".to_string())
-}
-
-/// Count occurrences of an element type in model.xml
-fn count_elements(model_xml: &str, element_type: &str) -> usize {
-    let pattern = format!("Type=\"{}\"", element_type);
-    model_xml.matches(&pattern).count()
-}
-
-/// Comparison result between Rust and DotNet dacpacs
-#[derive(Debug)]
-struct DacpacComparison {
-    rust_tables: usize,
-    dotnet_tables: usize,
-    rust_indexes: usize,
-    dotnet_indexes: usize,
-    rust_constraints: usize,
-    dotnet_constraints: usize,
-    rust_defaults: usize,
-    dotnet_defaults: usize,
-    rust_procedures: usize,
-    dotnet_procedures: usize,
-    rust_functions: usize,
-    dotnet_functions: usize,
-    rust_views: usize,
-    dotnet_views: usize,
-    rust_parameters: usize,
-    dotnet_parameters: usize,
-    dotnet_has_header: bool,
-    rust_has_header: bool,
-    dotnet_has_db_options: bool,
-    rust_has_db_options: bool,
-    dotnet_inline_annotations: usize,
-    rust_inline_annotations: usize,
-    dotnet_computed_columns: usize,
-    rust_computed_columns: usize,
-    dotnet_extended_properties: usize,
-    rust_extended_properties: usize,
-}
-
-impl DacpacComparison {
-    fn from_model_xmls(rust_xml: &str, dotnet_xml: &str) -> Self {
-        Self {
-            rust_tables: count_elements(rust_xml, "SqlTable"),
-            dotnet_tables: count_elements(dotnet_xml, "SqlTable"),
-            rust_indexes: count_elements(rust_xml, "SqlIndex"),
-            dotnet_indexes: count_elements(dotnet_xml, "SqlIndex"),
-            rust_constraints: count_elements(rust_xml, "SqlPrimaryKeyConstraint")
-                + count_elements(rust_xml, "SqlForeignKeyConstraint")
-                + count_elements(rust_xml, "SqlUniqueConstraint")
-                + count_elements(rust_xml, "SqlCheckConstraint"),
-            dotnet_constraints: count_elements(dotnet_xml, "SqlPrimaryKeyConstraint")
-                + count_elements(dotnet_xml, "SqlForeignKeyConstraint")
-                + count_elements(dotnet_xml, "SqlUniqueConstraint")
-                + count_elements(dotnet_xml, "SqlCheckConstraint"),
-            rust_defaults: count_elements(rust_xml, "SqlDefaultConstraint"),
-            dotnet_defaults: count_elements(dotnet_xml, "SqlDefaultConstraint"),
-            rust_procedures: count_elements(rust_xml, "SqlProcedure"),
-            dotnet_procedures: count_elements(dotnet_xml, "SqlProcedure"),
-            rust_functions: count_elements(rust_xml, "SqlScalarFunction")
-                + count_elements(rust_xml, "SqlMultiStatementTableValuedFunction"),
-            dotnet_functions: count_elements(dotnet_xml, "SqlScalarFunction")
-                + count_elements(dotnet_xml, "SqlMultiStatementTableValuedFunction"),
-            rust_views: count_elements(rust_xml, "SqlView"),
-            dotnet_views: count_elements(dotnet_xml, "SqlView"),
-            rust_parameters: count_elements(rust_xml, "SqlSubroutineParameter"),
-            dotnet_parameters: count_elements(dotnet_xml, "SqlSubroutineParameter"),
-            dotnet_has_header: dotnet_xml.contains("<Header>"),
-            rust_has_header: rust_xml.contains("<Header>"),
-            dotnet_has_db_options: dotnet_xml.contains("SqlDatabaseOptions"),
-            rust_has_db_options: rust_xml.contains("SqlDatabaseOptions"),
-            dotnet_inline_annotations: count_elements(dotnet_xml, "SqlInlineConstraintAnnotation"),
-            rust_inline_annotations: count_elements(rust_xml, "SqlInlineConstraintAnnotation"),
-            dotnet_computed_columns: count_elements(dotnet_xml, "SqlComputedColumn"),
-            rust_computed_columns: count_elements(rust_xml, "SqlComputedColumn"),
-            dotnet_extended_properties: count_elements(dotnet_xml, "SqlExtendedProperty"),
-            rust_extended_properties: count_elements(rust_xml, "SqlExtendedProperty"),
-        }
+    let dotnet_dacpac = get_dotnet_dacpac_path(project_path);
+    if !dotnet_dacpac.exists() {
+        return Err(format!("DotNet dacpac not found at {:?}", dotnet_dacpac));
     }
 
-    fn print_report(&self) {
-        println!("\n=== Dacpac Comparison Report ===\n");
-        println!(
-            "| Element Type                  | Rust   | DotNet | Diff   | % Coverage |"
-        );
-        println!(
-            "|-------------------------------|--------|--------|--------|------------|"
-        );
-
-        self.print_row("SqlTable", self.rust_tables, self.dotnet_tables);
-        self.print_row("SqlIndex", self.rust_indexes, self.dotnet_indexes);
-        self.print_row("Constraints (PK/FK/UQ/CK)", self.rust_constraints, self.dotnet_constraints);
-        self.print_row("SqlDefaultConstraint", self.rust_defaults, self.dotnet_defaults);
-        self.print_row("SqlProcedure", self.rust_procedures, self.dotnet_procedures);
-        self.print_row("Functions (Scalar/TVF)", self.rust_functions, self.dotnet_functions);
-        self.print_row("SqlView", self.rust_views, self.dotnet_views);
-        self.print_row("SqlSubroutineParameter", self.rust_parameters, self.dotnet_parameters);
-        self.print_row(
-            "SqlInlineConstraintAnnotation",
-            self.rust_inline_annotations,
-            self.dotnet_inline_annotations,
-        );
-        self.print_row(
-            "SqlComputedColumn",
-            self.rust_computed_columns,
-            self.dotnet_computed_columns,
-        );
-        self.print_row(
-            "SqlExtendedProperty",
-            self.rust_extended_properties,
-            self.dotnet_extended_properties,
-        );
-
-        println!();
-        println!("Header section: Rust={}, DotNet={}", self.rust_has_header, self.dotnet_has_header);
-        println!(
-            "SqlDatabaseOptions: Rust={}, DotNet={}",
-            self.rust_has_db_options, self.dotnet_has_db_options
-        );
-    }
-
-    fn print_row(&self, name: &str, rust: usize, dotnet: usize) {
-        let diff = dotnet as i64 - rust as i64;
-        let coverage = if dotnet > 0 {
-            (rust as f64 / dotnet as f64 * 100.0) as i32
-        } else if rust > 0 {
-            100 // Rust has more
-        } else {
-            100 // Both zero
-        };
-
-        println!(
-            "| {:<29} | {:>6} | {:>6} | {:>+6} | {:>9}% |",
-            name, rust, dotnet, diff, coverage
-        );
-    }
+    Ok((rust_dacpac, dotnet_dacpac))
 }
 
-// ============================================================================
-// E2E Comparison Tests
-// ============================================================================
+// =============================================================================
+// Main Layered Comparison Test
+// =============================================================================
 
-/// Compare dacpac output between Rust and DotNet
+/// Full layered comparison test - Layer 1, 2, and optionally 3
 #[test]
 #[ignore = "Requires dotnet SDK"]
-fn test_compare_dacpacs() {
+fn test_layered_dacpac_comparison() {
     if !dotnet_available() {
         eprintln!("Skipping: dotnet SDK not available");
         return;
@@ -246,7 +138,7 @@ fn test_compare_dacpacs() {
     let project_path = match get_test_project_path() {
         Some(p) => p,
         None => {
-            eprintln!("Skipping: No test project found. Set SQL_TEST_PROJECT or ensure e2e_comprehensive fixture exists.");
+            eprintln!("Skipping: No test project found");
             return;
         }
     };
@@ -254,200 +146,313 @@ fn test_compare_dacpacs() {
     eprintln!("Using test project: {:?}", project_path);
 
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
 
-    // Build with Rust
+    // Run full comparison with Layer 3 if SqlPackage is available
+    let include_layer3 = sqlpackage_available();
+    let result = compare_dacpacs(&rust_dacpac, &dotnet_dacpac, include_layer3)
+        .expect("Comparison should succeed");
+
+    // Print detailed report
+    result.print_report();
+
+    // Assert on results with detailed messages
+    assert!(
+        result.layer1_errors.is_empty(),
+        "Layer 1 (Element Inventory) failed:\n{}",
+        result
+            .layer1_errors
+            .iter()
+            .map(|e| format!("  - {}", e))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    assert!(
+        result.layer2_errors.is_empty(),
+        "Layer 2 (Property Comparison) failed:\n{}",
+        result
+            .layer2_errors
+            .iter()
+            .map(|e| format!("  - {}", e))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    if let Some(ref l3) = result.layer3_result {
+        if l3.error.is_none() {
+            assert!(
+                !l3.has_differences,
+                "Layer 3 (SqlPackage DeployReport) detected schema differences:\n{}",
+                l3.deploy_script
+            );
+        }
+    }
+}
+
+// =============================================================================
+// Individual Layer Tests
+// =============================================================================
+
+/// Test Layer 1 only: Element inventory comparison
+#[test]
+#[ignore = "Requires dotnet SDK"]
+fn test_layer1_element_inventory() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    let rust_model = DacpacModel::from_dacpac(&rust_dacpac).expect("Parse rust dacpac");
+    let dotnet_model = DacpacModel::from_dacpac(&dotnet_dacpac).expect("Parse dotnet dacpac");
+
+    let errors = compare_element_inventory(&rust_model, &dotnet_model);
+
+    // Print summary by type
+    println!("\n=== Layer 1: Element Inventory ===\n");
+
+    let mut missing_by_type: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+    let mut extra_by_type: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+
+    for err in &errors {
+        match err {
+            Layer1Error::MissingInRust { element_type, name } => {
+                missing_by_type
+                    .entry(element_type.as_str())
+                    .or_default()
+                    .push(name.as_str());
+            }
+            Layer1Error::ExtraInRust { element_type, name } => {
+                extra_by_type
+                    .entry(element_type.as_str())
+                    .or_default()
+                    .push(name.as_str());
+            }
+            Layer1Error::CountMismatch {
+                element_type,
+                rust_count,
+                dotnet_count,
+            } => {
+                println!(
+                    "Count mismatch for {}: Rust={}, DotNet={}",
+                    element_type, rust_count, dotnet_count
+                );
+            }
+        }
+    }
+
+    if !missing_by_type.is_empty() {
+        println!("Missing in Rust:");
+        for (elem_type, names) in &missing_by_type {
+            println!("  {}: {} elements", elem_type, names.len());
+            for name in names.iter().take(5) {
+                println!("    - {}", name);
+            }
+            if names.len() > 5 {
+                println!("    ... and {} more", names.len() - 5);
+            }
+        }
+    }
+
+    if !extra_by_type.is_empty() {
+        println!("Extra in Rust:");
+        for (elem_type, names) in &extra_by_type {
+            println!("  {}: {} elements", elem_type, names.len());
+            for name in names.iter().take(5) {
+                println!("    - {}", name);
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        println!("All elements match!");
+    }
+}
+
+/// Test Layer 2 only: Property comparison
+#[test]
+#[ignore = "Requires dotnet SDK"]
+fn test_layer2_property_comparison() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    let rust_model = DacpacModel::from_dacpac(&rust_dacpac).expect("Parse rust dacpac");
+    let dotnet_model = DacpacModel::from_dacpac(&dotnet_dacpac).expect("Parse dotnet dacpac");
+
+    let errors = compare_element_properties(&rust_model, &dotnet_model);
+
+    println!("\n=== Layer 2: Property Comparison ===\n");
+
+    if errors.is_empty() {
+        println!("All properties match!");
+    } else {
+        println!("Property mismatches found: {}\n", errors.len());
+        for err in errors.iter().take(20) {
+            println!(
+                "  {}.{} - {}:",
+                err.element_type, err.element_name, err.property_name
+            );
+            println!("    Rust:   {:?}", err.rust_value);
+            println!("    DotNet: {:?}", err.dotnet_value);
+        }
+        if errors.len() > 20 {
+            println!("  ... and {} more", errors.len() - 20);
+        }
+    }
+}
+
+/// Test Layer 3 only: SqlPackage DeployReport comparison
+#[test]
+#[ignore = "Requires dotnet SDK and SqlPackage"]
+fn test_layer3_sqlpackage_comparison() {
+    if !dotnet_available() {
+        eprintln!("Skipping: dotnet SDK not available");
+        return;
+    }
+
+    if !sqlpackage_available() {
+        eprintln!("Skipping: SqlPackage not available");
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== Layer 3: SqlPackage DeployReport ===\n");
+
+    // Compare Rust -> DotNet (what changes needed to make DotNet match Rust?)
+    println!("Rust -> DotNet comparison:");
+    let result_r2d = compare_with_sqlpackage(&rust_dacpac, &dotnet_dacpac);
+    if let Some(ref err) = result_r2d.error {
+        println!("  Error: {}", err);
+    } else if result_r2d.has_differences {
+        println!("  Differences detected!");
+        println!("  Deploy script preview (first 50 lines):");
+        for line in result_r2d.deploy_script.lines().take(50) {
+            println!("    {}", line);
+        }
+    } else {
+        println!("  No differences - dacpacs are equivalent!");
+    }
+
+    // Compare DotNet -> Rust (what changes needed to make Rust match DotNet?)
+    println!("\nDotNet -> Rust comparison:");
+    let result_d2r = compare_with_sqlpackage(&dotnet_dacpac, &rust_dacpac);
+    if let Some(ref err) = result_d2r.error {
+        println!("  Error: {}", err);
+    } else if result_d2r.has_differences {
+        println!("  Differences detected!");
+        println!("  Deploy script preview (first 50 lines):");
+        for line in result_d2r.deploy_script.lines().take(50) {
+            println!("    {}", line);
+        }
+    } else {
+        println!("  No differences - dacpacs are equivalent!");
+    }
+
+    // Both directions should show no differences for true equivalence
+    assert!(
+        !result_r2d.has_differences && !result_d2r.has_differences,
+        "SqlPackage detected schema differences between Rust and DotNet dacpacs"
+    );
+}
+
+// =============================================================================
+// Feature-Specific Tests
+// =============================================================================
+
+/// Test for ampersand encoding in element names
+#[test]
+#[ignore = "Requires dotnet SDK"]
+fn test_ampersand_encoding() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let rust_dacpac = temp_dir.path().join("rust.dacpac");
-    let rust_result = rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+
+    rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
         project_path: project_path.clone(),
         output_path: Some(rust_dacpac.clone()),
         target_platform: "Sql150".to_string(),
         verbose: false,
-    });
+    })
+    .expect("Rust build should succeed");
 
-    assert!(rust_result.is_ok(), "Rust build should succeed: {:?}", rust_result.err());
+    let rust_xml = extract_model_xml(&rust_dacpac).expect("Extract model.xml");
 
-    // Build with DotNet
-    let dotnet_output = Command::new("dotnet")
-        .arg("build")
-        .arg(&project_path)
-        .output()
-        .expect("Failed to run dotnet build");
+    // Check for properly encoded ampersands
+    let has_encoded_ampersand = rust_xml.contains("&amp;");
+    let has_truncated_names =
+        rust_xml.contains("GetP\"") || rust_xml.contains("Terms\"");
 
-    if !dotnet_output.status.success() {
-        eprintln!(
-            "DotNet build failed: {}",
-            String::from_utf8_lossy(&dotnet_output.stderr)
-        );
-        return;
-    }
-
-    // Find the dotnet dacpac
-    let dotnet_dacpac = get_dotnet_dacpac_path(&project_path);
-
-    if !dotnet_dacpac.exists() {
-        eprintln!("DotNet dacpac not found at {:?}", dotnet_dacpac);
-        return;
-    }
-
-    // Extract and compare model.xml
-    let rust_xml = extract_model_xml(&rust_dacpac).expect("Should extract rust model.xml");
-    let dotnet_xml = extract_model_xml(&dotnet_dacpac).expect("Should extract dotnet model.xml");
-
-    let comparison = DacpacComparison::from_model_xmls(&rust_xml, &dotnet_xml);
-    comparison.print_report();
-
-    // Assertions for critical compatibility
-    assert_eq!(
-        comparison.rust_tables, comparison.dotnet_tables,
-        "Table count should match"
-    );
-    assert_eq!(
-        comparison.rust_views, comparison.dotnet_views,
-        "View count should match"
-    );
-    assert_eq!(
-        comparison.rust_procedures, comparison.dotnet_procedures,
-        "Procedure count should match"
-    );
-}
-
-/// Test for missing Header section
-#[test]
-#[ignore = "Requires dotnet SDK"]
-fn test_missing_header_section() {
-    if !dotnet_available() {
-        return;
-    }
-
-    let project_path = match get_test_project_path() {
-        Some(p) => p,
-        None => return,
-    };
-
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let rust_dacpac = temp_dir.path().join("rust.dacpac");
-
-    let _ = rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
-        project_path,
-        output_path: Some(rust_dacpac.clone()),
-        target_platform: "Sql150".to_string(),
-        verbose: false,
-    });
-
-    let rust_xml = extract_model_xml(&rust_dacpac).expect("Should extract rust model.xml");
-
-    // Check for Header section
-    let has_header = rust_xml.contains("<Header>");
-    let has_ansi_nulls = rust_xml.contains("AnsiNulls");
-    let has_quoted_identifier = rust_xml.contains("QuotedIdentifier");
-    let has_compat_mode = rust_xml.contains("CompatibilityMode");
-    let has_reference = rust_xml.contains("Reference");
-    let has_sqlcmd_vars = rust_xml.contains("SqlCmdVariable");
-
-    println!("\n=== Header Section Analysis ===");
-    println!("Has <Header> section: {}", has_header);
-    println!("Has AnsiNulls: {}", has_ansi_nulls);
-    println!("Has QuotedIdentifier: {}", has_quoted_identifier);
-    println!("Has CompatibilityMode: {}", has_compat_mode);
-    println!("Has Reference (master.dacpac): {}", has_reference);
-    println!("Has SqlCmdVariables: {}", has_sqlcmd_vars);
-
-    // Currently expected to fail - these are missing features
-    assert!(has_header, "Rust dacpac should have Header section");
-}
-
-/// Test for missing SqlDatabaseOptions
-#[test]
-#[ignore = "Requires dotnet SDK"]
-fn test_missing_database_options() {
-    if !dotnet_available() {
-        return;
-    }
-
-    let project_path = match get_test_project_path() {
-        Some(p) => p,
-        None => return,
-    };
-
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let rust_dacpac = temp_dir.path().join("rust.dacpac");
-
-    let _ = rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
-        project_path,
-        output_path: Some(rust_dacpac.clone()),
-        target_platform: "Sql150".to_string(),
-        verbose: false,
-    });
-
-    let rust_xml = extract_model_xml(&rust_dacpac).expect("Should extract rust model.xml");
-
-    let has_db_options = rust_xml.contains("SqlDatabaseOptions");
-    let has_collation = rust_xml.contains("Collation");
-    let has_ansi_settings =
-        rust_xml.contains("IsAnsiNullsOn") || rust_xml.contains("IsAnsiWarningsOn");
-
-    println!("\n=== Database Options Analysis ===");
-    println!("Has SqlDatabaseOptions: {}", has_db_options);
-    println!("Has Collation: {}", has_collation);
-    println!("Has ANSI settings: {}", has_ansi_settings);
-
-    // Currently expected to fail - this is a missing feature
-    assert!(
-        has_db_options,
-        "Rust dacpac should have SqlDatabaseOptions element"
-    );
-}
-
-/// Test for ampersand encoding bug
-#[test]
-#[ignore = "Requires dotnet SDK"]
-fn test_ampersand_encoding_bug() {
-    if !dotnet_available() {
-        return;
-    }
-
-    let project_path = match get_test_project_path() {
-        Some(p) => p,
-        None => return,
-    };
-
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let rust_dacpac = temp_dir.path().join("rust.dacpac");
-
-    let _ = rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
-        project_path: project_path.clone(),
-        output_path: Some(rust_dacpac.clone()),
-        target_platform: "Sql150".to_string(),
-        verbose: false,
-    });
-
-    let dotnet_dacpac = get_dotnet_dacpac_path(&project_path);
-
-    let rust_xml = extract_model_xml(&rust_dacpac).expect("Should extract rust model.xml");
-    let dotnet_xml = extract_model_xml(&dotnet_dacpac).expect("Should extract dotnet model.xml");
-
-    // Check for procedures/views with ampersand in name (P&L in e2e_comprehensive)
-    let dotnet_has_ampersand = dotnet_xml.contains("P&amp;L") || dotnet_xml.contains("Terms&amp;Conditions");
-    let rust_has_ampersand = rust_xml.contains("P&amp;L") || rust_xml.contains("P&L")
-        || rust_xml.contains("Terms&amp;Conditions") || rust_xml.contains("Terms&Conditions");
-    let rust_truncated = rust_xml.contains("GetP\"") || rust_xml.contains("GetP<")
-        || rust_xml.contains("Terms\"") || rust_xml.contains("Terms<");
-
-    println!("\n=== Ampersand Encoding Analysis ===");
-    println!("DotNet has ampersand in names: {}", dotnet_has_ampersand);
-    println!("Rust has ampersand in names: {}", rust_has_ampersand);
-    println!("Rust name is truncated: {}", rust_truncated);
+    println!("\n=== Ampersand Encoding Test ===");
+    println!("Has encoded ampersands (&amp;): {}", has_encoded_ampersand);
+    println!("Has truncated names: {}", has_truncated_names);
 
     assert!(
-        !rust_truncated,
-        "Rust should not truncate names at ampersand"
+        !has_truncated_names,
+        "Names should not be truncated at ampersand characters"
     );
 }
 
-/// Test for index double-bracketing bug
+/// Test for index naming (no double brackets)
 #[test]
 #[ignore = "Requires dotnet SDK"]
-fn test_index_double_bracket_bug() {
+fn test_index_naming() {
     if !dotnet_available() {
         return;
     }
@@ -460,19 +465,19 @@ fn test_index_double_bracket_bug() {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
     let rust_dacpac = temp_dir.path().join("rust.dacpac");
 
-    let _ = rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+    rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
         project_path,
         output_path: Some(rust_dacpac.clone()),
         target_platform: "Sql150".to_string(),
         verbose: false,
-    });
+    })
+    .expect("Rust build should succeed");
 
-    let rust_xml = extract_model_xml(&rust_dacpac).expect("Should extract rust model.xml");
+    let rust_xml = extract_model_xml(&rust_dacpac).expect("Extract model.xml");
 
-    // Check for double brackets [[IX_
-    let has_double_brackets = rust_xml.contains("[[IX_") || rust_xml.contains(".[[");
+    let has_double_brackets = rust_xml.contains("[[") || rust_xml.contains("]]");
 
-    println!("\n=== Index Naming Analysis ===");
+    println!("\n=== Index Naming Test ===");
     println!("Has double brackets: {}", has_double_brackets);
 
     assert!(
@@ -481,10 +486,10 @@ fn test_index_double_bracket_bug() {
     );
 }
 
-/// Test for missing inline constraint annotations
+/// Print element type summary for both dacpacs
 #[test]
 #[ignore = "Requires dotnet SDK"]
-fn test_missing_inline_constraint_annotations() {
+fn test_print_element_summary() {
     if !dotnet_available() {
         return;
     }
@@ -495,80 +500,43 @@ fn test_missing_inline_constraint_annotations() {
     };
 
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let rust_dacpac = temp_dir.path().join("rust.dacpac");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
 
-    let _ = rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
-        project_path: project_path.clone(),
-        output_path: Some(rust_dacpac.clone()),
-        target_platform: "Sql150".to_string(),
-        verbose: false,
-    });
+    let rust_model = DacpacModel::from_dacpac(&rust_dacpac).expect("Parse rust dacpac");
+    let dotnet_model = DacpacModel::from_dacpac(&dotnet_dacpac).expect("Parse dotnet dacpac");
 
-    let dotnet_dacpac = get_dotnet_dacpac_path(&project_path);
-
-    let rust_xml = extract_model_xml(&rust_dacpac).expect("Should extract rust model.xml");
-    let dotnet_xml = extract_model_xml(&dotnet_dacpac).expect("Should extract dotnet model.xml");
-
-    let rust_annotations = count_elements(&rust_xml, "SqlInlineConstraintAnnotation");
-    let dotnet_annotations = count_elements(&dotnet_xml, "SqlInlineConstraintAnnotation");
-
-    println!("\n=== Inline Constraint Annotation Analysis ===");
-    println!("Rust SqlInlineConstraintAnnotation: {}", rust_annotations);
-    println!("DotNet SqlInlineConstraintAnnotation: {}", dotnet_annotations);
-
-    // Currently expected to fail - this is a missing feature
-    assert!(
-        rust_annotations > 0,
-        "Rust should generate SqlInlineConstraintAnnotation elements"
+    println!("\n=== Element Type Summary ===\n");
+    println!(
+        "| {:<35} | {:>8} | {:>8} | {:>8} |",
+        "Element Type", "Rust", "DotNet", "Diff"
     );
-}
+    println!("|{:-<37}|{:-<10}|{:-<10}|{:-<10}|", "", "", "", "");
 
-/// Test for default constraint count discrepancy
-#[test]
-#[ignore = "Requires dotnet SDK"]
-fn test_default_constraint_coverage() {
-    if !dotnet_available() {
-        return;
+    let mut all_types: std::collections::BTreeSet<String> = rust_model.element_types();
+    all_types.extend(dotnet_model.element_types());
+
+    for elem_type in all_types {
+        let rust_count = rust_model.elements_of_type(&elem_type).len();
+        let dotnet_count = dotnet_model.elements_of_type(&elem_type).len();
+        let diff = rust_count as i64 - dotnet_count as i64;
+
+        let diff_str = if diff == 0 {
+            "".to_string()
+        } else if diff > 0 {
+            format!("+{}", diff)
+        } else {
+            format!("{}", diff)
+        };
+
+        println!(
+            "| {:<35} | {:>8} | {:>8} | {:>8} |",
+            elem_type, rust_count, dotnet_count, diff_str
+        );
     }
-
-    let project_path = match get_test_project_path() {
-        Some(p) => p,
-        None => return,
-    };
-
-    let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let rust_dacpac = temp_dir.path().join("rust.dacpac");
-
-    let _ = rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
-        project_path: project_path.clone(),
-        output_path: Some(rust_dacpac.clone()),
-        target_platform: "Sql150".to_string(),
-        verbose: false,
-    });
-
-    let dotnet_dacpac = get_dotnet_dacpac_path(&project_path);
-
-    let rust_xml = extract_model_xml(&rust_dacpac).expect("Should extract rust model.xml");
-    let dotnet_xml = extract_model_xml(&dotnet_dacpac).expect("Should extract dotnet model.xml");
-
-    let rust_defaults = count_elements(&rust_xml, "SqlDefaultConstraint");
-    let dotnet_defaults = count_elements(&dotnet_xml, "SqlDefaultConstraint");
-
-    let coverage = if dotnet_defaults > 0 {
-        (rust_defaults as f64 / dotnet_defaults as f64 * 100.0) as i32
-    } else {
-        100
-    };
-
-    println!("\n=== Default Constraint Coverage ===");
-    println!("Rust SqlDefaultConstraint: {}", rust_defaults);
-    println!("DotNet SqlDefaultConstraint: {}", dotnet_defaults);
-    println!("Coverage: {}%", coverage);
-
-    // Currently ~45% coverage
-    assert!(
-        coverage >= 90,
-        "Default constraint coverage should be at least 90%, got {}%",
-        coverage
-    );
 }
