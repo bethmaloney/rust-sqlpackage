@@ -370,7 +370,6 @@ fn test_build_with_procedure_parameters() {
 }
 
 #[test]
-#[ignore = "OUTPUT parameter mode not yet captured"]
 fn test_build_with_output_parameters() {
     let ctx = TestContext::with_fixture("procedure_parameters");
     let result = ctx.build();

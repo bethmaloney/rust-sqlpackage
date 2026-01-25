@@ -5,8 +5,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 ## Summary
 
 - **Total Ignored Tests**: 12
-- **Fixed**: 6
-- **Remaining**: 6
+- **Fixed**: 7
+- **Remaining**: 5
 
 ## Test Fixes
 
@@ -92,17 +92,13 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 
 ### 7. OUTPUT Parameters
 
-- [ ] **Test**: `test_build_with_output_parameters`
-- **Ignore Reason**: OUTPUT parameter mode not yet captured
-- **Impact**: Missing IsOutput property on procedure parameters
-- **Files to Modify**:
-  - `src/parser/procedure.rs` - Parse OUTPUT keyword on parameters
-  - `src/model/procedure.rs` - Add is_output field to Parameter
-  - `src/dacpac/xml.rs` - Add IsOutput property when true
-- **Implementation Notes**:
-  - Pattern: `@Result INT OUTPUT` or `@Result INT OUT`
-  - Also `@Param INT = NULL OUTPUT` with default
-  - Need Property element: `<Property Name="IsOutput" Value="True"/>`
+- [x] **Test**: `test_build_with_output_parameters`
+- **Status**: ✅ FIXED - Already implemented, test re-enabled
+- **Notes**: OUTPUT parameter support was already fully implemented:
+  - Parser in `src/dacpac/model_xml.rs` extracts OUTPUT/OUT keywords via `extract_procedure_parameters()`
+    using regex pattern `(?:\s+(OUTPUT|OUT))?` in the parameter extraction regex
+  - `ProcedureParameter` struct already had `is_output: bool` field
+  - XML serializer already writes `<Property Name="IsOutput" Value="True"/>` when `param.is_output` is true
 - **Fixture**: `tests/fixtures/procedure_parameters/`
 
 ---
