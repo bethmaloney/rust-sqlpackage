@@ -382,7 +382,10 @@ impl ExtendedPropertyElement {
     /// For table-level: [schema].[table]
     pub fn extends_object_ref(&self) -> String {
         if let Some(ref column) = self.target_column {
-            format!("[{}].[{}].[{}]", self.target_schema, self.target_object, column)
+            format!(
+                "[{}].[{}].[{}]",
+                self.target_schema, self.target_object, column
+            )
         } else {
             format!("[{}].[{}]", self.target_schema, self.target_object)
         }

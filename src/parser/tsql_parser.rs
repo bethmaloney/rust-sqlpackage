@@ -572,10 +572,12 @@ fn try_drop_fallback(sql: &str) -> Option<FallbackStatementType> {
     // Check for DROP SYNONYM
     if sql_upper.contains("DROP SYNONYM") {
         let re = regex::Regex::new(
-            r"(?i)DROP\s+SYNONYM\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-        ).ok()?;
+            r"(?i)DROP\s+SYNONYM\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
+        )
+        .ok()?;
         let caps = re.captures(sql)?;
-        let schema = caps.get(1)
+        let schema = caps
+            .get(1)
             .map(|m| m.as_str().to_string())
             .unwrap_or_else(|| "dbo".to_string());
         let name = caps.get(2)?.as_str().to_string();
@@ -589,10 +591,12 @@ fn try_drop_fallback(sql: &str) -> Option<FallbackStatementType> {
     // Check for DROP TRIGGER
     if sql_upper.contains("DROP TRIGGER") {
         let re = regex::Regex::new(
-            r"(?i)DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-        ).ok()?;
+            r"(?i)DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
+        )
+        .ok()?;
         let caps = re.captures(sql)?;
-        let schema = caps.get(1)
+        let schema = caps
+            .get(1)
             .map(|m| m.as_str().to_string())
             .unwrap_or_else(|| "dbo".to_string());
         let name = caps.get(2)?.as_str().to_string();
@@ -610,7 +614,8 @@ fn try_drop_fallback(sql: &str) -> Option<FallbackStatementType> {
         ).ok()?;
         let caps = re.captures(sql)?;
         let index_name = caps.get(1)?.as_str().to_string();
-        let schema = caps.get(2)
+        let schema = caps
+            .get(2)
             .map(|m| m.as_str().to_string())
             .unwrap_or_else(|| "dbo".to_string());
         let table_name = caps.get(3)?.as_str().to_string();
@@ -625,10 +630,12 @@ fn try_drop_fallback(sql: &str) -> Option<FallbackStatementType> {
     // Only match PROC that's not followed by EDURE (to avoid matching PROCEDURE)
     if sql_upper.contains("DROP PROC") && !sql_upper.contains("DROP PROCEDURE") {
         let re = regex::Regex::new(
-            r"(?i)DROP\s+PROC\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-        ).ok()?;
+            r"(?i)DROP\s+PROC\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
+        )
+        .ok()?;
         let caps = re.captures(sql)?;
-        let schema = caps.get(1)
+        let schema = caps
+            .get(1)
             .map(|m| m.as_str().to_string())
             .unwrap_or_else(|| "dbo".to_string());
         let name = caps.get(2)?.as_str().to_string();
@@ -679,11 +686,11 @@ fn try_merge_output_fallback(sql: &str) -> Option<FallbackStatementType> {
     // Check for MERGE ... OUTPUT
     if sql_upper.contains("MERGE") && sql_upper.contains("OUTPUT") {
         // Extract target table name
-        let re = regex::Regex::new(
-            r"(?i)MERGE\s+(?:INTO\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-        ).ok()?;
+        let re =
+            regex::Regex::new(r"(?i)MERGE\s+(?:INTO\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
         let caps = re.captures(sql)?;
-        let schema = caps.get(1)
+        let schema = caps
+            .get(1)
             .map(|m| m.as_str().to_string())
             .unwrap_or_else(|| "dbo".to_string());
         let name = caps.get(2)?.as_str().to_string();
@@ -705,13 +712,14 @@ fn try_xml_method_fallback(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for UPDATE with XML method call pattern
     // Pattern: UPDATE ... SET [column].modify(...) or [column].value(...)
-    if sql_upper.contains("UPDATE") && (sql_upper.contains(".MODIFY(") || sql_upper.contains(".VALUE(")) {
+    if sql_upper.contains("UPDATE")
+        && (sql_upper.contains(".MODIFY(") || sql_upper.contains(".VALUE("))
+    {
         // Extract target table name
-        let re = regex::Regex::new(
-            r"(?i)UPDATE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-        ).ok()?;
+        let re = regex::Regex::new(r"(?i)UPDATE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
         let caps = re.captures(sql)?;
-        let schema = caps.get(1)
+        let schema = caps
+            .get(1)
             .map(|m| m.as_str().to_string())
             .unwrap_or_else(|| "dbo".to_string());
         let name = caps.get(2)?.as_str().to_string();
@@ -756,7 +764,8 @@ pub fn extract_extended_property_from_sql(sql: &str) -> Option<ExtractedExtended
         // Match @paramname = N'value' or @paramname = 'value'
         let pattern = format!(r"(?i)@{}\s*=\s*N?'([^']*)'", param_name);
         let re = regex::Regex::new(&pattern).ok()?;
-        re.captures(sql).and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))
+        re.captures(sql)
+            .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))
     }
 
     // Extract required parameters
@@ -859,7 +868,12 @@ fn extract_type_name(sql: &str) -> Option<(String, String)> {
 }
 
 /// Extract columns and constraints from a table type definition
-fn extract_table_type_structure(sql: &str) -> (Vec<ExtractedTableTypeColumn>, Vec<ExtractedTableTypeConstraint>) {
+fn extract_table_type_structure(
+    sql: &str,
+) -> (
+    Vec<ExtractedTableTypeColumn>,
+    Vec<ExtractedTableTypeConstraint>,
+) {
     let mut columns = Vec::new();
     let mut constraints = Vec::new();
 
@@ -941,15 +955,21 @@ fn extract_table_type_structure(sql: &str) -> (Vec<ExtractedTableTypeColumn>, Ve
         } else if upper.starts_with("INDEX") {
             // INDEX [IX_Name] [UNIQUE] [CLUSTERED|NONCLUSTERED] ([Col])
             let idx_re = Regex::new(
-                r"(?i)INDEX\s+\[?(\w+)\]?\s*(UNIQUE)?\s*(CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)"
-            ).unwrap();
+                r"(?i)INDEX\s+\[?(\w+)\]?\s*(UNIQUE)?\s*(CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)",
+            )
+            .unwrap();
             if let Some(caps) = idx_re.captures(trimmed) {
-                let name = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let name = caps
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
                 let is_unique = caps.get(2).is_some();
-                let is_clustered = caps.get(3)
+                let is_clustered = caps
+                    .get(3)
                     .map(|m| m.as_str().to_uppercase() == "CLUSTERED")
                     .unwrap_or(false);
-                let idx_columns = caps.get(4)
+                let idx_columns = caps
+                    .get(4)
                     .map(|m| parse_column_list(m.as_str()))
                     .unwrap_or_default();
                 constraints.push(ExtractedTableTypeConstraint::Index {
@@ -962,9 +982,7 @@ fn extract_table_type_structure(sql: &str) -> (Vec<ExtractedTableTypeColumn>, Ve
         } else {
             // This is a column definition
             // Pattern: [ColumnName] DataType [NULL|NOT NULL] [DEFAULT (value)]
-            let col_re = Regex::new(
-                r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)"
-            ).unwrap();
+            let col_re = Regex::new(r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)").unwrap();
 
             if let Some(caps) = col_re.captures(trimmed) {
                 let name = caps
@@ -1005,7 +1023,8 @@ fn extract_table_type_structure(sql: &str) -> (Vec<ExtractedTableTypeColumn>, Ve
 fn extract_table_type_column_default(col_def: &str) -> Option<String> {
     // Pattern: DEFAULT (value) or DEFAULT value
     let default_re = Regex::new(r"(?i)DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\)|\w+\(\))").ok()?;
-    default_re.captures(col_def)
+    default_re
+        .captures(col_def)
         .and_then(|caps| caps.get(1).or(caps.get(0)))
         .map(|m| {
             let val = m.as_str();
@@ -1040,11 +1059,7 @@ fn extract_procedure_name(sql: &str) -> Option<(String, String)> {
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
     // Name can be in group 3 (bracketed) or group 4 (unbracketed)
-    let name = caps
-        .get(3)
-        .or_else(|| caps.get(4))?
-        .as_str()
-        .to_string();
+    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
 }
@@ -1066,11 +1081,7 @@ fn extract_alter_procedure_name(sql: &str) -> Option<(String, String)> {
         .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    let name = caps
-        .get(3)
-        .or_else(|| caps.get(4))?
-        .as_str()
-        .to_string();
+    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
 }
@@ -1080,10 +1091,7 @@ fn extract_alter_function_name(sql: &str) -> Option<(String, String)> {
     // Match patterns like:
     // ALTER FUNCTION [dbo].[FuncName]
     // ALTER FUNCTION dbo.FuncName
-    let re = regex::Regex::new(
-        r"(?i)ALTER\s+FUNCTION\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
-    )
-    .ok()?;
+    let re = regex::Regex::new(r"(?i)ALTER\s+FUNCTION\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
 
     let caps = re.captures(sql)?;
     let schema = caps
@@ -1160,9 +1168,7 @@ fn extract_function_parameters(sql: &str) -> Vec<ExtractedFunctionParameter> {
         .map(|start| {
             // Skip past CREATE/ALTER FUNCTION and the name
             let after_keyword = &sql_upper[start..];
-            after_keyword
-                .find('(')
-                .map(|idx| start + idx)
+            after_keyword.find('(').map(|idx| start + idx)
         })
         .flatten();
 
@@ -1186,9 +1192,7 @@ fn extract_function_parameters(sql: &str) -> Vec<ExtractedFunctionParameter> {
         let param_content = &param_section[1..close_paren];
 
         // Parse parameters - they start with @
-        let param_regex = regex::Regex::new(
-            r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:,|$)"
-        ).unwrap();
+        let param_regex = regex::Regex::new(r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:,|$)").unwrap();
 
         for cap in param_regex.captures_iter(param_content) {
             let name = cap
@@ -1378,7 +1382,10 @@ fn extract_balanced_parens(sql: &str) -> Option<String> {
 }
 
 /// Parse table body to extract columns and constraints
-fn parse_table_body(body: &str, table_name: &str) -> (Vec<ExtractedTableColumn>, Vec<ExtractedTableConstraint>) {
+fn parse_table_body(
+    body: &str,
+    table_name: &str,
+) -> (Vec<ExtractedTableColumn>, Vec<ExtractedTableConstraint>) {
     let mut columns = Vec::new();
     let mut constraints = Vec::new();
 
@@ -1394,8 +1401,10 @@ fn parse_table_body(body: &str, table_name: &str) -> (Vec<ExtractedTableColumn>,
         let upper = trimmed.to_uppercase();
 
         // Check if this is a table-level constraint
-        if upper.starts_with("CONSTRAINT") || upper.starts_with("PRIMARY KEY")
-            || upper.starts_with("FOREIGN KEY") || upper.starts_with("UNIQUE")
+        if upper.starts_with("CONSTRAINT")
+            || upper.starts_with("PRIMARY KEY")
+            || upper.starts_with("FOREIGN KEY")
+            || upper.starts_with("UNIQUE")
             || upper.starts_with("CHECK")
         {
             if let Some(constraint) = parse_table_constraint(trimmed, table_name) {
@@ -1528,9 +1537,9 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     ).ok()?;
 
     // Try named constraint with function call: CONSTRAINT [name] [NOT NULL|NULL] DEFAULT GETDATE()
-    let named_default_func_re = Regex::new(
-        r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+(?:NOT\s+NULL\s+|NULL\s+)?DEFAULT\s+(\w+\(\))"
-    ).ok()?;
+    let named_default_func_re =
+        Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+(?:NOT\s+NULL\s+|NULL\s+)?DEFAULT\s+(\w+\(\))")
+            .ok()?;
 
     if let Some(caps) = named_default_paren_re.captures(col_def) {
         default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
@@ -1540,25 +1549,21 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
         default_value = caps.get(2).map(|m| m.as_str().to_string());
     } else {
         // Try unnamed default with parenthesized value: DEFAULT ((value))
-        let unnamed_default_paren_re = Regex::new(
-            r"(?i)DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))"
-        ).ok()?;
+        let unnamed_default_paren_re =
+            Regex::new(r"(?i)DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))").ok()?;
 
         // Try unnamed default with function call: DEFAULT GETDATE()
-        let unnamed_default_func_re = Regex::new(
-            r"(?i)DEFAULT\s+(\w+\(\))"
-        ).ok()?;
+        let unnamed_default_func_re = Regex::new(r"(?i)DEFAULT\s+(\w+\(\))").ok()?;
 
         // Try unnamed default with string literal: DEFAULT 'value'
-        let unnamed_default_string_re = Regex::new(
-            r"(?i)DEFAULT\s+('(?:[^']|'')*')"
-        ).ok()?;
+        let unnamed_default_string_re = Regex::new(r"(?i)DEFAULT\s+('(?:[^']|'')*')").ok()?;
 
         // Try unnamed default with bare number: DEFAULT 0.00 or DEFAULT 1
         // Match numbers that are NOT followed by CHECK to avoid matching constraint names
         let unnamed_default_number_re = Regex::new(
-            r"(?i)DEFAULT\s+(-?\d+(?:\.\d+)?)\s*(?:CHECK|UNIQUE|PRIMARY|FOREIGN|CONSTRAINT|,|$|\))"
-        ).ok()?;
+            r"(?i)DEFAULT\s+(-?\d+(?:\.\d+)?)\s*(?:CHECK|UNIQUE|PRIMARY|FOREIGN|CONSTRAINT|,|$|\))",
+        )
+        .ok()?;
 
         if let Some(caps) = unnamed_default_paren_re.captures(col_def) {
             default_constraint_name = None;
@@ -1584,9 +1589,7 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     let check_expression;
 
     // Try named check constraint: CONSTRAINT [name] CHECK (expression)
-    let named_check_re = Regex::new(
-        r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+CHECK\s*\((.+)\)"
-    ).ok();
+    let named_check_re = Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+CHECK\s*\((.+)\)").ok();
 
     if let Some(caps) = named_check_re.and_then(|re| re.captures(col_def)) {
         check_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
@@ -1622,7 +1625,10 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
 }
 
 /// Parse a table-level constraint
-fn parse_table_constraint(constraint_def: &str, table_name: &str) -> Option<ExtractedTableConstraint> {
+fn parse_table_constraint(
+    constraint_def: &str,
+    table_name: &str,
+) -> Option<ExtractedTableConstraint> {
     let upper = constraint_def.to_uppercase();
 
     // Extract constraint name if present
@@ -1682,7 +1688,9 @@ fn parse_table_constraint(constraint_def: &str, table_name: &str) -> Option<Extr
 fn extract_constraint_columns(constraint_def: &str) -> Vec<ExtractedConstraintColumn> {
     // Find the column list in parentheses after PRIMARY KEY or UNIQUE
     // Pattern: PRIMARY KEY [CLUSTERED|NONCLUSTERED] ([Col1] [ASC|DESC], [Col2] [ASC|DESC])
-    let pk_re = Regex::new(r"(?i)(?:PRIMARY\s+KEY|UNIQUE)\s*(?:CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)").unwrap();
+    let pk_re =
+        Regex::new(r"(?i)(?:PRIMARY\s+KEY|UNIQUE)\s*(?:CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)")
+            .unwrap();
 
     pk_re
         .captures(constraint_def)
@@ -1734,7 +1742,10 @@ fn extract_fk_references(constraint_def: &str) -> Option<(String, Vec<String>)> 
 
     let caps = ref_re.captures(constraint_def)?;
     let raw_table = caps.get(1)?.as_str();
-    let columns = caps.get(2).map(|m| parse_column_list(m.as_str())).unwrap_or_default();
+    let columns = caps
+        .get(2)
+        .map(|m| parse_column_list(m.as_str()))
+        .unwrap_or_default();
 
     // Normalize the table reference to [schema].[table] format
     let table = normalize_table_reference(raw_table);
@@ -1869,12 +1880,12 @@ fn split_batches(content: &str) -> Vec<Batch<'_>> {
 ///         KEY INDEX [pk_name] ON [catalog] WITH CHANGE_TRACKING AUTO;
 fn extract_fulltext_index_info(sql: &str) -> Option<FallbackStatementType> {
     // Match: CREATE FULLTEXT INDEX ON [schema].[table]
-    let table_re = Regex::new(
-        r"(?i)CREATE\s+FULLTEXT\s+INDEX\s+ON\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-    ).ok()?;
+    let table_re =
+        Regex::new(r"(?i)CREATE\s+FULLTEXT\s+INDEX\s+ON\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
 
     let caps = table_re.captures(sql)?;
-    let table_schema = caps.get(1)
+    let table_schema = caps
+        .get(1)
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
     let table_name = caps.get(2)?.as_str().to_string();
@@ -1886,7 +1897,8 @@ fn extract_fulltext_index_info(sql: &str) -> Option<FallbackStatementType> {
     // Extract KEY INDEX name
     // Pattern: KEY INDEX [pk_name]
     let key_index_re = Regex::new(r"(?i)KEY\s+INDEX\s+\[?(\w+)\]?").ok()?;
-    let key_index = key_index_re.captures(sql)
+    let key_index = key_index_re
+        .captures(sql)
         .and_then(|caps| caps.get(1))
         .map(|m| m.as_str().to_string())?;
 
@@ -1897,7 +1909,8 @@ fn extract_fulltext_index_info(sql: &str) -> Option<FallbackStatementType> {
     // Extract optional change tracking mode
     // Pattern: WITH CHANGE_TRACKING AUTO|MANUAL|OFF
     let change_tracking_re = Regex::new(r"(?i)CHANGE_TRACKING\s+(\w+)").ok()?;
-    let change_tracking = change_tracking_re.captures(sql)
+    let change_tracking = change_tracking_re
+        .captures(sql)
         .and_then(|caps| caps.get(1))
         .map(|m| m.as_str().to_uppercase());
 
@@ -1962,11 +1975,11 @@ fn extract_fulltext_columns(sql: &str) -> Vec<ExtractedFullTextColumn> {
         // Pattern: [ColumnName] LANGUAGE 1033 or just [ColumnName]
         let col_re = Regex::new(r"(?i)\[?(\w+)\]?(?:\s+LANGUAGE\s+(\d+))?").unwrap();
         if let Some(caps) = col_re.captures(col_part) {
-            let name = caps.get(1)
+            let name = caps
+                .get(1)
                 .map(|m| m.as_str().to_string())
                 .unwrap_or_default();
-            let language_id = caps.get(2)
-                .and_then(|m| m.as_str().parse::<u32>().ok());
+            let language_id = caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok());
 
             if !name.is_empty() {
                 columns.push(ExtractedFullTextColumn { name, language_id });
@@ -2034,7 +2047,11 @@ mod tests {
         // Test various GO; variations
         let sql = "SELECT 1\nGO;\nSELECT 2\n  GO;  \nSELECT 3\ngo;\nSELECT 4";
         let batches = split_batches(sql);
-        assert_eq!(batches.len(), 4, "Should handle GO; with various whitespace and casing");
+        assert_eq!(
+            batches.len(),
+            4,
+            "Should handle GO; with various whitespace and casing"
+        );
     }
 
     #[test]

@@ -724,8 +724,12 @@ fn test_origin_xml_element_order() {
     let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("ABCD1234");
 
     // Verify Operation comes before Checksums (XSD order)
-    let operation_pos = origin.find("<Operation>").expect("Should have Operation element");
-    let checksums_pos = origin.find("<Checksums>").expect("Should have Checksums element");
+    let operation_pos = origin
+        .find("<Operation>")
+        .expect("Should have Operation element");
+    let checksums_pos = origin
+        .find("<Checksums>")
+        .expect("Should have Checksums element");
     assert!(
         operation_pos < checksums_pos,
         "Operation should come before Checksums per XSD schema. Got:\n{}",
@@ -1126,7 +1130,10 @@ CREATE TABLE [dbo].[FileArchive] (
 
     // Verify overall structure
     assert!(xml.contains("SqlTable"), "Should have SqlTable element");
-    assert!(xml.contains("SqlSimpleColumn"), "Should have SqlSimpleColumn elements");
+    assert!(
+        xml.contains("SqlSimpleColumn"),
+        "Should have SqlSimpleColumn elements"
+    );
     assert!(
         xml.contains(r#"<Property Name="IsFileStream" Value="True"/>"#),
         "FILESTREAM column should have IsFileStream property"
@@ -1151,7 +1158,9 @@ CREATE TABLE [dbo].[MediaFiles] (
     let xml = generate_model_xml(sql);
 
     // Count IsFileStream properties - should be 2
-    let filestream_count = xml.matches(r#"<Property Name="IsFileStream" Value="True"/>"#).count();
+    let filestream_count = xml
+        .matches(r#"<Property Name="IsFileStream" Value="True"/>"#)
+        .count();
     assert!(
         filestream_count == 2,
         "Should have exactly 2 IsFileStream=True properties for 2 FILESTREAM columns. Got: {}",

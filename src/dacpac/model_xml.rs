@@ -109,7 +109,12 @@ fn write_header<W: Write>(writer: &mut Writer<W>, project: &SqlProject) -> anyho
 
     // CompatibilityMode
     let compat_mode = project.target_platform.compatibility_mode().to_string();
-    write_custom_data(writer, "CompatibilityMode", "CompatibilityMode", &compat_mode)?;
+    write_custom_data(
+        writer,
+        "CompatibilityMode",
+        "CompatibilityMode",
+        &compat_mode,
+    )?;
 
     // Package references (e.g., Microsoft.SqlServer.Dacpacs.Master)
     for pkg_ref in &project.package_references {
@@ -267,42 +272,66 @@ fn write_database_options<W: Write>(
     write_property(
         writer,
         "IsAnsiNullDefaultOn",
-        if db_options.ansi_null_default_on { "True" } else { "False" },
+        if db_options.ansi_null_default_on {
+            "True"
+        } else {
+            "False"
+        },
     )?;
 
     // IsAnsiNullsOn
     write_property(
         writer,
         "IsAnsiNullsOn",
-        if db_options.ansi_nulls_on { "True" } else { "False" },
+        if db_options.ansi_nulls_on {
+            "True"
+        } else {
+            "False"
+        },
     )?;
 
     // IsAnsiWarningsOn
     write_property(
         writer,
         "IsAnsiWarningsOn",
-        if db_options.ansi_warnings_on { "True" } else { "False" },
+        if db_options.ansi_warnings_on {
+            "True"
+        } else {
+            "False"
+        },
     )?;
 
     // IsArithAbortOn
     write_property(
         writer,
         "IsArithAbortOn",
-        if db_options.arith_abort_on { "True" } else { "False" },
+        if db_options.arith_abort_on {
+            "True"
+        } else {
+            "False"
+        },
     )?;
 
     // IsConcatNullYieldsNullOn
     write_property(
         writer,
         "IsConcatNullYieldsNullOn",
-        if db_options.concat_null_yields_null_on { "True" } else { "False" },
+        if db_options.concat_null_yields_null_on {
+            "True"
+        } else {
+            "False"
+        },
     )?;
 
     // IsFullTextEnabled
     write_property(
         writer,
         "IsFullTextEnabled",
-        if db_options.full_text_enabled { "True" } else { "False" },
+        if db_options.full_text_enabled {
+            "True"
+        } else {
+            "False"
+        },
     )?;
 
     // PageVerifyMode (convert string to numeric value for DacFx compatibility)
@@ -1011,7 +1040,10 @@ fn write_function_body_with_annotation<W: Write>(
 /// Format: <Relationship Name="Type"><Entry><Element Type="SqlTypeSpecifier">
 ///           <Relationship Name="Type"><Entry><References ExternalSource="BuiltIns" Name="[type]"/></Entry></Relationship>
 ///         </Element></Entry></Relationship>
-fn write_function_return_type<W: Write>(writer: &mut Writer<W>, return_type: &str) -> anyhow::Result<()> {
+fn write_function_return_type<W: Write>(
+    writer: &mut Writer<W>,
+    return_type: &str,
+) -> anyhow::Result<()> {
     // Extract base type name (e.g., "INT" -> "int", "DECIMAL(18,2)" -> "decimal")
     let base_type = extract_base_type_name(return_type);
     let type_ref = format!("[{}]", base_type.to_lowercase());
@@ -1207,7 +1239,10 @@ fn write_fulltext_index<W: Write>(
 
     // Reference to the unique key index (UniqueIndex)
     // The key index is typically on the same table
-    let key_index_ref = format!("[{}].[{}].[{}]", fulltext.table_schema, fulltext.table_name, fulltext.key_index);
+    let key_index_ref = format!(
+        "[{}].[{}].[{}]",
+        fulltext.table_schema, fulltext.table_name, fulltext.key_index
+    );
     write_relationship(writer, "UniqueIndex", &[&key_index_ref])?;
 
     // Reference to full-text catalog if specified
@@ -1566,16 +1601,34 @@ fn write_table_type_constraint<W: Write>(
     columns: &[TableTypeColumnElement],
 ) -> anyhow::Result<()> {
     match constraint {
-        TableTypeConstraint::PrimaryKey { columns: pk_cols, is_clustered } => {
+        TableTypeConstraint::PrimaryKey {
+            columns: pk_cols,
+            is_clustered,
+        } => {
             write_table_type_pk_constraint(writer, type_name, pk_cols, *is_clustered, columns)?;
         }
-        TableTypeConstraint::Unique { columns: uq_cols, is_clustered } => {
-            write_table_type_unique_constraint(writer, type_name, uq_cols, *is_clustered, idx, columns)?;
+        TableTypeConstraint::Unique {
+            columns: uq_cols,
+            is_clustered,
+        } => {
+            write_table_type_unique_constraint(
+                writer,
+                type_name,
+                uq_cols,
+                *is_clustered,
+                idx,
+                columns,
+            )?;
         }
         TableTypeConstraint::Check { expression } => {
             write_table_type_check_constraint(writer, type_name, expression, idx)?;
         }
-        TableTypeConstraint::Index { name, columns: idx_cols, is_unique, is_clustered } => {
+        TableTypeConstraint::Index {
+            name,
+            columns: idx_cols,
+            is_unique,
+            is_clustered,
+        } => {
             write_table_type_index(writer, type_name, name, idx_cols, *is_unique, *is_clustered)?;
         }
     }
@@ -1614,7 +1667,13 @@ fn write_table_type_pk_constraint<W: Write>(
 
         for pk_col in pk_columns {
             let is_descending = pk_col.sort_direction == SortDirection::Descending;
-            write_table_type_indexed_column_spec(writer, type_name, &pk_col.name, is_descending, all_columns)?;
+            write_table_type_indexed_column_spec(
+                writer,
+                type_name,
+                &pk_col.name,
+                is_descending,
+                all_columns,
+            )?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
@@ -1659,7 +1718,13 @@ fn write_table_type_unique_constraint<W: Write>(
 
         for uq_col in uq_columns {
             let is_descending = uq_col.sort_direction == SortDirection::Descending;
-            write_table_type_indexed_column_spec(writer, type_name, &uq_col.name, is_descending, all_columns)?;
+            write_table_type_indexed_column_spec(
+                writer,
+                type_name,
+                &uq_col.name,
+                is_descending,
+                all_columns,
+            )?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;

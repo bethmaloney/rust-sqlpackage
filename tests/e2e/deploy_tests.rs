@@ -93,7 +93,10 @@ fn create_config(database: Option<&str>) -> Config {
     let mut config = Config::new();
     config.host(&SQL_CONFIG.host);
     config.port(SQL_CONFIG.port);
-    config.authentication(AuthMethod::sql_server(&SQL_CONFIG.user, &SQL_CONFIG.password));
+    config.authentication(AuthMethod::sql_server(
+        &SQL_CONFIG.user,
+        &SQL_CONFIG.password,
+    ));
     config.trust_cert();
 
     if let Some(db) = database {

@@ -57,10 +57,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         FallbackFunctionType::TableValued => FunctionType::TableValued,
                     };
                     let is_natively_compiled = is_natively_compiled(&parsed.sql_text);
-                    let param_elements = parameters
-                        .iter()
-                        .map(|p| param_from_extracted(p))
-                        .collect();
+                    let param_elements =
+                        parameters.iter().map(|p| param_from_extracted(p)).collect();
                     model.add_element(ModelElement::Function(FunctionElement {
                         schema: schema.clone(),
                         name: name.clone(),
@@ -132,10 +130,14 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     constraints,
                 } => {
                     schemas.insert(schema.clone());
-                    let column_elements: Vec<TableTypeColumnElement> =
-                        columns.iter().map(|c| table_type_column_from_extracted(c)).collect();
-                    let constraint_elements: Vec<TableTypeConstraint> =
-                        constraints.iter().map(|c| table_type_constraint_from_extracted(c)).collect();
+                    let column_elements: Vec<TableTypeColumnElement> = columns
+                        .iter()
+                        .map(|c| table_type_column_from_extracted(c))
+                        .collect();
+                    let constraint_elements: Vec<TableTypeConstraint> = constraints
+                        .iter()
+                        .map(|c| table_type_constraint_from_extracted(c))
+                        .collect();
                     model.add_element(ModelElement::UserDefinedType(UserDefinedTypeElement {
                         schema: schema.clone(),
                         name: name.clone(),
@@ -522,7 +524,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 };
                 if is_sp_addextendedproperty {
                     // Use the original SQL text to extract the extended property
-                    if let Some(property) = crate::parser::extract_extended_property_from_sql(&parsed.sql_text) {
+                    if let Some(property) =
+                        crate::parser::extract_extended_property_from_sql(&parsed.sql_text)
+                    {
                         if property.level1name.is_some() {
                             let ext_prop = extended_property_from_extracted(&property);
                             model.add_element(ModelElement::ExtendedProperty(ext_prop));
@@ -599,10 +603,7 @@ fn column_from_def(col: &ColumnDef, schema: &str, table_name: &str) -> ColumnEle
                 }
                 // Check if PERSISTED (STORED in ANSI SQL)
                 if let Some(mode) = generation_expr_mode {
-                    is_persisted = matches!(
-                        mode,
-                        sqlparser::ast::GeneratedExpressionMode::Stored
-                    );
+                    is_persisted = matches!(mode, sqlparser::ast::GeneratedExpressionMode::Stored);
                 }
             }
             _ => {}
@@ -611,22 +612,25 @@ fn column_from_def(col: &ColumnDef, schema: &str, table_name: &str) -> ColumnEle
 
     // Check for ROWGUIDCOL - sqlparser doesn't have native support, so check the column options text
     // This is a T-SQL specific feature that may appear in the original SQL
-    let is_rowguidcol = col
-        .options
-        .iter()
-        .any(|opt| format!("{:?}", opt.option).to_uppercase().contains("ROWGUIDCOL"));
+    let is_rowguidcol = col.options.iter().any(|opt| {
+        format!("{:?}", opt.option)
+            .to_uppercase()
+            .contains("ROWGUIDCOL")
+    });
 
     // Check for SPARSE - T-SQL specific feature
-    let is_sparse = col
-        .options
-        .iter()
-        .any(|opt| format!("{:?}", opt.option).to_uppercase().contains("SPARSE"));
+    let is_sparse = col.options.iter().any(|opt| {
+        format!("{:?}", opt.option)
+            .to_uppercase()
+            .contains("SPARSE")
+    });
 
     // Check for FILESTREAM - T-SQL specific feature for VARBINARY(MAX) columns
-    let is_filestream = col
-        .options
-        .iter()
-        .any(|opt| format!("{:?}", opt.option).to_uppercase().contains("FILESTREAM"));
+    let is_filestream = col.options.iter().any(|opt| {
+        format!("{:?}", opt.option)
+            .to_uppercase()
+            .contains("FILESTREAM")
+    });
 
     let (max_length, precision, scale) = extract_type_params(&col.data_type);
 
@@ -671,39 +675,44 @@ fn table_type_column_from_extracted(col: &ExtractedTableTypeColumn) -> TableType
 }
 
 /// Convert an extracted table type constraint to a TableTypeConstraint
-fn table_type_constraint_from_extracted(constraint: &ExtractedTableTypeConstraint) -> TableTypeConstraint {
+fn table_type_constraint_from_extracted(
+    constraint: &ExtractedTableTypeConstraint,
+) -> TableTypeConstraint {
     match constraint {
-        ExtractedTableTypeConstraint::PrimaryKey { columns, is_clustered } => {
-            TableTypeConstraint::PrimaryKey {
-                columns: columns
-                    .iter()
-                    .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
-                    .collect(),
-                is_clustered: *is_clustered,
-            }
-        }
-        ExtractedTableTypeConstraint::Unique { columns, is_clustered } => {
-            TableTypeConstraint::Unique {
-                columns: columns
-                    .iter()
-                    .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
-                    .collect(),
-                is_clustered: *is_clustered,
-            }
-        }
-        ExtractedTableTypeConstraint::Check { expression } => {
-            TableTypeConstraint::Check {
-                expression: expression.clone(),
-            }
-        }
-        ExtractedTableTypeConstraint::Index { name, columns, is_unique, is_clustered } => {
-            TableTypeConstraint::Index {
-                name: name.clone(),
-                columns: columns.clone(),
-                is_unique: *is_unique,
-                is_clustered: *is_clustered,
-            }
-        }
+        ExtractedTableTypeConstraint::PrimaryKey {
+            columns,
+            is_clustered,
+        } => TableTypeConstraint::PrimaryKey {
+            columns: columns
+                .iter()
+                .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
+                .collect(),
+            is_clustered: *is_clustered,
+        },
+        ExtractedTableTypeConstraint::Unique {
+            columns,
+            is_clustered,
+        } => TableTypeConstraint::Unique {
+            columns: columns
+                .iter()
+                .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
+                .collect(),
+            is_clustered: *is_clustered,
+        },
+        ExtractedTableTypeConstraint::Check { expression } => TableTypeConstraint::Check {
+            expression: expression.clone(),
+        },
+        ExtractedTableTypeConstraint::Index {
+            name,
+            columns,
+            is_unique,
+            is_clustered,
+        } => TableTypeConstraint::Index {
+            name: name.clone(),
+            columns: columns.clone(),
+            is_unique: *is_unique,
+            is_clustered: *is_clustered,
+        },
     }
 }
 
@@ -788,12 +797,15 @@ fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option
 }
 
 /// Convert an extracted table column (from fallback parser) to a model column
-fn column_from_fallback_table(col: &ExtractedTableColumn, schema: &str, table_name: &str) -> ColumnElement {
+fn column_from_fallback_table(
+    col: &ExtractedTableColumn,
+    schema: &str,
+    table_name: &str,
+) -> ColumnElement {
     let (max_length, precision, scale) = extract_type_params_from_string(&col.data_type);
 
     // Check if column has inline constraints (default or check)
-    let has_inline_constraint =
-        col.default_value.is_some() || col.check_expression.is_some();
+    let has_inline_constraint = col.default_value.is_some() || col.check_expression.is_some();
 
     // Generate disambiguator from full qualified name hash if column has inline constraints
     let inline_constraint_disambiguator = if has_inline_constraint {
@@ -1025,7 +1037,9 @@ fn is_natively_compiled(definition: &str) -> bool {
 }
 
 /// Convert an extracted extended property to a model ExtendedPropertyElement
-fn extended_property_from_extracted(property: &ExtractedExtendedProperty) -> ExtendedPropertyElement {
+fn extended_property_from_extracted(
+    property: &ExtractedExtendedProperty,
+) -> ExtendedPropertyElement {
     ExtendedPropertyElement {
         property_name: property.property_name.clone(),
         property_value: property.property_value.clone(),

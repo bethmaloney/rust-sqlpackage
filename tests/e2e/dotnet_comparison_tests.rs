@@ -30,8 +30,7 @@ use tempfile::TempDir;
 
 use crate::dacpac_compare::{
     compare_dacpacs, compare_element_inventory, compare_element_properties,
-    compare_with_sqlpackage, extract_model_xml, DacpacModel, Layer1Error,
-    sqlpackage_available,
+    compare_with_sqlpackage, extract_model_xml, sqlpackage_available, DacpacModel, Layer1Error,
 };
 
 // =============================================================================
@@ -436,8 +435,7 @@ fn test_ampersand_encoding() {
 
     // Check for properly encoded ampersands
     let has_encoded_ampersand = rust_xml.contains("&amp;");
-    let has_truncated_names =
-        rust_xml.contains("GetP\"") || rust_xml.contains("Terms\"");
+    let has_truncated_names = rust_xml.contains("GetP\"") || rust_xml.contains("Terms\"");
 
     println!("\n=== Ampersand Encoding Test ===");
     println!("Has encoded ampersands (&amp;): {}", has_encoded_ampersand);

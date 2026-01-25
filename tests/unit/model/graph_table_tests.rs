@@ -64,7 +64,10 @@ CREATE TABLE [dbo].[Employee] (
     // Verify column details
     let emp_id_col = table.columns.iter().find(|c| c.name == "EmployeeId");
     assert!(emp_id_col.is_some(), "Should have EmployeeId column");
-    assert!(!emp_id_col.unwrap().is_nullable, "EmployeeId should be NOT NULL");
+    assert!(
+        !emp_id_col.unwrap().is_nullable,
+        "EmployeeId should be NOT NULL"
+    );
 }
 
 #[test]
@@ -148,7 +151,10 @@ CREATE TABLE [dbo].[WorksFor] (
     // Check nullable properties
     let start_date = table.columns.iter().find(|c| c.name == "StartDate");
     assert!(start_date.is_some());
-    assert!(!start_date.unwrap().is_nullable, "StartDate should be NOT NULL");
+    assert!(
+        !start_date.unwrap().is_nullable,
+        "StartDate should be NOT NULL"
+    );
 
     let end_date = table.columns.iter().find(|c| c.name == "EndDate");
     assert!(end_date.is_some());
@@ -205,8 +211,14 @@ CREATE TABLE [dbo].[NodeConfiguration] (
 
     assert!(table.is_some());
     let table = table.unwrap();
-    assert!(!table.is_node, "Table with NODE in name should not be marked as NODE without AS NODE syntax");
-    assert!(!table.is_edge, "Table with NODE in name should not be marked as EDGE");
+    assert!(
+        !table.is_node,
+        "Table with NODE in name should not be marked as NODE without AS NODE syntax"
+    );
+    assert!(
+        !table.is_edge,
+        "Table with NODE in name should not be marked as EDGE"
+    );
 }
 
 // ============================================================================
@@ -233,13 +245,17 @@ CREATE TABLE [dbo].[AuditLog] (
     let model = parse_and_build_model(sql);
 
     // Find all tables
-    let tables: Vec<_> = model.elements.iter().filter_map(|e| {
-        if let rust_sqlpackage::model::ModelElement::Table(t) = e {
-            Some(t)
-        } else {
-            None
-        }
-    }).collect();
+    let tables: Vec<_> = model
+        .elements
+        .iter()
+        .filter_map(|e| {
+            if let rust_sqlpackage::model::ModelElement::Table(t) = e {
+                Some(t)
+            } else {
+                None
+            }
+        })
+        .collect();
 
     assert_eq!(tables.len(), 3, "Should have 3 tables");
 

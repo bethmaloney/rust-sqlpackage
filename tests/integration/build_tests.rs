@@ -965,7 +965,11 @@ fn test_output_parameter_model_xml_structure() {
     let ctx = TestContext::with_fixture("procedure_parameters");
     let result = ctx.build();
 
-    assert!(result.success, "Build should succeed. Errors: {:?}", result.errors);
+    assert!(
+        result.success,
+        "Build should succeed. Errors: {:?}",
+        result.errors
+    );
 
     let dacpac_path = result.dacpac_path.unwrap();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");

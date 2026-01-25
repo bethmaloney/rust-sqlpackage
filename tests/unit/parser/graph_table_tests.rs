@@ -281,7 +281,11 @@ CREATE TABLE [dbo].[Reviewed] (
     );
 
     let statements = result.unwrap();
-    assert_eq!(statements.len(), 4, "Expected 4 statements (2 nodes, 2 edges)");
+    assert_eq!(
+        statements.len(),
+        4,
+        "Expected 4 statements (2 nodes, 2 edges)"
+    );
 }
 
 // ============================================================================

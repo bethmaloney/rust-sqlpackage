@@ -430,7 +430,9 @@ RETURN
 
     // Verify it's detected as table-valued
     match &statements[0].fallback_type {
-        Some(rust_sqlpackage::parser::FallbackStatementType::Function { function_type, .. }) => {
+        Some(rust_sqlpackage::parser::FallbackStatementType::Function {
+            function_type, ..
+        }) => {
             assert_eq!(
                 *function_type,
                 rust_sqlpackage::parser::FallbackFunctionType::TableValued

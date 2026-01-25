@@ -203,13 +203,22 @@ CREATE TABLE [dbo].[TableWithRowGuid] (
     let rowguid_col = table.columns.iter().find(|c| c.name == "RowGuid");
     assert!(rowguid_col.is_some(), "Should have RowGuid column");
     let rowguid_col = rowguid_col.unwrap();
-    assert!(rowguid_col.is_rowguidcol, "Column should be marked as ROWGUIDCOL");
-    assert!(!rowguid_col.is_nullable, "ROWGUIDCOL column should be NOT NULL");
+    assert!(
+        rowguid_col.is_rowguidcol,
+        "Column should be marked as ROWGUIDCOL"
+    );
+    assert!(
+        !rowguid_col.is_nullable,
+        "ROWGUIDCOL column should be NOT NULL"
+    );
 
     // Non-ROWGUIDCOL columns should not have the flag
     let id_col = table.columns.iter().find(|c| c.name == "Id");
     assert!(id_col.is_some(), "Should have Id column");
-    assert!(!id_col.unwrap().is_rowguidcol, "Id column should not be ROWGUIDCOL");
+    assert!(
+        !id_col.unwrap().is_rowguidcol,
+        "Id column should not be ROWGUIDCOL"
+    );
 }
 
 #[test]
@@ -237,7 +246,10 @@ CREATE TABLE [dbo].[Entities] (
     let guid_col = table.columns.iter().find(|c| c.name == "EntityGuid");
     assert!(guid_col.is_some(), "Should have EntityGuid column");
     let guid_col = guid_col.unwrap();
-    assert!(guid_col.is_rowguidcol, "Column should be marked as ROWGUIDCOL");
+    assert!(
+        guid_col.is_rowguidcol,
+        "Column should be marked as ROWGUIDCOL"
+    );
 }
 
 #[test]
@@ -264,7 +276,11 @@ CREATE TABLE [dbo].[RegularGuid] (
 
     // Neither column should be ROWGUIDCOL
     for col in &table.columns {
-        assert!(!col.is_rowguidcol, "Column {} should not be ROWGUIDCOL", col.name);
+        assert!(
+            !col.is_rowguidcol,
+            "Column {} should not be ROWGUIDCOL",
+            col.name
+        );
     }
 }
 
@@ -338,8 +354,15 @@ CREATE TABLE [dbo].[WideTable] (
     let id_col = table.columns.iter().find(|c| c.name == "Id").unwrap();
     assert!(!id_col.is_sparse, "Id should not be SPARSE");
 
-    let required_col = table.columns.iter().find(|c| c.name == "RequiredField").unwrap();
-    assert!(!required_col.is_sparse, "RequiredField should not be SPARSE");
+    let required_col = table
+        .columns
+        .iter()
+        .find(|c| c.name == "RequiredField")
+        .unwrap();
+    assert!(
+        !required_col.is_sparse,
+        "RequiredField should not be SPARSE"
+    );
 
     // Check sparse columns
     for attr_name in &["Attribute1", "Attribute2", "Attribute3"] {
@@ -455,13 +478,22 @@ CREATE TABLE [dbo].[Documents] (
     let filestream_col = table.columns.iter().find(|c| c.name == "FileData");
     assert!(filestream_col.is_some(), "Should have FileData column");
     let filestream_col = filestream_col.unwrap();
-    assert!(filestream_col.is_filestream, "Column should be marked as FILESTREAM");
-    assert!(filestream_col.is_nullable, "FILESTREAM column should be NULL");
+    assert!(
+        filestream_col.is_filestream,
+        "Column should be marked as FILESTREAM"
+    );
+    assert!(
+        filestream_col.is_nullable,
+        "FILESTREAM column should be NULL"
+    );
 
     // Non-FILESTREAM columns should not have the flag
     let id_col = table.columns.iter().find(|c| c.name == "Id");
     assert!(id_col.is_some(), "Should have Id column");
-    assert!(!id_col.unwrap().is_filestream, "Id column should not be FILESTREAM");
+    assert!(
+        !id_col.unwrap().is_filestream,
+        "Id column should not be FILESTREAM"
+    );
 }
 
 #[test]
@@ -489,8 +521,14 @@ CREATE TABLE [dbo].[RequiredFiles] (
     let content_col = table.columns.iter().find(|c| c.name == "Content");
     assert!(content_col.is_some(), "Should have Content column");
     let content_col = content_col.unwrap();
-    assert!(content_col.is_filestream, "Column should be marked as FILESTREAM");
-    assert!(!content_col.is_nullable, "FILESTREAM column should be NOT NULL");
+    assert!(
+        content_col.is_filestream,
+        "Column should be marked as FILESTREAM"
+    );
+    assert!(
+        !content_col.is_nullable,
+        "FILESTREAM column should be NOT NULL"
+    );
 }
 
 #[test]
@@ -554,7 +592,11 @@ CREATE TABLE [dbo].[RegularBinary] (
 
     // Neither column should be FILESTREAM
     for col in &table.columns {
-        assert!(!col.is_filestream, "Column {} should not be FILESTREAM", col.name);
+        assert!(
+            !col.is_filestream,
+            "Column {} should not be FILESTREAM",
+            col.name
+        );
     }
 }
 
@@ -586,18 +628,30 @@ CREATE TABLE [dbo].[MediaFiles] (
     // Check FILESTREAM columns
     let thumbnail = table.columns.iter().find(|c| c.name == "Thumbnail");
     assert!(thumbnail.is_some(), "Should have Thumbnail column");
-    assert!(thumbnail.unwrap().is_filestream, "Thumbnail should be FILESTREAM");
+    assert!(
+        thumbnail.unwrap().is_filestream,
+        "Thumbnail should be FILESTREAM"
+    );
 
     let fullsize = table.columns.iter().find(|c| c.name == "FullSize");
     assert!(fullsize.is_some(), "Should have FullSize column");
-    assert!(fullsize.unwrap().is_filestream, "FullSize should be FILESTREAM");
+    assert!(
+        fullsize.unwrap().is_filestream,
+        "FullSize should be FILESTREAM"
+    );
 
     // Non-FILESTREAM columns
     let id_col = table.columns.iter().find(|c| c.name == "Id");
     assert!(id_col.is_some(), "Should have Id column");
-    assert!(!id_col.unwrap().is_filestream, "Id should not be FILESTREAM");
+    assert!(
+        !id_col.unwrap().is_filestream,
+        "Id should not be FILESTREAM"
+    );
 
     let name_col = table.columns.iter().find(|c| c.name == "Name");
     assert!(name_col.is_some(), "Should have Name column");
-    assert!(!name_col.unwrap().is_filestream, "Name should not be FILESTREAM");
+    assert!(
+        !name_col.unwrap().is_filestream,
+        "Name should not be FILESTREAM"
+    );
 }

@@ -326,7 +326,10 @@ END
 
     // Verify defaults and OUTPUT are preserved
     let sql_text = &statements[0].sql_text;
-    assert!(sql_text.contains("= 2"), "Should preserve default value = 2");
+    assert!(
+        sql_text.contains("= 2"),
+        "Should preserve default value = 2"
+    );
     assert!(
         sql_text.contains("'Pending'"),
         "Should preserve default value 'Pending'"

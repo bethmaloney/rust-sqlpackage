@@ -729,10 +729,7 @@ REBUILD WITH (ONLINE = ON);
         let statements = result.unwrap();
         assert_eq!(statements.len(), 1);
     } else {
-        println!(
-            "Note: ALTER INDEX ALL not supported: {:?}",
-            result.err()
-        );
+        println!("Note: ALTER INDEX ALL not supported: {:?}", result.err());
     }
 }
 

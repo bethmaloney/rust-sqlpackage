@@ -138,11 +138,7 @@ WHEN NOT MATCHED THEN
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(
-        result.is_ok(),
-        "Failed to parse MERGE: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Failed to parse MERGE: {:?}", result.err());
 }
 
 #[test]
@@ -604,11 +600,7 @@ PIVOT (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    assert!(
-        result.is_ok(),
-        "Failed to parse PIVOT: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Failed to parse PIVOT: {:?}", result.err());
 }
 
 #[test]
@@ -715,7 +707,10 @@ FROM [dbo].[JsonDocuments];
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
     assert!(
-        matches!(&statements[0].statement, Some(sqlparser::ast::Statement::Query(_))),
+        matches!(
+            &statements[0].statement,
+            Some(sqlparser::ast::Statement::Query(_))
+        ),
         "Expected SELECT query statement"
     );
 }
@@ -773,7 +768,10 @@ FROM [dbo].[JsonDocuments];
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
     assert!(
-        matches!(&statements[0].statement, Some(sqlparser::ast::Statement::Query(_))),
+        matches!(
+            &statements[0].statement,
+            Some(sqlparser::ast::Statement::Query(_))
+        ),
         "Expected SELECT query statement"
     );
 }
@@ -828,7 +826,10 @@ WHERE [Id] = 1;
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
     assert!(
-        matches!(&statements[0].statement, Some(sqlparser::ast::Statement::Update { .. })),
+        matches!(
+            &statements[0].statement,
+            Some(sqlparser::ast::Statement::Update { .. })
+        ),
         "Expected UPDATE statement"
     );
 }
@@ -853,7 +854,10 @@ WHERE [Id] = 1;
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
     assert!(
-        matches!(&statements[0].statement, Some(sqlparser::ast::Statement::Update { .. })),
+        matches!(
+            &statements[0].statement,
+            Some(sqlparser::ast::Statement::Update { .. })
+        ),
         "Expected UPDATE statement"
     );
 }
@@ -904,7 +908,10 @@ FROM [dbo].[Documents];
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
     assert!(
-        matches!(&statements[0].statement, Some(sqlparser::ast::Statement::Query(_))),
+        matches!(
+            &statements[0].statement,
+            Some(sqlparser::ast::Statement::Query(_))
+        ),
         "Expected SELECT query statement"
     );
 }
@@ -962,7 +969,10 @@ CROSS APPLY OPENJSON(d.[Data], '$.items') j;
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
     assert!(
-        matches!(&statements[0].statement, Some(sqlparser::ast::Statement::Query(_))),
+        matches!(
+            &statements[0].statement,
+            Some(sqlparser::ast::Statement::Query(_))
+        ),
         "Expected SELECT query statement"
     );
 }
@@ -1028,7 +1038,10 @@ WITH (
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
     assert!(
-        matches!(&statements[0].statement, Some(sqlparser::ast::Statement::Query(_))),
+        matches!(
+            &statements[0].statement,
+            Some(sqlparser::ast::Statement::Query(_))
+        ),
         "Expected SELECT query statement"
     );
 }
@@ -1199,7 +1212,10 @@ FOR JSON PATH;
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
     assert!(
-        matches!(&statements[0].statement, Some(sqlparser::ast::Statement::Query(_))),
+        matches!(
+            &statements[0].statement,
+            Some(sqlparser::ast::Statement::Query(_))
+        ),
         "Expected SELECT query statement"
     );
 }
@@ -1233,7 +1249,10 @@ FOR JSON PATH;
     assert!(sql_text.contains("JSON_VALUE"), "Should contain JSON_VALUE");
     assert!(sql_text.contains("JSON_QUERY"), "Should contain JSON_QUERY");
     assert!(sql_text.contains("ISJSON"), "Should contain ISJSON");
-    assert!(sql_text.contains("FOR JSON PATH"), "Should contain FOR JSON PATH");
+    assert!(
+        sql_text.contains("FOR JSON PATH"),
+        "Should contain FOR JSON PATH"
+    );
 }
 
 #[test]
@@ -1257,7 +1276,10 @@ FROM [dbo].[Documents];
     let statements = result.unwrap();
     assert_eq!(statements.len(), 1);
     assert!(
-        matches!(&statements[0].statement, Some(sqlparser::ast::Statement::Query(_))),
+        matches!(
+            &statements[0].statement,
+            Some(sqlparser::ast::Statement::Query(_))
+        ),
         "Expected SELECT query statement"
     );
 }

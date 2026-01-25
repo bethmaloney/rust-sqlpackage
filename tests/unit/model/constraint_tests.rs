@@ -112,7 +112,10 @@ CREATE TABLE [dbo].[T] (
     let status_col = table.columns.iter().find(|c| c.name == "Status");
     assert!(status_col.is_some());
     assert!(
-        status_col.unwrap().inline_constraint_disambiguator.is_some(),
+        status_col
+            .unwrap()
+            .inline_constraint_disambiguator
+            .is_some(),
         "Status column should have inline constraint annotation due to DEFAULT"
     );
 }

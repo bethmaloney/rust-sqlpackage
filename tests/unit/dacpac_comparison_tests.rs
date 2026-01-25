@@ -425,9 +425,10 @@ CREATE TYPE [dbo].[IdListType] AS TABLE (
         let project = create_test_project();
         if let Ok(model) = rust_sqlpackage::model::build_model(&statements, &project) {
             // Check if we have any table type elements
-            let has_table_type = model.elements.iter().any(|e| {
-                matches!(e, rust_sqlpackage::model::ModelElement::UserDefinedType(_))
-            });
+            let has_table_type = model
+                .elements
+                .iter()
+                .any(|e| matches!(e, rust_sqlpackage::model::ModelElement::UserDefinedType(_)));
 
             // Document current behavior
             println!(

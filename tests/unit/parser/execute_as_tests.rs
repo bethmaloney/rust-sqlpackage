@@ -526,7 +526,9 @@ END
 
     let statements = result.unwrap();
     assert!(
-        statements[0].sql_text.contains("EXECUTE AS 'DOMAIN\\ServiceAccount'"),
+        statements[0]
+            .sql_text
+            .contains("EXECUTE AS 'DOMAIN\\ServiceAccount'"),
         "SQL text should preserve EXECUTE AS with domain user"
     );
 }

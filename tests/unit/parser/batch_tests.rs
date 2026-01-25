@@ -484,10 +484,7 @@ CREATE TABLE [dbo].[日本語テーブル] (
 fn test_parse_very_long_identifier() {
     // SQL Server allows identifiers up to 128 characters
     let long_name = "A".repeat(128);
-    let sql = format!(
-        "CREATE TABLE [dbo].[{}] ([Id] INT);",
-        long_name
-    );
+    let sql = format!("CREATE TABLE [dbo].[{}] ([Id] INT);", long_name);
     let file = create_sql_file(&sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());

@@ -704,7 +704,11 @@ CREATE NONCLUSTERED INDEX [IX_IndexedGuidTable_ExternalId] ON [dbo].[IndexedGuid
     );
 
     let statements = result.unwrap();
-    assert_eq!(statements.len(), 2, "Should have table and index statements");
+    assert_eq!(
+        statements.len(),
+        2,
+        "Should have table and index statements"
+    );
 }
 
 // ============================================================================

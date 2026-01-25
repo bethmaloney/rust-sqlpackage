@@ -92,8 +92,8 @@ impl DacpacModel {
 
     /// Parse model.xml content
     pub fn from_xml(xml: &str) -> Result<Self, String> {
-        let doc = roxmltree::Document::parse(xml)
-            .map_err(|e| format!("Failed to parse XML: {}", e))?;
+        let doc =
+            roxmltree::Document::parse(xml).map_err(|e| format!("Failed to parse XML: {}", e))?;
 
         let root = doc.root_element();
         let model_node = root
@@ -139,7 +139,10 @@ impl DacpacModel {
 
     /// Get all unique element types
     pub fn element_types(&self) -> BTreeSet<String> {
-        self.elements.iter().map(|e| e.element_type.clone()).collect()
+        self.elements
+            .iter()
+            .map(|e| e.element_type.clone())
+            .collect()
     }
 
     /// Get all named elements as (type, name) pairs
@@ -152,10 +155,7 @@ impl DacpacModel {
 }
 
 fn parse_element(node: &roxmltree::Node) -> ModelElement {
-    let element_type = node
-        .attribute("Type")
-        .unwrap_or("Unknown")
-        .to_string();
+    let element_type = node.attribute("Type").unwrap_or("Unknown").to_string();
     let name = node.attribute("Name").map(|s| s.to_string());
 
     let mut properties = BTreeMap::new();
@@ -188,8 +188,7 @@ fn parse_element(node: &roxmltree::Node) -> ModelElement {
 
 /// Extract model.xml from a dacpac
 pub fn extract_model_xml(dacpac_path: &Path) -> Result<String, String> {
-    let file =
-        fs::File::open(dacpac_path).map_err(|e| format!("Failed to open dacpac: {}", e))?;
+    let file = fs::File::open(dacpac_path).map_err(|e| format!("Failed to open dacpac: {}", e))?;
 
     let mut archive =
         ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
@@ -359,10 +358,7 @@ pub fn sqlpackage_available() -> bool {
 
 /// Compare dacpacs using SqlPackage DeployReport
 /// This generates a deployment script from source to target - if empty, they're equivalent
-pub fn compare_with_sqlpackage(
-    source_dacpac: &Path,
-    target_dacpac: &Path,
-) -> Layer3Result {
+pub fn compare_with_sqlpackage(source_dacpac: &Path, target_dacpac: &Path) -> Layer3Result {
     if !sqlpackage_available() {
         return Layer3Result {
             has_differences: false,
@@ -422,7 +418,7 @@ fn script_has_schema_changes(script: &str) -> bool {
         .filter(|l| !l.starts_with("/*"))
         .filter(|l| !l.starts_with("PRINT"))
         .filter(|l| !l.starts_with("GO"))
-        .filter(|l| !l.starts_with(":"))  // SQLCMD variables
+        .filter(|l| !l.starts_with(":")) // SQLCMD variables
         .filter(|l| !l.starts_with("SET "))
         .filter(|l| !l.starts_with("USE "))
         .collect();
@@ -512,7 +508,10 @@ impl ComparisonResult {
     pub fn is_success(&self) -> bool {
         self.layer1_errors.is_empty()
             && self.layer2_errors.is_empty()
-            && self.layer3_result.as_ref().map_or(true, |r| !r.has_differences)
+            && self
+                .layer3_result
+                .as_ref()
+                .map_or(true, |r| !r.has_differences)
     }
 
     pub fn print_report(&self) {
