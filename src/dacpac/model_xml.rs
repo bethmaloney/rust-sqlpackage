@@ -762,7 +762,8 @@ fn extract_function_body(definition: &str) -> String {
 }
 
 /// Extract the header part from a CREATE FUNCTION definition
-/// Returns everything up to and including AS (CREATE FUNCTION [name](...) RETURNS type AS)
+/// Returns everything up to and including AS (CREATE FUNCTION [name](...) RETURNS type AS\n)
+/// Preserves trailing whitespace after AS to ensure proper separation from body
 fn extract_function_header(definition: &str) -> String {
     let def_upper = definition.to_uppercase();
 
@@ -772,10 +773,11 @@ fn extract_function_header(definition: &str) -> String {
         // Find AS keyword
         let as_regex = regex::Regex::new(r"(?i)[\s\n]AS[\s\n]").unwrap();
         if let Some(m) = as_regex.find(after_returns) {
-            // Calculate absolute position in original string (include the AS)
+            // Calculate absolute position in original string (include the AS and trailing whitespace)
             let abs_as_end = returns_pos + m.end();
-            // Return everything up to and including AS, trimmed
-            return definition[..abs_as_end].trim().to_string();
+            // Return everything up to and including AS with trailing whitespace
+            // Use trim_start() to only remove leading whitespace, preserving trailing newline
+            return definition[..abs_as_end].trim_start().to_string();
         }
     }
 

@@ -1183,6 +1183,49 @@ END
 }
 
 #[test]
+fn test_scalar_function_header_ends_with_whitespace() {
+    // The header must end with whitespace (newline) after AS so that when
+    // SqlPackage concatenates header + body, we get "AS\nBEGIN" not "ASBEGIN"
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetValue]()
+RETURNS INT
+AS
+BEGIN
+    RETURN 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Extract HeaderContents value
+    // The pattern is: <Property Name="HeaderContents" Value="..."/>
+    let header_start = xml
+        .find(r#"<Property Name="HeaderContents" Value=""#)
+        .expect("Should have HeaderContents property");
+    let value_start = header_start + r#"<Property Name="HeaderContents" Value=""#.len();
+    let value_end = xml[value_start..]
+        .find(r#""/>"#)
+        .expect("Should find end of HeaderContents");
+    let header_value = &xml[value_start..value_start + value_end];
+
+    // Header should end with newline (encoded as &#xD;&#xA; or &#xA; in XML)
+    // or at minimum should end with AS followed by whitespace
+    assert!(
+        header_value.ends_with("&#xA;")
+            || header_value.ends_with("&#xD;&#xA;")
+            || header_value.ends_with("\n"),
+        "HeaderContents should end with newline after AS to prevent ASBEGIN. Got: {:?}",
+        header_value
+    );
+
+    // Also verify the header contains "AS" near the end (not trimmed off)
+    assert!(
+        header_value.contains("AS"),
+        "HeaderContents should contain AS keyword. Got: {:?}",
+        header_value
+    );
+}
+
+#[test]
 fn test_scalar_function_has_ansi_nulls_property() {
     // Scalar functions should have IsAnsiNullsOn property
     let sql = r#"

@@ -449,7 +449,9 @@ fn test_ampersand_encoding() {
     );
 }
 
-/// Test for index naming (no double brackets)
+/// Test for index naming (no double brackets in element names)
+/// Note: Double brackets can legitimately appear in CDATA sections (e.g., check constraints
+/// like `[Price] >= 0`), so we only check element Name attributes.
 #[test]
 #[ignore = "Requires dotnet SDK"]
 fn test_index_naming() {
@@ -475,14 +477,32 @@ fn test_index_naming() {
 
     let rust_xml = extract_model_xml(&rust_dacpac).expect("Extract model.xml");
 
-    let has_double_brackets = rust_xml.contains("[[") || rust_xml.contains("]]");
+    // Check for double brackets only in element Name attributes, not in CDATA content
+    // CDATA sections legitimately contain brackets for check constraints like `[Price] >= 0`
+    let name_pattern = regex::Regex::new(r#"Name="([^"]+)""#).unwrap();
+    let mut double_bracket_names = Vec::new();
+
+    for cap in name_pattern.captures_iter(&rust_xml) {
+        let name = &cap[1];
+        if name.contains("[[") || name.contains("]]") {
+            double_bracket_names.push(name.to_string());
+        }
+    }
 
     println!("\n=== Index Naming Test ===");
-    println!("Has double brackets: {}", has_double_brackets);
+    println!(
+        "Names with double brackets: {}",
+        if double_bracket_names.is_empty() {
+            "none".to_string()
+        } else {
+            double_bracket_names.join(", ")
+        }
+    );
 
     assert!(
-        !has_double_brackets,
-        "Index names should not have double brackets"
+        double_bracket_names.is_empty(),
+        "Element names should not have double brackets. Found: {:?}",
+        double_bracket_names
     );
 }
 
