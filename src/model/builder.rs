@@ -513,9 +513,14 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 
             // Handle EXEC statements (for sp_addextendedproperty)
             Statement::Execute { name, .. } => {
-                // Check if this is sp_addextendedproperty
-                let proc_name = name.0.iter().map(|p| p.value.as_str()).collect::<Vec<_>>().join(".");
-                if proc_name.to_lowercase() == "sp_addextendedproperty" {
+                // Check if this is sp_addextendedproperty (with or without sys. prefix)
+                let parts: Vec<_> = name.0.iter().map(|p| p.value.to_lowercase()).collect();
+                let is_sp_addextendedproperty = match parts.as_slice() {
+                    [proc] => proc == "sp_addextendedproperty",
+                    [schema, proc] => schema == "sys" && proc == "sp_addextendedproperty",
+                    _ => false,
+                };
+                if is_sp_addextendedproperty {
                     // Use the original SQL text to extract the extended property
                     if let Some(property) = crate::parser::extract_extended_property_from_sql(&parsed.sql_text) {
                         if property.level1name.is_some() {
