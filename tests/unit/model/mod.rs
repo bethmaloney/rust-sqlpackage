@@ -41,6 +41,7 @@ pub fn create_test_project() -> rust_sqlpackage::project::SqlProject {
         post_deploy_script: None,
         ansi_nulls: true,
         quoted_identifier: true,
+        database_options: rust_sqlpackage::project::DatabaseOptions::default(),
     }
 }
 

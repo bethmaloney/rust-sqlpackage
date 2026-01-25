@@ -456,7 +456,6 @@ fn test_build_with_package_references() {
 // ============================================================================
 
 #[test]
-#[ignore = "SqlDatabaseOptions not yet implemented"]
 fn test_build_with_database_options() {
     let ctx = TestContext::with_fixture("database_options");
     let result = ctx.build();

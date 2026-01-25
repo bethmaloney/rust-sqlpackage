@@ -83,6 +83,42 @@ pub struct PackageReference {
     pub version: String,
 }
 
+/// Database options from sqlproj PropertyGroup
+#[derive(Debug, Clone)]
+pub struct DatabaseOptions {
+    /// Default collation (e.g., "Latin1_General_CI_AS")
+    pub collation: Option<String>,
+    /// Page verify mode (e.g., "CHECKSUM", "TORN_PAGE_DETECTION", "NONE")
+    pub page_verify: Option<String>,
+    /// ANSI_NULL_DEFAULT ON/OFF setting
+    pub ansi_null_default_on: bool,
+    /// ANSI_NULLS ON/OFF setting
+    pub ansi_nulls_on: bool,
+    /// ANSI_WARNINGS ON/OFF setting
+    pub ansi_warnings_on: bool,
+    /// ARITHABORT ON/OFF setting
+    pub arith_abort_on: bool,
+    /// CONCAT_NULL_YIELDS_NULL ON/OFF setting
+    pub concat_null_yields_null_on: bool,
+    /// Full-text enabled
+    pub full_text_enabled: bool,
+}
+
+impl Default for DatabaseOptions {
+    fn default() -> Self {
+        Self {
+            collation: None,
+            page_verify: Some("CHECKSUM".to_string()),
+            ansi_null_default_on: true,
+            ansi_nulls_on: true,
+            ansi_warnings_on: true,
+            arith_abort_on: true,
+            concat_null_yields_null_on: true,
+            full_text_enabled: false,
+        }
+    }
+}
+
 /// Parsed SQL project
 #[derive(Debug, Clone)]
 pub struct SqlProject {
@@ -110,6 +146,8 @@ pub struct SqlProject {
     pub ansi_nulls: bool,
     /// QUOTED_IDENTIFIER setting (default: true)
     pub quoted_identifier: bool,
+    /// Database options from sqlproj
+    pub database_options: DatabaseOptions,
 }
 
 /// Parse a .sqlproj file
@@ -158,6 +196,9 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(true);
 
+    // Parse database options
+    let database_options = parse_database_options(&root);
+
     // Find all SQL files
     let sql_files = find_sql_files(&root, &project_dir)?;
 
@@ -183,7 +224,55 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         post_deploy_script,
         ansi_nulls,
         quoted_identifier,
+        database_options,
     })
+}
+
+/// Parse database options from sqlproj PropertyGroup
+fn parse_database_options(root: &roxmltree::Node) -> DatabaseOptions {
+    let mut options = DatabaseOptions::default();
+
+    // DefaultCollation (e.g., "Latin1_General_CI_AS")
+    if let Some(collation) = find_property_value(root, "DefaultCollation") {
+        options.collation = Some(collation);
+    }
+
+    // PageVerify (e.g., "CHECKSUM", "TORN_PAGE_DETECTION", "NONE")
+    if let Some(page_verify) = find_property_value(root, "PageVerify") {
+        options.page_verify = Some(page_verify);
+    }
+
+    // AnsiNullDefaultOn (default: true)
+    if let Some(val) = find_property_value(root, "AnsiNullDefaultOn") {
+        options.ansi_null_default_on = val.eq_ignore_ascii_case("true");
+    }
+
+    // AnsiNullsOn (default: true)
+    if let Some(val) = find_property_value(root, "AnsiNullsOn") {
+        options.ansi_nulls_on = val.eq_ignore_ascii_case("true");
+    }
+
+    // AnsiWarningsOn (default: true)
+    if let Some(val) = find_property_value(root, "AnsiWarningsOn") {
+        options.ansi_warnings_on = val.eq_ignore_ascii_case("true");
+    }
+
+    // ArithAbortOn (default: true)
+    if let Some(val) = find_property_value(root, "ArithAbortOn") {
+        options.arith_abort_on = val.eq_ignore_ascii_case("true");
+    }
+
+    // ConcatNullYieldsNullOn (default: true)
+    if let Some(val) = find_property_value(root, "ConcatNullYieldsNullOn") {
+        options.concat_null_yields_null_on = val.eq_ignore_ascii_case("true");
+    }
+
+    // FullTextEnabled (default: false)
+    if let Some(val) = find_property_value(root, "FullTextEnabled") {
+        options.full_text_enabled = val.eq_ignore_ascii_case("true");
+    }
+
+    options
 }
 
 fn find_property_value(root: &roxmltree::Node, property_name: &str) -> Option<String> {

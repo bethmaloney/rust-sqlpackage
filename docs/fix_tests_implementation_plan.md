@@ -5,8 +5,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 ## Summary
 
 - **Total Ignored Tests**: 12
-- **Fixed**: 9
-- **Remaining**: 3
+- **Fixed**: 10
+- **Remaining**: 2
 
 ## Test Fixes
 
@@ -137,17 +137,20 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 
 ### 10. Database Options
 
-- [ ] **Test**: `test_build_with_database_options`
-- **Ignore Reason**: SqlDatabaseOptions not yet implemented
-- **Impact**: 1 missing SqlDatabaseOptions element
-- **Files to Modify**:
-  - `src/project/mod.rs` - Extract database options from sqlproj
-  - `src/model/mod.rs` - Add DatabaseOptions struct
-  - `src/dacpac/xml.rs` - Generate SqlDatabaseOptions element
-- **Implementation Notes**:
-  - Properties: IsAnsiNullsOn, PageVerifyMode, Collation, etc.
-  - Comes from sqlproj PropertyGroup settings
-  - Single element per database
+- [x] **Test**: `test_build_with_database_options`
+- **Status**: ✅ FIXED - SqlDatabaseOptions element now generated correctly
+- **Notes**: Database options from sqlproj PropertyGroup are now parsed and serialized.
+  The implementation:
+  - Added `DatabaseOptions` struct to `src/project/sqlproj_parser.rs` to capture settings:
+    - `collation` - DefaultCollation from sqlproj
+    - `page_verify` - PageVerify mode (CHECKSUM, TORN_PAGE_DETECTION, NONE)
+    - `ansi_null_default_on`, `ansi_nulls_on`, `ansi_warnings_on`, `arith_abort_on`
+    - `concat_null_yields_null_on`, `full_text_enabled`
+  - `parse_database_options()` function extracts these settings from sqlproj XML
+  - `write_database_options()` in `src/dacpac/model_xml.rs` generates `SqlDatabaseOptions` element
+  - Properties include: Collation, IsAnsiNullDefaultOn, IsAnsiNullsOn, IsAnsiWarningsOn,
+    IsArithAbortOn, IsConcatNullYieldsNullOn, IsFullTextEnabled, PageVerifyMode
+  - PageVerify strings are converted to numeric values (NONE=0, TORN_PAGE_DETECTION=1, CHECKSUM=3)
 - **Fixture**: `tests/fixtures/database_options/`
 
 ---
@@ -233,4 +236,4 @@ After fixing each test:
 
 ---
 
-*Last updated: 2026-01-25*
+*Last updated: 2026-01-25 (Database Options implemented)*

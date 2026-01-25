@@ -66,6 +66,9 @@ pub fn generate_model_xml<W: Write>(
     // Model element
     xml_writer.write_event(Event::Start(BytesStart::new("Model")))?;
 
+    // Write SqlDatabaseOptions element first
+    write_database_options(&mut xml_writer, project)?;
+
     // Write each element
     for element in &model.elements {
         write_element(&mut xml_writer, element)?;
@@ -191,6 +194,93 @@ fn write_custom_data<W: Write>(
     writer.write_event(Event::Empty(metadata))?;
 
     writer.write_event(Event::End(BytesEnd::new("CustomData")))?;
+    Ok(())
+}
+
+/// Write the SqlDatabaseOptions element
+/// Format:
+/// ```xml
+/// <Element Type="SqlDatabaseOptions">
+///   <Property Name="Collation" Value="Latin1_General_CI_AS"/>
+///   <Property Name="IsAnsiNullDefaultOn" Value="True"/>
+///   <Property Name="IsAnsiNullsOn" Value="True"/>
+///   <Property Name="IsAnsiWarningsOn" Value="True"/>
+///   <Property Name="IsArithAbortOn" Value="True"/>
+///   <Property Name="IsConcatNullYieldsNullOn" Value="True"/>
+///   <Property Name="IsFullTextEnabled" Value="False"/>
+///   <Property Name="PageVerifyMode" Value="3"/>
+/// </Element>
+/// ```
+fn write_database_options<W: Write>(
+    writer: &mut Writer<W>,
+    project: &SqlProject,
+) -> anyhow::Result<()> {
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlDatabaseOptions"));
+    writer.write_event(Event::Start(elem))?;
+
+    let db_options = &project.database_options;
+
+    // Collation (if specified)
+    if let Some(ref collation) = db_options.collation {
+        write_property(writer, "Collation", collation)?;
+    }
+
+    // IsAnsiNullDefaultOn
+    write_property(
+        writer,
+        "IsAnsiNullDefaultOn",
+        if db_options.ansi_null_default_on { "True" } else { "False" },
+    )?;
+
+    // IsAnsiNullsOn
+    write_property(
+        writer,
+        "IsAnsiNullsOn",
+        if db_options.ansi_nulls_on { "True" } else { "False" },
+    )?;
+
+    // IsAnsiWarningsOn
+    write_property(
+        writer,
+        "IsAnsiWarningsOn",
+        if db_options.ansi_warnings_on { "True" } else { "False" },
+    )?;
+
+    // IsArithAbortOn
+    write_property(
+        writer,
+        "IsArithAbortOn",
+        if db_options.arith_abort_on { "True" } else { "False" },
+    )?;
+
+    // IsConcatNullYieldsNullOn
+    write_property(
+        writer,
+        "IsConcatNullYieldsNullOn",
+        if db_options.concat_null_yields_null_on { "True" } else { "False" },
+    )?;
+
+    // IsFullTextEnabled
+    write_property(
+        writer,
+        "IsFullTextEnabled",
+        if db_options.full_text_enabled { "True" } else { "False" },
+    )?;
+
+    // PageVerifyMode (convert string to numeric value for DacFx compatibility)
+    // NONE = 0, TORN_PAGE_DETECTION = 1, CHECKSUM = 3
+    if let Some(ref page_verify) = db_options.page_verify {
+        let mode_value = match page_verify.to_uppercase().as_str() {
+            "NONE" => "0",
+            "TORN_PAGE_DETECTION" => "1",
+            "CHECKSUM" => "3",
+            _ => "3", // Default to CHECKSUM
+        };
+        write_property(writer, "PageVerifyMode", mode_value)?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
 }
 
