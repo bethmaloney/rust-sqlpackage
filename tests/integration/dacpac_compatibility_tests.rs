@@ -75,7 +75,6 @@ fn test_build_with_fulltext_index() {
 // ============================================================================
 
 #[test]
-#[ignore = "SqlTableType column structure not yet implemented"]
 fn test_build_with_table_types() {
     let ctx = TestContext::with_fixture("table_types");
     let result = ctx.build();

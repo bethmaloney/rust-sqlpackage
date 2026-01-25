@@ -289,7 +289,43 @@ pub struct UserDefinedTypeElement {
     pub name: String,
     pub definition: String,
     /// Columns for table types (if parsed)
-    pub columns: Vec<ColumnElement>,
+    pub columns: Vec<TableTypeColumnElement>,
+    /// Constraints for table types (PRIMARY KEY, UNIQUE, CHECK, INDEX)
+    pub constraints: Vec<TableTypeConstraint>,
+}
+
+/// Column element for table types
+#[derive(Debug, Clone)]
+pub struct TableTypeColumnElement {
+    pub name: String,
+    pub data_type: String,
+    pub is_nullable: bool,
+    pub default_value: Option<String>,
+    pub max_length: Option<i32>,
+    pub precision: Option<u8>,
+    pub scale: Option<u8>,
+}
+
+/// Constraint for table types
+#[derive(Debug, Clone)]
+pub enum TableTypeConstraint {
+    PrimaryKey {
+        columns: Vec<ConstraintColumn>,
+        is_clustered: bool,
+    },
+    Unique {
+        columns: Vec<ConstraintColumn>,
+        is_clustered: bool,
+    },
+    Check {
+        expression: String,
+    },
+    Index {
+        name: String,
+        columns: Vec<String>,
+        is_unique: bool,
+        is_clustered: bool,
+    },
 }
 
 /// Generic raw element for statements that couldn't be fully parsed

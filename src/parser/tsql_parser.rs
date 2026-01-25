@@ -65,6 +65,30 @@ pub struct ExtractedTableTypeColumn {
     pub data_type: String,
     /// Whether the column is nullable
     pub is_nullable: bool,
+    /// Default value expression (if any)
+    pub default_value: Option<String>,
+}
+
+/// A constraint extracted from a table type definition
+#[derive(Debug, Clone)]
+pub enum ExtractedTableTypeConstraint {
+    PrimaryKey {
+        columns: Vec<ExtractedConstraintColumn>,
+        is_clustered: bool,
+    },
+    Unique {
+        columns: Vec<ExtractedConstraintColumn>,
+        is_clustered: bool,
+    },
+    Check {
+        expression: String,
+    },
+    Index {
+        name: String,
+        columns: Vec<String>,
+        is_unique: bool,
+        is_clustered: bool,
+    },
 }
 
 /// A parameter extracted from a function definition
@@ -208,6 +232,7 @@ pub enum FallbackStatementType {
         schema: String,
         name: String,
         columns: Vec<ExtractedTableTypeColumn>,
+        constraints: Vec<ExtractedTableTypeConstraint>,
     },
     /// Fallback for CREATE TABLE statements with T-SQL syntax not supported by sqlparser
     Table {
@@ -470,11 +495,12 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for CREATE TYPE (user-defined table types)
     if sql_upper.contains("CREATE TYPE") {
         if let Some((schema, name)) = extract_type_name(sql) {
-            let columns = extract_table_type_columns(sql);
+            let (columns, constraints) = extract_table_type_structure(sql);
             return Some(FallbackStatementType::UserDefinedType {
                 schema,
                 name,
                 columns,
+                constraints,
             });
         }
     }
@@ -826,22 +852,23 @@ fn extract_type_name(sql: &str) -> Option<(String, String)> {
     Some((schema, name))
 }
 
-/// Extract columns from a table type definition
-fn extract_table_type_columns(sql: &str) -> Vec<ExtractedTableTypeColumn> {
+/// Extract columns and constraints from a table type definition
+fn extract_table_type_structure(sql: &str) -> (Vec<ExtractedTableTypeColumn>, Vec<ExtractedTableTypeConstraint>) {
     let mut columns = Vec::new();
+    let mut constraints = Vec::new();
 
     // Find the content between AS TABLE ( and the closing )
     let sql_upper = sql.to_uppercase();
     let start = match sql_upper.find("AS TABLE") {
         Some(idx) => idx + "AS TABLE".len(),
-        None => return columns,
+        None => return (columns, constraints),
     };
 
     // Find the opening paren after AS TABLE
     let remaining = &sql[start..];
     let paren_start = match remaining.find('(') {
         Some(idx) => start + idx + 1,
-        None => return columns,
+        None => return (columns, constraints),
     };
 
     // Find the matching closing paren (handle nested parens for types like DECIMAL(18,2))
@@ -862,68 +889,127 @@ fn extract_table_type_columns(sql: &str) -> Vec<ExtractedTableTypeColumn> {
     }
 
     if paren_end <= paren_start {
-        return columns;
+        return (columns, constraints);
     }
 
-    let columns_str = &sql[paren_start..paren_end];
+    let body_str = &sql[paren_start..paren_end];
 
     // Split by commas, handling nested parens
-    let mut col_parts = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0;
-    for c in columns_str.chars() {
-        match c {
-            '(' => {
-                depth += 1;
-                current.push(c);
-            }
-            ')' => {
-                depth -= 1;
-                current.push(c);
-            }
-            ',' if depth == 0 => {
-                col_parts.push(current.trim().to_string());
-                current = String::new();
-            }
-            _ => current.push(c),
+    let parts = split_by_top_level_comma(body_str);
+
+    for part in parts {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
         }
-    }
-    if !current.trim().is_empty() {
-        col_parts.push(current.trim().to_string());
-    }
 
-    // Parse each column definition
-    // Pattern: [ColumnName] DataType [NULL|NOT NULL]
-    let col_re =
-        regex::Regex::new(r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)\s*(NOT\s+NULL|NULL)?")
-            .unwrap();
+        let upper = trimmed.to_uppercase();
 
-    for part in col_parts {
-        if let Some(caps) = col_re.captures(&part) {
-            let name = caps
-                .get(1)
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_default();
-            let data_type = caps
-                .get(2)
-                .map(|m| m.as_str().trim().to_uppercase())
-                .unwrap_or_default();
-            let is_nullable = caps
-                .get(3)
-                .map(|m| !m.as_str().to_uppercase().contains("NOT"))
-                .unwrap_or(true); // Default to nullable if not specified
-
-            if !name.is_empty() && !data_type.is_empty() {
-                columns.push(ExtractedTableTypeColumn {
+        // Check if this is a constraint
+        if upper.starts_with("PRIMARY KEY") {
+            // PRIMARY KEY CLUSTERED ([Col1], [Col2])
+            let is_clustered = !upper.contains("NONCLUSTERED");
+            let pk_columns = extract_constraint_columns(trimmed);
+            constraints.push(ExtractedTableTypeConstraint::PrimaryKey {
+                columns: pk_columns,
+                is_clustered,
+            });
+        } else if upper.starts_with("UNIQUE") {
+            // UNIQUE [CLUSTERED|NONCLUSTERED] ([Col])
+            let is_clustered = upper.contains("CLUSTERED") && !upper.contains("NONCLUSTERED");
+            let uq_columns = extract_constraint_columns(trimmed);
+            constraints.push(ExtractedTableTypeConstraint::Unique {
+                columns: uq_columns,
+                is_clustered,
+            });
+        } else if upper.starts_with("CHECK") {
+            // CHECK (expression)
+            let check_re = Regex::new(r"(?i)CHECK\s*\((.+)\)\s*$").unwrap();
+            if let Some(caps) = check_re.captures(trimmed) {
+                if let Some(expr) = caps.get(1) {
+                    constraints.push(ExtractedTableTypeConstraint::Check {
+                        expression: expr.as_str().to_string(),
+                    });
+                }
+            }
+        } else if upper.starts_with("INDEX") {
+            // INDEX [IX_Name] [UNIQUE] [CLUSTERED|NONCLUSTERED] ([Col])
+            let idx_re = Regex::new(
+                r"(?i)INDEX\s+\[?(\w+)\]?\s*(UNIQUE)?\s*(CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)"
+            ).unwrap();
+            if let Some(caps) = idx_re.captures(trimmed) {
+                let name = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let is_unique = caps.get(2).is_some();
+                let is_clustered = caps.get(3)
+                    .map(|m| m.as_str().to_uppercase() == "CLUSTERED")
+                    .unwrap_or(false);
+                let idx_columns = caps.get(4)
+                    .map(|m| parse_column_list(m.as_str()))
+                    .unwrap_or_default();
+                constraints.push(ExtractedTableTypeConstraint::Index {
                     name,
-                    data_type,
-                    is_nullable,
+                    columns: idx_columns,
+                    is_unique,
+                    is_clustered,
                 });
             }
+        } else {
+            // This is a column definition
+            // Pattern: [ColumnName] DataType [NULL|NOT NULL] [DEFAULT (value)]
+            let col_re = Regex::new(
+                r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)"
+            ).unwrap();
+
+            if let Some(caps) = col_re.captures(trimmed) {
+                let name = caps
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+                let data_type = caps
+                    .get(2)
+                    .map(|m| m.as_str().trim().to_uppercase())
+                    .unwrap_or_default();
+
+                // Check nullability
+                let is_nullable = if upper.contains("NOT NULL") {
+                    false
+                } else {
+                    true // Default to nullable if not specified
+                };
+
+                // Extract DEFAULT value if present
+                let default_value = extract_table_type_column_default(trimmed);
+
+                if !name.is_empty() && !data_type.is_empty() {
+                    columns.push(ExtractedTableTypeColumn {
+                        name,
+                        data_type,
+                        is_nullable,
+                        default_value,
+                    });
+                }
+            }
         }
     }
 
-    columns
+    (columns, constraints)
+}
+
+/// Extract default value from a table type column definition
+fn extract_table_type_column_default(col_def: &str) -> Option<String> {
+    // Pattern: DEFAULT (value) or DEFAULT value
+    let default_re = Regex::new(r"(?i)DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\)|\w+\(\))").ok()?;
+    default_re.captures(col_def)
+        .and_then(|caps| caps.get(1).or(caps.get(0)))
+        .map(|m| {
+            let val = m.as_str();
+            // If it starts with DEFAULT, remove that prefix
+            if val.to_uppercase().starts_with("DEFAULT") {
+                val[7..].trim().to_string()
+            } else {
+                val.to_string()
+            }
+        })
 }
 
 /// Extract schema and name from CREATE PROCEDURE statement

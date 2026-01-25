@@ -8,7 +8,8 @@ use sqlparser::ast::{ColumnDef, ColumnOption, DataType, ObjectName, Statement, T
 use crate::parser::{
     ExtractedExtendedProperty, ExtractedFullTextColumn, ExtractedFunctionParameter,
     ExtractedTableColumn, ExtractedTableConstraint, ExtractedTableTypeColumn,
-    FallbackFunctionType, FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL,
+    ExtractedTableTypeConstraint, FallbackFunctionType, FallbackStatementType, ParsedStatement,
+    BINARY_MAX_SENTINEL,
 };
 use crate::project::SqlProject;
 
@@ -16,7 +17,8 @@ use super::{
     ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
     ExtendedPropertyElement, FullTextCatalogElement, FullTextColumnElement, FullTextIndexElement,
     FunctionElement, FunctionType, IndexElement, ModelElement, ParameterElement, ProcedureElement,
-    RawElement, SchemaElement, SequenceElement, TableElement, UserDefinedTypeElement, ViewElement,
+    RawElement, SchemaElement, SequenceElement, TableElement, TableTypeColumnElement,
+    TableTypeConstraint, UserDefinedTypeElement, ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -127,15 +129,19 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     schema,
                     name,
                     columns,
+                    constraints,
                 } => {
                     schemas.insert(schema.clone());
-                    let column_elements =
-                        columns.iter().map(|c| column_from_extracted(c)).collect();
+                    let column_elements: Vec<TableTypeColumnElement> =
+                        columns.iter().map(|c| table_type_column_from_extracted(c)).collect();
+                    let constraint_elements: Vec<TableTypeConstraint> =
+                        constraints.iter().map(|c| table_type_constraint_from_extracted(c)).collect();
                     model.add_element(ModelElement::UserDefinedType(UserDefinedTypeElement {
                         schema: schema.clone(),
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
                         columns: column_elements,
+                        constraints: constraint_elements,
                     }));
                 }
                 FallbackStatementType::Table {
@@ -603,22 +609,55 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
     }
 }
 
-/// Convert an extracted table type column to a ColumnElement
-fn column_from_extracted(col: &ExtractedTableTypeColumn) -> ColumnElement {
+/// Convert an extracted table type column to a TableTypeColumnElement
+fn table_type_column_from_extracted(col: &ExtractedTableTypeColumn) -> TableTypeColumnElement {
     let (max_length, precision, scale) = extract_type_params_from_string(&col.data_type);
 
-    ColumnElement {
+    TableTypeColumnElement {
         name: col.name.clone(),
         data_type: col.data_type.clone(),
         is_nullable: col.is_nullable,
-        is_identity: false,    // Table types don't support identity columns
-        is_rowguidcol: false,  // Table types don't support ROWGUIDCOL
-        is_sparse: false,      // Table types don't support SPARSE
-        is_filestream: false,  // Table types don't support FILESTREAM
-        default_value: None,
+        default_value: col.default_value.clone(),
         max_length,
         precision,
         scale,
+    }
+}
+
+/// Convert an extracted table type constraint to a TableTypeConstraint
+fn table_type_constraint_from_extracted(constraint: &ExtractedTableTypeConstraint) -> TableTypeConstraint {
+    match constraint {
+        ExtractedTableTypeConstraint::PrimaryKey { columns, is_clustered } => {
+            TableTypeConstraint::PrimaryKey {
+                columns: columns
+                    .iter()
+                    .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
+                    .collect(),
+                is_clustered: *is_clustered,
+            }
+        }
+        ExtractedTableTypeConstraint::Unique { columns, is_clustered } => {
+            TableTypeConstraint::Unique {
+                columns: columns
+                    .iter()
+                    .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
+                    .collect(),
+                is_clustered: *is_clustered,
+            }
+        }
+        ExtractedTableTypeConstraint::Check { expression } => {
+            TableTypeConstraint::Check {
+                expression: expression.clone(),
+            }
+        }
+        ExtractedTableTypeConstraint::Index { name, columns, is_unique, is_clustered } => {
+            TableTypeConstraint::Index {
+                name: name.clone(),
+                columns: columns.clone(),
+                is_unique: *is_unique,
+                is_clustered: *is_clustered,
+            }
+        }
     }
 }
 

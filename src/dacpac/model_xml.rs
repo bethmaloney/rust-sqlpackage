@@ -5,9 +5,10 @@ use quick_xml::Writer;
 use std::io::Write;
 
 use crate::model::{
-    ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, ExtendedPropertyElement,
-    FullTextCatalogElement, FullTextIndexElement, FunctionElement, IndexElement, ModelElement,
-    ProcedureElement, RawElement, SchemaElement, SequenceElement, TableElement,
+    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
+    ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement, FunctionElement,
+    IndexElement, ModelElement, ProcedureElement, RawElement, SchemaElement, SequenceElement,
+    SortDirection, TableElement, TableTypeColumnElement, TableTypeConstraint,
     UserDefinedTypeElement, ViewElement,
 };
 use crate::project::SqlProject;
@@ -147,10 +148,37 @@ fn write_column<W: Write>(
 /// Write a table type column (uses SqlTableTypeSimpleColumn for user-defined table types)
 fn write_table_type_column<W: Write>(
     writer: &mut Writer<W>,
-    column: &ColumnElement,
+    column: &TableTypeColumnElement,
     type_name: &str,
 ) -> anyhow::Result<()> {
-    write_column_with_type(writer, column, type_name, "SqlTableTypeSimpleColumn")
+    let col_name = format!("{}.[{}]", type_name, column.name);
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTableTypeSimpleColumn"));
+    elem.push_attribute(("Name", col_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Properties
+    write_property(
+        writer,
+        "IsNullable",
+        if column.is_nullable { "True" } else { "False" },
+    )?;
+
+    // Data type relationship
+    write_type_specifier(
+        writer,
+        &column.data_type,
+        column.max_length,
+        column.precision,
+        column.scale,
+    )?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    Ok(())
 }
 
 fn write_column_with_type<W: Write>(
@@ -1228,7 +1256,239 @@ fn write_user_defined_type<W: Write>(
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     }
 
+    // Write constraints (PRIMARY KEY, UNIQUE, CHECK, INDEX)
+    for (idx, constraint) in udt.constraints.iter().enumerate() {
+        write_table_type_constraint(writer, constraint, &full_name, idx, &udt.columns)?;
+    }
+
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write a table type constraint (PrimaryKey, Unique, Check, Index)
+fn write_table_type_constraint<W: Write>(
+    writer: &mut Writer<W>,
+    constraint: &TableTypeConstraint,
+    type_name: &str,
+    idx: usize,
+    columns: &[TableTypeColumnElement],
+) -> anyhow::Result<()> {
+    match constraint {
+        TableTypeConstraint::PrimaryKey { columns: pk_cols, is_clustered } => {
+            write_table_type_pk_constraint(writer, type_name, pk_cols, *is_clustered, columns)?;
+        }
+        TableTypeConstraint::Unique { columns: uq_cols, is_clustered } => {
+            write_table_type_unique_constraint(writer, type_name, uq_cols, *is_clustered, idx, columns)?;
+        }
+        TableTypeConstraint::Check { expression } => {
+            write_table_type_check_constraint(writer, type_name, expression, idx)?;
+        }
+        TableTypeConstraint::Index { name, columns: idx_cols, is_unique, is_clustered } => {
+            write_table_type_index(writer, type_name, name, idx_cols, *is_unique, *is_clustered)?;
+        }
+    }
+    Ok(())
+}
+
+/// Write SqlTableTypePrimaryKeyConstraint element
+fn write_table_type_pk_constraint<W: Write>(
+    writer: &mut Writer<W>,
+    type_name: &str,
+    pk_columns: &[ConstraintColumn],
+    is_clustered: bool,
+    all_columns: &[TableTypeColumnElement],
+) -> anyhow::Result<()> {
+    // Relationship for PrimaryKey
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "PrimaryKey"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTableTypePrimaryKeyConstraint"));
+    writer.write_event(Event::Start(elem))?;
+
+    // IsClustered property
+    if is_clustered {
+        write_property(writer, "IsClustered", "True")?;
+    }
+
+    // ColumnSpecifications relationship
+    if !pk_columns.is_empty() {
+        let mut col_rel = BytesStart::new("Relationship");
+        col_rel.push_attribute(("Name", "ColumnSpecifications"));
+        writer.write_event(Event::Start(col_rel))?;
+
+        for pk_col in pk_columns {
+            let is_descending = pk_col.sort_direction == SortDirection::Descending;
+            write_table_type_indexed_column_spec(writer, type_name, &pk_col.name, is_descending, all_columns)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write SqlTableTypeUniqueConstraint element
+fn write_table_type_unique_constraint<W: Write>(
+    writer: &mut Writer<W>,
+    type_name: &str,
+    uq_columns: &[ConstraintColumn],
+    is_clustered: bool,
+    _idx: usize,
+    all_columns: &[TableTypeColumnElement],
+) -> anyhow::Result<()> {
+    // Relationship for UniqueConstraints
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "UniqueConstraints"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTableTypeUniqueConstraint"));
+    writer.write_event(Event::Start(elem))?;
+
+    // IsClustered property
+    if is_clustered {
+        write_property(writer, "IsClustered", "True")?;
+    }
+
+    // ColumnSpecifications relationship
+    if !uq_columns.is_empty() {
+        let mut col_rel = BytesStart::new("Relationship");
+        col_rel.push_attribute(("Name", "ColumnSpecifications"));
+        writer.write_event(Event::Start(col_rel))?;
+
+        for uq_col in uq_columns {
+            let is_descending = uq_col.sort_direction == SortDirection::Descending;
+            write_table_type_indexed_column_spec(writer, type_name, &uq_col.name, is_descending, all_columns)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write SqlTableTypeCheckConstraint element
+fn write_table_type_check_constraint<W: Write>(
+    writer: &mut Writer<W>,
+    type_name: &str,
+    expression: &str,
+    idx: usize,
+) -> anyhow::Result<()> {
+    // Relationship for CheckConstraints
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "CheckConstraints"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    // Generate a disambiguator for unnamed check constraints
+    let disambiguator = format!("{}_CK{}", type_name, idx);
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTableTypeCheckConstraint"));
+    elem.push_attribute(("Disambiguator", disambiguator.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Expression property
+    write_script_property(writer, "Expression", expression)?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write table type index element
+fn write_table_type_index<W: Write>(
+    writer: &mut Writer<W>,
+    type_name: &str,
+    name: &str,
+    idx_columns: &[String],
+    is_unique: bool,
+    is_clustered: bool,
+) -> anyhow::Result<()> {
+    // Relationship for Indexes
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "Indexes"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let idx_name = format!("{}.[{}]", type_name, name);
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTableTypeIndex"));
+    elem.push_attribute(("Name", idx_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Properties
+    if is_unique {
+        write_property(writer, "IsUnique", "True")?;
+    }
+    if is_clustered {
+        write_property(writer, "IsClustered", "True")?;
+    }
+
+    // Columns relationship
+    if !idx_columns.is_empty() {
+        let mut col_rel = BytesStart::new("Relationship");
+        col_rel.push_attribute(("Name", "Columns"));
+        writer.write_event(Event::Start(col_rel))?;
+
+        for col_name in idx_columns {
+            writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+            let col_ref = format!("{}.[{}]", type_name, col_name);
+            let mut refs = BytesStart::new("References");
+            refs.push_attribute(("Name", col_ref.as_str()));
+            writer.write_event(Event::Empty(refs))?;
+            writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write SqlTableTypeIndexedColumnSpecification element
+fn write_table_type_indexed_column_spec<W: Write>(
+    writer: &mut Writer<W>,
+    type_name: &str,
+    column_name: &str,
+    is_descending: bool,
+    _all_columns: &[TableTypeColumnElement],
+) -> anyhow::Result<()> {
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTableTypeIndexedColumnSpecification"));
+    writer.write_event(Event::Start(elem))?;
+
+    // IsAscending property (true by default, false if descending)
+    if is_descending {
+        write_property(writer, "IsAscending", "False")?;
+    }
+
+    // Column relationship
+    let col_ref = format!("{}.[{}]", type_name, column_name);
+    write_relationship(writer, "Column", &[&col_ref])?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     Ok(())
 }
 

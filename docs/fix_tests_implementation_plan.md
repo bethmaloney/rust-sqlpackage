@@ -5,8 +5,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 ## Summary
 
 - **Total Ignored Tests**: 12
-- **Fixed**: 3
-- **Remaining**: 9
+- **Fixed**: 4
+- **Remaining**: 8
 
 ## Test Fixes
 
@@ -51,17 +51,13 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 
 ### 4. Table Types (Complete)
 
-- [ ] **Test**: `test_build_with_table_types`
-- **Ignore Reason**: SqlTableType column structure not yet implemented
-- **Impact**: Missing table type columns, PK constraints, index specs
-- **Files to Modify**:
-  - `src/model/table_type.rs` - Add column definitions to TableType
-  - `src/dacpac/xml.rs` - Generate SqlTableTypeSimpleColumn elements
-  - `src/dacpac/xml.rs` - Generate SqlTableTypePrimaryKeyConstraint
-- **Implementation Notes**:
-  - Table types can have columns, PKs, and indexes
-  - Need SqlTableTypeSimpleColumn, SqlTableTypePrimaryKeyConstraint
-  - Currently only outputs basic SqlTableType element
+- [x] **Test**: `test_build_with_table_types`
+- **Status**: ✅ FIXED - Table type columns and constraints now parsed and serialized correctly
+- **Notes**: Table types are now fully supported with columns, PRIMARY KEY, UNIQUE, CHECK, and INDEX constraints.
+  The parser in `src/parser/tsql_parser.rs` extracts columns and constraints via `extract_table_type_structure()`.
+  The model builder creates `TableTypeColumnElement` and `TableTypeConstraint` entries. The XML serializer
+  outputs proper `SqlTableTypeSimpleColumn`, `SqlTableTypePrimaryKeyConstraint`, `SqlTableTypeUniqueConstraint`,
+  `SqlTableTypeCheckConstraint`, and `SqlTableTypeIndexedColumnSpecification` elements.
 - **Fixture**: `tests/fixtures/table_types/`
 
 ---
