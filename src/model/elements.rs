@@ -116,6 +116,8 @@ pub struct ColumnElement {
     pub max_length: Option<i32>,
     pub precision: Option<u8>,
     pub scale: Option<u8>,
+    /// Disambiguator for inline constraint annotation (if column has inline constraints)
+    pub inline_constraint_disambiguator: Option<u32>,
 }
 
 /// View element

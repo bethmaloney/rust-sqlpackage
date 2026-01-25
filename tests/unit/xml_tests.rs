@@ -401,6 +401,53 @@ END
 }
 
 // ============================================================================
+// SqlInlineConstraintAnnotation Tests
+// ============================================================================
+
+#[test]
+fn test_column_with_inline_default_has_annotation() {
+    let sql = r#"
+CREATE TABLE [dbo].[T] (
+    [Id] INT NOT NULL,
+    [Status] INT NOT NULL DEFAULT 0
+);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // The Status column should have SqlInlineConstraintAnnotation due to DEFAULT
+    assert!(
+        xml.contains("SqlInlineConstraintAnnotation"),
+        "Column with inline DEFAULT should have SqlInlineConstraintAnnotation. Got:\n{}",
+        xml
+    );
+
+    // The annotation should have Disambiguator attribute
+    assert!(
+        xml.contains(r#"Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="#),
+        "SqlInlineConstraintAnnotation should have Disambiguator attribute. Got:\n{}",
+        xml
+    );
+}
+
+#[test]
+fn test_column_without_inline_constraint_no_annotation() {
+    let sql = r#"
+CREATE TABLE [dbo].[T] (
+    [Id] INT NOT NULL,
+    [Name] NVARCHAR(100)
+);
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Neither column has inline constraints, so there should be no annotation
+    assert!(
+        !xml.contains("SqlInlineConstraintAnnotation"),
+        "Columns without inline constraints should NOT have SqlInlineConstraintAnnotation. Got:\n{}",
+        xml
+    );
+}
+
+// ============================================================================
 // Relationship Generation Tests
 // ============================================================================
 

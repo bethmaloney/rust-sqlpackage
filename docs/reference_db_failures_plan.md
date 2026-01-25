@@ -39,16 +39,21 @@ if trimmed.eq_ignore_ascii_case("go") || trimmed.eq_ignore_ascii_case("go;")
 
 ### 2. SqlInlineConstraintAnnotation
 
-- **Status:** [ ] Not started
+- **Status:** [x] Completed
 - **Severity:** Low
 
 **Description:**
-Dotnet emits `SqlInlineConstraintAnnotation` elements on columns that have inline constraints (e.g., default values defined inline). These annotations track which constraints were defined inline vs as named table-level constraints. Rust-sqlpackage does not emit these annotations.
+Dotnet emits `SqlInlineConstraintAnnotation` elements on columns that have inline constraints (e.g., default values defined inline). These annotations track which constraints were defined inline vs as named table-level constraints.
 
-**Example in dotnet output:**
+**Implementation:**
+- Added `inline_constraint_disambiguator: Option<u32>` field to `ColumnElement` struct
+- Updated `column_from_def()` and `column_from_fallback_table()` to set disambiguator when columns have inline DEFAULT, CHECK, PRIMARY KEY, or UNIQUE constraints
+- Updated `write_column_with_type()` in model_xml.rs to emit the annotation
+
+**Example output:**
 ```xml
 <Element Type="SqlSimpleColumn" Name="[dbo].[Table].[Column]">
-    <Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="123" />
+    <Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="123456" />
 </Element>
 ```
 

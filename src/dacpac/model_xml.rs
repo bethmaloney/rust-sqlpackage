@@ -467,6 +467,14 @@ fn write_column_with_type<W: Write>(
         column.scale,
     )?;
 
+    // Write SqlInlineConstraintAnnotation if column has inline constraints
+    if let Some(disambiguator) = column.inline_constraint_disambiguator {
+        let mut annotation = BytesStart::new("Annotation");
+        annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
+        annotation.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
+        writer.write_event(Event::Empty(annotation))?;
+    }
+
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     Ok(())

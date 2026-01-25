@@ -564,13 +564,23 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
     let mut is_nullable = true;
     let mut is_identity = false;
     let mut default_value = None;
+    let mut has_inline_constraint = false;
 
     for option in &col.options {
         match &option.option {
             ColumnOption::NotNull => is_nullable = false,
             ColumnOption::Null => is_nullable = true,
-            ColumnOption::Default(expr) => default_value = Some(expr.to_string()),
+            ColumnOption::Default(expr) => {
+                default_value = Some(expr.to_string());
+                has_inline_constraint = true;
+            }
             ColumnOption::Identity(_) => is_identity = true,
+            ColumnOption::Check(_) => {
+                has_inline_constraint = true;
+            }
+            ColumnOption::Unique { .. } => {
+                has_inline_constraint = true;
+            }
             _ => {}
         }
     }
@@ -596,6 +606,13 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
 
     let (max_length, precision, scale) = extract_type_params(&col.data_type);
 
+    // Generate disambiguator from column name hash if column has inline constraints
+    let inline_constraint_disambiguator = if has_inline_constraint {
+        Some(generate_disambiguator(&col.name.value))
+    } else {
+        None
+    };
+
     ColumnElement {
         name: col.name.value.clone(),
         data_type: col.data_type.to_string(),
@@ -608,6 +625,7 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
         max_length,
         precision,
         scale,
+        inline_constraint_disambiguator,
     }
 }
 
@@ -747,6 +765,17 @@ fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option
 fn column_from_fallback_table(col: &ExtractedTableColumn) -> ColumnElement {
     let (max_length, precision, scale) = extract_type_params_from_string(&col.data_type);
 
+    // Check if column has inline constraints (default or check)
+    let has_inline_constraint =
+        col.default_value.is_some() || col.check_expression.is_some();
+
+    // Generate disambiguator from column name hash if column has inline constraints
+    let inline_constraint_disambiguator = if has_inline_constraint {
+        Some(generate_disambiguator(&col.name))
+    } else {
+        None
+    };
+
     ColumnElement {
         name: col.name.clone(),
         data_type: col.data_type.clone(),
@@ -759,7 +788,20 @@ fn column_from_fallback_table(col: &ExtractedTableColumn) -> ColumnElement {
         max_length,
         precision,
         scale,
+        inline_constraint_disambiguator,
     }
+}
+
+/// Generate a disambiguator value from a string (e.g., column name)
+/// Uses a simple hash to generate a consistent numeric value
+fn generate_disambiguator(name: &str) -> u32 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    // Use modulo to keep the number in a reasonable range similar to DacFx output
+    (hasher.finish() % 1_000_000) as u32
 }
 
 /// Convert an extracted table constraint (from fallback parser) to a model constraint
