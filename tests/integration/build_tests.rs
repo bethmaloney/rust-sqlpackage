@@ -3,8 +3,6 @@
 //! These tests are converted from the Microsoft DacFx BuildTests.cs
 //! to verify end-to-end build functionality.
 
-use std::path::PathBuf;
-
 use crate::common::{DacpacInfo, TestContext};
 
 // ============================================================================

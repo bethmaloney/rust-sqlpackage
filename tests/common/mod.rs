@@ -9,9 +9,11 @@ use zip::ZipArchive;
 
 /// Test context with temporary directory for isolated test execution
 pub struct TestContext {
-    pub temp_dir: TempDir,
+    /// Kept to prevent temp directory cleanup until TestContext is dropped
+    _temp_dir: TempDir,
     pub project_dir: PathBuf,
-    pub fixture_name: String,
+    /// Stored for debugging purposes
+    _fixture_name: String,
 }
 
 impl TestContext {
@@ -29,23 +31,15 @@ impl TestContext {
         copy_dir_recursive(&fixture_path, &project_dir).expect("Failed to copy fixture");
 
         Self {
-            temp_dir,
+            _temp_dir: temp_dir,
             project_dir,
-            fixture_name: fixture_name.to_string(),
+            _fixture_name: fixture_name.to_string(),
         }
     }
 
     /// Get the path to the .sqlproj file
     pub fn project_path(&self) -> PathBuf {
         self.project_dir.join("project.sqlproj")
-    }
-
-    /// Get the expected output dacpac path
-    pub fn output_dacpac_path(&self) -> PathBuf {
-        self.project_dir
-            .join("bin")
-            .join("Debug")
-            .join("project.dacpac")
     }
 
     /// Build the project using rust-sqlpackage library

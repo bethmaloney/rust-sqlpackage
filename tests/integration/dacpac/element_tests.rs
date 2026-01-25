@@ -4,7 +4,7 @@
 
 use crate::common::{DacpacInfo, TestContext};
 
-use super::{find_elements_by_type, has_relationship, parse_model_xml};
+use super::{find_elements_by_type, parse_model_xml};
 
 // ============================================================================
 // Basic Element Tests
