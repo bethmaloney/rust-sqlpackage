@@ -113,44 +113,43 @@ Current Layer 2 only compares "key properties" per element type. Expand to compa
 
 ---
 
-## Phase 3: Add Relationship Comparison
+## Phase 3: Add Relationship Comparison ✓ COMPLETE
 
 Current parser extracts `children` but doesn't fully compare relationships.
 
-- [ ] **3.1 Extend ModelElement to capture relationships**
-  ```rust
-  pub struct ModelElement {
-      pub element_type: String,
-      pub name: Option<String>,
-      pub properties: BTreeMap<String, String>,
-      pub children: Vec<ModelElement>,
-      pub relationships: Vec<Relationship>,  // NEW
-  }
+- [x] **3.1 Extend ModelElement to capture relationships** ✓ COMPLETE
+  - Extended `ModelElement` struct with `relationships: Vec<Relationship>` field
+  - Added `Relationship` struct with `name`, `references: Vec<ReferenceEntry>`, and `entries: Vec<ModelElement>`
+  - Added `ReferenceEntry` struct to capture `Name` and optional `ExternalSource` attributes
+  - Location: `tests/e2e/dacpac_compare.rs:22-50`
 
-  pub struct Relationship {
-      pub name: String,
-      pub references: Vec<String>,
-      pub entries: Vec<ModelElement>,
-  }
-  ```
+- [x] **3.2 Update XML parser to capture all relationships** ✓ COMPLETE
+  - Added `parse_relationship()` function that captures Relationship `Name` attribute
+  - Captures all `Reference` elements with `Name` and `ExternalSource` attributes
+  - Captures nested `Entry` elements as `ModelElement` children
+  - Preserves entry ordering
+  - Location: `tests/e2e/dacpac_compare.rs:228-258`
 
-- [ ] **3.2 Update XML parser to capture all relationships**
-  - Location: `parse_element()` in `dacpac_compare.rs`
-  - Capture Relationship `Type` attribute
-  - Capture all `Reference` elements with their `Name` attributes
-  - Preserve entry ordering
+- [x] **3.3 Implement relationship comparison** ✓ COMPLETE
+  - Implemented `compare_relationships()` function comparing two vectors of relationships
+  - Implemented `compare_element_relationships()` for element-level comparison
+  - Added `RelationshipError` enum with 5 variants:
+    - `MissingRelationship` - relationship exists in DotNet but not Rust
+    - `ExtraRelationship` - relationship exists in Rust but not DotNet
+    - `ReferenceCountMismatch` - different number of references
+    - `ReferenceMismatch` - reference name or external source differs
+    - `EntryCountMismatch` - different number of entries in relationship
+  - Location: `tests/e2e/dacpac_compare.rs:97-136` (enum), `tests/e2e/dacpac_compare.rs:668-827` (functions)
 
-- [ ] **3.3 Implement relationship comparison**
-  ```rust
-  pub fn compare_relationships(
-      rust_elem: &ModelElement,
-      dotnet_elem: &ModelElement,
-  ) -> Vec<RelationshipError>
-  ```
-
-- [ ] **3.4 Add relationship comparison to Layer 2**
-  - Integrate into `compare_element_pair()`
-  - Report missing/extra/different relationships
+- [x] **3.4 Add relationship comparison to Layer 2** ✓ COMPLETE
+  - Added `relationship_errors` field to `ComparisonResult`
+  - Updated `compare_dacpacs_with_options()` to use `check_relationships` option
+  - Added `Display` impl for `RelationshipError` for readable error output
+  - Location: `tests/e2e/dacpac_compare.rs:1024-1089` (Display impl)
+  - Tests added:
+    - `test_relationship_comparison` - informational test comparing relationships between Rust/DotNet
+    - `test_relationship_comparison_options` - tests ComparisonOptions with `check_relationships=true`
+  - Location: `tests/e2e/dotnet_comparison_tests.rs:681-825`
 
 ---
 
@@ -339,17 +338,18 @@ Reorganize and improve test infrastructure.
 |-------|--------|------------|
 | Phase 1: High-Priority Issues | **COMPLETE** | 9/9 ✓ |
 | Phase 2: Property Comparison | **COMPLETE** | 4/4 ✓ |
-| Phase 3: Relationship Comparison | Not Started | 0/4 |
+| Phase 3: Relationship Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 4: XML Structure (Layer 4) | Not Started | 0/4 |
 | Phase 5: Metadata Files | Not Started | 0/5 |
 | Phase 6: Per-Feature Tests | Not Started | 0/5+ |
 | Phase 7: Canonical XML | Not Started | 0/4 |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 13/39+ tasks complete
+**Overall Progress**: 17/39+ tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
+Phase 3 added relationship parsing and comparison infrastructure with comprehensive error types.
 
 ---
 

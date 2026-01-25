@@ -30,8 +30,9 @@ use tempfile::TempDir;
 
 use crate::dacpac_compare::{
     compare_all_properties, compare_dacpacs, compare_dacpacs_with_options,
-    compare_element_inventory, compare_element_properties, compare_with_sqlpackage,
-    extract_model_xml, sqlpackage_available, ComparisonOptions, DacpacModel, Layer1Error,
+    compare_element_inventory, compare_element_properties, compare_element_relationships,
+    compare_with_sqlpackage, extract_model_xml, sqlpackage_available, ComparisonOptions,
+    DacpacModel, Layer1Error,
 };
 
 // =============================================================================
@@ -674,5 +675,154 @@ fn test_print_element_summary() {
             "| {:<35} | {:>8} | {:>8} | {:>8} |",
             elem_type, rust_count, dotnet_count, diff_str
         );
+    }
+}
+
+/// Test relationship comparison between Rust and DotNet dacpacs.
+/// This tests the relationship comparison mode introduced in Phase 3.
+///
+/// Purpose: Identifies relationships that Rust is missing or has different
+/// references compared to DotNet output. This is critical for achieving
+/// exact 1-1 matching of relationship structures.
+#[test]
+fn test_relationship_comparison() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    let rust_model = DacpacModel::from_dacpac(&rust_dacpac).expect("Parse rust dacpac");
+    let dotnet_model = DacpacModel::from_dacpac(&dotnet_dacpac).expect("Parse dotnet dacpac");
+
+    // Use the relationship comparison function
+    let errors = compare_element_relationships(&rust_model, &dotnet_model);
+
+    println!("\n=== Relationship Comparison Test (Phase 3) ===\n");
+
+    if errors.is_empty() {
+        println!("All relationships match!");
+    } else {
+        // Group errors by element type for better readability
+        let mut by_type: std::collections::HashMap<String, Vec<_>> =
+            std::collections::HashMap::new();
+        for err in &errors {
+            let key = match err {
+                crate::dacpac_compare::RelationshipError::MissingRelationship {
+                    element_type,
+                    ..
+                }
+                | crate::dacpac_compare::RelationshipError::ExtraRelationship {
+                    element_type,
+                    ..
+                }
+                | crate::dacpac_compare::RelationshipError::ReferenceCountMismatch {
+                    element_type,
+                    ..
+                }
+                | crate::dacpac_compare::RelationshipError::ReferenceMismatch {
+                    element_type,
+                    ..
+                }
+                | crate::dacpac_compare::RelationshipError::EntryCountMismatch {
+                    element_type,
+                    ..
+                } => element_type.clone(),
+            };
+            by_type.entry(key).or_default().push(err);
+        }
+
+        println!("Relationship mismatches by element type:\n");
+        for (elem_type, errs) in &by_type {
+            println!("  {} ({} mismatches):", elem_type, errs.len());
+            for err in errs.iter().take(5) {
+                println!("    - {}", err);
+            }
+            if errs.len() > 5 {
+                println!("    ... and {} more", errs.len() - 5);
+            }
+        }
+
+        println!("\nTotal relationship mismatches: {}", errors.len());
+        println!("This test is informational - mismatches indicate relationships");
+        println!("that need to be implemented for exact 1-1 matching.");
+    }
+
+    // Note: We don't assert here because this is a progress tracking test.
+    // Mismatches are expected until all relationships are fully implemented.
+}
+
+/// Test using ComparisonOptions with check_relationships=true
+#[test]
+fn test_relationship_comparison_options() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Test with check_relationships enabled
+    let options = ComparisonOptions {
+        include_layer3: false,
+        strict_properties: false,
+        check_relationships: true,
+        check_element_order: false,
+    };
+
+    let result =
+        compare_dacpacs_with_options(&rust_dacpac, &dotnet_dacpac, &options).expect("Comparison");
+
+    println!("\n=== Relationship ComparisonOptions Test ===\n");
+    println!("Layer 1 errors: {}", result.layer1_errors.len());
+    println!("Layer 2 errors: {}", result.layer2_errors.len());
+    println!("Relationship errors: {}", result.relationship_errors.len());
+
+    // Show summary of relationship errors by type
+    let mut by_error_type: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for err in &result.relationship_errors {
+        let key = match err {
+            crate::dacpac_compare::RelationshipError::MissingRelationship { .. } => "Missing",
+            crate::dacpac_compare::RelationshipError::ExtraRelationship { .. } => "Extra",
+            crate::dacpac_compare::RelationshipError::ReferenceCountMismatch { .. } => {
+                "RefCountMismatch"
+            }
+            crate::dacpac_compare::RelationshipError::ReferenceMismatch { .. } => "RefMismatch",
+            crate::dacpac_compare::RelationshipError::EntryCountMismatch { .. } => {
+                "EntryCountMismatch"
+            }
+        };
+        *by_error_type.entry(key).or_default() += 1;
+    }
+
+    if !by_error_type.is_empty() {
+        println!("\nRelationship errors by type:");
+        for (error_type, count) in &by_error_type {
+            println!("  {}: {}", error_type, count);
+        }
     }
 }
