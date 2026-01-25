@@ -29,8 +29,9 @@ use std::process::Command;
 use tempfile::TempDir;
 
 use crate::dacpac_compare::{
-    compare_dacpacs, compare_element_inventory, compare_element_properties,
-    compare_with_sqlpackage, extract_model_xml, sqlpackage_available, DacpacModel, Layer1Error,
+    compare_all_properties, compare_dacpacs, compare_dacpacs_with_options,
+    compare_element_inventory, compare_element_properties, compare_with_sqlpackage,
+    extract_model_xml, sqlpackage_available, ComparisonOptions, DacpacModel, Layer1Error,
 };
 
 // =============================================================================
@@ -334,6 +335,125 @@ fn test_layer2_property_comparison() {
         }
         if errors.len() > 20 {
             println!("  ... and {} more", errors.len() - 20);
+        }
+    }
+}
+
+/// Test property completeness: Compare ALL properties (not just key properties)
+/// This tests the strict property comparison mode introduced in Phase 2.
+///
+/// Purpose: Identifies properties that Rust is missing or has different values
+/// compared to DotNet output. This is critical for achieving exact 1-1 matching.
+#[test]
+fn test_property_completeness() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    let rust_model = DacpacModel::from_dacpac(&rust_dacpac).expect("Parse rust dacpac");
+    let dotnet_model = DacpacModel::from_dacpac(&dotnet_dacpac).expect("Parse dotnet dacpac");
+
+    // Use the strict comparison mode that checks ALL properties
+    let errors = compare_all_properties(&rust_model, &dotnet_model);
+
+    println!("\n=== Property Completeness Test (Strict Mode) ===\n");
+
+    if errors.is_empty() {
+        println!("All properties match in strict mode!");
+    } else {
+        // Group errors by element type for better readability
+        let mut by_type: std::collections::HashMap<&str, Vec<_>> = std::collections::HashMap::new();
+        for err in &errors {
+            by_type
+                .entry(err.element_type.as_str())
+                .or_default()
+                .push(err);
+        }
+
+        println!("Property mismatches by element type:\n");
+        for (elem_type, errs) in &by_type {
+            println!("  {} ({} mismatches):", elem_type, errs.len());
+            for err in errs.iter().take(5) {
+                println!("    - {}.{}:", err.element_name, err.property_name);
+                println!("      Rust:   {:?}", err.rust_value);
+                println!("      DotNet: {:?}", err.dotnet_value);
+            }
+            if errs.len() > 5 {
+                println!("    ... and {} more", errs.len() - 5);
+            }
+        }
+
+        println!("\nTotal property mismatches: {}", errors.len());
+        println!("This test is informational - mismatches indicate properties");
+        println!("that need to be implemented for exact 1-1 matching.");
+    }
+
+    // Note: We don't assert here because this is a progress tracking test.
+    // Mismatches are expected until all properties are fully implemented.
+}
+
+/// Test using ComparisonOptions with strict_properties=true
+#[test]
+fn test_strict_comparison_options() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Test with strict_properties enabled
+    let options = ComparisonOptions {
+        include_layer3: false,
+        strict_properties: true,
+        check_relationships: false,
+        check_element_order: false,
+    };
+
+    let result =
+        compare_dacpacs_with_options(&rust_dacpac, &dotnet_dacpac, &options).expect("Comparison");
+
+    println!("\n=== Strict ComparisonOptions Test ===\n");
+    println!("Layer 1 errors: {}", result.layer1_errors.len());
+    println!("Layer 2 errors (strict): {}", result.layer2_errors.len());
+
+    // Show summary of Layer 2 errors by property name
+    let mut by_prop: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for err in &result.layer2_errors {
+        *by_prop.entry(err.property_name.as_str()).or_default() += 1;
+    }
+
+    if !by_prop.is_empty() {
+        println!("\nMismatches by property name:");
+        let mut sorted: Vec<_> = by_prop.iter().collect();
+        sorted.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+        for (prop, count) in sorted.iter().take(10) {
+            println!("  {}: {}", prop, count);
         }
     }
 }

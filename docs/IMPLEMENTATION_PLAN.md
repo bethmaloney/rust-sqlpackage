@@ -78,34 +78,38 @@ These issues are documented in TESTING.md and block exact matching.
 
 ---
 
-## Phase 2: Expand Property Comparison
+## Phase 2: Expand Property Comparison ✓ COMPLETE
 
 Current Layer 2 only compares "key properties" per element type. Expand to compare ALL properties.
 
-- [ ] **2.1 Audit all element types and properties**
-  - Review DotNet output for all element types
-  - Document every property per element type
-  - Update `get_key_properties()` or replace with comprehensive comparison
+- [x] **2.1 Audit all element types and properties** ✓ COMPLETE
+  - Reviewed DotNet output for all 20+ element types
+  - Documented every property per element type in `get_all_properties()` docstring
+  - Added `get_all_properties()` function alongside existing `get_key_properties()`
+  - Element types documented: SqlDatabaseOptions, SqlTable, SqlSimpleColumn, SqlComputedColumn,
+    SqlTypeSpecifier, SqlIndex, SqlIndexedColumnSpecification, SqlPrimaryKeyConstraint,
+    SqlUniqueConstraint, SqlForeignKeyConstraint, SqlCheckConstraint, SqlDefaultConstraint,
+    SqlProcedure, SqlScalarFunction, SqlMultiStatementTableValuedFunction, SqlView,
+    SqlSubroutineParameter, SqlExtendedProperty, SqlSequence, SqlTableType, SqlTableTypeSimpleColumn
 
-- [ ] **2.2 Implement `compare_all_properties()` function**
-  - Location: `tests/e2e/dacpac_compare.rs`
-  - Compare all properties from both Rust and DotNet elements
-  - Report any property present in one but not the other
+- [x] **2.2 Implement `compare_all_properties()` function** ✓ COMPLETE
+  - Location: `tests/e2e/dacpac_compare.rs:545-562`
+  - Uses `compare_element_pair_strict()` which calls `get_all_properties()`
+  - Compares all documented properties for each element type
+  - Returns Layer2Error for each mismatch
 
-- [ ] **2.3 Add property completeness test**
-  - New test: `test_property_completeness`
-  - Verify Rust generates same properties as DotNet for each element type
-  - Track properties missing vs extra
+- [x] **2.3 Add property completeness test** ✓ COMPLETE
+  - Added test: `test_property_completeness` in `dotnet_comparison_tests.rs:347-407`
+  - Groups mismatches by element type for readability
+  - Informational test (doesn't fail) to track parity progress
+  - Also added `test_strict_comparison_options` to test the options struct
 
-- [ ] **2.4 Add strict mode flag to comparison**
-  ```rust
-  pub struct ComparisonOptions {
-      pub include_layer3: bool,
-      pub strict_properties: bool,    // Compare ALL properties
-      pub check_relationships: bool,  // Validate all relationships
-      pub check_element_order: bool,  // Validate element ordering
-  }
-  ```
+- [x] **2.4 Add strict mode flag to comparison** ✓ COMPLETE
+  - Added `ComparisonOptions` struct in `dacpac_compare.rs:74-85`
+  - Added `compare_dacpacs_with_options()` function that uses options
+  - Original `compare_dacpacs()` preserved for backward compatibility
+  - Options include: `include_layer3`, `strict_properties`, `check_relationships`, `check_element_order`
+  - `check_relationships` and `check_element_order` are placeholders for Phases 3 & 4
 
 ---
 
@@ -334,7 +338,7 @@ Reorganize and improve test infrastructure.
 | Phase | Status | Completion |
 |-------|--------|------------|
 | Phase 1: High-Priority Issues | **COMPLETE** | 9/9 ✓ |
-| Phase 2: Property Comparison | Not Started | 0/4 |
+| Phase 2: Property Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 3: Relationship Comparison | Not Started | 0/4 |
 | Phase 4: XML Structure (Layer 4) | Not Started | 0/4 |
 | Phase 5: Metadata Files | Not Started | 0/5 |
@@ -342,9 +346,10 @@ Reorganize and improve test infrastructure.
 | Phase 7: Canonical XML | Not Started | 0/4 |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 9/39+ tasks complete
+**Overall Progress**: 13/39+ tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
+Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
 
 ---
 

@@ -71,6 +71,19 @@ pub struct Layer2Error {
     pub dotnet_value: Option<String>,
 }
 
+/// Options for controlling comparison behavior
+#[derive(Debug, Clone, Default)]
+pub struct ComparisonOptions {
+    /// Include Layer 3 (SqlPackage DeployReport) comparison
+    pub include_layer3: bool,
+    /// Compare ALL properties instead of just key properties
+    pub strict_properties: bool,
+    /// Validate all relationships (Phase 3 - not yet implemented)
+    pub check_relationships: bool,
+    /// Validate element ordering (Phase 4 - not yet implemented)
+    pub check_element_order: bool,
+}
+
 /// Layer 3: SqlPackage DeployReport result
 #[derive(Debug)]
 pub struct Layer3Result {
@@ -264,7 +277,7 @@ pub fn compare_element_inventory(
 // Layer 2: Property Comparison
 // =============================================================================
 
-/// Key properties to compare for each element type
+/// Key properties to compare for each element type (subset for backward compatibility)
 fn get_key_properties(element_type: &str) -> &'static [&'static str] {
     match element_type {
         "SqlTable" => &["IsAnsiNullsOn"],
@@ -280,6 +293,170 @@ fn get_key_properties(element_type: &str) -> &'static [&'static str] {
         "SqlView" => &["SelectScript", "IsAnsiNullsOn", "IsQuotedIdentifierOn"],
         "SqlSubroutineParameter" => &["IsOutput", "IsReadOnly"],
         "SqlTypeSpecifier" => &["Length", "Precision", "Scale", "IsMax"],
+        _ => &[],
+    }
+}
+
+/// Complete set of properties for each element type based on DotNet DacFx output.
+/// This documents all known properties that DotNet generates for parity testing.
+///
+/// Property Documentation by Element Type:
+///
+/// SqlDatabaseOptions - Database-level settings
+///   - Collation: Database collation (e.g., "SQL_Latin1_General_CP1_CI_AS")
+///   - IsAnsiNullDefaultOn: ANSI NULL default setting
+///   - IsAnsiNullsOn: ANSI nulls setting
+///   - IsAnsiWarningsOn: ANSI warnings setting
+///   - IsArithAbortOn: Arithmetic abort setting
+///   - IsConcatNullYieldsNullOn: Concat null behavior
+///   - IsTornPageProtectionOn: Torn page detection
+///   - IsFullTextEnabled: Full-text search enabled
+///   - PageVerifyMode: Page verification mode (0=NONE, 1=TORN_PAGE, 3=CHECKSUM)
+///   - DefaultLanguage: Default language setting
+///   - DefaultFullTextLanguage: Default full-text language
+///   - QueryStoreStaleQueryThreshold: Query store threshold
+///
+/// SqlTable - Table definitions
+///   - IsAnsiNullsOn: ANSI nulls setting for table creation context
+///
+/// SqlSimpleColumn - Regular table columns
+///   - IsNullable: Whether column allows NULL values
+///   - IsIdentity: Whether column is an identity column
+///   - IsRowGuidCol: Whether column is a ROWGUIDCOL
+///   - IsSparse: Whether column is sparse
+///   - IsColumnSet: Whether column is a column set
+///
+/// SqlComputedColumn - Computed columns
+///   - IsPersisted: Whether computed value is stored
+///   - ExpressionScript: The computation expression
+///
+/// SqlTypeSpecifier - Type information for columns/parameters
+///   - Length: Character/binary length
+///   - Precision: Numeric precision
+///   - Scale: Numeric scale
+///   - IsMax: Whether MAX length (varchar(max), etc.)
+///
+/// SqlIndex - Index definitions
+///   - IsClustered: Whether index is clustered
+///   - IsUnique: Whether index enforces uniqueness
+///   - IsDisabled: Whether index is disabled
+///   - FillFactor: Index fill factor (0-100)
+///   - FilterPredicate/FilterDefinition: Filtered index predicate
+///   - IgnoreDuplicateKeys: Ignore duplicate key behavior
+///   - DisallowPageLocks: Page lock behavior
+///   - DisallowRowLocks: Row lock behavior
+///   - PadIndex: Pad index setting
+///
+/// SqlIndexedColumnSpecification - Index column details
+///   - IsAscending: Sort order (True=ASC, False=DESC)
+///
+/// SqlPrimaryKeyConstraint - Primary key constraints
+///   - IsClustered: Whether PK is clustered
+///
+/// SqlUniqueConstraint - Unique constraints
+///   - IsClustered: Whether unique constraint is clustered
+///
+/// SqlForeignKeyConstraint - Foreign key constraints
+///   - DeleteAction: ON DELETE action (NO ACTION, CASCADE, SET NULL, SET DEFAULT)
+///   - UpdateAction: ON UPDATE action
+///   - IsNotForReplication: NOT FOR REPLICATION setting
+///
+/// SqlCheckConstraint - Check constraints
+///   - CheckExpressionScript: The check expression (CDATA)
+///   - IsNotForReplication: NOT FOR REPLICATION setting
+///
+/// SqlDefaultConstraint - Default constraints
+///   - DefaultExpressionScript: The default value expression (CDATA)
+///
+/// SqlProcedure - Stored procedures
+///   - BodyScript: Procedure body (CDATA)
+///   - IsNativelyCompiled: Native compilation setting
+///
+/// SqlScalarFunction / SqlMultiStatementTableValuedFunction - Functions
+///   - BodyScript: Function body (CDATA)
+///   - HeaderContents: Function header for parsing
+///
+/// SqlView - View definitions
+///   - QueryScript: View SELECT statement (CDATA)
+///   - IsAnsiNullsOn: ANSI nulls context
+///   - IsQuotedIdentifierOn: Quoted identifier context
+///
+/// SqlSubroutineParameter - Procedure/function parameters
+///   - IsOutput: Whether parameter is OUTPUT
+///   - IsReadOnly: Whether parameter is READONLY (for TVPs)
+///
+/// SqlExtendedProperty - Extended properties
+///   - Value: The extended property value (CDATA)
+///
+/// SqlSequence - Sequence objects
+///   - StartValue: Starting value
+///   - IncrementValue: Increment
+///   - MinValue: Minimum value
+///   - MaxValue: Maximum value
+///   - IsCycling: Whether sequence cycles
+///   - CacheSize: Cache size
+fn get_all_properties(element_type: &str) -> &'static [&'static str] {
+    match element_type {
+        "SqlDatabaseOptions" => &[
+            "Collation",
+            "IsAnsiNullDefaultOn",
+            "IsAnsiNullsOn",
+            "IsAnsiWarningsOn",
+            "IsArithAbortOn",
+            "IsConcatNullYieldsNullOn",
+            "IsTornPageProtectionOn",
+            "IsFullTextEnabled",
+            "PageVerifyMode",
+            "DefaultLanguage",
+            "DefaultFullTextLanguage",
+            "QueryStoreStaleQueryThreshold",
+        ],
+        "SqlTable" => &["IsAnsiNullsOn"],
+        "SqlSimpleColumn" => &[
+            "IsNullable",
+            "IsIdentity",
+            "IsRowGuidCol",
+            "IsSparse",
+            "IsColumnSet",
+        ],
+        "SqlTableTypeSimpleColumn" => &["IsNullable", "IsIdentity", "IsRowGuidCol"],
+        "SqlComputedColumn" => &["IsPersisted", "ExpressionScript"],
+        "SqlTypeSpecifier" => &["Length", "Precision", "Scale", "IsMax"],
+        "SqlIndex" => &[
+            "IsClustered",
+            "IsUnique",
+            "IsDisabled",
+            "FillFactor",
+            "FilterPredicate",
+            "FilterDefinition",
+            "IgnoreDuplicateKeys",
+            "DisallowPageLocks",
+            "DisallowRowLocks",
+            "PadIndex",
+        ],
+        "SqlIndexedColumnSpecification" => &["IsAscending"],
+        "SqlPrimaryKeyConstraint" => &["IsClustered"],
+        "SqlUniqueConstraint" => &["IsClustered"],
+        "SqlForeignKeyConstraint" => &["DeleteAction", "UpdateAction", "IsNotForReplication"],
+        "SqlCheckConstraint" => &["CheckExpressionScript", "IsNotForReplication"],
+        "SqlDefaultConstraint" => &["DefaultExpressionScript"],
+        "SqlProcedure" => &["BodyScript", "IsNativelyCompiled"],
+        "SqlScalarFunction" => &["BodyScript", "HeaderContents"],
+        "SqlMultiStatementTableValuedFunction" => &["BodyScript", "HeaderContents"],
+        "SqlInlineTableValuedFunction" => &["BodyScript", "HeaderContents"],
+        "SqlView" => &["QueryScript", "IsAnsiNullsOn", "IsQuotedIdentifierOn"],
+        "SqlSubroutineParameter" => &["IsOutput", "IsReadOnly"],
+        "SqlExtendedProperty" => &["Value"],
+        "SqlSequence" => &[
+            "StartValue",
+            "IncrementValue",
+            "MinValue",
+            "MaxValue",
+            "IsCycling",
+            "CacheSize",
+        ],
+        "SqlTableType" => &["IsAnsiNullsOn"],
+        "SqlSchema" | "SqlCmdVariable" | "SqlScriptFunctionImplementation" => &[],
         _ => &[],
     }
 }
@@ -305,11 +482,30 @@ pub fn compare_element_properties(
 }
 
 fn compare_element_pair(rust_elem: &ModelElement, dotnet_elem: &ModelElement) -> Vec<Layer2Error> {
+    compare_element_pair_internal(rust_elem, dotnet_elem, false)
+}
+
+fn compare_element_pair_strict(
+    rust_elem: &ModelElement,
+    dotnet_elem: &ModelElement,
+) -> Vec<Layer2Error> {
+    compare_element_pair_internal(rust_elem, dotnet_elem, true)
+}
+
+fn compare_element_pair_internal(
+    rust_elem: &ModelElement,
+    dotnet_elem: &ModelElement,
+    strict: bool,
+) -> Vec<Layer2Error> {
     let mut errors = Vec::new();
 
-    let key_props = get_key_properties(&rust_elem.element_type);
+    let props_to_check = if strict {
+        get_all_properties(&rust_elem.element_type)
+    } else {
+        get_key_properties(&rust_elem.element_type)
+    };
 
-    for &prop_name in key_props {
+    for &prop_name in props_to_check {
         let rust_val = rust_elem.properties.get(prop_name);
         let dotnet_val = dotnet_elem.properties.get(prop_name);
 
@@ -335,8 +531,34 @@ fn compare_element_pair(rust_elem: &ModelElement, dotnet_elem: &ModelElement) ->
     for dotnet_child in &dotnet_elem.children {
         if let Some(ref child_name) = dotnet_child.name {
             if let Some(rust_child) = rust_named.get(child_name) {
-                errors.extend(compare_element_pair(rust_child, dotnet_child));
+                errors.extend(compare_element_pair_internal(
+                    rust_child,
+                    dotnet_child,
+                    strict,
+                ));
             }
+        }
+    }
+
+    errors
+}
+
+/// Compare ALL properties of matching elements (strict mode).
+/// This compares the complete set of properties defined in `get_all_properties()`
+/// rather than just the key properties. Used for exact parity testing.
+pub fn compare_all_properties(
+    rust_model: &DacpacModel,
+    dotnet_model: &DacpacModel,
+) -> Vec<Layer2Error> {
+    let mut errors = Vec::new();
+
+    // Compare properties of all matching named elements
+    for (elem_type, name) in rust_model.named_elements() {
+        if let (Some(rust_elem), Some(dotnet_elem)) = (
+            rust_model.get_element(&elem_type, &name),
+            dotnet_model.get_element(&elem_type, &name),
+        ) {
+            errors.extend(compare_element_pair_strict(rust_elem, dotnet_elem));
         }
     }
 
@@ -443,13 +665,39 @@ pub fn compare_dacpacs(
     dotnet_dacpac: &Path,
     include_layer3: bool,
 ) -> Result<ComparisonResult, String> {
+    let options = ComparisonOptions {
+        include_layer3,
+        strict_properties: false,
+        check_relationships: false,
+        check_element_order: false,
+    };
+    compare_dacpacs_with_options(rust_dacpac, dotnet_dacpac, &options)
+}
+
+/// Perform full layered comparison of two dacpacs with configurable options.
+///
+/// Options:
+/// - `include_layer3`: Run SqlPackage DeployReport comparison
+/// - `strict_properties`: Compare ALL properties (not just key properties)
+/// - `check_relationships`: Validate all relationships (Phase 3 - not yet implemented)
+/// - `check_element_order`: Validate element ordering (Phase 4 - not yet implemented)
+pub fn compare_dacpacs_with_options(
+    rust_dacpac: &Path,
+    dotnet_dacpac: &Path,
+    options: &ComparisonOptions,
+) -> Result<ComparisonResult, String> {
     let rust_model = DacpacModel::from_dacpac(rust_dacpac)?;
     let dotnet_model = DacpacModel::from_dacpac(dotnet_dacpac)?;
 
     let layer1_errors = compare_element_inventory(&rust_model, &dotnet_model);
-    let layer2_errors = compare_element_properties(&rust_model, &dotnet_model);
 
-    let layer3_result = if include_layer3 {
+    let layer2_errors = if options.strict_properties {
+        compare_all_properties(&rust_model, &dotnet_model)
+    } else {
+        compare_element_properties(&rust_model, &dotnet_model)
+    };
+
+    let layer3_result = if options.include_layer3 {
         Some(compare_with_sqlpackage(rust_dacpac, dotnet_dacpac))
     } else {
         None
