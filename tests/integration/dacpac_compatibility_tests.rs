@@ -181,7 +181,6 @@ fn test_build_with_index_naming() {
 // ============================================================================
 
 #[test]
-#[ignore = "Named inline default constraints not yet captured"]
 fn test_build_with_named_default_constraints() {
     let ctx = TestContext::with_fixture("default_constraints_named");
     let result = ctx.build();
