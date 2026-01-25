@@ -917,6 +917,14 @@ fn extract_table_type_structure(
     // Split by commas, handling nested parens
     let parts = split_by_top_level_comma(body_str);
 
+    // Compile regexes outside the loop to avoid recompiling on each iteration
+    let check_re = Regex::new(r"(?i)CHECK\s*\((.+)\)\s*$").unwrap();
+    let idx_re = Regex::new(
+        r"(?i)INDEX\s+\[?(\w+)\]?\s*(UNIQUE)?\s*(CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)",
+    )
+    .unwrap();
+    let col_re = Regex::new(r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)").unwrap();
+
     for part in parts {
         let trimmed = part.trim();
         if trimmed.is_empty() {
@@ -944,7 +952,6 @@ fn extract_table_type_structure(
             });
         } else if upper.starts_with("CHECK") {
             // CHECK (expression)
-            let check_re = Regex::new(r"(?i)CHECK\s*\((.+)\)\s*$").unwrap();
             if let Some(caps) = check_re.captures(trimmed) {
                 if let Some(expr) = caps.get(1) {
                     constraints.push(ExtractedTableTypeConstraint::Check {
@@ -954,10 +961,6 @@ fn extract_table_type_structure(
             }
         } else if upper.starts_with("INDEX") {
             // INDEX [IX_Name] [UNIQUE] [CLUSTERED|NONCLUSTERED] ([Col])
-            let idx_re = Regex::new(
-                r"(?i)INDEX\s+\[?(\w+)\]?\s*(UNIQUE)?\s*(CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)",
-            )
-            .unwrap();
             if let Some(caps) = idx_re.captures(trimmed) {
                 let name = caps
                     .get(1)
@@ -982,7 +985,6 @@ fn extract_table_type_structure(
         } else {
             // This is a column definition
             // Pattern: [ColumnName] DataType [NULL|NOT NULL] [DEFAULT (value)]
-            let col_re = Regex::new(r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)").unwrap();
 
             if let Some(caps) = col_re.captures(trimmed) {
                 let name = caps
@@ -1165,12 +1167,11 @@ fn extract_function_parameters(sql: &str) -> Vec<ExtractedFunctionParameter> {
     let func_name_end = sql_upper
         .find("CREATE FUNCTION")
         .or_else(|| sql_upper.find("ALTER FUNCTION"))
-        .map(|start| {
+        .and_then(|start| {
             // Skip past CREATE/ALTER FUNCTION and the name
             let after_keyword = &sql_upper[start..];
             after_keyword.find('(').map(|idx| start + idx)
-        })
-        .flatten();
+        });
 
     if func_name_end.is_none() {
         return params;
@@ -1965,6 +1966,9 @@ fn extract_fulltext_columns(sql: &str) -> Vec<ExtractedFullTextColumn> {
 
     let columns_str = &sql[paren_start..paren_end];
 
+    // Compile regex outside the loop to avoid recompiling on each iteration
+    let col_re = Regex::new(r"(?i)\[?(\w+)\]?(?:\s+LANGUAGE\s+(\d+))?").unwrap();
+
     // Split by comma and parse each column
     for col_part in columns_str.split(',') {
         let col_part = col_part.trim();
@@ -1973,7 +1977,6 @@ fn extract_fulltext_columns(sql: &str) -> Vec<ExtractedFullTextColumn> {
         }
 
         // Pattern: [ColumnName] LANGUAGE 1033 or just [ColumnName]
-        let col_re = Regex::new(r"(?i)\[?(\w+)\]?(?:\s+LANGUAGE\s+(\d+))?").unwrap();
         if let Some(caps) = col_re.captures(col_part) {
             let name = caps
                 .get(1)

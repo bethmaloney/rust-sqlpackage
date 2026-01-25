@@ -8,18 +8,13 @@ use roxmltree::Document;
 use crate::error::SqlPackageError;
 
 /// SQL Server version target
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SqlServerVersion {
     Sql130, // SQL Server 2016
     Sql140, // SQL Server 2017
     Sql150, // SQL Server 2019
+    #[default]
     Sql160, // SQL Server 2022
-}
-
-impl Default for SqlServerVersion {
-    fn default() -> Self {
-        SqlServerVersion::Sql160
-    }
 }
 
 impl std::str::FromStr for SqlServerVersion {
@@ -315,13 +310,9 @@ fn extract_version_from_dsp(dsp: &str) -> Option<SqlServerVersion> {
     }
 }
 
-fn extract_lcid_from_collation(collation: &str) -> Option<u32> {
+fn extract_lcid_from_collation(_collation: &str) -> Option<u32> {
     // Common collations and their LCIDs
-    if collation.starts_with("SQL_Latin1_General") || collation.starts_with("Latin1_General") {
-        Some(1033) // US English
-    } else {
-        Some(1033) // Default to US English
-    }
+    Some(1033) // Default to US English
 }
 
 fn find_sql_files(root: &roxmltree::Node, project_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -349,7 +340,7 @@ fn find_sql_files(root: &roxmltree::Node, project_dir: &Path) -> Result<Vec<Path
             let glob_str = glob_pattern.to_string_lossy();
             if let Ok(paths) = glob::glob(&glob_str) {
                 for entry in paths.filter_map(|p| p.ok()) {
-                    if entry.extension().map_or(false, |ext| ext == "sql") {
+                    if entry.extension().is_some_and(|ext| ext == "sql") {
                         sql_files.push(entry);
                     }
                 }
@@ -393,7 +384,7 @@ fn find_sql_files(root: &roxmltree::Node, project_dir: &Path) -> Result<Vec<Path
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "sql") {
+            if path.extension().is_some_and(|ext| ext == "sql") {
                 // Skip bin and obj directories
                 let path_str = path.to_string_lossy();
                 if !path_str.contains("/bin/")

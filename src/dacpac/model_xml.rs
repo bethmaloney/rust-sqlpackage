@@ -211,7 +211,7 @@ fn write_sqlcmd_variable<W: Write>(
 /// e.g., "Microsoft.SqlServer.Dacpacs.Msdb" -> "msdb.dacpac"
 fn extract_dacpac_name(package_name: &str) -> String {
     // Common pattern: Microsoft.SqlServer.Dacpacs.<DatabaseName>
-    if let Some(last_part) = package_name.split('.').last() {
+    if let Some(last_part) = package_name.split('.').next_back() {
         format!("{}.dacpac", last_part.to_lowercase())
     } else {
         format!("{}.dacpac", package_name.to_lowercase())

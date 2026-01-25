@@ -57,8 +57,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         FallbackFunctionType::TableValued => FunctionType::TableValued,
                     };
                     let is_natively_compiled = is_natively_compiled(&parsed.sql_text);
-                    let param_elements =
-                        parameters.iter().map(|p| param_from_extracted(p)).collect();
+                    let param_elements = parameters.iter().map(param_from_extracted).collect();
                     model.add_element(ModelElement::Function(FunctionElement {
                         schema: schema.clone(),
                         name: name.clone(),
@@ -98,7 +97,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 } => {
                     let column_elements: Vec<FullTextColumnElement> = columns
                         .iter()
-                        .map(|c| fulltext_column_from_extracted(c))
+                        .map(fulltext_column_from_extracted)
                         .collect();
                     model.add_element(ModelElement::FullTextIndex(FullTextIndexElement {
                         table_schema: table_schema.clone(),
@@ -132,11 +131,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     schemas.insert(schema.clone());
                     let column_elements: Vec<TableTypeColumnElement> = columns
                         .iter()
-                        .map(|c| table_type_column_from_extracted(c))
+                        .map(table_type_column_from_extracted)
                         .collect();
                     let constraint_elements: Vec<TableTypeConstraint> = constraints
                         .iter()
-                        .map(|c| table_type_constraint_from_extracted(c))
+                        .map(table_type_constraint_from_extracted)
                         .collect();
                     model.add_element(ModelElement::UserDefinedType(UserDefinedTypeElement {
                         schema: schema.clone(),
@@ -763,11 +762,11 @@ fn extract_type_params_from_string(data_type: &str) -> (Option<i32>, Option<u8>,
 fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option<u8>) {
     match data_type {
         DataType::Varchar(len) | DataType::Char(len) | DataType::Nvarchar(len) => {
-            let max_length = len.as_ref().and_then(|l| match l {
+            let max_length = len.as_ref().map(|l| match l {
                 sqlparser::ast::CharacterLength::IntegerLength { length, .. } => {
-                    Some(*length as i32)
+                    *length as i32
                 }
-                sqlparser::ast::CharacterLength::Max => Some(-1),
+                sqlparser::ast::CharacterLength::Max => -1,
             });
             (max_length, None, None)
         }

@@ -87,6 +87,7 @@ fn expand_includes_recursive(
     let source_dir = source_file.parent().unwrap_or(Path::new("."));
     let mut result = String::new();
     let mut last_end = 0;
+    let var_re = Regex::new(r"\$\((\w+)\)").expect("Invalid var regex");
 
     for caps in re.captures_iter(content) {
         let match_range = caps.get(0).unwrap();
@@ -102,7 +103,6 @@ fn expand_includes_recursive(
             .unwrap_or("");
 
         // Substitute SQLCMD variables $(varname)
-        let var_re = Regex::new(r"\$\((\w+)\)").expect("Invalid var regex");
         let include_path_str = var_re
             .replace_all(include_path_str, |caps: &regex::Captures| {
                 let var_name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
