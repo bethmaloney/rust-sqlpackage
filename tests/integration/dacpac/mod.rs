@@ -68,10 +68,12 @@ pub(crate) fn find_index_by_name<'a>(
     doc: &'a roxmltree::Document,
     index_name: &str,
 ) -> Option<roxmltree::Node<'a, 'a>> {
+    // Match exact index name at end of full name (e.g., [dbo].[Table].[IndexName])
+    let suffix = format!("].[{}]", index_name);
     doc.descendants().find(|n| {
         n.tag_name().name() == "Element"
             && n.attribute("Type") == Some("SqlIndex")
             && n.attribute("Name")
-                .map_or(false, |name| name.contains(index_name))
+                .map_or(false, |name| name.ends_with(&suffix))
     })
 }

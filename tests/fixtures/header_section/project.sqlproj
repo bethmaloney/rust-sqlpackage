@@ -3,16 +3,9 @@
   <Sdk Name="Microsoft.Build.Sql" Version="2.0.0" />
   <PropertyGroup>
     <Name>HeaderSection</Name>
-    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql150DatabaseSchemaProvider</DSP>
-    <ModelCollation>1033, CI</ModelCollation>
-    <AnsiNulls>True</AnsiNulls>
-    <QuotedIdentifier>True</QuotedIdentifier>
-    <ProjectGuid>{00000000-0000-0000-0000-000000000000}</ProjectGuid>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
   </PropertyGroup>
   <ItemGroup>
-    <Build Include="Tables.sql" />
-  </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="Microsoft.SqlServer.Dacpacs.Master" Version="150.0.0" />
+    <PackageReference Include="Microsoft.SqlServer.Dacpacs.Master" Version="160.0.0" />
   </ItemGroup>
 </Project>

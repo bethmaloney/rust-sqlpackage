@@ -1,30 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project DefaultTargets="Build">
+  <Sdk Name="Microsoft.Build.Sql" Version="2.0.0" />
   <PropertyGroup>
     <Name>E2ESimple</Name>
     <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
-    <DefaultSchema>dbo</DefaultSchema>
-    <ProjectGuid>{E2E00000-0000-0000-0000-000000000002}</ProjectGuid>
   </PropertyGroup>
-  <ItemGroup>
-    <!-- Schemas -->
-    <Build Include="Schemas/Sales.sql" />
-    <!-- Tables -->
-    <Build Include="Tables/Categories.sql" />
-    <Build Include="Tables/Products.sql" />
-    <Build Include="Tables/Customers.sql" />
-    <Build Include="Tables/Orders.sql" />
-    <!-- Views -->
-    <Build Include="Views/ActiveProducts.sql" />
-    <!-- Indexes -->
-    <Build Include="Indexes/IX_Products_CategoryId.sql" />
-    <!-- Stored Procedures -->
-    <Build Include="Procedures/GetProducts.sql" />
-    <!-- Functions -->
-    <Build Include="Functions/GetProductCount.sql" />
-    <!-- Sequences -->
-    <Build Include="Sequences/OrderSequence.sql" />
-    <!-- User-Defined Types - temporarily excluded pending SqlTableType support -->
-    <!-- <Build Include="Types/ProductTableType.sql" /> -->
-  </ItemGroup>
 </Project>

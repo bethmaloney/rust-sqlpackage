@@ -354,7 +354,28 @@ fn find_sql_files(root: &roxmltree::Node, project_dir: &Path) -> Result<Vec<Path
         }
     }
 
-    // Apply exclusion patterns
+    // If no explicit Build items, glob for .sql files in project directory (SDK-style default)
+    if sql_files.is_empty() && include_patterns.is_empty() {
+        for entry in walkdir::WalkDir::new(project_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "sql") {
+                // Skip bin and obj directories
+                let path_str = path.to_string_lossy();
+                if !path_str.contains("/bin/")
+                    && !path_str.contains("/obj/")
+                    && !path_str.contains("\\bin\\")
+                    && !path_str.contains("\\obj\\")
+                {
+                    sql_files.push(path.to_path_buf());
+                }
+            }
+        }
+    }
+
+    // Apply exclusion patterns (after SDK-style glob so Remove works for both styles)
     if !exclude_patterns.is_empty() {
         sql_files.retain(|file| {
             for pattern in &exclude_patterns {
@@ -375,27 +396,6 @@ fn find_sql_files(root: &roxmltree::Node, project_dir: &Path) -> Result<Vec<Path
             }
             true
         });
-    }
-
-    // If no explicit Build items, glob for .sql files in project directory (SDK-style default)
-    if sql_files.is_empty() && include_patterns.is_empty() {
-        for entry in walkdir::WalkDir::new(project_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "sql") {
-                // Skip bin and obj directories
-                let path_str = path.to_string_lossy();
-                if !path_str.contains("/bin/")
-                    && !path_str.contains("/obj/")
-                    && !path_str.contains("\\bin\\")
-                    && !path_str.contains("\\obj\\")
-                {
-                    sql_files.push(path.to_path_buf());
-                }
-            }
-        }
     }
 
     Ok(sql_files)
