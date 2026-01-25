@@ -118,6 +118,11 @@ pub struct ColumnElement {
     pub scale: Option<u8>,
     /// Disambiguator for inline constraint annotation (if column has inline constraints)
     pub inline_constraint_disambiguator: Option<u32>,
+    /// Computed column expression (e.g., "[Qty] * [Price]")
+    /// If Some, this is a computed column (SqlComputedColumn) instead of SqlSimpleColumn
+    pub computed_expression: Option<String>,
+    /// Whether the computed column is PERSISTED (stored physically)
+    pub is_persisted: bool,
 }
 
 /// View element

@@ -270,7 +270,7 @@ fn get_key_properties(element_type: &str) -> &'static [&'static str] {
     match element_type {
         "SqlTable" => &["IsAnsiNullsOn"],
         "SqlSimpleColumn" => &["IsNullable", "IsIdentity", "IsRowGuidCol", "IsPersisted"],
-        "SqlComputedColumn" => &["IsNullable", "IsPersisted", "ExpressionScript"],
+        "SqlComputedColumn" => &["IsPersisted", "ExpressionScript"],
         "SqlPrimaryKeyConstraint" => &["IsClustered"],
         "SqlIndex" => &["IsClustered", "IsUnique", "FilterPredicate"],
         "SqlForeignKeyConstraint" => &["DeleteAction", "UpdateAction"],

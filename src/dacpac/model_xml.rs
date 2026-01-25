@@ -389,7 +389,44 @@ fn write_column<W: Write>(
     column: &ColumnElement,
     table_name: &str,
 ) -> anyhow::Result<()> {
-    write_column_with_type(writer, column, table_name, "SqlSimpleColumn")
+    // Check if this is a computed column
+    if column.computed_expression.is_some() {
+        write_computed_column(writer, column, table_name)
+    } else {
+        write_column_with_type(writer, column, table_name, "SqlSimpleColumn")
+    }
+}
+
+/// Write a computed column element (SqlComputedColumn)
+fn write_computed_column<W: Write>(
+    writer: &mut Writer<W>,
+    column: &ColumnElement,
+    table_name: &str,
+) -> anyhow::Result<()> {
+    let col_name = format!("{}.[{}]", table_name, column.name);
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlComputedColumn"));
+    elem.push_attribute(("Name", col_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // SqlComputedColumn does NOT support IsNullable property (unlike SqlSimpleColumn)
+    // Only IsPersisted and ExpressionScript are valid properties
+
+    if column.is_persisted {
+        write_property(writer, "IsPersisted", "True")?;
+    }
+
+    // Write expression script
+    if let Some(ref expr) = column.computed_expression {
+        write_script_property(writer, "ExpressionScript", expr)?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    Ok(())
 }
 
 /// Write a table type column (uses SqlTableTypeSimpleColumn for user-defined table types)

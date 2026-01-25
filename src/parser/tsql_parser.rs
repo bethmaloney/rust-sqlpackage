@@ -106,6 +106,7 @@ pub struct ExtractedTableColumn {
     /// Column name
     pub name: String,
     /// Data type (e.g., "NVARCHAR(50)", "INT", "DECIMAL(18, 2)")
+    /// For computed columns, this will be empty
     pub data_type: String,
     /// Whether the column is nullable
     pub is_nullable: bool,
@@ -125,6 +126,11 @@ pub struct ExtractedTableColumn {
     pub check_constraint_name: Option<String>,
     /// Inline CHECK constraint expression (if any)
     pub check_expression: Option<String>,
+    /// Computed column expression (e.g., "[Qty] * [Price]")
+    /// If Some, this is a computed column with no explicit data type
+    pub computed_expression: Option<String>,
+    /// Whether the computed column is PERSISTED (stored physically)
+    pub is_persisted: bool,
 }
 
 /// A column reference in a constraint with optional sort direction
@@ -1440,8 +1446,48 @@ fn split_by_top_level_comma(s: &str) -> Vec<String> {
 /// Parse a column definition
 fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     // Column pattern: [Name] TYPE [IDENTITY] [CONSTRAINT name DEFAULT (value)] [NOT NULL|NULL]
+    // OR computed column: [Name] AS (expression) [PERSISTED] [NOT NULL]
     // The order can vary, so we need to be flexible
 
+    // First check if this is a computed column: [Name] AS (expression)
+    let computed_re = Regex::new(r"(?i)^\[?(\w+)\]?\s+AS\s+\(").ok()?;
+    if let Some(caps) = computed_re.captures(col_def) {
+        let name = caps.get(1)?.as_str().to_string();
+
+        // Find the start of the expression (position of AS followed by '(')
+        let as_match = Regex::new(r"(?i)\bAS\s*\(").ok()?.find(col_def)?;
+        let expr_start = as_match.end() - 1; // Position of '('
+
+        // Extract the full balanced expression using existing helper
+        // extract_balanced_parens returns content without outer parens, so we add them back
+        let inner_expr = extract_balanced_parens(&col_def[expr_start..])?;
+        let expression = format!("({})", inner_expr);
+
+        // Check for PERSISTED keyword
+        let is_persisted = col_def.to_uppercase().contains("PERSISTED");
+
+        // Check for NOT NULL (computed columns can specify nullability)
+        let upper = col_def.to_uppercase();
+        let is_nullable = !upper.contains("NOT NULL");
+
+        return Some(ExtractedTableColumn {
+            name,
+            data_type: String::new(), // Computed columns have no explicit data type
+            is_nullable,
+            is_identity: false,
+            is_rowguidcol: false,
+            is_sparse: false,
+            is_filestream: false,
+            default_constraint_name: None,
+            default_value: None,
+            check_constraint_name: None,
+            check_expression: None,
+            computed_expression: Some(expression),
+            is_persisted,
+        });
+    }
+
+    // Not a computed column - parse as regular column
     // First extract the column name and type
     let col_re = Regex::new(r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)").ok()?;
     let caps = col_re.captures(col_def)?;
@@ -1570,6 +1616,8 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
         default_value,
         check_constraint_name,
         check_expression,
+        computed_expression: None, // Regular column, not computed
+        is_persisted: false,
     })
 }
 

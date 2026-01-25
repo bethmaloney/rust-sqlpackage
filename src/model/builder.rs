@@ -565,6 +565,8 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
     let mut is_identity = false;
     let mut default_value = None;
     let mut has_inline_constraint = false;
+    let mut computed_expression: Option<String> = None;
+    let mut is_persisted = false;
 
     for option in &col.options {
         match &option.option {
@@ -580,6 +582,23 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
             }
             ColumnOption::Unique { .. } => {
                 has_inline_constraint = true;
+            }
+            ColumnOption::Generated {
+                generation_expr,
+                generation_expr_mode,
+                ..
+            } => {
+                // This is a computed column
+                if let Some(expr) = generation_expr {
+                    computed_expression = Some(format!("({})", expr));
+                }
+                // Check if PERSISTED (STORED in ANSI SQL)
+                if let Some(mode) = generation_expr_mode {
+                    is_persisted = matches!(
+                        mode,
+                        sqlparser::ast::GeneratedExpressionMode::Stored
+                    );
+                }
             }
             _ => {}
         }
@@ -626,6 +645,8 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
         precision,
         scale,
         inline_constraint_disambiguator,
+        computed_expression,
+        is_persisted,
     }
 }
 
@@ -789,6 +810,8 @@ fn column_from_fallback_table(col: &ExtractedTableColumn) -> ColumnElement {
         precision,
         scale,
         inline_constraint_disambiguator,
+        computed_expression: col.computed_expression.clone(),
+        is_persisted: col.is_persisted,
     }
 }
 

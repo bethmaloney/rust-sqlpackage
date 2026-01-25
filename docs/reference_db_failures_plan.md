@@ -61,16 +61,31 @@ Dotnet emits `SqlInlineConstraintAnnotation` elements on columns that have inlin
 
 ### 3. SqlComputedColumn
 
-- **Status:** [ ] Not started
+- **Status:** [x] Completed
 - **Severity:** Low
 
 **Description:**
-Dotnet parses stored procedure and function bodies to extract computed columns from CTEs, temp tables, and other query constructs. Rust-sqlpackage does not perform this deep analysis of procedure bodies.
+Computed columns defined with `AS (expression)` syntax in table definitions are now fully supported.
 
-**Example:** Columns in CTE definitions within stored procedures:
-```sql
-WITH CTE AS (SELECT a.field AS computed_col FROM ...)
+**Implementation:**
+- Added `computed_expression` and `is_persisted` fields to `ExtractedTableColumn` and `ColumnElement` structs
+- Updated `parse_column_definition()` in `tsql_parser.rs` to detect computed column syntax: `[ColumnName] AS (expression) [PERSISTED]`
+- Updated `column_from_def()` and `column_from_fallback_table()` to extract computed column info
+- Added `write_computed_column()` function in `model_xml.rs` to emit `SqlComputedColumn` elements
+
+**Example output:**
+```xml
+<Element Type="SqlComputedColumn" Name="[dbo].[Products].[TotalValue]">
+  <Property Name="IsPersisted" Value="True"/>
+  <Property Name="ExpressionScript">
+    <Value><![CDATA[([Quantity] * [UnitPrice])]]></Value>
+  </Property>
+</Element>
 ```
+
+**Note:** SqlComputedColumn does not support the `IsNullable` property (unlike SqlSimpleColumn). Only `IsPersisted` and `ExpressionScript` are valid properties.
+
+**Not implemented:** Deep analysis of procedure bodies to extract computed columns from CTEs, temp tables, and other query constructs (this would require semantic analysis beyond the scope of basic parsing).
 
 ---
 
@@ -178,7 +193,9 @@ Fixed the XML content type in `[Content_Types].xml` to match dotnet behavior.
 3. **#6 - DacMetadata.xml Root Element** - ~~Low, cosmetic compatibility~~ ✓ Completed
 4. **#8 - Content_Types.xml MIME Type** - ~~Low, cosmetic compatibility~~ ✓ Completed
 5. **#7 - Origin.xml Format Differences** - ~~Low, cosmetic compatibility~~ ✓ Completed
-6. **#2-4 - Annotation/computed elements** - Low, deep analysis features
+6. **#2 - SqlInlineConstraintAnnotation** - ~~Low, inline constraints~~ ✓ Completed
+7. **#3 - SqlComputedColumn** - ~~Low, computed columns~~ ✓ Completed
+8. **#4 - SqlDynamicColumnSource** - Low, deep analysis features (not planned)
 
 ---
 
