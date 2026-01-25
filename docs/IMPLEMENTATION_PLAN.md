@@ -27,36 +27,36 @@ These issues are documented in TESTING.md and block exact matching.
   - Test added: `test_ampersand_in_function_name` in unit tests
   - Acceptance: Names like `GetP&L_Report` preserved correctly ✓
 
-- [ ] **1.2 Named inline default constraints**
-  - Issue: `CONSTRAINT [DF_Name] DEFAULT (value)` syntax not extracted
-  - Location: Model builder
-  - Test fixture: `default_constraints_named/`
-  - Acceptance: Named default constraints appear as separate `SqlDefaultConstraint` elements
+- [x] **1.2 Named inline default constraints** ✓ ALREADY IMPLEMENTED
+  - Issue: `CONSTRAINT [DF_Name] DEFAULT (value)` syntax was already supported
+  - Implementation: Model builder extracts from sqlparser's `ColumnOption::Default` with names
+  - Unnamed defaults auto-generate names like `DF_TableName_ColumnName`
+  - Test fixture: `default_constraints_named/` (all tests pass)
+  - Acceptance: Named default constraints appear as separate `SqlDefaultConstraint` elements ✓
 
-- [ ] **1.3 Inline CHECK constraints**
-  - Issue: Inline CHECK constraints not captured as separate elements
-  - Location: Model builder
-  - Test fixture: `inline_constraints/`
-  - Acceptance: Inline CHECK constraints appear as `SqlCheckConstraint` elements
+- [x] **1.3 Inline CHECK constraints** ✓ ALREADY IMPLEMENTED
+  - Issue: Inline CHECK constraints were already being captured
+  - Implementation: Model builder extracts from sqlparser's `ColumnOption::Check`
+  - Fallback parser also extracts via regex from column definitions
+  - Test fixture: `inline_constraints/` (all tests pass)
+  - Acceptance: Inline CHECK constraints appear as `SqlCheckConstraint` elements ✓
 
 ### Medium Priority
 
-- [ ] **1.4 SqlDatabaseOptions element**
-  - Issue: Database-level settings missing from model.xml
-  - Location: Dacpac generator
-  - Test fixture: `database_options/`
-  - Acceptance: `SqlDatabaseOptions` element present with correct properties
+- [x] **1.4 SqlDatabaseOptions element** ✓ ALREADY IMPLEMENTED
+  - Verified: model.xml contains `<Element Type="SqlDatabaseOptions">` with properties
+  - Properties include: IsAnsiNullDefaultOn, IsAnsiNullsOn, IsArithAbortOn, etc.
+  - Acceptance: `SqlDatabaseOptions` element present with correct properties ✓
 
-- [ ] **1.5 Header section generation**
-  - Issue: AnsiNulls, QuotedIdentifier, CompatibilityMode missing
-  - Location: Dacpac generator
-  - Test fixture: `header_section/`
-  - Acceptance: Header element with correct SET options
+- [x] **1.5 Header section generation** ✓ ALREADY IMPLEMENTED
+  - Verified: model.xml contains Metadata elements for AnsiNulls, QuotedIdentifier, CompatibilityMode
+  - Example: `<Metadata Name="AnsiNulls" Value="True"/>`, etc.
+  - Acceptance: Header element with correct SET options ✓
 
-- [ ] **1.6 SqlInlineConstraintAnnotation**
-  - Issue: Links between columns and inline constraints missing
-  - Location: Model builder
-  - Acceptance: Annotation elements linking columns to their inline constraints
+- [x] **1.6 SqlInlineConstraintAnnotation** ✓ ALREADY IMPLEMENTED
+  - Implementation: Columns with inline constraints get hash-based disambiguator values
+  - XML output: `<Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="123456"/>`
+  - Acceptance: Annotation elements linking columns to their inline constraints ✓
 
 ### Lower Priority
 

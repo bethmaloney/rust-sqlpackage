@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Script to repeatedly run Claude Code with prompt.md
+# Script to repeatedly run Claude Code with IMPLEMENTATION_PROMPT.md
 # Exits early if "ALL TODO ITEMS COMPLETE" is detected
 
 set -e
 
-PROMPT_FILE="docs/test_failures_prompt.md"
+PROMPT_FILE="docs/IMPLEMENTATION_PROMPT.md"
 MAX_ITERATIONS=20
 ITERATION=0
 CURRENT_BRANCH=$(git branch --show-current)
@@ -16,7 +16,7 @@ if [ ! -f "$PROMPT_FILE" ]; then
     exit 1
 fi
 
-echo "Starting fix_tests loop on branch: $CURRENT_BRANCH"
+echo "Starting implementation loop on branch: $CURRENT_BRANCH"
 echo "Max iterations: $MAX_ITERATIONS"
 echo "Prompt file: $PROMPT_FILE"
 echo ""
