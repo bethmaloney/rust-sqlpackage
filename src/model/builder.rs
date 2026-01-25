@@ -95,10 +95,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     catalog,
                     change_tracking,
                 } => {
-                    let column_elements: Vec<FullTextColumnElement> = columns
-                        .iter()
-                        .map(fulltext_column_from_extracted)
-                        .collect();
+                    let column_elements: Vec<FullTextColumnElement> =
+                        columns.iter().map(fulltext_column_from_extracted).collect();
                     model.add_element(ModelElement::FullTextIndex(FullTextIndexElement {
                         table_schema: table_schema.clone(),
                         table_name: table_name.clone(),
@@ -763,9 +761,7 @@ fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option
     match data_type {
         DataType::Varchar(len) | DataType::Char(len) | DataType::Nvarchar(len) => {
             let max_length = len.as_ref().map(|l| match l {
-                sqlparser::ast::CharacterLength::IntegerLength { length, .. } => {
-                    *length as i32
-                }
+                sqlparser::ast::CharacterLength::IntegerLength { length, .. } => *length as i32,
                 sqlparser::ast::CharacterLength::Max => -1,
             });
             (max_length, None, None)
