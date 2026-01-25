@@ -5,8 +5,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 ## Summary
 
 - **Total Ignored Tests**: 12
-- **Fixed**: 7
-- **Remaining**: 5
+- **Fixed**: 8
+- **Remaining**: 4
 
 ## Test Fixes
 
@@ -105,16 +105,17 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 
 ### 8. Header Section
 
-- [ ] **Test**: `test_build_with_header_section`
-- **Ignore Reason**: Header section not yet implemented
-- **Impact**: Missing model.xml Header with settings
-- **Files to Modify**:
-  - `src/dacpac/xml.rs` - Add Header element before Model
-  - `src/project/mod.rs` - Extract settings from sqlproj
-- **Implementation Notes**:
-  - Header contains: AnsiNulls, QuotedIdentifier, CompatibilityMode
-  - Format: `<Header><... /></Header>` before `<Model>`
-  - Settings come from sqlproj PropertyGroup
+- [x] **Test**: `test_build_with_header_section`
+- **Status**: ✅ FIXED - Header section now generated correctly
+- **Notes**: The Header section is now generated before the Model element in model.xml.
+  The implementation:
+  - Parses `AnsiNulls` and `QuotedIdentifier` settings from sqlproj PropertyGroup (defaults: true)
+  - Generates `<Header>` element with `<CustomData>` entries for:
+    - `AnsiNulls` - from project settings
+    - `QuotedIdentifier` - from project settings
+    - `CompatibilityMode` - derived from target platform (130, 140, 150, 160)
+  - Added `ansi_nulls` and `quoted_identifier` fields to `SqlProject` struct
+  - Added `compatibility_mode()` method to `SqlServerVersion` enum
 - **Fixture**: `tests/fixtures/header_section/`
 
 ---

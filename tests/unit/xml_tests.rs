@@ -28,6 +28,8 @@ fn create_test_project() -> rust_sqlpackage::project::SqlProject {
         project_dir: PathBuf::new(),
         pre_deploy_script: None,
         post_deploy_script: None,
+        ansi_nulls: true,
+        quoted_identifier: true,
     }
 }
 

@@ -60,6 +60,9 @@ pub fn generate_model_xml<W: Write>(
     root.push_attribute(("xmlns", NAMESPACE));
     xml_writer.write_event(Event::Start(root))?;
 
+    // Header element with CustomData entries
+    write_header(&mut xml_writer, project)?;
+
     // Model element
     xml_writer.write_event(Event::Start(BytesStart::new("Model")))?;
 
@@ -74,6 +77,59 @@ pub fn generate_model_xml<W: Write>(
     // Close root
     xml_writer.write_event(Event::End(BytesEnd::new("DataSchemaModel")))?;
 
+    Ok(())
+}
+
+/// Write the Header section with CustomData entries for AnsiNulls, QuotedIdentifier, and CompatibilityMode
+fn write_header<W: Write>(writer: &mut Writer<W>, project: &SqlProject) -> anyhow::Result<()> {
+    writer.write_event(Event::Start(BytesStart::new("Header")))?;
+
+    // AnsiNulls
+    write_custom_data(
+        writer,
+        "AnsiNulls",
+        "AnsiNulls",
+        if project.ansi_nulls { "True" } else { "False" },
+    )?;
+
+    // QuotedIdentifier
+    write_custom_data(
+        writer,
+        "QuotedIdentifier",
+        "QuotedIdentifier",
+        if project.quoted_identifier {
+            "True"
+        } else {
+            "False"
+        },
+    )?;
+
+    // CompatibilityMode
+    let compat_mode = project.target_platform.compatibility_mode().to_string();
+    write_custom_data(writer, "CompatibilityMode", "CompatibilityMode", &compat_mode)?;
+
+    writer.write_event(Event::End(BytesEnd::new("Header")))?;
+    Ok(())
+}
+
+/// Write a CustomData element with a single Metadata child
+/// Format: <CustomData Category="category"><Metadata Name="name" Value="value"/></CustomData>
+fn write_custom_data<W: Write>(
+    writer: &mut Writer<W>,
+    category: &str,
+    name: &str,
+    value: &str,
+) -> anyhow::Result<()> {
+    let mut custom_data = BytesStart::new("CustomData");
+    custom_data.push_attribute(("Category", category));
+    writer.write_event(Event::Start(custom_data))?;
+
+    let mut metadata = BytesStart::new("Metadata");
+    metadata.push_attribute(("Name", name));
+    metadata.push_attribute(("Value", value));
+    writer.write_event(Event::Empty(metadata))?;
+
+    writer.write_event(Event::End(BytesEnd::new("CustomData")))?;
     Ok(())
 }
 

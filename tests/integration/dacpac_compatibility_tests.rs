@@ -393,7 +393,6 @@ fn test_build_with_output_parameters() {
 // ============================================================================
 
 #[test]
-#[ignore = "Header section not yet implemented"]
 fn test_build_with_header_section() {
     let ctx = TestContext::with_fixture("header_section");
     let result = ctx.build();

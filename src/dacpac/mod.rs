@@ -34,6 +34,8 @@ pub fn generate_model_xml_string(
         project_dir: PathBuf::new(),
         pre_deploy_script: None,
         post_deploy_script: None,
+        ansi_nulls: true,
+        quoted_identifier: true,
     };
 
     let mut buffer = Vec::new();
@@ -56,6 +58,8 @@ pub fn generate_dac_metadata_xml(name: &str, version: &str) -> String {
         project_dir: PathBuf::new(),
         pre_deploy_script: None,
         post_deploy_script: None,
+        ansi_nulls: true,
+        quoted_identifier: true,
     };
 
     let mut buffer = Vec::new();

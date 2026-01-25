@@ -53,6 +53,16 @@ impl SqlServerVersion {
             }
         }
     }
+
+    /// Get the compatibility mode number for the Header section
+    pub fn compatibility_mode(&self) -> u16 {
+        match self {
+            SqlServerVersion::Sql130 => 130,
+            SqlServerVersion::Sql140 => 140,
+            SqlServerVersion::Sql150 => 150,
+            SqlServerVersion::Sql160 => 160,
+        }
+    }
 }
 
 /// Reference to another dacpac
@@ -85,6 +95,10 @@ pub struct SqlProject {
     pub pre_deploy_script: Option<PathBuf>,
     /// Post-deployment script file (optional, at most one)
     pub post_deploy_script: Option<PathBuf>,
+    /// ANSI_NULLS setting (default: true)
+    pub ansi_nulls: bool,
+    /// QUOTED_IDENTIFIER setting (default: true)
+    pub quoted_identifier: bool,
 }
 
 /// Parse a .sqlproj file
@@ -123,6 +137,16 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         .and_then(|c| extract_lcid_from_collation(&c))
         .unwrap_or(1033); // Default to US English
 
+    // Parse ANSI_NULLS setting (default: true)
+    let ansi_nulls = find_property_value(&root, "AnsiNulls")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(true);
+
+    // Parse QUOTED_IDENTIFIER setting (default: true)
+    let quoted_identifier = find_property_value(&root, "QuotedIdentifier")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(true);
+
     // Find all SQL files
     let sql_files = find_sql_files(&root, &project_dir)?;
 
@@ -142,6 +166,8 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         project_dir,
         pre_deploy_script,
         post_deploy_script,
+        ansi_nulls,
+        quoted_identifier,
     })
 }
 
