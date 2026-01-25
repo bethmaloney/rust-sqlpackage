@@ -731,8 +731,8 @@ fn test_generate_content_types() {
         "Should have Types root element"
     );
     assert!(
-        content_types.contains("application/xml"),
-        "Should have XML content type"
+        content_types.contains("text/xml"),
+        "Should have XML content type (text/xml to match dotnet)"
     );
 }
 

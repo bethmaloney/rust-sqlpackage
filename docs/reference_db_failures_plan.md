@@ -150,15 +150,18 @@ Several structural differences in Origin.xml:
 
 ### 8. Content_Types.xml MIME Type
 
-- **Status:** [ ] Not started
+- **Status:** [x] Completed
 - **Severity:** Low
 
 **Description:**
-Different content type used for XML files:
+Fixed the XML content type in `[Content_Types].xml` to match dotnet behavior.
+
+**Implementation:**
+- Changed `ContentType="application/xml"` to `ContentType="text/xml"` in `generate_content_types_xml()` function in `src/dacpac/packager.rs`
 
 | Implementation | XML Content Type |
 |----------------|------------------|
-| Rust | `application/xml` |
+| Rust | `text/xml` |
 | Dotnet | `text/xml` |
 
 ---
@@ -167,8 +170,10 @@ Different content type used for XML files:
 
 1. **#1 - GO; Batch Separator** - ~~Critical, causes real data loss~~ ✓ Completed
 2. **#5 - SqlExtendedProperty** - ~~Medium, already parsed but not emitted~~ ✓ Completed
-3. **#6-8 - Metadata differences** - Low, cosmetic compatibility
-4. **#2-4 - Annotation/computed elements** - Low, deep analysis features
+3. **#6 - DacMetadata.xml Root Element** - ~~Low, cosmetic compatibility~~ ✓ Completed
+4. **#8 - Content_Types.xml MIME Type** - ~~Low, cosmetic compatibility~~ ✓ Completed
+5. **#7 - Origin.xml Format Differences** - Low, cosmetic compatibility
+6. **#2-4 - Annotation/computed elements** - Low, deep analysis features
 
 ---
 

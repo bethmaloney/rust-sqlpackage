@@ -107,14 +107,14 @@ pub(crate) fn generate_content_types_xml(include_sql: bool) -> String {
     if include_sql {
         r#"<?xml version="1.0" encoding="utf-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="xml" ContentType="application/xml" />
+  <Default Extension="xml" ContentType="text/xml" />
   <Default Extension="sql" ContentType="text/plain" />
 </Types>"#
             .to_string()
     } else {
         r#"<?xml version="1.0" encoding="utf-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="xml" ContentType="application/xml" />
+  <Default Extension="xml" ContentType="text/xml" />
 </Types>"#
             .to_string()
     }
