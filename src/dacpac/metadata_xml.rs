@@ -18,8 +18,8 @@ pub fn generate_metadata_xml<W: Write>(
     // XML declaration
     xml_writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;
 
-    // Root element
-    let mut root = BytesStart::new("DacMetadata");
+    // Root element - DacType per MS schema
+    let mut root = BytesStart::new("DacType");
     root.push_attribute(("xmlns", NAMESPACE));
     xml_writer.write_event(Event::Start(root))?;
 
@@ -29,11 +29,11 @@ pub fn generate_metadata_xml<W: Write>(
     // Version
     write_element(&mut xml_writer, "Version", version)?;
 
-    // Description (optional)
-    write_element(&mut xml_writer, "Description", "")?;
+    // Description - omit if empty (matches dotnet behavior)
+    // Currently SqlProject doesn't have a description field, so we don't emit it
 
     // Close root
-    xml_writer.write_event(Event::End(BytesEnd::new("DacMetadata")))?;
+    xml_writer.write_event(Event::End(BytesEnd::new("DacType")))?;
 
     Ok(())
 }

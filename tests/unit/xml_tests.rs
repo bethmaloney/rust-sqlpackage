@@ -620,13 +620,19 @@ fn test_model_xml_has_correct_namespace() {
 fn test_generate_dac_metadata() {
     let metadata = rust_sqlpackage::dacpac::generate_dac_metadata_xml("TestProject", "1.0.0.0");
 
+    // DacMetadata.xml uses DacType as root element (per MS XSD schema)
     assert!(
-        metadata.contains("<DacMetadata"),
-        "Should have DacMetadata root element"
+        metadata.contains("<DacType"),
+        "Should have DacType root element (per MS schema)"
     );
     assert!(
         metadata.contains("TestProject"),
         "Should contain project name"
+    );
+    // Empty Description should not be emitted (matches dotnet behavior)
+    assert!(
+        !metadata.contains("<Description>"),
+        "Should not emit empty Description element"
     );
 }
 

@@ -86,23 +86,32 @@ Related to computed/dynamic columns within procedure bodies. Dotnet tracks the s
 
 ### 5. SqlExtendedProperty
 
-- **Status:** [ ] Not started
+- **Status:** [x] Completed
 - **Severity:** Medium
 
 **Description:**
-Extended properties defined via `sp_addextendedproperty` (e.g., `MS_Description` for documentation) are parsed by the fallback parser but not emitted to model.xml.
+Extended properties defined via `sp_addextendedproperty` (e.g., `MS_Description` for documentation) are now fully supported.
 
-**Example SQL:**
-```sql
-EXEC sp_addextendedproperty
-    @name = N'MS_Description',
-    @value = N'Description text',
-    @level0type = N'SCHEMA', @level0name = N'dbo',
-    @level1type = N'TABLE',  @level1name = N'TableName',
-    @level2type = N'COLUMN', @level2name = N'ColumnName';
+**Implementation:**
+- The fallback parser extracts `ExtractedExtendedProperty` from `sp_addextendedproperty` calls
+- The model builder converts these to `ExtendedPropertyElement` structs
+- The `write_extended_property()` function in model_xml.rs emits the XML elements
+
+**Example output:**
+```xml
+<Element Type="SqlExtendedProperty" Name="[dbo].[TableName].[MS_Description]">
+  <Property Name="Value">
+    <Value><![CDATA[Description text]]></Value>
+  </Property>
+  <Relationship Name="ExtendedObject">
+    <Entry>
+      <References Name="[dbo].[TableName]"/>
+    </Entry>
+  </Relationship>
+</Element>
 ```
 
-**Note:** The parser already extracts this information (`ExtractedExtendedProperty`), but it's not being written to the model.xml output.
+For column-level properties, the Name includes the column: `[dbo].[TableName].[ColumnName].[MS_Description]`
 
 ---
 
@@ -110,18 +119,15 @@ EXEC sp_addextendedproperty
 
 ### 6. DacMetadata.xml Root Element
 
-- **Status:** [ ] Not started
+- **Status:** [x] Completed
 - **Severity:** Low
 
 **Description:**
-The root element name differs between implementations:
+Fixed the root element name and empty Description handling to match dotnet behavior.
 
-| Implementation | Root Element |
-|----------------|--------------|
-| Rust | `<DacMetadata>` |
-| Dotnet | `<DacType>` |
-
-Rust also includes an empty `<Description>` element that dotnet omits.
+**Implementation:**
+- Changed root element from `<DacMetadata>` to `<DacType>` (per MS XSD schema)
+- Empty `<Description>` element is now omitted (matches dotnet behavior)
 
 ---
 
@@ -159,8 +165,8 @@ Different content type used for XML files:
 
 ## Priority Order
 
-1. **#1 - GO; Batch Separator** - Critical, causes real data loss
-2. **#5 - SqlExtendedProperty** - Medium, already parsed but not emitted
+1. **#1 - GO; Batch Separator** - ~~Critical, causes real data loss~~ ✓ Completed
+2. **#5 - SqlExtendedProperty** - ~~Medium, already parsed but not emitted~~ ✓ Completed
 3. **#6-8 - Metadata differences** - Low, cosmetic compatibility
 4. **#2-4 - Annotation/computed elements** - Low, deep analysis features
 

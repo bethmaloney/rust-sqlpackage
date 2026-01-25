@@ -19,9 +19,17 @@ fn test_metadata_xml_structure() {
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let metadata_xml = info.metadata_xml_content.expect("Should have metadata XML");
 
+    // DacMetadata.xml uses DacType as root element (per MS XSD schema)
     assert!(
-        metadata_xml.contains("<DacMetadata") || metadata_xml.contains("DacMetadata"),
-        "Metadata XML should have DacMetadata root element"
+        metadata_xml.contains("<DacType") || metadata_xml.contains("DacType"),
+        "DacMetadata.xml should have DacType root element (per MS schema)"
+    );
+
+    // Empty Description should not be emitted (matches dotnet behavior)
+    assert!(
+        !metadata_xml.contains("<Description></Description>")
+            && !metadata_xml.contains("<Description/>"),
+        "DacMetadata.xml should not contain empty Description element"
     );
 }
 
