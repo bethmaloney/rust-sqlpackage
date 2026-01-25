@@ -5,7 +5,8 @@ mod tsql_parser;
 
 pub use sqlcmd::expand_includes;
 pub use tsql_parser::{
-    parse_sql_file, parse_sql_files, ExtractedConstraintColumn, ExtractedDefaultConstraint,
+    extract_extended_property_from_sql, parse_sql_file, parse_sql_files,
+    ExtractedConstraintColumn, ExtractedDefaultConstraint, ExtractedExtendedProperty,
     ExtractedFunctionParameter, ExtractedTableColumn, ExtractedTableConstraint,
     ExtractedTableTypeColumn, FallbackFunctionType, FallbackStatementType, ParsedStatement,
     BINARY_MAX_SENTINEL,

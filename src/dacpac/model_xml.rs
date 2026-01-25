@@ -5,9 +5,9 @@ use quick_xml::Writer;
 use std::io::Write;
 
 use crate::model::{
-    ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, FunctionElement, IndexElement,
-    ModelElement, ProcedureElement, RawElement, SchemaElement, SequenceElement, TableElement,
-    UserDefinedTypeElement, ViewElement,
+    ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, ExtendedPropertyElement,
+    FunctionElement, IndexElement, ModelElement, ProcedureElement, RawElement, SchemaElement,
+    SequenceElement, TableElement, UserDefinedTypeElement, ViewElement,
 };
 use crate::project::SqlProject;
 
@@ -86,6 +86,7 @@ fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> an
         ModelElement::Constraint(c) => write_constraint(writer, c),
         ModelElement::Sequence(s) => write_sequence(writer, s),
         ModelElement::UserDefinedType(u) => write_user_defined_type(writer, u),
+        ModelElement::ExtendedProperty(e) => write_extended_property(writer, e),
         ModelElement::Raw(r) => write_raw(writer, r),
     }
 }
@@ -1143,6 +1144,40 @@ fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Resu
 
     // Relationship to schema
     write_schema_relationship(writer, &raw.schema)?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write an extended property element
+/// Format:
+/// ```xml
+/// <Element Type="SqlExtendedProperty" Name="[dbo].[Table].[MS_Description]">
+///   <Property Name="Value"><Value><![CDATA[Description text]]></Value></Property>
+///   <Relationship Name="ExtendedObject">
+///     <Entry>
+///       <References Name="[dbo].[Table]"/>
+///     </Entry>
+///   </Relationship>
+/// </Element>
+/// ```
+fn write_extended_property<W: Write>(
+    writer: &mut Writer<W>,
+    ext_prop: &ExtendedPropertyElement,
+) -> anyhow::Result<()> {
+    let full_name = ext_prop.full_name();
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlExtendedProperty"));
+    elem.push_attribute(("Name", full_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Write Value property with CDATA containing the property value
+    write_script_property(writer, "Value", &ext_prop.property_value)?;
+
+    // Write ExtendedObject relationship pointing to the target object (table or column)
+    let extends_ref = ext_prop.extends_object_ref();
+    write_relationship(writer, "ExtendedObject", &[&extends_ref])?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())

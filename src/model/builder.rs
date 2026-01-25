@@ -6,16 +6,17 @@ use anyhow::Result;
 use sqlparser::ast::{ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint};
 
 use crate::parser::{
-    ExtractedFunctionParameter, ExtractedTableColumn, ExtractedTableConstraint,
-    ExtractedTableTypeColumn, FallbackFunctionType, FallbackStatementType, ParsedStatement,
-    BINARY_MAX_SENTINEL,
+    ExtractedExtendedProperty, ExtractedFunctionParameter, ExtractedTableColumn,
+    ExtractedTableConstraint, ExtractedTableTypeColumn, FallbackFunctionType,
+    FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL,
 };
 use crate::project::SqlProject;
 
 use super::{
     ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
-    FunctionElement, FunctionType, IndexElement, ModelElement, ParameterElement, ProcedureElement,
-    RawElement, SchemaElement, SequenceElement, TableElement, UserDefinedTypeElement, ViewElement,
+    ExtendedPropertyElement, FunctionElement, FunctionType, IndexElement, ModelElement,
+    ParameterElement, ProcedureElement, RawElement, SchemaElement, SequenceElement, TableElement,
+    UserDefinedTypeElement, ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -205,6 +206,14 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                             sql_type: sql_type.to_string(),
                             definition: parsed.sql_text.clone(),
                         }));
+                    }
+                }
+                FallbackStatementType::ExtendedProperty { property } => {
+                    // Extended properties apply to existing objects (tables, columns, etc.)
+                    // Only add if level1 is specified (TABLE, VIEW, etc.)
+                    if property.level1name.is_some() {
+                        let ext_prop = extended_property_from_extracted(property);
+                        model.add_element(ModelElement::ExtendedProperty(ext_prop));
                     }
                 }
             }
@@ -465,6 +474,21 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     .to_string();
                 schemas.insert(normalized.clone());
                 model.add_element(ModelElement::Schema(SchemaElement { name: normalized }));
+            }
+
+            // Handle EXEC statements (for sp_addextendedproperty)
+            Statement::Execute { name, .. } => {
+                // Check if this is sp_addextendedproperty
+                let proc_name = name.0.iter().map(|p| p.value.as_str()).collect::<Vec<_>>().join(".");
+                if proc_name.to_lowercase() == "sp_addextendedproperty" {
+                    // Use the original SQL text to extract the extended property
+                    if let Some(property) = crate::parser::extract_extended_property_from_sql(&parsed.sql_text) {
+                        if property.level1name.is_some() {
+                            let ext_prop = extended_property_from_extracted(&property);
+                            model.add_element(ModelElement::ExtendedProperty(ext_prop));
+                        }
+                    }
+                }
             }
 
             // Ignore other statements (DML, etc.)
@@ -850,4 +874,15 @@ fn is_natively_compiled(definition: &str) -> bool {
     // Look for WITH NATIVE_COMPILATION in the definition
     // It can appear as "WITH NATIVE_COMPILATION" or "WITH NATIVE_COMPILATION, SCHEMABINDING" etc.
     upper.contains("NATIVE_COMPILATION")
+}
+
+/// Convert an extracted extended property to a model ExtendedPropertyElement
+fn extended_property_from_extracted(property: &ExtractedExtendedProperty) -> ExtendedPropertyElement {
+    ExtendedPropertyElement {
+        property_name: property.property_name.clone(),
+        property_value: property.property_value.clone(),
+        target_schema: property.level0name.clone(),
+        target_object: property.level1name.clone().unwrap_or_default(),
+        target_column: property.level2name.clone(),
+    }
 }

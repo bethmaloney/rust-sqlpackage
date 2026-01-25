@@ -5,8 +5,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 ## Summary
 
 - **Total Ignored Tests**: 12
-- **Fixed**: 1
-- **Remaining**: 11
+- **Fixed**: 2
+- **Remaining**: 10
 
 ## Test Fixes
 
@@ -25,17 +25,13 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 
 ### 2. Extended Properties
 
-- [ ] **Test**: `test_build_with_extended_properties`
-- **Ignore Reason**: SqlExtendedProperty not yet implemented
-- **Impact**: 174 missing elements (column/table descriptions)
-- **Files to Modify**:
-  - `src/parser/mod.rs` - Parse `sp_addextendedproperty` calls
-  - `src/model/mod.rs` - Add ExtendedProperty variant to ModelElement
-  - `src/dacpac/xml.rs` - Generate SqlExtendedProperty elements
-- **Implementation Notes**:
-  - Extended properties use `EXEC sp_addextendedproperty` syntax
-  - Common property: `MS_Description` for documentation
-  - Need to link to host element (column, table, etc.)
+- [x] **Test**: `test_build_with_extended_properties`
+- **Status**: ✅ FIXED - Extended properties now parsed and serialized correctly
+- **Notes**: Extended properties from `sp_addextendedproperty` calls are now captured.
+  The parser extracts property name, value, and target information (schema, table, column)
+  from EXEC statements. The model builder creates `ExtendedPropertyElement` entries, and
+  the XML serializer outputs proper `SqlExtendedProperty` elements with `Value` property
+  and `ExtendedObject` relationship pointing to the target object.
 - **Fixture**: `tests/fixtures/extended_properties/`
 
 ---
@@ -254,4 +250,4 @@ After fixing each test:
 
 ---
 
-*Last updated: 2025-01-25*
+*Last updated: 2026-01-25*

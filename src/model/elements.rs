@@ -12,6 +12,7 @@ pub enum ModelElement {
     Constraint(ConstraintElement),
     Sequence(SequenceElement),
     UserDefinedType(UserDefinedTypeElement),
+    ExtendedProperty(ExtendedPropertyElement),
     /// Generic raw element for statements that couldn't be fully parsed
     Raw(RawElement),
 }
@@ -39,6 +40,7 @@ impl ModelElement {
             },
             ModelElement::Sequence(_) => "SqlSequence",
             ModelElement::UserDefinedType(_) => "SqlTableType",
+            ModelElement::ExtendedProperty(_) => "SqlExtendedProperty",
             ModelElement::Raw(r) => match r.sql_type.as_str() {
                 "SqlTable" => "SqlTable",
                 "SqlView" => "SqlView",
@@ -65,6 +67,7 @@ impl ModelElement {
             }
             ModelElement::Sequence(s) => format!("[{}].[{}]", s.schema, s.name),
             ModelElement::UserDefinedType(u) => format!("[{}].[{}]", u.schema, u.name),
+            ModelElement::ExtendedProperty(e) => e.full_name(),
             ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),
         }
     }
@@ -253,4 +256,49 @@ pub struct RawElement {
     pub name: String,
     pub sql_type: String,
     pub definition: String,
+}
+
+/// Extended property element (from sp_addextendedproperty)
+#[derive(Debug, Clone)]
+pub struct ExtendedPropertyElement {
+    /// Property name (e.g., "MS_Description")
+    pub property_name: String,
+    /// Property value (e.g., "Unique identifier for the documented item")
+    pub property_value: String,
+    /// Target schema (e.g., "dbo")
+    pub target_schema: String,
+    /// Target object (table name for level1, e.g., "DocumentedTable")
+    pub target_object: String,
+    /// Target column (if level2 is COLUMN, e.g., "Id")
+    pub target_column: Option<String>,
+}
+
+impl ExtendedPropertyElement {
+    /// Get the full qualified name for this extended property
+    /// Format: [schema].[object].[property] for table-level properties
+    /// Format: [schema].[object].[column].[property] for column-level properties
+    pub fn full_name(&self) -> String {
+        if let Some(ref column) = self.target_column {
+            format!(
+                "[{}].[{}].[{}].[{}]",
+                self.target_schema, self.target_object, column, self.property_name
+            )
+        } else {
+            format!(
+                "[{}].[{}].[{}]",
+                self.target_schema, self.target_object, self.property_name
+            )
+        }
+    }
+
+    /// Get the reference to the extended object
+    /// For column-level: [schema].[table].[column]
+    /// For table-level: [schema].[table]
+    pub fn extends_object_ref(&self) -> String {
+        if let Some(ref column) = self.target_column {
+            format!("[{}].[{}].[{}]", self.target_schema, self.target_object, column)
+        } else {
+            format!("[{}].[{}]", self.target_schema, self.target_object)
+        }
+    }
 }

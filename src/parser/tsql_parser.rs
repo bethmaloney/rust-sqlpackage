@@ -37,6 +37,25 @@ pub struct ExtractedDefaultConstraint {
     pub expression: String,
 }
 
+/// An extended property extracted from sp_addextendedproperty call
+#[derive(Debug, Clone)]
+pub struct ExtractedExtendedProperty {
+    /// Property name (e.g., "MS_Description")
+    pub property_name: String,
+    /// Property value (e.g., "Description text")
+    pub property_value: String,
+    /// Level 0 name (schema, e.g., "dbo")
+    pub level0name: String,
+    /// Level 1 type (e.g., "TABLE")
+    pub level1type: Option<String>,
+    /// Level 1 name (e.g., "DocumentedTable")
+    pub level1name: Option<String>,
+    /// Level 2 type (e.g., "COLUMN")
+    pub level2type: Option<String>,
+    /// Level 2 name (e.g., "Id")
+    pub level2name: Option<String>,
+}
+
 /// A column extracted from a table type definition
 #[derive(Debug, Clone)]
 pub struct ExtractedTableTypeColumn {
@@ -180,6 +199,10 @@ pub enum FallbackStatementType {
         object_type: String,
         schema: String,
         name: String,
+    },
+    /// Extended property from sp_addextendedproperty
+    ExtendedProperty {
+        property: ExtractedExtendedProperty,
     },
 }
 
@@ -423,6 +446,13 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         }
     }
 
+    // Check for EXEC sp_addextendedproperty
+    if sql_upper.contains("SP_ADDEXTENDEDPROPERTY") {
+        if let Some(property) = extract_extended_property_from_sql(sql) {
+            return Some(FallbackStatementType::ExtendedProperty { property });
+        }
+    }
+
     // Generic fallback for any other CREATE statements
     if let Some(fallback) = try_generic_create_fallback(sql) {
         return Some(fallback);
@@ -636,6 +666,51 @@ fn extract_alter_table_name(sql: &str) -> Option<(String, String)> {
     let name = caps.get(2)?.as_str().to_string();
 
     Some((schema, name))
+}
+
+/// Extract extended property from sp_addextendedproperty call
+/// Handles multiline syntax like:
+/// ```sql
+/// EXEC sp_addextendedproperty
+///     @name = N'MS_Description',
+///     @value = N'Description text',
+///     @level0type = N'SCHEMA', @level0name = N'dbo',
+///     @level1type = N'TABLE',  @level1name = N'TableName',
+///     @level2type = N'COLUMN', @level2name = N'ColumnName';
+/// ```
+pub fn extract_extended_property_from_sql(sql: &str) -> Option<ExtractedExtendedProperty> {
+    // Helper to extract a parameter value from @paramname = N'value' pattern
+    fn extract_param(sql: &str, param_name: &str) -> Option<String> {
+        // Match @paramname = N'value' or @paramname = 'value'
+        let pattern = format!(r"(?i)@{}\s*=\s*N?'([^']*)'", param_name);
+        let re = regex::Regex::new(&pattern).ok()?;
+        re.captures(sql).and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))
+    }
+
+    // Extract required parameters
+    let property_name = extract_param(sql, "name")?;
+    let property_value = extract_param(sql, "value").unwrap_or_default();
+
+    // Extract level 0 (always SCHEMA)
+    let level0name = extract_param(sql, "level0name").unwrap_or_else(|| "dbo".to_string());
+
+    // Extract level 1 (TABLE, VIEW, etc.)
+    let level1type = extract_param(sql, "level1type");
+    let level1name = extract_param(sql, "level1name");
+
+    // Extract level 2 (COLUMN, INDEX, etc.)
+    let level2type = extract_param(sql, "level2type");
+    let level2name = extract_param(sql, "level2name");
+
+    Some(ExtractedExtendedProperty {
+        property_name,
+        property_value,
+        level0name,
+        level1type,
+        level1name,
+        level2type,
+        level2name,
+    })
 }
 
 /// Try to extract any CREATE statement as a generic fallback
@@ -1760,5 +1835,51 @@ CREATE TABLE [dbo].[Products] (
             parsed.err(),
             result.sql
         );
+    }
+
+    #[test]
+    fn test_extract_extended_property() {
+        let sql = r#"EXEC sp_addextendedproperty
+    @name = N'MS_Description',
+    @value = N'Unique identifier for the documented item',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'TABLE',  @level1name = N'DocumentedTable',
+    @level2type = N'COLUMN', @level2name = N'Id';"#;
+
+        let prop = extract_extended_property_from_sql(sql);
+        assert!(prop.is_some(), "Should extract extended property");
+        let prop = prop.unwrap();
+
+        assert_eq!(prop.property_name, "MS_Description");
+        assert_eq!(
+            prop.property_value,
+            "Unique identifier for the documented item"
+        );
+        assert_eq!(prop.level0name, "dbo");
+        assert_eq!(prop.level1type, Some("TABLE".to_string()));
+        assert_eq!(prop.level1name, Some("DocumentedTable".to_string()));
+        assert_eq!(prop.level2type, Some("COLUMN".to_string()));
+        assert_eq!(prop.level2name, Some("Id".to_string()));
+    }
+
+    #[test]
+    fn test_fallback_parse_extended_property() {
+        let sql = r#"EXEC sp_addextendedproperty
+    @name = N'MS_Description',
+    @value = N'This table stores documented items',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'TABLE',  @level1name = N'DocumentedTable';"#;
+
+        let fallback = try_fallback_parse(sql);
+        assert!(fallback.is_some(), "Should parse extended property");
+
+        match fallback.unwrap() {
+            FallbackStatementType::ExtendedProperty { property } => {
+                assert_eq!(property.property_name, "MS_Description");
+                assert_eq!(property.level1name, Some("DocumentedTable".to_string()));
+                assert!(property.level2name.is_none());
+            }
+            _ => panic!("Expected ExtendedProperty variant"),
+        }
     }
 }

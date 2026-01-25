@@ -12,7 +12,6 @@ use crate::common::{DacpacInfo, TestContext};
 // ============================================================================
 
 #[test]
-#[ignore = "SqlExtendedProperty not yet implemented"]
 fn test_build_with_extended_properties() {
     let ctx = TestContext::with_fixture("extended_properties");
     let result = ctx.build();
