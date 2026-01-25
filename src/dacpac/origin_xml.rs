@@ -6,6 +6,15 @@ use std::io::Write;
 
 const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
 
+/// The product schema URL used by dotnet DacFx
+const PRODUCT_SCHEMA: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
+
+/// Product name for rust-sqlpackage
+const PRODUCT_NAME: &str = "rust-sqlpackage";
+
+/// Product version for rust-sqlpackage
+const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub fn generate_origin_xml<W: Write>(writer: W, model_xml_checksum: &str) -> anyhow::Result<()> {
     let mut xml_writer = Writer::new_with_indent(writer, b' ', 2);
 
@@ -39,7 +48,25 @@ pub fn generate_origin_xml<W: Write>(writer: W, model_xml_checksum: &str) -> any
 
     xml_writer.write_event(Event::End(BytesEnd::new("PackageProperties")))?;
 
-    // Checksums
+    // Operation (before Checksums per XSD schema order)
+    xml_writer.write_event(Event::Start(BytesStart::new("Operation")))?;
+
+    write_element(&mut xml_writer, "Identity", "rust-sqlpackage")?;
+    write_element(&mut xml_writer, "Start", &chrono::Utc::now().to_rfc3339())?;
+    write_element(&mut xml_writer, "End", &chrono::Utc::now().to_rfc3339())?;
+
+    // ProductName (matches dotnet behavior)
+    write_element(&mut xml_writer, "ProductName", PRODUCT_NAME)?;
+
+    // ProductVersion (matches dotnet behavior)
+    write_element(&mut xml_writer, "ProductVersion", PRODUCT_VERSION)?;
+
+    // ProductSchema as simple URL string (matches dotnet behavior and XSD schema)
+    write_element(&mut xml_writer, "ProductSchema", PRODUCT_SCHEMA)?;
+
+    xml_writer.write_event(Event::End(BytesEnd::new("Operation")))?;
+
+    // Checksums (after Operation per XSD schema order)
     xml_writer.write_event(Event::Start(BytesStart::new("Checksums")))?;
     let mut checksum = BytesStart::new("Checksum");
     checksum.push_attribute(("Uri", "/model.xml"));
@@ -49,24 +76,6 @@ pub fn generate_origin_xml<W: Write>(writer: W, model_xml_checksum: &str) -> any
     )))?;
     xml_writer.write_event(Event::End(BytesEnd::new("Checksum")))?;
     xml_writer.write_event(Event::End(BytesEnd::new("Checksums")))?;
-
-    // Operation
-    xml_writer.write_event(Event::Start(BytesStart::new("Operation")))?;
-
-    write_element(&mut xml_writer, "Identity", "rust-sqlpackage")?;
-    write_element(&mut xml_writer, "Start", &chrono::Utc::now().to_rfc3339())?;
-    write_element(&mut xml_writer, "End", &chrono::Utc::now().to_rfc3339())?;
-
-    // ProductSchema (required for compatibility)
-    xml_writer.write_event(Event::Start(BytesStart::new("ProductSchema")))?;
-
-    let mut major = BytesStart::new("MajorVersion");
-    major.push_attribute(("Value", "160"));
-    xml_writer.write_event(Event::Empty(major))?;
-
-    xml_writer.write_event(Event::End(BytesEnd::new("ProductSchema")))?;
-
-    xml_writer.write_event(Event::End(BytesEnd::new("Operation")))?;
 
     // Close root
     xml_writer.write_event(Event::End(BytesEnd::new("DacOrigin")))?;

@@ -718,6 +718,67 @@ fn test_origin_xml_checksum_format() {
     );
 }
 
+#[test]
+fn test_origin_xml_element_order() {
+    // Per XSD schema: PackageProperties -> Operation -> Server? -> ExportStatistics? -> Checksums
+    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("ABCD1234");
+
+    // Verify Operation comes before Checksums (XSD order)
+    let operation_pos = origin.find("<Operation>").expect("Should have Operation element");
+    let checksums_pos = origin.find("<Checksums>").expect("Should have Checksums element");
+    assert!(
+        operation_pos < checksums_pos,
+        "Operation should come before Checksums per XSD schema. Got:\n{}",
+        origin
+    );
+}
+
+#[test]
+fn test_origin_xml_has_product_name() {
+    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("ABCD1234");
+
+    // Should have ProductName element with value "rust-sqlpackage"
+    assert!(
+        origin.contains("<ProductName>rust-sqlpackage</ProductName>"),
+        "Should have ProductName element. Got:\n{}",
+        origin
+    );
+}
+
+#[test]
+fn test_origin_xml_has_product_version() {
+    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("ABCD1234");
+
+    // Should have ProductVersion element (version from Cargo.toml)
+    assert!(
+        origin.contains("<ProductVersion>"),
+        "Should have ProductVersion element. Got:\n{}",
+        origin
+    );
+    assert!(
+        origin.contains("</ProductVersion>"),
+        "Should have closing ProductVersion element. Got:\n{}",
+        origin
+    );
+}
+
+#[test]
+fn test_origin_xml_product_schema_is_url() {
+    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("ABCD1234");
+
+    // ProductSchema should be a simple URL string, not nested MajorVersion element
+    assert!(
+        origin.contains("<ProductSchema>http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02</ProductSchema>"),
+        "ProductSchema should be a simple URL string (not nested MajorVersion). Got:\n{}",
+        origin
+    );
+    assert!(
+        !origin.contains("<MajorVersion"),
+        "Should NOT have MajorVersion element (old format). Got:\n{}",
+        origin
+    );
+}
+
 // ============================================================================
 // [Content_Types].xml Tests
 // ============================================================================

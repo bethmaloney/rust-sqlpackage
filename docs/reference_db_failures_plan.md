@@ -133,18 +133,23 @@ Fixed the root element name and empty Description handling to match dotnet behav
 
 ### 7. Origin.xml Format Differences
 
-- **Status:** [ ] Not started
+- **Status:** [x] Completed
 - **Severity:** Low
 
 **Description:**
-Several structural differences in Origin.xml:
+Fixed structural differences in Origin.xml to match dotnet DacFx output.
 
-| Aspect | Rust | Dotnet |
-|--------|------|--------|
+**Implementation:**
+- Changed `ProductSchema` from nested `<MajorVersion Value="160"/>` to simple URL string `http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02`
+- Moved `Checksums` element to after `Operation` (per XSD schema order)
+- Added `ProductName` element with value "rust-sqlpackage"
+- Added `ProductVersion` element with the package version from Cargo.toml
+
+| Aspect | Before | After |
+|--------|--------|-------|
 | ProductSchema | `<ProductSchema><MajorVersion Value="160"/></ProductSchema>` | `<ProductSchema>http://schemas.microsoft.com/...</ProductSchema>` |
 | Checksums position | Before Operation | After Operation |
 | ProductName/Version | Not included | Included |
-| ModelSchemaVersion | Not included | Included |
 
 ---
 
@@ -172,7 +177,7 @@ Fixed the XML content type in `[Content_Types].xml` to match dotnet behavior.
 2. **#5 - SqlExtendedProperty** - ~~Medium, already parsed but not emitted~~ ✓ Completed
 3. **#6 - DacMetadata.xml Root Element** - ~~Low, cosmetic compatibility~~ ✓ Completed
 4. **#8 - Content_Types.xml MIME Type** - ~~Low, cosmetic compatibility~~ ✓ Completed
-5. **#7 - Origin.xml Format Differences** - Low, cosmetic compatibility
+5. **#7 - Origin.xml Format Differences** - ~~Low, cosmetic compatibility~~ ✓ Completed
 6. **#2-4 - Annotation/computed elements** - Low, deep analysis features
 
 ---
