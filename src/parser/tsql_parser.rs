@@ -150,6 +150,15 @@ pub struct ParsedStatement {
     pub extracted_defaults: Vec<ExtractedDefaultConstraint>,
 }
 
+/// A column in a full-text index with optional language specification
+#[derive(Debug, Clone)]
+pub struct ExtractedFullTextColumn {
+    /// Column name
+    pub name: String,
+    /// Language ID (e.g., 1033 for English)
+    pub language_id: Option<u32>,
+}
+
 /// Statement types that require fallback parsing due to sqlparser limitations
 #[derive(Debug, Clone)]
 pub enum FallbackStatementType {
@@ -173,6 +182,23 @@ pub enum FallbackStatementType {
         include_columns: Vec<String>,
         is_unique: bool,
         is_clustered: bool,
+    },
+    /// Full-text index (CREATE FULLTEXT INDEX ON table ...)
+    FullTextIndex {
+        table_schema: String,
+        table_name: String,
+        columns: Vec<ExtractedFullTextColumn>,
+        /// Key index name (required for full-text index)
+        key_index: String,
+        /// Full-text catalog name (optional, defaults to default catalog)
+        catalog: Option<String>,
+        /// Change tracking mode (AUTO, MANUAL, OFF)
+        change_tracking: Option<String>,
+    },
+    /// Full-text catalog (CREATE FULLTEXT CATALOG ...)
+    FullTextCatalog {
+        name: String,
+        is_default: bool,
     },
     Sequence {
         schema: String,
@@ -409,6 +435,20 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     {
         if let Some(index_info) = extract_index_info(sql) {
             return Some(index_info);
+        }
+    }
+
+    // Check for CREATE FULLTEXT INDEX (must check before generic CREATE fallback)
+    if sql_upper.contains("CREATE FULLTEXT INDEX") {
+        if let Some(fulltext_info) = extract_fulltext_index_info(sql) {
+            return Some(fulltext_info);
+        }
+    }
+
+    // Check for CREATE FULLTEXT CATALOG
+    if sql_upper.contains("CREATE FULLTEXT CATALOG") {
+        if let Some(catalog_info) = extract_fulltext_catalog_info(sql) {
+            return Some(catalog_info);
         }
     }
 
@@ -1670,6 +1710,146 @@ fn split_batches(content: &str) -> Vec<Batch<'_>> {
     }
 
     batches
+}
+
+/// Extract full-text index information from CREATE FULLTEXT INDEX statement
+/// Syntax: CREATE FULLTEXT INDEX ON [schema].[table] ([col1] LANGUAGE 1033, [col2] LANGUAGE 1033)
+///         KEY INDEX [pk_name] ON [catalog] WITH CHANGE_TRACKING AUTO;
+fn extract_fulltext_index_info(sql: &str) -> Option<FallbackStatementType> {
+    // Match: CREATE FULLTEXT INDEX ON [schema].[table]
+    let table_re = Regex::new(
+        r"(?i)CREATE\s+FULLTEXT\s+INDEX\s+ON\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
+    ).ok()?;
+
+    let caps = table_re.captures(sql)?;
+    let table_schema = caps.get(1)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
+    let table_name = caps.get(2)?.as_str().to_string();
+
+    // Extract the column list with optional LANGUAGE specifiers
+    // Pattern: ([col1] LANGUAGE 1033, [col2] LANGUAGE 1033, ...)
+    let columns = extract_fulltext_columns(sql);
+
+    // Extract KEY INDEX name
+    // Pattern: KEY INDEX [pk_name]
+    let key_index_re = Regex::new(r"(?i)KEY\s+INDEX\s+\[?(\w+)\]?").ok()?;
+    let key_index = key_index_re.captures(sql)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())?;
+
+    // Extract optional catalog name
+    // Pattern: ON [catalog] (after KEY INDEX, not the table ON)
+    let catalog = extract_fulltext_catalog_name(sql);
+
+    // Extract optional change tracking mode
+    // Pattern: WITH CHANGE_TRACKING AUTO|MANUAL|OFF
+    let change_tracking_re = Regex::new(r"(?i)CHANGE_TRACKING\s+(\w+)").ok()?;
+    let change_tracking = change_tracking_re.captures(sql)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_uppercase());
+
+    Some(FallbackStatementType::FullTextIndex {
+        table_schema,
+        table_name,
+        columns,
+        key_index,
+        catalog,
+        change_tracking,
+    })
+}
+
+/// Extract columns with optional LANGUAGE specifiers from full-text index definition
+fn extract_fulltext_columns(sql: &str) -> Vec<ExtractedFullTextColumn> {
+    let mut columns = Vec::new();
+
+    // Find the column list after ON [schema].[table] (
+    // We need to find the first ( after CREATE FULLTEXT INDEX ON [table]
+    let sql_upper = sql.to_uppercase();
+    let on_pos = match sql_upper.find("CREATE FULLTEXT INDEX ON") {
+        Some(pos) => pos,
+        None => return columns,
+    };
+
+    let remaining = &sql[on_pos..];
+    let paren_start = match remaining.find('(') {
+        Some(idx) => on_pos + idx + 1,
+        None => return columns,
+    };
+
+    // Find the matching closing paren
+    let mut depth = 1;
+    let mut paren_end = paren_start;
+    for (i, c) in sql[paren_start..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    paren_end = paren_start + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if paren_end <= paren_start {
+        return columns;
+    }
+
+    let columns_str = &sql[paren_start..paren_end];
+
+    // Split by comma and parse each column
+    for col_part in columns_str.split(',') {
+        let col_part = col_part.trim();
+        if col_part.is_empty() {
+            continue;
+        }
+
+        // Pattern: [ColumnName] LANGUAGE 1033 or just [ColumnName]
+        let col_re = Regex::new(r"(?i)\[?(\w+)\]?(?:\s+LANGUAGE\s+(\d+))?").unwrap();
+        if let Some(caps) = col_re.captures(col_part) {
+            let name = caps.get(1)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+            let language_id = caps.get(2)
+                .and_then(|m| m.as_str().parse::<u32>().ok());
+
+            if !name.is_empty() {
+                columns.push(ExtractedFullTextColumn { name, language_id });
+            }
+        }
+    }
+
+    columns
+}
+
+/// Extract the catalog name from the full-text index definition
+/// Pattern: KEY INDEX [pk_name] ON [catalog]
+fn extract_fulltext_catalog_name(sql: &str) -> Option<String> {
+    // The catalog appears after KEY INDEX [name] ON [catalog]
+    // Be careful not to match the table ON
+    let re = Regex::new(r"(?i)KEY\s+INDEX\s+\[?\w+\]?\s+ON\s+\[?(\w+)\]?").ok()?;
+    re.captures(sql)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
+}
+
+/// Extract full-text catalog information from CREATE FULLTEXT CATALOG statement
+/// Syntax: CREATE FULLTEXT CATALOG [name] AS DEFAULT;
+fn extract_fulltext_catalog_info(sql: &str) -> Option<FallbackStatementType> {
+    // Match: CREATE FULLTEXT CATALOG [name]
+    let re = Regex::new(r"(?i)CREATE\s+FULLTEXT\s+CATALOG\s+\[?(\w+)\]?").ok()?;
+
+    let caps = re.captures(sql)?;
+    let name = caps.get(1)?.as_str().to_string();
+
+    // Check if this is set AS DEFAULT
+    let sql_upper = sql.to_uppercase();
+    let is_default = sql_upper.contains("AS DEFAULT");
+
+    Some(FallbackStatementType::FullTextCatalog { name, is_default })
 }
 
 #[cfg(test)]

@@ -9,6 +9,8 @@ pub enum ModelElement {
     Procedure(ProcedureElement),
     Function(FunctionElement),
     Index(IndexElement),
+    FullTextIndex(FullTextIndexElement),
+    FullTextCatalog(FullTextCatalogElement),
     Constraint(ConstraintElement),
     Sequence(SequenceElement),
     UserDefinedType(UserDefinedTypeElement),
@@ -31,6 +33,8 @@ impl ModelElement {
                 FunctionType::InlineTableValued => "SqlInlineTableValuedFunction",
             },
             ModelElement::Index(_) => "SqlIndex",
+            ModelElement::FullTextIndex(_) => "SqlFullTextIndex",
+            ModelElement::FullTextCatalog(_) => "SqlFullTextCatalog",
             ModelElement::Constraint(c) => match c.constraint_type {
                 ConstraintType::PrimaryKey => "SqlPrimaryKeyConstraint",
                 ConstraintType::ForeignKey => "SqlForeignKeyConstraint",
@@ -61,6 +65,13 @@ impl ModelElement {
             ModelElement::Function(f) => format!("[{}].[{}]", f.schema, f.name),
             ModelElement::Index(i) => {
                 format!("[{}].[{}].[{}]", i.table_schema, i.table_name, i.name)
+            }
+            ModelElement::FullTextIndex(f) => {
+                // Full-text index name format: [schema].[table].[FullTextIndex]
+                format!("[{}].[{}].[FullTextIndex]", f.table_schema, f.table_name)
+            }
+            ModelElement::FullTextCatalog(c) => {
+                format!("[{}]", c.name)
             }
             ModelElement::Constraint(c) => {
                 format!("[{}].[{}].[{}]", c.table_schema, c.table_name, c.name)
@@ -167,6 +178,38 @@ pub struct IndexElement {
     pub include_columns: Vec<String>,
     pub is_unique: bool,
     pub is_clustered: bool,
+}
+
+/// A column in a full-text index with optional language specification
+#[derive(Debug, Clone)]
+pub struct FullTextColumnElement {
+    /// Column name
+    pub name: String,
+    /// Language ID (e.g., 1033 for English)
+    pub language_id: Option<u32>,
+}
+
+/// Full-text index element
+#[derive(Debug, Clone)]
+pub struct FullTextIndexElement {
+    pub table_schema: String,
+    pub table_name: String,
+    /// Columns included in the full-text index
+    pub columns: Vec<FullTextColumnElement>,
+    /// Key index name (required unique index)
+    pub key_index: String,
+    /// Full-text catalog name (optional)
+    pub catalog: Option<String>,
+    /// Change tracking mode (AUTO, MANUAL, OFF)
+    pub change_tracking: Option<String>,
+}
+
+/// Full-text catalog element
+#[derive(Debug, Clone)]
+pub struct FullTextCatalogElement {
+    pub name: String,
+    /// Whether this is the default catalog
+    pub is_default: bool,
 }
 
 /// Sort direction for constraint/index columns

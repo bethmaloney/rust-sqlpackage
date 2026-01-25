@@ -6,17 +6,17 @@ use anyhow::Result;
 use sqlparser::ast::{ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint};
 
 use crate::parser::{
-    ExtractedExtendedProperty, ExtractedFunctionParameter, ExtractedTableColumn,
-    ExtractedTableConstraint, ExtractedTableTypeColumn, FallbackFunctionType,
-    FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL,
+    ExtractedExtendedProperty, ExtractedFullTextColumn, ExtractedFunctionParameter,
+    ExtractedTableColumn, ExtractedTableConstraint, ExtractedTableTypeColumn,
+    FallbackFunctionType, FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL,
 };
 use crate::project::SqlProject;
 
 use super::{
     ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
-    ExtendedPropertyElement, FunctionElement, FunctionType, IndexElement, ModelElement,
-    ParameterElement, ProcedureElement, RawElement, SchemaElement, SequenceElement, TableElement,
-    UserDefinedTypeElement, ViewElement,
+    ExtendedPropertyElement, FullTextCatalogElement, FullTextColumnElement, FullTextIndexElement,
+    FunctionElement, FunctionType, IndexElement, ModelElement, ParameterElement, ProcedureElement,
+    RawElement, SchemaElement, SequenceElement, TableElement, UserDefinedTypeElement, ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -86,6 +86,33 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         include_columns: include_columns.clone(),
                         is_unique: *is_unique,
                         is_clustered: *is_clustered,
+                    }));
+                }
+                FallbackStatementType::FullTextIndex {
+                    table_schema,
+                    table_name,
+                    columns,
+                    key_index,
+                    catalog,
+                    change_tracking,
+                } => {
+                    let column_elements: Vec<FullTextColumnElement> = columns
+                        .iter()
+                        .map(|c| fulltext_column_from_extracted(c))
+                        .collect();
+                    model.add_element(ModelElement::FullTextIndex(FullTextIndexElement {
+                        table_schema: table_schema.clone(),
+                        table_name: table_name.clone(),
+                        columns: column_elements,
+                        key_index: key_index.clone(),
+                        catalog: catalog.clone(),
+                        change_tracking: change_tracking.clone(),
+                    }));
+                }
+                FallbackStatementType::FullTextCatalog { name, is_default } => {
+                    model.add_element(ModelElement::FullTextCatalog(FullTextCatalogElement {
+                        name: name.clone(),
+                        is_default: *is_default,
                     }));
                 }
                 FallbackStatementType::Sequence { schema, name } => {
@@ -602,6 +629,14 @@ fn param_from_extracted(param: &ExtractedFunctionParameter) -> ParameterElement 
         data_type: param.data_type.clone(),
         is_output: false, // Function parameters are typically input-only
         default_value: None,
+    }
+}
+
+/// Convert an extracted full-text column to a FullTextColumnElement
+fn fulltext_column_from_extracted(col: &ExtractedFullTextColumn) -> FullTextColumnElement {
+    FullTextColumnElement {
+        name: col.name.clone(),
+        language_id: col.language_id,
     }
 }
 

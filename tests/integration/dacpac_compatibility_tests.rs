@@ -44,7 +44,6 @@ fn test_build_with_extended_properties() {
 // ============================================================================
 
 #[test]
-#[ignore = "SqlFullTextIndex not yet implemented"]
 fn test_build_with_fulltext_index() {
     let ctx = TestContext::with_fixture("fulltext_index");
     let result = ctx.build();

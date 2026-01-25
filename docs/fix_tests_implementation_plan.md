@@ -5,8 +5,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 ## Summary
 
 - **Total Ignored Tests**: 12
-- **Fixed**: 2
-- **Remaining**: 10
+- **Fixed**: 3
+- **Remaining**: 9
 
 ## Test Fixes
 
@@ -38,17 +38,13 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 
 ### 3. Full-Text Index
 
-- [ ] **Test**: `test_build_with_fulltext_index`
-- **Ignore Reason**: SqlFullTextIndex not yet implemented
-- **Impact**: 4 missing full-text indexes, 6 column specifiers
-- **Files to Modify**:
-  - `src/parser/index.rs` - Parse CREATE FULLTEXT INDEX statements
-  - `src/model/mod.rs` - Add FullTextIndex variant to ModelElement
-  - `src/dacpac/xml.rs` - Generate SqlFullTextIndex elements
-- **Implementation Notes**:
-  - Syntax: `CREATE FULLTEXT INDEX ON table (columns) KEY INDEX pk_name`
-  - Properties: IsStopListOff, DoUseSystemStopList, LanguageId
-  - Needs SqlFullTextIndexColumnSpecifier for each column
+- [x] **Test**: `test_build_with_fulltext_index`
+- **Status**: ✅ FIXED - Full-text indexes and catalogs now parsed and serialized correctly
+- **Notes**: Full-text indexes and catalogs from `CREATE FULLTEXT INDEX` and `CREATE FULLTEXT CATALOG`
+  statements are now captured. The parser extracts table, columns with language IDs, key index,
+  catalog reference, and change tracking mode. The model builder creates `FullTextIndexElement` and
+  `FullTextCatalogElement` entries, and the XML serializer outputs proper `SqlFullTextIndex` and
+  `SqlFullTextCatalog` elements with `SqlFullTextIndexColumnSpecifier` entries for each column.
 - **Fixture**: `tests/fixtures/fulltext_index/`
 
 ---

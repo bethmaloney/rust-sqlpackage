@@ -6,8 +6,9 @@ use std::io::Write;
 
 use crate::model::{
     ColumnElement, ConstraintElement, ConstraintType, DatabaseModel, ExtendedPropertyElement,
-    FunctionElement, IndexElement, ModelElement, ProcedureElement, RawElement, SchemaElement,
-    SequenceElement, TableElement, UserDefinedTypeElement, ViewElement,
+    FullTextCatalogElement, FullTextIndexElement, FunctionElement, IndexElement, ModelElement,
+    ProcedureElement, RawElement, SchemaElement, SequenceElement, TableElement,
+    UserDefinedTypeElement, ViewElement,
 };
 use crate::project::SqlProject;
 
@@ -83,6 +84,8 @@ fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> an
         ModelElement::Procedure(p) => write_procedure(writer, p),
         ModelElement::Function(f) => write_function(writer, f),
         ModelElement::Index(i) => write_index(writer, i),
+        ModelElement::FullTextIndex(f) => write_fulltext_index(writer, f),
+        ModelElement::FullTextCatalog(c) => write_fulltext_catalog(writer, c),
         ModelElement::Constraint(c) => write_constraint(writer, c),
         ModelElement::Sequence(s) => write_sequence(writer, s),
         ModelElement::UserDefinedType(u) => write_user_defined_type(writer, u),
@@ -860,6 +863,104 @@ fn write_index_column_specifications<W: Write>(
     }
 
     writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+fn write_fulltext_index<W: Write>(
+    writer: &mut Writer<W>,
+    fulltext: &FullTextIndexElement,
+) -> anyhow::Result<()> {
+    // Full-text index name format: [schema].[table].[FullTextIndex]
+    let full_name = format!(
+        "[{}].[{}].[FullTextIndex]",
+        fulltext.table_schema, fulltext.table_name
+    );
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlFullTextIndex"));
+    elem.push_attribute(("Name", full_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Reference to table (IndexedObject)
+    let table_ref = format!("[{}].[{}]", fulltext.table_schema, fulltext.table_name);
+    write_relationship(writer, "IndexedObject", &[&table_ref])?;
+
+    // Reference to the unique key index (UniqueIndex)
+    // The key index is typically on the same table
+    let key_index_ref = format!("[{}].[{}].[{}]", fulltext.table_schema, fulltext.table_name, fulltext.key_index);
+    write_relationship(writer, "UniqueIndex", &[&key_index_ref])?;
+
+    // Reference to full-text catalog if specified
+    if let Some(catalog) = &fulltext.catalog {
+        let catalog_ref = format!("[{}]", catalog);
+        write_relationship(writer, "FullTextCatalog", &[&catalog_ref])?;
+    }
+
+    // Write ColumnSpecifications for full-text columns
+    if !fulltext.columns.is_empty() {
+        write_fulltext_column_specifications(writer, fulltext, &table_ref)?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+fn write_fulltext_column_specifications<W: Write>(
+    writer: &mut Writer<W>,
+    fulltext: &FullTextIndexElement,
+    table_ref: &str,
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "ColumnSpecifications"));
+    writer.write_event(Event::Start(rel))?;
+
+    for (i, col) in fulltext.columns.iter().enumerate() {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let spec_name = format!(
+            "[{}].[{}].[FullTextIndex].[{}]",
+            fulltext.table_schema, fulltext.table_name, i
+        );
+
+        let mut elem = BytesStart::new("Element");
+        elem.push_attribute(("Type", "SqlFullTextIndexColumnSpecifier"));
+        elem.push_attribute(("Name", spec_name.as_str()));
+        writer.write_event(Event::Start(elem))?;
+
+        // Add LanguageId property if specified
+        if let Some(lang_id) = col.language_id {
+            write_property(writer, "LanguageId", &lang_id.to_string())?;
+        }
+
+        // Reference to the column
+        let col_ref = format!("{}.[{}]", table_ref, col.name);
+        write_relationship(writer, "Column", &[&col_ref])?;
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+fn write_fulltext_catalog<W: Write>(
+    writer: &mut Writer<W>,
+    catalog: &FullTextCatalogElement,
+) -> anyhow::Result<()> {
+    let full_name = format!("[{}]", catalog.name);
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlFullTextCatalog"));
+    elem.push_attribute(("Name", full_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Add IsDefault property if this is the default catalog
+    if catalog.is_default {
+        write_property(writer, "IsDefault", "True")?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
 }
 
