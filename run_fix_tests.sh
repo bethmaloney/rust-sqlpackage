@@ -35,12 +35,13 @@ while true; do
     # --dangerously-skip-permissions: Auto-approve all tool calls
     # --output-format=stream-json: Structured output for logging/monitoring
     # --model opus: Use Opus for complex reasoning
-    # --verbose: Detailed execution logging
+    # claude-stream-format: Converts stream-json to readable output with emoji indicators
     OUTPUT=$(cat "$PROMPT_FILE" | claude -p \
         --dangerously-skip-permissions \
         --output-format=stream-json \
         --model opus \
-        --verbose 2>&1 | tee /dev/stderr)
+        --verbose \
+        2>&1 | tee >(claude-stream-format > /dev/stderr))
 
     # Check for completion signal
     if echo "$OUTPUT" | grep -q "ALL TODO ITEMS COMPLETE"; then
