@@ -4,25 +4,30 @@ rust-sqlpackage is a Rust implementation of the SQL Server database project comp
 
 ## Build and Development Commands
 
+This project uses `just` as a command runner. Run `just --list` to see all available recipes.
+
 ```bash
 # Build
-cargo build
-cargo build --release
+just build                              # Debug build
+just release                            # Release build (optimized)
 
 # Run tests
-cargo test                              # All tests
-cargo test --test integration_tests     # Integration tests only
-cargo test --test unit_tests            # Unit tests only
-cargo test test_name                    # Single test by name
+just test                               # All tests (excluding e2e)
+just test-e2e                           # E2E tests (requires SQL Server)
+just test-all                           # All tests including e2e
+just test-one test_name                 # Single test by name
 
 # Lint and format
-cargo clippy
-cargo fmt
+just lint                               # Run clippy
+just fmt                                # Format code
+just check                              # Format check + lint + test
 
 # Run the CLI
-cargo run -- build --project path/to/Database.sqlproj
-cargo run -- build --project path/to/Database.sqlproj --output out.dacpac --verbose
+just run build --project path/to/Database.sqlproj
+just build-project path/to/Database.sqlproj
 ```
+
+**Important:** Before finishing a feature or committing, always run `just test-all` to run all tests including e2e.
 
 ## Architecture
 

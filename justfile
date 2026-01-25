@@ -1,0 +1,106 @@
+# rust-sqlpackage justfile
+# Run `just --list` to see available recipes
+
+# Default recipe: run checks and tests
+default: check test
+
+# ============================================================================
+# Building
+# ============================================================================
+
+# Build debug binary
+build:
+    cargo build
+
+# Build release binary (optimized, stripped)
+release:
+    cargo build --release
+
+# Clean build artifacts
+clean:
+    cargo clean
+
+# ============================================================================
+# Testing
+# ============================================================================
+
+# Run all tests (excluding e2e)
+test:
+    cargo test
+
+# Run unit tests only
+test-unit:
+    cargo test --test unit_tests
+
+# Run integration tests only
+test-integration:
+    cargo test --test integration_tests
+
+# Run e2e tests (requires SQL Server and SqlPackage CLI)
+test-e2e:
+    cargo test --test e2e_tests -- --ignored
+
+# Run all tests including e2e
+test-all: test test-e2e
+
+# Run a specific test by name
+test-one NAME:
+    cargo test {{NAME}}
+
+# ============================================================================
+# Code Quality
+# ============================================================================
+
+# Run all checks (fmt, clippy, test)
+check: fmt-check lint test
+
+# Run clippy linter
+lint:
+    cargo clippy -- -D warnings
+
+# Check code formatting
+fmt-check:
+    cargo fmt -- --check
+
+# Format code
+fmt:
+    cargo fmt
+
+# ============================================================================
+# Running
+# ============================================================================
+
+# Run CLI with arguments (e.g., just run build --project foo.sqlproj)
+run *ARGS:
+    cargo run -- {{ARGS}}
+
+# Build a sqlproj file (e.g., just build-project path/to/Database.sqlproj)
+build-project PROJECT:
+    cargo run -- build --project {{PROJECT}}
+
+# Build a sqlproj file with verbose output
+build-project-verbose PROJECT:
+    cargo run -- build --project {{PROJECT}} --verbose
+
+# ============================================================================
+# Development
+# ============================================================================
+
+# Watch for changes and run tests (requires cargo-watch)
+watch:
+    cargo watch -x test
+
+# Watch for changes and run clippy (requires cargo-watch)
+watch-lint:
+    cargo watch -x clippy
+
+# Generate documentation
+doc:
+    cargo doc --no-deps --open
+
+# ============================================================================
+# CI
+# ============================================================================
+
+# Run CI checks (what CI should run)
+ci: fmt-check lint test
