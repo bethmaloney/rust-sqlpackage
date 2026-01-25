@@ -17,9 +17,13 @@
     <Build Include="Tables/Orders.sql" />
     <Build Include="Tables/OrderItems.sql" />
     <Build Include="Tables/InventoryLog.sql" />
+    <Build Include="Tables/AuditLog.sql" />
+    <Build Include="Tables/Settings.sql" />
+    <Build Include="Tables/InlineConstraintDemo.sql" />
     <!-- Views -->
     <Build Include="Views/ActiveProducts.sql" />
     <Build Include="Views/CustomerOrderSummary.sql" />
+    <Build Include="Views/Terms&amp;ConditionsView.sql" />
     <!-- Indexes -->
     <Build Include="Indexes/IX_Products_CategoryId.sql" />
     <Build Include="Indexes/IX_Orders_CustomerId.sql" />
@@ -27,6 +31,8 @@
     <!-- Stored Procedures -->
     <Build Include="Procedures/GetProductsByCategory.sql" />
     <Build Include="Procedures/CreateOrder.sql" />
+    <Build Include="Procedures/GetP&amp;LReport.sql" />
+    <Build Include="Procedures/ProcessRefunds.sql" />
     <!-- Functions -->
     <Build Include="Functions/GetProductCount.sql" />
     <Build Include="Functions/GetOrderTotal.sql" />
@@ -36,6 +42,8 @@
     <!-- User-Defined Types -->
     <Build Include="Types/ProductTableType.sql" />
     <Build Include="Types/OrderItemTableType.sql" />
+    <!-- Extended Properties -->
+    <Build Include="ExtendedProperties/TableDescriptions.sql" />
     <!-- Deployment Scripts -->
     <PreDeploy Include="Scripts/PreDeployment.sql" />
     <PostDeploy Include="Scripts/PostDeployment.sql" />

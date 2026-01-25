@@ -1,4 +1,4 @@
--- Table with named inline default constraints (Capital.Database style)
+-- Table with named inline default constraints
 CREATE TABLE [dbo].[Entity] (
     [Id] UNIQUEIDENTIFIER NOT NULL,
     [Version] INT CONSTRAINT [DF_Entity_Version] NOT NULL DEFAULT ((0)),

@@ -79,19 +79,23 @@ cargo test --test unit_tests dacpac_comparison
 # Run integration tests (verify dacpac structure)
 cargo test --test integration_tests dacpac_compatibility -- --nocapture
 
-# Run e2e tests (requires dotnet SDK and Capital.DatabaseCore)
+# Run e2e tests (requires dotnet SDK)
 cargo test --test e2e_tests dotnet_comparison -- --ignored
+
+# Run e2e tests with a custom project
+SQL_TEST_PROJECT=/path/to/YourProject.sqlproj cargo test --test e2e_tests -- --ignored
 ```
 
 ## E2E Tests (Ignored by Default)
 
 These tests require:
 - DotNet SDK with Microsoft.Build.Sql
-- Access to Capital.DatabaseCore project
+
+By default, tests use the `tests/fixtures/e2e_comprehensive` fixture. You can specify a custom project via the `SQL_TEST_PROJECT` environment variable.
 
 | Test | Purpose |
 |------|---------|
-| test_compare_capital_database_dacpacs | Full comparison report |
+| test_compare_dacpacs | Full comparison report |
 | test_missing_header_section | Verify Header is generated |
 | test_missing_database_options | Verify SqlDatabaseOptions |
 | test_ampersand_encoding_bug | Verify & not truncated |

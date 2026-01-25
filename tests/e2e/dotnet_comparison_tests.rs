@@ -5,7 +5,11 @@
 //!
 //! Prerequisites:
 //! - dotnet SDK installed with Microsoft.Build.Sql
-//! - Access to the Capital.DatabaseCore project (or similar test project)
+//!
+//! The test project can be specified via environment variable:
+//!   SQL_TEST_PROJECT=/path/to/YourProject.sqlproj cargo test --test e2e_tests -- --ignored
+//!
+//! If not specified, falls back to the e2e_comprehensive fixture in tests/fixtures.
 //!
 //! Run with:
 //!   cargo test --test e2e_tests -- --ignored dotnet_comparison
@@ -18,20 +22,44 @@ use std::process::Command;
 use tempfile::TempDir;
 use zip::ZipArchive;
 
-/// Path to the Capital.DatabaseCore project (if available)
-fn get_capital_database_path() -> Option<PathBuf> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()?
-        .join("Capital")
-        .join("src")
-        .join("Capital.DatabaseCore")
-        .join("Capital.DatabaseCore.sqlproj");
+/// Get the test project path from environment variable or use e2e_comprehensive fixture
+fn get_test_project_path() -> Option<PathBuf> {
+    // First check for SQL_TEST_PROJECT environment variable
+    if let Ok(custom_path) = std::env::var("SQL_TEST_PROJECT") {
+        let path = PathBuf::from(&custom_path);
+        if path.exists() {
+            return Some(path);
+        } else {
+            eprintln!("Warning: SQL_TEST_PROJECT path does not exist: {}", custom_path);
+        }
+    }
 
-    if path.exists() {
-        Some(path)
+    // Fall back to e2e_comprehensive fixture
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("e2e_comprehensive")
+        .join("project.sqlproj");
+
+    if fixture_path.exists() {
+        Some(fixture_path)
     } else {
         None
     }
+}
+
+/// Get the expected dacpac output path for dotnet build
+fn get_dotnet_dacpac_path(project_path: &std::path::Path) -> PathBuf {
+    let project_dir = project_path.parent().unwrap();
+    let project_name = project_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project");
+
+    project_dir
+        .join("bin")
+        .join("Debug")
+        .join(format!("{}.dacpac", project_name))
 }
 
 /// Check if dotnet build is available
@@ -206,22 +234,24 @@ impl DacpacComparison {
 // E2E Comparison Tests
 // ============================================================================
 
-/// Compare dacpac output between Rust and DotNet for Capital.DatabaseCore
+/// Compare dacpac output between Rust and DotNet
 #[test]
-#[ignore = "Requires Capital.DatabaseCore project and dotnet SDK"]
-fn test_compare_capital_database_dacpacs() {
+#[ignore = "Requires dotnet SDK"]
+fn test_compare_dacpacs() {
     if !dotnet_available() {
         eprintln!("Skipping: dotnet SDK not available");
         return;
     }
 
-    let project_path = match get_capital_database_path() {
+    let project_path = match get_test_project_path() {
         Some(p) => p,
         None => {
-            eprintln!("Skipping: Capital.DatabaseCore project not found");
+            eprintln!("Skipping: No test project found. Set SQL_TEST_PROJECT or ensure e2e_comprehensive fixture exists.");
             return;
         }
     };
+
+    eprintln!("Using test project: {:?}", project_path);
 
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
@@ -234,7 +264,7 @@ fn test_compare_capital_database_dacpacs() {
         verbose: false,
     });
 
-    assert!(rust_result.is_ok(), "Rust build should succeed");
+    assert!(rust_result.is_ok(), "Rust build should succeed: {:?}", rust_result.err());
 
     // Build with DotNet
     let dotnet_output = Command::new("dotnet")
@@ -252,12 +282,7 @@ fn test_compare_capital_database_dacpacs() {
     }
 
     // Find the dotnet dacpac
-    let dotnet_dacpac = project_path
-        .parent()
-        .unwrap()
-        .join("bin")
-        .join("Debug")
-        .join("Capital.DatabaseCore.dacpac");
+    let dotnet_dacpac = get_dotnet_dacpac_path(&project_path);
 
     if !dotnet_dacpac.exists() {
         eprintln!("DotNet dacpac not found at {:?}", dotnet_dacpac);
@@ -288,13 +313,13 @@ fn test_compare_capital_database_dacpacs() {
 
 /// Test for missing Header section
 #[test]
-#[ignore = "Requires Capital.DatabaseCore project and dotnet SDK"]
+#[ignore = "Requires dotnet SDK"]
 fn test_missing_header_section() {
     if !dotnet_available() {
         return;
     }
 
-    let project_path = match get_capital_database_path() {
+    let project_path = match get_test_project_path() {
         Some(p) => p,
         None => return,
     };
@@ -333,13 +358,13 @@ fn test_missing_header_section() {
 
 /// Test for missing SqlDatabaseOptions
 #[test]
-#[ignore = "Requires Capital.DatabaseCore project and dotnet SDK"]
+#[ignore = "Requires dotnet SDK"]
 fn test_missing_database_options() {
     if !dotnet_available() {
         return;
     }
 
-    let project_path = match get_capital_database_path() {
+    let project_path = match get_test_project_path() {
         Some(p) => p,
         None => return,
     };
@@ -375,13 +400,13 @@ fn test_missing_database_options() {
 
 /// Test for ampersand encoding bug
 #[test]
-#[ignore = "Requires Capital.DatabaseCore project and dotnet SDK"]
+#[ignore = "Requires dotnet SDK"]
 fn test_ampersand_encoding_bug() {
     if !dotnet_available() {
         return;
     }
 
-    let project_path = match get_capital_database_path() {
+    let project_path = match get_test_project_path() {
         Some(p) => p,
         None => return,
     };
@@ -396,43 +421,38 @@ fn test_ampersand_encoding_bug() {
         verbose: false,
     });
 
-    let dotnet_dacpac = project_path
-        .parent()
-        .unwrap()
-        .join("bin")
-        .join("Debug")
-        .join("Capital.DatabaseCore.dacpac");
+    let dotnet_dacpac = get_dotnet_dacpac_path(&project_path);
 
     let rust_xml = extract_model_xml(&rust_dacpac).expect("Should extract rust model.xml");
     let dotnet_xml = extract_model_xml(&dotnet_dacpac).expect("Should extract dotnet model.xml");
 
-    // Check for the P&I procedure
-    let dotnet_has_pi = dotnet_xml.contains("P&amp;IConversion");
-    let rust_has_pi = rust_xml.contains("P&amp;IConversion") || rust_xml.contains("P&IConversion");
-    let rust_truncated = rust_xml.contains("IOLoansWithoutP\"")
-        || rust_xml.contains("IOLoansWithoutP<")
-        || (rust_xml.contains("IOLoansWithoutP") && !rust_xml.contains("Conversion"));
+    // Check for procedures/views with ampersand in name (P&L in e2e_comprehensive)
+    let dotnet_has_ampersand = dotnet_xml.contains("P&amp;L") || dotnet_xml.contains("Terms&amp;Conditions");
+    let rust_has_ampersand = rust_xml.contains("P&amp;L") || rust_xml.contains("P&L")
+        || rust_xml.contains("Terms&amp;Conditions") || rust_xml.contains("Terms&Conditions");
+    let rust_truncated = rust_xml.contains("GetP\"") || rust_xml.contains("GetP<")
+        || rust_xml.contains("Terms\"") || rust_xml.contains("Terms<");
 
     println!("\n=== Ampersand Encoding Analysis ===");
-    println!("DotNet has P&I procedure: {}", dotnet_has_pi);
-    println!("Rust has P&I procedure: {}", rust_has_pi);
+    println!("DotNet has ampersand in names: {}", dotnet_has_ampersand);
+    println!("Rust has ampersand in names: {}", rust_has_ampersand);
     println!("Rust name is truncated: {}", rust_truncated);
 
     assert!(
         !rust_truncated,
-        "Rust should not truncate procedure names at ampersand"
+        "Rust should not truncate names at ampersand"
     );
 }
 
 /// Test for index double-bracketing bug
 #[test]
-#[ignore = "Requires Capital.DatabaseCore project and dotnet SDK"]
+#[ignore = "Requires dotnet SDK"]
 fn test_index_double_bracket_bug() {
     if !dotnet_available() {
         return;
     }
 
-    let project_path = match get_capital_database_path() {
+    let project_path = match get_test_project_path() {
         Some(p) => p,
         None => return,
     };
@@ -463,13 +483,13 @@ fn test_index_double_bracket_bug() {
 
 /// Test for missing inline constraint annotations
 #[test]
-#[ignore = "Requires Capital.DatabaseCore project and dotnet SDK"]
+#[ignore = "Requires dotnet SDK"]
 fn test_missing_inline_constraint_annotations() {
     if !dotnet_available() {
         return;
     }
 
-    let project_path = match get_capital_database_path() {
+    let project_path = match get_test_project_path() {
         Some(p) => p,
         None => return,
     };
@@ -484,12 +504,7 @@ fn test_missing_inline_constraint_annotations() {
         verbose: false,
     });
 
-    let dotnet_dacpac = project_path
-        .parent()
-        .unwrap()
-        .join("bin")
-        .join("Debug")
-        .join("Capital.DatabaseCore.dacpac");
+    let dotnet_dacpac = get_dotnet_dacpac_path(&project_path);
 
     let rust_xml = extract_model_xml(&rust_dacpac).expect("Should extract rust model.xml");
     let dotnet_xml = extract_model_xml(&dotnet_dacpac).expect("Should extract dotnet model.xml");
@@ -510,13 +525,13 @@ fn test_missing_inline_constraint_annotations() {
 
 /// Test for default constraint count discrepancy
 #[test]
-#[ignore = "Requires Capital.DatabaseCore project and dotnet SDK"]
+#[ignore = "Requires dotnet SDK"]
 fn test_default_constraint_coverage() {
     if !dotnet_available() {
         return;
     }
 
-    let project_path = match get_capital_database_path() {
+    let project_path = match get_test_project_path() {
         Some(p) => p,
         None => return,
     };
@@ -531,12 +546,7 @@ fn test_default_constraint_coverage() {
         verbose: false,
     });
 
-    let dotnet_dacpac = project_path
-        .parent()
-        .unwrap()
-        .join("bin")
-        .join("Debug")
-        .join("Capital.DatabaseCore.dacpac");
+    let dotnet_dacpac = get_dotnet_dacpac_path(&project_path);
 
     let rust_xml = extract_model_xml(&rust_dacpac).expect("Should extract rust model.xml");
     let dotnet_xml = extract_model_xml(&dotnet_dacpac).expect("Should extract dotnet model.xml");
