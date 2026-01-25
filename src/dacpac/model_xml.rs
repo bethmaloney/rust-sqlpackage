@@ -613,27 +613,39 @@ fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> a
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
+    // Write IsAnsiNullsOn property (always true for functions)
+    write_property(writer, "IsAnsiNullsOn", "True")?;
+
     // Write IsNativelyCompiled property if true
     if func.is_natively_compiled {
         write_property(writer, "IsNativelyCompiled", "True")?;
     }
 
     // Write FunctionBody relationship with SqlScriptFunctionImplementation
-    // Include everything from RETURNS onwards to preserve return type and parameters
-    let body = extract_function_body_with_returns(&func.definition);
-    write_function_body(writer, &body, None)?;
+    // BodyScript contains only the function body (BEGIN...END), not the header
+    let body = extract_function_body(&func.definition);
+    let header = extract_function_header(&func.definition);
+    write_function_body_with_annotation(writer, &body, &header)?;
 
     write_schema_relationship(writer, &func.schema)?;
+
+    // Write Type relationship for return type (scalar functions only)
+    if matches!(func.function_type, crate::model::FunctionType::Scalar) {
+        if let Some(ref return_type) = func.return_type {
+            write_function_return_type(writer, return_type)?;
+        }
+    }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
 }
 
 /// Write FunctionBody relationship for functions with nested SqlScriptFunctionImplementation
-fn write_function_body<W: Write>(
+/// Includes SysCommentsObjectAnnotation with HeaderContents for DacFx compatibility
+fn write_function_body_with_annotation<W: Write>(
     writer: &mut Writer<W>,
     body: &str,
-    _return_type: Option<&str>,
+    header: &str,
 ) -> anyhow::Result<()> {
     let mut rel = BytesStart::new("Relationship");
     rel.push_attribute(("Name", "FunctionBody"));
@@ -645,9 +657,24 @@ fn write_function_body<W: Write>(
     elem.push_attribute(("Type", "SqlScriptFunctionImplementation"));
     writer.write_event(Event::Start(elem))?;
 
-    // Write BodyScript property with the function body
-    // This includes everything from RETURNS onwards for proper DacFx compatibility
+    // Write BodyScript property with the function body only (BEGIN...END)
     write_script_property(writer, "BodyScript", body)?;
+
+    // Write SysCommentsObjectAnnotation with HeaderContents
+    let mut annotation = BytesStart::new("Annotation");
+    annotation.push_attribute(("Type", "SysCommentsObjectAnnotation"));
+    writer.write_event(Event::Start(annotation))?;
+
+    // Calculate length (header + body)
+    let total_length = header.len() + body.len();
+    write_property(writer, "Length", &total_length.to_string())?;
+    write_property(writer, "StartLine", "1")?;
+    write_property(writer, "StartColumn", "1")?;
+
+    // Write HeaderContents with XML-escaped header
+    write_property(writer, "HeaderContents", header)?;
+
+    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -656,9 +683,61 @@ fn write_function_body<W: Write>(
     Ok(())
 }
 
+/// Write Type relationship for scalar function return type
+/// Format: <Relationship Name="Type"><Entry><Element Type="SqlTypeSpecifier">
+///           <Relationship Name="Type"><Entry><References ExternalSource="BuiltIns" Name="[type]"/></Entry></Relationship>
+///         </Element></Entry></Relationship>
+fn write_function_return_type<W: Write>(writer: &mut Writer<W>, return_type: &str) -> anyhow::Result<()> {
+    // Extract base type name (e.g., "INT" -> "int", "DECIMAL(18,2)" -> "decimal")
+    let base_type = extract_base_type_name(return_type);
+    let type_ref = format!("[{}]", base_type.to_lowercase());
+
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "Type"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTypeSpecifier"));
+    writer.write_event(Event::Start(elem))?;
+
+    // Nested Type relationship referencing the built-in type
+    let mut inner_rel = BytesStart::new("Relationship");
+    inner_rel.push_attribute(("Name", "Type"));
+    writer.write_event(Event::Start(inner_rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut refs = BytesStart::new("References");
+    refs.push_attribute(("ExternalSource", "BuiltIns"));
+    refs.push_attribute(("Name", type_ref.as_str()));
+    writer.write_event(Event::Empty(refs))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    Ok(())
+}
+
+/// Extract base type name from a type specification
+/// e.g., "DECIMAL(18,2)" -> "decimal", "VARCHAR(100)" -> "varchar", "INT" -> "int"
+fn extract_base_type_name(type_spec: &str) -> String {
+    let type_upper = type_spec.trim().to_uppercase();
+    // Remove parentheses and everything after
+    if let Some(paren_pos) = type_upper.find('(') {
+        type_upper[..paren_pos].trim().to_lowercase()
+    } else {
+        type_upper.to_lowercase()
+    }
+}
+
 /// Extract the body part from a CREATE FUNCTION definition
 /// Returns just the body (BEGIN...END or RETURN(...)) without the header
-#[allow(dead_code)]
 fn extract_function_body(definition: &str) -> String {
     let def_upper = definition.to_uppercase();
 
@@ -682,25 +761,26 @@ fn extract_function_body(definition: &str) -> String {
     definition.to_string()
 }
 
-/// Extract everything from the parameter list onwards for function body
-/// This includes parameters, return type, AS keyword, and body
-fn extract_function_body_with_returns(definition: &str) -> String {
+/// Extract the header part from a CREATE FUNCTION definition
+/// Returns everything up to and including AS (CREATE FUNCTION [name](...) RETURNS type AS)
+fn extract_function_header(definition: &str) -> String {
     let def_upper = definition.to_uppercase();
 
-    // Find the opening paren of the parameter list
-    // Pattern: CREATE FUNCTION [name](params) RETURNS type AS BEGIN ... END
-    if let Some(func_pos) = def_upper.find("FUNCTION") {
-        let after_func = &def_upper[func_pos..];
-        // Find the opening paren (start of parameters)
-        if let Some(paren_pos) = after_func.find('(') {
-            let abs_paren_pos = func_pos + paren_pos;
-            // Return everything from the opening paren onwards
-            return definition[abs_paren_pos..].trim().to_string();
+    // Find RETURNS and then AS after it
+    if let Some(returns_pos) = def_upper.find("RETURNS") {
+        let after_returns = &def_upper[returns_pos..];
+        // Find AS keyword
+        let as_regex = regex::Regex::new(r"(?i)[\s\n]AS[\s\n]").unwrap();
+        if let Some(m) = as_regex.find(after_returns) {
+            // Calculate absolute position in original string (include the AS)
+            let abs_as_end = returns_pos + m.end();
+            // Return everything up to and including AS, trimmed
+            return definition[..abs_as_end].trim().to_string();
         }
     }
 
-    // Fallback: return the original definition
-    definition.to_string()
+    // Fallback: return empty string
+    String::new()
 }
 
 fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow::Result<()> {

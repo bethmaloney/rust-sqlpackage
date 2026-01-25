@@ -1039,3 +1039,190 @@ CREATE TABLE [dbo].[MediaFiles] (
         filestream_count
     );
 }
+
+// ============================================================================
+// Scalar Function Return Type Tests
+// ============================================================================
+
+#[test]
+fn test_scalar_function_has_type_relationship() {
+    // Scalar functions must have a Type relationship containing SqlTypeSpecifier
+    // that references the return type
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetValue]()
+RETURNS INT
+AS
+BEGIN
+    RETURN 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Must have Type relationship
+    assert!(
+        xml.contains(r#"<Relationship Name="Type">"#),
+        "Scalar function should have Type relationship for return type. Got:\n{}",
+        xml
+    );
+
+    // Type relationship must contain SqlTypeSpecifier element
+    assert!(
+        xml.contains(r#"Type="SqlTypeSpecifier""#),
+        "Type relationship should contain SqlTypeSpecifier element. Got:\n{}",
+        xml
+    );
+
+    // SqlTypeSpecifier must reference the int type
+    assert!(
+        xml.contains(r#"Name="[int]""#),
+        "SqlTypeSpecifier should reference [int] type. Got:\n{}",
+        xml
+    );
+}
+
+#[test]
+fn test_scalar_function_decimal_return_type() {
+    // Test that DECIMAL(18,2) return type is properly represented
+    let sql = r#"
+CREATE FUNCTION [Sales].[GetOrderTotal](@OrderId INT)
+RETURNS DECIMAL(18, 2)
+AS
+BEGIN
+    RETURN 100.00;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Must have Type relationship with SqlTypeSpecifier
+    assert!(
+        xml.contains(r#"<Relationship Name="Type">"#),
+        "Scalar function should have Type relationship. Got:\n{}",
+        xml
+    );
+    assert!(
+        xml.contains(r#"Type="SqlTypeSpecifier""#),
+        "Should have SqlTypeSpecifier element. Got:\n{}",
+        xml
+    );
+
+    // Should reference decimal type
+    assert!(
+        xml.contains(r#"Name="[decimal]""#),
+        "SqlTypeSpecifier should reference [decimal] type. Got:\n{}",
+        xml
+    );
+}
+
+#[test]
+fn test_scalar_function_body_script_excludes_header() {
+    // BodyScript should contain only the function body (BEGIN...END),
+    // not the RETURNS clause or parameters
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetValue]()
+RETURNS INT
+AS
+BEGIN
+    RETURN 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Extract the BodyScript CDATA content to check it specifically
+    // BodyScript should start with BEGIN, not with parameters or RETURNS
+    assert!(
+        xml.contains("<![CDATA[BEGIN"),
+        "BodyScript should start with BEGIN (not parameters or RETURNS). Got:\n{}",
+        xml
+    );
+
+    // BodyScript should NOT contain RETURNS in the CDATA section
+    // (RETURNS is allowed in HeaderContents, just not in BodyScript)
+    let cdata_start = xml.find("<![CDATA[").unwrap();
+    let cdata_end = xml.find("]]>").unwrap();
+    let body_script = &xml[cdata_start..cdata_end];
+    assert!(
+        !body_script.contains("RETURNS INT"),
+        "BodyScript CDATA should not contain RETURNS clause. Got:\n{}",
+        body_script
+    );
+
+    // BodyScript SHOULD contain BEGIN...END
+    assert!(
+        xml.contains("BEGIN") && xml.contains("RETURN 1") && xml.contains("END"),
+        "BodyScript should contain function body. Got:\n{}",
+        xml
+    );
+}
+
+#[test]
+fn test_scalar_function_has_header_annotation() {
+    // Scalar functions should have SysCommentsObjectAnnotation with HeaderContents
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetValue]()
+RETURNS INT
+AS
+BEGIN
+    RETURN 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    // Should have SysCommentsObjectAnnotation
+    assert!(
+        xml.contains(r#"<Annotation Type="SysCommentsObjectAnnotation">"#),
+        "Scalar function should have SysCommentsObjectAnnotation. Got:\n{}",
+        xml
+    );
+
+    // Should have HeaderContents property
+    assert!(
+        xml.contains(r#"<Property Name="HeaderContents""#),
+        "Annotation should have HeaderContents property. Got:\n{}",
+        xml
+    );
+}
+
+#[test]
+fn test_scalar_function_has_ansi_nulls_property() {
+    // Scalar functions should have IsAnsiNullsOn property
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetValue]()
+RETURNS INT
+AS
+BEGIN
+    RETURN 1;
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    assert!(
+        xml.contains(r#"<Property Name="IsAnsiNullsOn" Value="True"/>"#),
+        "Scalar function should have IsAnsiNullsOn property. Got:\n{}",
+        xml
+    );
+}
+
+#[test]
+fn test_scalar_function_varchar_return_type() {
+    // Test VARCHAR return type
+    let sql = r#"
+CREATE FUNCTION [dbo].[GetName]()
+RETURNS VARCHAR(100)
+AS
+BEGIN
+    RETURN 'Test';
+END
+"#;
+    let xml = generate_model_xml(sql);
+
+    assert!(
+        xml.contains(r#"<Relationship Name="Type">"#),
+        "Should have Type relationship. Got:\n{}",
+        xml
+    );
+    assert!(
+        xml.contains(r#"Name="[varchar]""#),
+        "Should reference [varchar] type. Got:\n{}",
+        xml
+    );
+}
