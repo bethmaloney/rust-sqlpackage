@@ -12,9 +12,7 @@ just build                              # Debug build
 just release                            # Release build (optimized)
 
 # Run tests
-just test                               # All tests (excluding e2e)
-just test-e2e                           # E2E tests (requires SQL Server)
-just test-all                           # All tests including e2e
+just test                               # All tests
 just test-one test_name                 # Single test by name
 
 # Run the CLI
@@ -22,7 +20,7 @@ just run build --project path/to/Database.sqlproj
 just build-project path/to/Database.sqlproj
 ```
 
-**Important:** Before finishing a feature or committing, always run `just test-all` to run all tests including e2e.
+**Important:** Before finishing a feature or committing, always run `just test`.
 
 ## Architecture
 

@@ -563,38 +563,4 @@ impl ComparisonResult {
             if self.is_success() { "PASS" } else { "FAIL" }
         );
     }
-
-    /// Get a summary suitable for test assertion messages
-    pub fn summary(&self) -> String {
-        let mut parts = Vec::new();
-
-        if !self.layer1_errors.is_empty() {
-            parts.push(format!(
-                "Layer 1: {} element inventory errors",
-                self.layer1_errors.len()
-            ));
-        }
-
-        if !self.layer2_errors.is_empty() {
-            parts.push(format!(
-                "Layer 2: {} property mismatches",
-                self.layer2_errors.len()
-            ));
-        }
-
-        if let Some(ref l3) = self.layer3_result {
-            if l3.has_differences {
-                parts.push("Layer 3: SqlPackage detected differences".to_string());
-            }
-            if let Some(ref err) = l3.error {
-                parts.push(format!("Layer 3 error: {}", err));
-            }
-        }
-
-        if parts.is_empty() {
-            "All layers passed".to_string()
-        } else {
-            parts.join("; ")
-        }
-    }
 }
