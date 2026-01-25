@@ -1789,7 +1789,8 @@ fn split_batches(content: &str) -> Vec<Batch<'_>> {
         };
 
         // GO must be on its own line (optionally with whitespace)
-        if trimmed.eq_ignore_ascii_case("go") {
+        // Also handle GO; with trailing semicolon (common in some SQL scripts)
+        if trimmed.eq_ignore_ascii_case("go") || trimmed.eq_ignore_ascii_case("go;") {
             if current_pos > batch_start {
                 batches.push(Batch {
                     content: &content[batch_start..current_pos],
@@ -1966,6 +1967,26 @@ mod tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].start_line, 1);
         assert_eq!(batches[1].start_line, 3);
+    }
+
+    #[test]
+    fn test_split_batches_with_semicolon() {
+        // GO; with trailing semicolon should also be recognized as a batch separator
+        let sql = "CREATE TABLE t1 (id INT)\nGO;\nCREATE TABLE t2 (id INT)";
+        let batches = split_batches(sql);
+        assert_eq!(batches.len(), 2, "GO; should split into 2 batches");
+        assert_eq!(batches[0].start_line, 1);
+        assert!(batches[0].content.contains("CREATE TABLE t1"));
+        assert_eq!(batches[1].start_line, 3);
+        assert!(batches[1].content.contains("CREATE TABLE t2"));
+    }
+
+    #[test]
+    fn test_split_batches_go_semicolon_variations() {
+        // Test various GO; variations
+        let sql = "SELECT 1\nGO;\nSELECT 2\n  GO;  \nSELECT 3\ngo;\nSELECT 4";
+        let batches = split_batches(sql);
+        assert_eq!(batches.len(), 4, "Should handle GO; with various whitespace and casing");
     }
 
     #[test]

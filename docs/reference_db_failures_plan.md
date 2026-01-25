@@ -14,7 +14,7 @@ This document tracks all identified differences between rust-sqlpackage output a
 
 ### 1. `GO;` Batch Separator Not Handled
 
-- **Status:** [ ] Not started
+- **Status:** [x] Completed
 - **Severity:** Critical
 - **Impact:** Tables and other objects in affected files are missing from output
 
