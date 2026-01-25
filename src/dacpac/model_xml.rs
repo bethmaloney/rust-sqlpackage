@@ -361,6 +361,9 @@ fn write_table<W: Write>(writer: &mut Writer<W>, table: &TableElement) -> anyhow
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
+    // Write IsAnsiNullsOn property (always true for tables - ANSI_NULLS ON is default)
+    write_property(writer, "IsAnsiNullsOn", "True")?;
+
     // Relationship to schema
     write_schema_relationship(writer, &table.schema)?;
 

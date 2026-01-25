@@ -5,8 +5,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 ## Summary
 
 - **Total Ignored Tests**: 12
-- **Fixed**: 11
-- **Remaining**: 1
+- **Fixed**: 12
+- **Remaining**: 0
 
 ## Test Fixes
 
@@ -172,15 +172,12 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 
 ### 12. Table IsAnsiNullsOn Property
 
-- [ ] **Test**: `test_table_has_ansi_nulls_property`
-- **Ignore Reason**: Table IsAnsiNullsOn property not yet implemented
-- **Impact**: Missing property on all table elements
-- **Files to Modify**:
-  - `src/dacpac/xml.rs` - Add IsAnsiNullsOn property to SqlTable
-- **Implementation Notes**:
-  - Simple addition: `<Property Name="IsAnsiNullsOn" Value="True"/>`
-  - All tables should have this property
-  - Value typically True (ANSI_NULLS ON is default)
+- [x] **Test**: `test_table_has_ansi_nulls_property`
+- **Status**: ✅ FIXED - IsAnsiNullsOn property now added to all SqlTable elements
+- **Notes**: The `IsAnsiNullsOn` property is now written to all table elements in model.xml.
+  The implementation adds `<Property Name="IsAnsiNullsOn" Value="True"/>` to each SqlTable
+  element in `src/dacpac/model_xml.rs` via the `write_table()` function. ANSI_NULLS ON is
+  the default behavior in SQL Server, so all tables have this property set to True.
 - **Fixture**: `tests/fixtures/simple_table/` (existing)
 
 ---
@@ -235,4 +232,4 @@ After fixing each test:
 
 ---
 
-*Last updated: 2026-01-25 (SQLCMD Variables implemented)*
+*Last updated: 2026-01-25 (Table IsAnsiNullsOn property implemented - ALL TESTS COMPLETE)*

@@ -517,7 +517,6 @@ fn test_build_with_sqlcmd_variables() {
 // ============================================================================
 
 #[test]
-#[ignore = "Table IsAnsiNullsOn property not yet implemented"]
 fn test_table_has_ansi_nulls_property() {
     let ctx = TestContext::with_fixture("simple_table");
     let result = ctx.build();
