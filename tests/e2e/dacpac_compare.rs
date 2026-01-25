@@ -1,9 +1,11 @@
 //! Layered dacpac comparison utilities for E2E testing
 //!
-//! Provides three layers of comparison:
+//! Provides multiple layers of comparison:
 //! 1. Element inventory - verify all elements exist with correct names
 //! 2. Property comparison - verify element properties match
 //! 3. SqlPackage DeployReport - verify deployment equivalence
+//! 4. Element ordering - verify element order matches DotNet output
+//! 5. Metadata files - verify Content_Types.xml, DacMetadata.xml, Origin.xml match
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -64,6 +66,7 @@ pub struct ComparisonResult {
     pub layer2_errors: Vec<Layer2Error>,
     pub relationship_errors: Vec<RelationshipError>,
     pub layer4_errors: Vec<Layer4Error>,
+    pub metadata_errors: Vec<MetadataFileError>,
     pub layer3_result: Option<Layer3Result>,
 }
 
@@ -171,6 +174,43 @@ pub enum Layer4Error {
     },
 }
 
+/// Phase 5: Metadata file comparison errors
+///
+/// Beyond model.xml, dacpacs contain metadata files that should match between
+/// Rust and DotNet implementations for true 1-1 parity.
+#[derive(Debug)]
+pub enum MetadataFileError {
+    /// [Content_Types].xml MIME type definition mismatch
+    ContentTypeMismatch {
+        /// File extension (e.g., "xml", "sql")
+        extension: String,
+        /// Content type in Rust output
+        rust_content_type: Option<String>,
+        /// Content type in DotNet output
+        dotnet_content_type: Option<String>,
+    },
+    /// [Content_Types].xml has different number of type definitions
+    ContentTypeCountMismatch {
+        rust_count: usize,
+        dotnet_count: usize,
+    },
+    /// File exists in one dacpac but not the other
+    FileMissing {
+        /// Name of the file (e.g., "[Content_Types].xml", "DacMetadata.xml")
+        file_name: String,
+        /// True if missing in Rust dacpac, false if missing in DotNet dacpac
+        missing_in_rust: bool,
+    },
+}
+
+/// Parsed [Content_Types].xml structure
+#[derive(Debug, Default)]
+pub struct ContentTypesXml {
+    /// Map of file extension to MIME content type
+    /// e.g., "xml" -> "text/xml", "sql" -> "text/plain"
+    pub types: HashMap<String, String>,
+}
+
 /// Options for controlling comparison behavior
 #[derive(Debug, Clone, Default)]
 pub struct ComparisonOptions {
@@ -182,6 +222,8 @@ pub struct ComparisonOptions {
     pub check_relationships: bool,
     /// Validate element ordering matches DotNet output (Phase 4)
     pub check_element_order: bool,
+    /// Compare metadata files ([Content_Types].xml, DacMetadata.xml, etc.) (Phase 5)
+    pub check_metadata_files: bool,
 }
 
 /// Layer 3: SqlPackage DeployReport result
@@ -975,6 +1017,142 @@ fn find_type_first_positions(model: &DacpacModel) -> HashMap<String, usize> {
 }
 
 // =============================================================================
+// Phase 5: Metadata File Comparison
+// =============================================================================
+
+/// Extract [Content_Types].xml from a dacpac file
+pub fn extract_content_types_xml(dacpac_path: &Path) -> Result<String, String> {
+    let file = fs::File::open(dacpac_path).map_err(|e| format!("Failed to open dacpac: {}", e))?;
+
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read ZIP entry: {}", e))?;
+
+        if file.name() == "[Content_Types].xml" {
+            let mut content = String::new();
+            file.read_to_string(&mut content)
+                .map_err(|e| format!("Failed to read [Content_Types].xml: {}", e))?;
+            return Ok(content);
+        }
+    }
+
+    Err("[Content_Types].xml not found in dacpac".to_string())
+}
+
+impl ContentTypesXml {
+    /// Parse [Content_Types].xml content using roxmltree
+    pub fn from_xml(xml: &str) -> Result<Self, String> {
+        let doc =
+            roxmltree::Document::parse(xml).map_err(|e| format!("Failed to parse XML: {}", e))?;
+
+        let mut types = HashMap::new();
+
+        // Find all Default elements with Extension and ContentType attributes
+        // Example: <Default Extension="xml" ContentType="text/xml" />
+        for node in doc.descendants() {
+            if node.has_tag_name("Default") {
+                if let (Some(ext), Some(content_type)) =
+                    (node.attribute("Extension"), node.attribute("ContentType"))
+                {
+                    types.insert(ext.to_lowercase(), content_type.to_string());
+                }
+            }
+            // Also check for Override elements which may define specific paths
+            // Example: <Override PartName="/model.xml" ContentType="text/xml" />
+            if node.has_tag_name("Override") {
+                if let (Some(part_name), Some(content_type)) =
+                    (node.attribute("PartName"), node.attribute("ContentType"))
+                {
+                    // Extract extension from part name
+                    if let Some(ext) = part_name.rsplit('.').next() {
+                        types.insert(ext.to_lowercase(), content_type.to_string());
+                    }
+                }
+            }
+        }
+
+        Ok(Self { types })
+    }
+
+    /// Parse [Content_Types].xml from a dacpac file
+    pub fn from_dacpac(dacpac_path: &Path) -> Result<Self, String> {
+        let xml = extract_content_types_xml(dacpac_path)?;
+        Self::from_xml(&xml)
+    }
+}
+
+/// Compare [Content_Types].xml between two dacpacs
+///
+/// Checks that:
+/// 1. Both dacpacs have [Content_Types].xml
+/// 2. Same file extensions are defined
+/// 3. Same MIME content types are used for each extension
+///
+/// Note: MIME type differences between `text/xml` and `application/xml` are
+/// semantically equivalent but flagged for exact parity tracking.
+pub fn compare_content_types(rust_dacpac: &Path, dotnet_dacpac: &Path) -> Vec<MetadataFileError> {
+    let mut errors = Vec::new();
+
+    // Extract Content_Types from both dacpacs
+    let rust_ct = match ContentTypesXml::from_dacpac(rust_dacpac) {
+        Ok(ct) => ct,
+        Err(_) => {
+            errors.push(MetadataFileError::FileMissing {
+                file_name: "[Content_Types].xml".to_string(),
+                missing_in_rust: true,
+            });
+            return errors;
+        }
+    };
+
+    let dotnet_ct = match ContentTypesXml::from_dacpac(dotnet_dacpac) {
+        Ok(ct) => ct,
+        Err(_) => {
+            errors.push(MetadataFileError::FileMissing {
+                file_name: "[Content_Types].xml".to_string(),
+                missing_in_rust: false,
+            });
+            return errors;
+        }
+    };
+
+    // Compare type counts
+    if rust_ct.types.len() != dotnet_ct.types.len() {
+        errors.push(MetadataFileError::ContentTypeCountMismatch {
+            rust_count: rust_ct.types.len(),
+            dotnet_count: dotnet_ct.types.len(),
+        });
+    }
+
+    // Compare all extensions present in either dacpac
+    let all_extensions: BTreeSet<_> = rust_ct
+        .types
+        .keys()
+        .chain(dotnet_ct.types.keys())
+        .cloned()
+        .collect();
+
+    for ext in all_extensions {
+        let rust_type = rust_ct.types.get(&ext);
+        let dotnet_type = dotnet_ct.types.get(&ext);
+
+        if rust_type != dotnet_type {
+            errors.push(MetadataFileError::ContentTypeMismatch {
+                extension: ext,
+                rust_content_type: rust_type.cloned(),
+                dotnet_content_type: dotnet_type.cloned(),
+            });
+        }
+    }
+
+    errors
+}
+
+// =============================================================================
 // Layer 3: SqlPackage DeployReport
 // =============================================================================
 
@@ -1079,6 +1257,7 @@ pub fn compare_dacpacs(
         strict_properties: false,
         check_relationships: false,
         check_element_order: false,
+        check_metadata_files: false,
     };
     compare_dacpacs_with_options(rust_dacpac, dotnet_dacpac, &options)
 }
@@ -1090,6 +1269,7 @@ pub fn compare_dacpacs(
 /// - `strict_properties`: Compare ALL properties (not just key properties)
 /// - `check_relationships`: Validate all relationships between elements
 /// - `check_element_order`: Validate element ordering matches DotNet output (Phase 4)
+/// - `check_metadata_files`: Compare metadata files like [Content_Types].xml (Phase 5)
 pub fn compare_dacpacs_with_options(
     rust_dacpac: &Path,
     dotnet_dacpac: &Path,
@@ -1118,6 +1298,12 @@ pub fn compare_dacpacs_with_options(
         Vec::new()
     };
 
+    let metadata_errors = if options.check_metadata_files {
+        compare_content_types(rust_dacpac, dotnet_dacpac)
+    } else {
+        Vec::new()
+    };
+
     let layer3_result = if options.include_layer3 {
         Some(compare_with_sqlpackage(rust_dacpac, dotnet_dacpac))
     } else {
@@ -1129,6 +1315,7 @@ pub fn compare_dacpacs_with_options(
         layer2_errors,
         relationship_errors,
         layer4_errors,
+        metadata_errors,
         layer3_result,
     })
 }
@@ -1273,12 +1460,51 @@ impl fmt::Display for Layer4Error {
     }
 }
 
+impl fmt::Display for MetadataFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MetadataFileError::ContentTypeMismatch {
+                extension,
+                rust_content_type,
+                dotnet_content_type,
+            } => {
+                write!(
+                    f,
+                    "CONTENT TYPE MISMATCH: .{} extension (Rust: {:?}, DotNet: {:?})",
+                    extension, rust_content_type, dotnet_content_type
+                )
+            }
+            MetadataFileError::ContentTypeCountMismatch {
+                rust_count,
+                dotnet_count,
+            } => {
+                write!(
+                    f,
+                    "CONTENT TYPE COUNT MISMATCH: Rust has {} types, DotNet has {} types",
+                    rust_count, dotnet_count
+                )
+            }
+            MetadataFileError::FileMissing {
+                file_name,
+                missing_in_rust,
+            } => {
+                if *missing_in_rust {
+                    write!(f, "FILE MISSING IN RUST: {}", file_name)
+                } else {
+                    write!(f, "FILE MISSING IN DOTNET: {}", file_name)
+                }
+            }
+        }
+    }
+}
+
 impl ComparisonResult {
     pub fn is_success(&self) -> bool {
         self.layer1_errors.is_empty()
             && self.layer2_errors.is_empty()
             && self.relationship_errors.is_empty()
             && self.layer4_errors.is_empty()
+            && self.metadata_errors.is_empty()
             && self
                 .layer3_result
                 .as_ref()
@@ -1329,6 +1555,16 @@ impl ComparisonResult {
             println!("Layer 4: Element Ordering");
             println!("{}", "-".repeat(40));
             for err in &self.layer4_errors {
+                println!("  {}", err);
+            }
+            println!();
+        }
+
+        // Phase 5: Metadata Files Comparison
+        if !self.metadata_errors.is_empty() {
+            println!("Phase 5: Metadata Files ([Content_Types].xml)");
+            println!("{}", "-".repeat(40));
+            for err in &self.metadata_errors {
                 println!("  {}", err);
             }
             println!();

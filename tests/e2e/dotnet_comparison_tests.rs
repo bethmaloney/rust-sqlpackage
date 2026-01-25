@@ -434,6 +434,7 @@ fn test_strict_comparison_options() {
         strict_properties: true,
         check_relationships: false,
         check_element_order: false,
+        check_metadata_files: false,
     };
 
     let result =
@@ -791,6 +792,7 @@ fn test_relationship_comparison_options() {
         strict_properties: false,
         check_relationships: true,
         check_element_order: false,
+        check_metadata_files: false,
     };
 
     let result =
@@ -943,6 +945,7 @@ fn test_element_order_comparison_options() {
         strict_properties: false,
         check_relationships: false,
         check_element_order: true,
+        check_metadata_files: false,
     };
 
     let result =
@@ -971,4 +974,192 @@ fn test_element_order_comparison_options() {
             println!("  {}: {}", error_type, count);
         }
     }
+}
+
+// =============================================================================
+// Phase 5: Metadata Files Comparison Tests
+// =============================================================================
+
+/// Test [Content_Types].xml comparison between Rust and DotNet dacpacs.
+/// This tests the Content_Types.xml comparison mode introduced in Phase 5.
+///
+/// Purpose: Verifies that [Content_Types].xml files match between Rust and DotNet output.
+/// This includes MIME type definitions for different file extensions.
+///
+/// Note: DotNet may use either "text/xml" or "application/xml" depending on version.
+/// Both are semantically equivalent but tracked for exact parity.
+#[test]
+fn test_content_types_comparison() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Use the content types comparison function
+    let errors = crate::dacpac_compare::compare_content_types(&rust_dacpac, &dotnet_dacpac);
+
+    println!("\n=== Content Types Comparison Test (Phase 5.1) ===\n");
+
+    if errors.is_empty() {
+        println!("All [Content_Types].xml entries match!");
+    } else {
+        println!("Content types mismatches found: {}\n", errors.len());
+        for err in &errors {
+            println!("  {}", err);
+        }
+
+        println!("\nThis test is informational - mismatches indicate Content_Types.xml");
+        println!("differences that need to be addressed for exact 1-1 matching.");
+    }
+
+    // Note: We don't assert here because this is a progress tracking test.
+    // Mismatches may be expected (text/xml vs application/xml) until fully implemented.
+}
+
+/// Test using ComparisonOptions with check_metadata_files=true
+#[test]
+fn test_content_types_comparison_options() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Test with check_metadata_files enabled
+    let options = ComparisonOptions {
+        include_layer3: false,
+        strict_properties: false,
+        check_relationships: false,
+        check_element_order: false,
+        check_metadata_files: true,
+    };
+
+    let result =
+        compare_dacpacs_with_options(&rust_dacpac, &dotnet_dacpac, &options).expect("Comparison");
+
+    println!("\n=== Metadata Files ComparisonOptions Test (Phase 5) ===\n");
+    println!("Layer 1 errors: {}", result.layer1_errors.len());
+    println!("Layer 2 errors: {}", result.layer2_errors.len());
+    println!("Relationship errors: {}", result.relationship_errors.len());
+    println!("Layer 4 (ordering) errors: {}", result.layer4_errors.len());
+    println!("Metadata file errors: {}", result.metadata_errors.len());
+
+    // Show details of metadata errors
+    if !result.metadata_errors.is_empty() {
+        println!("\nMetadata file errors:");
+        for err in &result.metadata_errors {
+            println!("  {}", err);
+        }
+    }
+}
+
+/// Test parsing Content_Types.xml directly
+#[test]
+fn test_content_types_xml_parsing() {
+    use crate::dacpac_compare::ContentTypesXml;
+
+    // Test parsing typical DotNet output
+    let dotnet_xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="text/xml" />
+  <Default Extension="sql" ContentType="text/plain" />
+</Types>"#;
+
+    let ct = ContentTypesXml::from_xml(dotnet_xml).expect("Should parse Content_Types.xml");
+
+    assert_eq!(ct.types.len(), 2, "Should have 2 type definitions");
+    assert_eq!(
+        ct.types.get("xml"),
+        Some(&"text/xml".to_string()),
+        "XML should be text/xml"
+    );
+    assert_eq!(
+        ct.types.get("sql"),
+        Some(&"text/plain".to_string()),
+        "SQL should be text/plain"
+    );
+
+    // Test parsing without SQL types
+    let xml_only = r#"<?xml version="1.0" encoding="utf-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml" />
+</Types>"#;
+
+    let ct2 = ContentTypesXml::from_xml(xml_only).expect("Should parse Content_Types.xml");
+
+    assert_eq!(ct2.types.len(), 1, "Should have 1 type definition");
+    assert_eq!(
+        ct2.types.get("xml"),
+        Some(&"application/xml".to_string()),
+        "XML should be application/xml"
+    );
+}
+
+/// Test extracting Content_Types.xml from a Rust-generated dacpac
+#[test]
+fn test_extract_content_types_from_dacpac() {
+    use crate::dacpac_compare::{extract_content_types_xml, ContentTypesXml};
+
+    let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("simple_table")
+        .join("project.sqlproj");
+
+    if !project_path.exists() {
+        eprintln!("Skipping: simple_table fixture not found");
+        return;
+    }
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let rust_dacpac = temp_dir.path().join("rust.dacpac");
+
+    rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+        project_path,
+        output_path: Some(rust_dacpac.clone()),
+        target_platform: "Sql150".to_string(),
+        verbose: false,
+    })
+    .expect("Rust build should succeed");
+
+    // Extract and parse Content_Types.xml
+    let xml = extract_content_types_xml(&rust_dacpac).expect("Should extract [Content_Types].xml");
+    let ct = ContentTypesXml::from_xml(&xml).expect("Should parse Content_Types.xml");
+
+    println!("\n=== Rust Dacpac Content_Types.xml ===");
+    println!("Raw XML:\n{}", xml);
+    println!("\nParsed types:");
+    for (ext, content_type) in &ct.types {
+        println!("  .{} -> {}", ext, content_type);
+    }
+
+    assert!(
+        ct.types.contains_key("xml"),
+        "Should have XML type definition"
+    );
 }

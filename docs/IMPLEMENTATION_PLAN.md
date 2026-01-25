@@ -192,10 +192,22 @@ New layer for exact XML structural validation.
 
 Extend comparison beyond model.xml to all dacpac files.
 
-- [ ] **5.1 Implement `[Content_Types].xml` comparison**
-  - Extract from both dacpacs
-  - Compare MIME type definitions
-  - Report differences
+- [x] **5.1 Implement `[Content_Types].xml` comparison** ✓ COMPLETE
+  - Added `MetadataFileError` enum with variants for content type mismatches, count mismatches, and missing files
+  - Added `ContentTypesXml` struct to parse and represent [Content_Types].xml structure
+  - Implemented `extract_content_types_xml()` to extract [Content_Types].xml from dacpac ZIP
+  - Implemented `ContentTypesXml::from_xml()` to parse Default and Override elements
+  - Implemented `compare_content_types()` to compare MIME type definitions between dacpacs
+  - Added `check_metadata_files` option to `ComparisonOptions`
+  - Added `metadata_errors` field to `ComparisonResult`
+  - Updated `is_success()` and `print_report()` to include metadata errors
+  - Tests added:
+    - `test_content_types_comparison` - informational test comparing [Content_Types].xml between Rust/DotNet
+    - `test_content_types_comparison_options` - tests ComparisonOptions with `check_metadata_files=true`
+    - `test_content_types_xml_parsing` - unit test for XML parsing logic
+    - `test_extract_content_types_from_dacpac` - test extraction from Rust-generated dacpac
+  - Location: `tests/e2e/dacpac_compare.rs:176-211` (types), `tests/e2e/dacpac_compare.rs:1019-1156` (functions)
+  - Acceptance: [Content_Types].xml comparison reports MIME type differences ✓
 
 - [ ] **5.2 Implement `DacMetadata.xml` comparison**
   - Compare metadata fields
@@ -336,17 +348,18 @@ Reorganize and improve test infrastructure.
 | Phase 2: Property Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 3: Relationship Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 4: XML Structure (Layer 4) | **COMPLETE** | 4/4 ✓ |
-| Phase 5: Metadata Files | Not Started | 0/5 |
+| Phase 5: Metadata Files | In Progress | 1/5 |
 | Phase 6: Per-Feature Tests | Not Started | 0/5+ |
 | Phase 7: Canonical XML | Not Started | 0/4 |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 21/39+ tasks complete
+**Overall Progress**: 22/39+ tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
 Phase 3 added relationship parsing and comparison infrastructure with comprehensive error types.
 Phase 4 added element ordering infrastructure to compare structural differences in element positions and type ordering.
+Phase 5 started with [Content_Types].xml comparison. Implemented extraction, parsing, and comparison infrastructure for metadata files.
 
 ---
 
