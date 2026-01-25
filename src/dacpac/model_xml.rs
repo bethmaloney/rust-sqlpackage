@@ -1806,8 +1806,10 @@ fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Resu
 /// Format:
 /// ```xml
 /// <Element Type="SqlExtendedProperty" Name="[dbo].[Table].[MS_Description]">
-///   <Property Name="Value"><Value><![CDATA[Description text]]></Value></Property>
-///   <Relationship Name="ExtendedObject">
+///   <Property Name="Value">
+///     <Value><![CDATA[Description text]]></Value>
+///   </Property>
+///   <Relationship Name="Host">
 ///     <Entry>
 ///       <References Name="[dbo].[Table]"/>
 ///     </Entry>
@@ -1825,12 +1827,16 @@ fn write_extended_property<W: Write>(
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    // Write Value property with CDATA containing the property value
-    write_script_property(writer, "Value", &ext_prop.property_value)?;
+    // Write Value property with CDATA (SqlScriptProperty format)
+    // The value must be wrapped with N'...' for proper SQL string literal escaping
+    // Any single quotes in the value must be doubled for SQL escaping
+    let escaped_value = ext_prop.property_value.replace('\'', "''");
+    let quoted_value = format!("N'{}'", escaped_value);
+    write_script_property(writer, "Value", &quoted_value)?;
 
-    // Write ExtendedObject relationship pointing to the target object (table or column)
+    // Write Host relationship pointing to the target object (table or column)
     let extends_ref = ext_prop.extends_object_ref();
-    write_relationship(writer, "ExtendedObject", &[&extends_ref])?;
+    write_relationship(writer, "Host", &[&extends_ref])?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())

@@ -31,7 +31,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
   The parser extracts property name, value, and target information (schema, table, column)
   from EXEC statements. The model builder creates `ExtendedPropertyElement` entries, and
   the XML serializer outputs proper `SqlExtendedProperty` elements with `Value` property
-  and `ExtendedObject` relationship pointing to the target object.
+  (wrapped in N'...' for SQL string literal format) and `Host` relationship pointing to
+  the target object.
 - **Fixture**: `tests/fixtures/extended_properties/`
 
 ---

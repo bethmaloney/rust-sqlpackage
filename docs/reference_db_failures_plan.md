@@ -116,15 +116,17 @@ Extended properties defined via `sp_addextendedproperty` (e.g., `MS_Description`
 ```xml
 <Element Type="SqlExtendedProperty" Name="[dbo].[TableName].[MS_Description]">
   <Property Name="Value">
-    <Value><![CDATA[Description text]]></Value>
+    <Value><![CDATA[N'Description text']]></Value>
   </Property>
-  <Relationship Name="ExtendedObject">
+  <Relationship Name="Host">
     <Entry>
       <References Name="[dbo].[TableName]"/>
     </Entry>
   </Relationship>
 </Element>
 ```
+
+Note: The Value is wrapped with `N'...'` for proper SQL string literal formatting when SqlPackage generates deployment scripts.
 
 For column-level properties, the Name includes the column: `[dbo].[TableName].[ColumnName].[MS_Description]`
 
