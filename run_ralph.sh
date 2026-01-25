@@ -5,7 +5,7 @@
 
 set -e
 
-PROMPT_FILE="docs/reference_db_failures_prompt.md"
+PROMPT_FILE="docs/test_failures_prompt.md"
 MAX_ITERATIONS=20
 ITERATION=0
 CURRENT_BRANCH=$(git branch --show-current)

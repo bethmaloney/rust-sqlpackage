@@ -157,7 +157,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     // Convert extracted columns to model columns
                     let model_columns: Vec<ColumnElement> = columns
                         .iter()
-                        .map(|c| column_from_fallback_table(c))
+                        .map(|c| column_from_fallback_table(c, schema, name))
                         .collect();
 
                     // Add the table element
@@ -270,7 +270,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 let columns = create_table
                     .columns
                     .iter()
-                    .map(|c| column_from_def(c))
+                    .map(|c| column_from_def(c, &schema, &name))
                     .collect();
 
                 model.add_element(ModelElement::Table(TableElement {
@@ -560,7 +560,7 @@ fn extract_schema_and_name(name: &ObjectName, default_schema: &str) -> (String, 
     }
 }
 
-fn column_from_def(col: &ColumnDef) -> ColumnElement {
+fn column_from_def(col: &ColumnDef, schema: &str, table_name: &str) -> ColumnElement {
     let mut is_nullable = true;
     let mut is_identity = false;
     let mut default_value = None;
@@ -625,9 +625,9 @@ fn column_from_def(col: &ColumnDef) -> ColumnElement {
 
     let (max_length, precision, scale) = extract_type_params(&col.data_type);
 
-    // Generate disambiguator from column name hash if column has inline constraints
+    // Generate disambiguator from full qualified name hash if column has inline constraints
     let inline_constraint_disambiguator = if has_inline_constraint {
-        Some(generate_disambiguator(&col.name.value))
+        Some(generate_disambiguator(schema, table_name, &col.name.value))
     } else {
         None
     };
@@ -783,16 +783,16 @@ fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option
 }
 
 /// Convert an extracted table column (from fallback parser) to a model column
-fn column_from_fallback_table(col: &ExtractedTableColumn) -> ColumnElement {
+fn column_from_fallback_table(col: &ExtractedTableColumn, schema: &str, table_name: &str) -> ColumnElement {
     let (max_length, precision, scale) = extract_type_params_from_string(&col.data_type);
 
     // Check if column has inline constraints (default or check)
     let has_inline_constraint =
         col.default_value.is_some() || col.check_expression.is_some();
 
-    // Generate disambiguator from column name hash if column has inline constraints
+    // Generate disambiguator from full qualified name hash if column has inline constraints
     let inline_constraint_disambiguator = if has_inline_constraint {
-        Some(generate_disambiguator(&col.name))
+        Some(generate_disambiguator(schema, table_name, &col.name))
     } else {
         None
     };
@@ -815,14 +815,16 @@ fn column_from_fallback_table(col: &ExtractedTableColumn) -> ColumnElement {
     }
 }
 
-/// Generate a disambiguator value from a string (e.g., column name)
-/// Uses a simple hash to generate a consistent numeric value
-fn generate_disambiguator(name: &str) -> u32 {
+/// Generate a disambiguator value from the full qualified column name (schema.table.column)
+/// Uses a simple hash to generate a consistent numeric value unique per column
+fn generate_disambiguator(schema: &str, table_name: &str, column_name: &str) -> u32 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
-    name.hash(&mut hasher);
+    // Hash the full qualified name to ensure uniqueness across tables
+    let qualified_name = format!("{}.{}.{}", schema, table_name, column_name);
+    qualified_name.hash(&mut hasher);
     // Use modulo to keep the number in a reasonable range similar to DacFx output
     (hasher.finish() % 1_000_000) as u32
 }
