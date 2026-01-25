@@ -489,7 +489,6 @@ fn test_build_with_database_options() {
 // ============================================================================
 
 #[test]
-#[ignore = "SqlCmdVariables in Header not yet implemented"]
 fn test_build_with_sqlcmd_variables() {
     let ctx = TestContext::with_fixture("sqlcmd_variables");
     let result = ctx.build();

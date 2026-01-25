@@ -83,6 +83,17 @@ pub struct PackageReference {
     pub version: String,
 }
 
+/// SQLCMD variable definition from sqlproj
+#[derive(Debug, Clone)]
+pub struct SqlCmdVariable {
+    /// Variable name (e.g., "Environment")
+    pub name: String,
+    /// Variable value expression (e.g., "$(SqlCmdVar__1)")
+    pub value: String,
+    /// Default value (e.g., "Development")
+    pub default_value: String,
+}
+
 /// Database options from sqlproj PropertyGroup
 #[derive(Debug, Clone)]
 pub struct DatabaseOptions {
@@ -136,6 +147,8 @@ pub struct SqlProject {
     pub dacpac_references: Vec<DacpacReference>,
     /// Package references (NuGet packages like Microsoft.SqlServer.Dacpacs.Master)
     pub package_references: Vec<PackageReference>,
+    /// SQLCMD variables from sqlproj
+    pub sqlcmd_variables: Vec<SqlCmdVariable>,
     /// Project directory
     pub project_dir: PathBuf,
     /// Pre-deployment script file (optional, at most one)
@@ -208,6 +221,9 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
     // Find package references (NuGet packages)
     let package_references = find_package_references(&root);
 
+    // Find SQLCMD variables
+    let sqlcmd_variables = find_sqlcmd_variables(&root);
+
     // Find pre/post deployment scripts
     let (pre_deploy_script, post_deploy_script) = find_deployment_scripts(&root, &project_dir);
 
@@ -219,6 +235,7 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         sql_files,
         dacpac_references,
         package_references,
+        sqlcmd_variables,
         project_dir,
         pre_deploy_script,
         post_deploy_script,
@@ -462,6 +479,48 @@ fn find_package_references(root: &roxmltree::Node) -> Vec<PackageReference> {
     }
 
     references
+}
+
+/// Find SqlCmdVariable items in the project file
+/// Format:
+/// ```xml
+/// <SqlCmdVariable Include="Environment">
+///   <Value>$(SqlCmdVar__1)</Value>
+///   <DefaultValue>Development</DefaultValue>
+/// </SqlCmdVariable>
+/// ```
+fn find_sqlcmd_variables(root: &roxmltree::Node) -> Vec<SqlCmdVariable> {
+    let mut variables = Vec::new();
+
+    for node in root.descendants() {
+        if node.tag_name().name() == "SqlCmdVariable" {
+            if let Some(name) = node.attribute("Include") {
+                // Get the Value child element
+                let value = node
+                    .children()
+                    .find(|n| n.tag_name().name() == "Value")
+                    .and_then(|n| n.text())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+
+                // Get the DefaultValue child element
+                let default_value = node
+                    .children()
+                    .find(|n| n.tag_name().name() == "DefaultValue")
+                    .and_then(|n| n.text())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+
+                variables.push(SqlCmdVariable {
+                    name: name.to_string(),
+                    value,
+                    default_value,
+                });
+            }
+        }
+    }
+
+    variables
 }
 
 fn find_deployment_scripts(

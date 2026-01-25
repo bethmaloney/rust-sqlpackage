@@ -5,8 +5,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 ## Summary
 
 - **Total Ignored Tests**: 12
-- **Fixed**: 10
-- **Remaining**: 2
+- **Fixed**: 11
+- **Remaining**: 1
 
 ## Test Fixes
 
@@ -157,16 +157,15 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 
 ### 11. SQLCMD Variables
 
-- [ ] **Test**: `test_build_with_sqlcmd_variables`
-- **Ignore Reason**: SqlCmdVariables in Header not yet implemented
-- **Impact**: Missing SQLCMD variable definitions
-- **Files to Modify**:
-  - `src/project/mod.rs` - Parse SqlCmdVariable items
-  - `src/dacpac/xml.rs` - Add to Header/CustomData section
-- **Implementation Notes**:
-  - Pattern in sqlproj: `<SqlCmdVariable Include="Environment">`
-  - Goes in Header/CustomData section
-  - Variables have Value and DefaultValue
+- [x] **Test**: `test_build_with_sqlcmd_variables`
+- **Status**: ✅ FIXED - SQLCMD variables now parsed and serialized correctly
+- **Notes**: SQLCMD variables from `<SqlCmdVariable>` items in sqlproj are now captured.
+  The implementation:
+  - Added `SqlCmdVariable` struct to `src/project/sqlproj_parser.rs` to capture name, value, and default_value
+  - `find_sqlcmd_variables()` function extracts variables from sqlproj XML
+  - Added `sqlcmd_variables` field to `SqlProject` struct
+  - `write_sqlcmd_variable()` in `src/dacpac/model_xml.rs` generates `CustomData` elements in Header
+  - Format: `<CustomData Category="SqlCmdVariable"><Metadata Name="SqlCmdVariable" Value="..."/><Metadata Name="DefaultValue" Value="..."/></CustomData>`
 - **Fixture**: `tests/fixtures/sqlcmd_variables/`
 
 ---
@@ -236,4 +235,4 @@ After fixing each test:
 
 ---
 
-*Last updated: 2026-01-25 (Database Options implemented)*
+*Last updated: 2026-01-25 (SQLCMD Variables implemented)*
