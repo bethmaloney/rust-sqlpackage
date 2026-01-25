@@ -24,6 +24,7 @@ fn create_test_project() -> rust_sqlpackage::project::SqlProject {
         collation_lcid: 1033,
         sql_files: vec![],
         dacpac_references: vec![],
+        package_references: vec![],
         project_dir: std::path::PathBuf::new(),
         pre_deploy_script: None,
         post_deploy_script: None,

@@ -5,8 +5,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 ## Summary
 
 - **Total Ignored Tests**: 12
-- **Fixed**: 8
-- **Remaining**: 4
+- **Fixed**: 9
+- **Remaining**: 3
 
 ## Test Fixes
 
@@ -122,16 +122,15 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 
 ### 9. Package References in Header
 
-- [ ] **Test**: `test_build_with_package_references`
-- **Ignore Reason**: Package references in Header not yet implemented
-- **Impact**: Missing dacpac references (master.dacpac, etc.)
-- **Files to Modify**:
-  - `src/project/mod.rs` - Parse PackageReference items
-  - `src/dacpac/xml.rs` - Add CustomData section to Header
-- **Implementation Notes**:
-  - References like `Microsoft.SqlServer.Dacpacs.Master`
-  - Goes in Header/CustomData section
-  - Format: `<CustomData Category="Reference" Type="...">`
+- [x] **Test**: `test_build_with_package_references`
+- **Status**: ✅ FIXED - Package references now parsed and serialized correctly
+- **Notes**: Package references from `<PackageReference>` items in sqlproj are now captured.
+  The parser in `src/project/sqlproj_parser.rs` extracts package name and version via
+  `find_package_references()`. Added `PackageReference` struct and `package_references` field
+  to `SqlProject`. The XML serializer in `src/dacpac/model_xml.rs` outputs proper
+  `<CustomData Category="Reference" Type="SqlSchema">` elements with `FileName`, `LogicalName`,
+  and `SuppressMissingDependenciesErrors` metadata. Package names like
+  `Microsoft.SqlServer.Dacpacs.Master` are converted to `master.dacpac`.
 - **Fixture**: `tests/fixtures/header_section/`
 
 ---

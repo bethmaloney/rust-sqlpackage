@@ -80,7 +80,7 @@ pub fn generate_model_xml<W: Write>(
     Ok(())
 }
 
-/// Write the Header section with CustomData entries for AnsiNulls, QuotedIdentifier, and CompatibilityMode
+/// Write the Header section with CustomData entries for AnsiNulls, QuotedIdentifier, CompatibilityMode, and References
 fn write_header<W: Write>(writer: &mut Writer<W>, project: &SqlProject) -> anyhow::Result<()> {
     writer.write_event(Event::Start(BytesStart::new("Header")))?;
 
@@ -108,8 +108,69 @@ fn write_header<W: Write>(writer: &mut Writer<W>, project: &SqlProject) -> anyho
     let compat_mode = project.target_platform.compatibility_mode().to_string();
     write_custom_data(writer, "CompatibilityMode", "CompatibilityMode", &compat_mode)?;
 
+    // Package references (e.g., Microsoft.SqlServer.Dacpacs.Master)
+    for pkg_ref in &project.package_references {
+        write_package_reference(writer, pkg_ref)?;
+    }
+
     writer.write_event(Event::End(BytesEnd::new("Header")))?;
     Ok(())
+}
+
+/// Write a CustomData element for a package reference
+/// Format:
+/// ```xml
+/// <CustomData Category="Reference" Type="SqlSchema">
+///   <Metadata Name="FileName" Value="master.dacpac" />
+///   <Metadata Name="LogicalName" Value="master.dacpac" />
+///   <Metadata Name="SuppressMissingDependenciesErrors" Value="False" />
+/// </CustomData>
+/// ```
+fn write_package_reference<W: Write>(
+    writer: &mut Writer<W>,
+    pkg_ref: &crate::project::PackageReference,
+) -> anyhow::Result<()> {
+    // Extract dacpac name from package name
+    // e.g., "Microsoft.SqlServer.Dacpacs.Master" -> "master.dacpac"
+    let dacpac_name = extract_dacpac_name(&pkg_ref.name);
+
+    let mut custom_data = BytesStart::new("CustomData");
+    custom_data.push_attribute(("Category", "Reference"));
+    custom_data.push_attribute(("Type", "SqlSchema"));
+    writer.write_event(Event::Start(custom_data))?;
+
+    // FileName metadata
+    let mut filename = BytesStart::new("Metadata");
+    filename.push_attribute(("Name", "FileName"));
+    filename.push_attribute(("Value", dacpac_name.as_str()));
+    writer.write_event(Event::Empty(filename))?;
+
+    // LogicalName metadata
+    let mut logical_name = BytesStart::new("Metadata");
+    logical_name.push_attribute(("Name", "LogicalName"));
+    logical_name.push_attribute(("Value", dacpac_name.as_str()));
+    writer.write_event(Event::Empty(logical_name))?;
+
+    // SuppressMissingDependenciesErrors metadata
+    let mut suppress = BytesStart::new("Metadata");
+    suppress.push_attribute(("Name", "SuppressMissingDependenciesErrors"));
+    suppress.push_attribute(("Value", "False"));
+    writer.write_event(Event::Empty(suppress))?;
+
+    writer.write_event(Event::End(BytesEnd::new("CustomData")))?;
+    Ok(())
+}
+
+/// Extract dacpac name from a package reference name
+/// e.g., "Microsoft.SqlServer.Dacpacs.Master" -> "master.dacpac"
+/// e.g., "Microsoft.SqlServer.Dacpacs.Msdb" -> "msdb.dacpac"
+fn extract_dacpac_name(package_name: &str) -> String {
+    // Common pattern: Microsoft.SqlServer.Dacpacs.<DatabaseName>
+    if let Some(last_part) = package_name.split('.').last() {
+        format!("{}.dacpac", last_part.to_lowercase())
+    } else {
+        format!("{}.dacpac", package_name.to_lowercase())
+    }
 }
 
 /// Write a CustomData element with a single Metadata child

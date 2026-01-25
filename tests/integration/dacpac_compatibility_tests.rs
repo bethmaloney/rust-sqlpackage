@@ -427,7 +427,6 @@ fn test_build_with_header_section() {
 }
 
 #[test]
-#[ignore = "Package references in Header not yet implemented"]
 fn test_build_with_package_references() {
     let ctx = TestContext::with_fixture("header_section");
     let result = ctx.build();
@@ -443,6 +442,12 @@ fn test_build_with_package_references() {
     assert!(
         model_xml.contains("master.dacpac"),
         "Header should contain reference to master.dacpac"
+    );
+
+    // Should have proper CustomData structure for references
+    assert!(
+        model_xml.contains("Category=\"Reference\""),
+        "Header should contain CustomData with Category=\"Reference\""
     );
 }
 

@@ -74,6 +74,15 @@ pub struct DacpacReference {
     pub suppress_missing_dependencies: bool,
 }
 
+/// NuGet package reference (e.g., Microsoft.SqlServer.Dacpacs.Master)
+#[derive(Debug, Clone)]
+pub struct PackageReference {
+    /// Package name (e.g., "Microsoft.SqlServer.Dacpacs.Master")
+    pub name: String,
+    /// Package version (e.g., "150.0.0")
+    pub version: String,
+}
+
 /// Parsed SQL project
 #[derive(Debug, Clone)]
 pub struct SqlProject {
@@ -89,6 +98,8 @@ pub struct SqlProject {
     pub sql_files: Vec<PathBuf>,
     /// Dacpac references
     pub dacpac_references: Vec<DacpacReference>,
+    /// Package references (NuGet packages like Microsoft.SqlServer.Dacpacs.Master)
+    pub package_references: Vec<PackageReference>,
     /// Project directory
     pub project_dir: PathBuf,
     /// Pre-deployment script file (optional, at most one)
@@ -153,6 +164,9 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
     // Find dacpac references
     let dacpac_references = find_dacpac_references(&root, &project_dir);
 
+    // Find package references (NuGet packages)
+    let package_references = find_package_references(&root);
+
     // Find pre/post deployment scripts
     let (pre_deploy_script, post_deploy_script) = find_deployment_scripts(&root, &project_dir);
 
@@ -163,6 +177,7 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         collation_lcid,
         sql_files,
         dacpac_references,
+        package_references,
         project_dir,
         pre_deploy_script,
         post_deploy_script,
@@ -321,6 +336,37 @@ fn find_dacpac_references(root: &roxmltree::Node, project_dir: &Path) -> Vec<Dac
                     database_variable,
                     server_variable,
                     suppress_missing_dependencies: suppress,
+                });
+            }
+        }
+    }
+
+    references
+}
+
+/// Find PackageReference items in the project file
+/// Format: <PackageReference Include="Microsoft.SqlServer.Dacpacs.Master" Version="150.0.0" />
+fn find_package_references(root: &roxmltree::Node) -> Vec<PackageReference> {
+    let mut references = Vec::new();
+
+    for node in root.descendants() {
+        if node.tag_name().name() == "PackageReference" {
+            if let Some(include) = node.attribute("Include") {
+                // Version can be an attribute or a child element
+                let version = node
+                    .attribute("Version")
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        node.children()
+                            .find(|n| n.tag_name().name() == "Version")
+                            .and_then(|n| n.text())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| "0.0.0".to_string());
+
+                references.push(PackageReference {
+                    name: include.to_string(),
+                    version,
                 });
             }
         }
