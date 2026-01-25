@@ -24,24 +24,10 @@ clean:
 # Testing
 # ============================================================================
 
-# Run all tests (excluding e2e)
+# Run all tests (parity tests skip if dotnet unavailable, deploy tests skip if no SQL Server)
 test:
     cargo test
-
-# Run unit tests only
-test-unit:
-    cargo test --test unit_tests
-
-# Run integration tests only
-test-integration:
-    cargo test --test integration_tests
-
-# Run e2e tests (requires SQL Server and SqlPackage CLI)
-test-e2e:
-    cargo test --test e2e_tests -- --ignored
-
-# Run all tests including e2e
-test-all: test test-e2e
+    cargo test --test e2e_tests deploy -- --ignored
 
 # Run a specific test by name
 test-one NAME:

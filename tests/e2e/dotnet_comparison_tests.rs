@@ -9,14 +9,19 @@
 //!
 //! Prerequisites:
 //! - dotnet SDK installed with Microsoft.Build.Sql
+//! - SqlPackage CLI (for Layer 3 tests)
+//!
+//! These tests run automatically in CI. Locally, they skip gracefully if dotnet
+//! is not available.
 //!
 //! The test project can be specified via environment variable:
-//!   SQL_TEST_PROJECT=/path/to/YourProject.sqlproj cargo test --test e2e_tests -- --ignored
+//!   SQL_TEST_PROJECT=/path/to/YourProject.sqlproj cargo test --test e2e_tests dotnet_comparison
 //!
 //! If not specified, falls back to the e2e_comprehensive fixture in tests/fixtures.
 //!
 //! Run with:
-//!   cargo test --test e2e_tests -- --ignored dotnet_comparison
+//!   cargo test --test e2e_tests dotnet_comparison -- --nocapture
+//!   just test-parity
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -128,7 +133,6 @@ fn build_both_dacpacs(
 
 /// Full layered comparison test - Layer 1, 2, and optionally 3
 #[test]
-#[ignore = "Requires dotnet SDK"]
 fn test_layered_dacpac_comparison() {
     if !dotnet_available() {
         eprintln!("Skipping: dotnet SDK not available");
@@ -202,7 +206,6 @@ fn test_layered_dacpac_comparison() {
 
 /// Test Layer 1 only: Element inventory comparison
 #[test]
-#[ignore = "Requires dotnet SDK"]
 fn test_layer1_element_inventory() {
     if !dotnet_available() {
         return;
@@ -292,7 +295,6 @@ fn test_layer1_element_inventory() {
 
 /// Test Layer 2 only: Property comparison
 #[test]
-#[ignore = "Requires dotnet SDK"]
 fn test_layer2_property_comparison() {
     if !dotnet_available() {
         return;
@@ -339,7 +341,6 @@ fn test_layer2_property_comparison() {
 
 /// Test Layer 3 only: SqlPackage DeployReport comparison
 #[test]
-#[ignore = "Requires dotnet SDK and SqlPackage"]
 fn test_layer3_sqlpackage_comparison() {
     if !dotnet_available() {
         eprintln!("Skipping: dotnet SDK not available");
@@ -410,7 +411,6 @@ fn test_layer3_sqlpackage_comparison() {
 
 /// Test for ampersand encoding in element names
 #[test]
-#[ignore = "Requires dotnet SDK"]
 fn test_ampersand_encoding() {
     if !dotnet_available() {
         return;
@@ -453,7 +453,6 @@ fn test_ampersand_encoding() {
 /// Note: Double brackets can legitimately appear in CDATA sections (e.g., check constraints
 /// like `[Price] >= 0`), so we only check element Name attributes.
 #[test]
-#[ignore = "Requires dotnet SDK"]
 fn test_index_naming() {
     if !dotnet_available() {
         return;
@@ -508,7 +507,6 @@ fn test_index_naming() {
 
 /// Print element type summary for both dacpacs
 #[test]
-#[ignore = "Requires dotnet SDK"]
 fn test_print_element_summary() {
     if !dotnet_available() {
         return;

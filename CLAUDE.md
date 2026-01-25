@@ -52,6 +52,8 @@ The codebase follows a pipeline architecture:
 
 **Important:** This project follows a TDD approach. Any new feature or bug fix must first have either a unit, integration or e2e test created for it.
 
+See `TESTING.md` for detailed testing documentation including the parity testing strategy.
+
 Test fixtures in `tests/fixtures/` are self-contained SQL projects:
 
 ## Dacpac File Format
