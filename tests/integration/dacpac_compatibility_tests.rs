@@ -217,12 +217,11 @@ fn test_build_with_named_default_constraints() {
 }
 
 // ============================================================================
-// Inline Constraint Annotation Tests
+// Inline Constraint Tests
 // ============================================================================
 
 #[test]
-#[ignore = "SqlInlineConstraintAnnotation not yet implemented"]
-fn test_build_with_inline_constraint_annotations() {
+fn test_build_with_inline_constraints() {
     let ctx = TestContext::with_fixture("inline_constraints");
     let result = ctx.build();
 
@@ -237,15 +236,50 @@ fn test_build_with_inline_constraint_annotations() {
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
-    // DotNet adds SqlInlineConstraintAnnotation to link columns to their inline constraints
+    // Note: Modern .NET DacFx does NOT use SqlInlineConstraintAnnotation.
+    // Inline constraints are converted to separate constraint elements.
+    // This test verifies that all constraint types are properly captured.
+
+    // Inline DEFAULT constraints should be captured as SqlDefaultConstraint
     assert!(
-        model_xml.contains("SqlInlineConstraintAnnotation"),
-        "Model should contain SqlInlineConstraintAnnotation elements"
+        model_xml.contains("SqlDefaultConstraint"),
+        "Model should contain SqlDefaultConstraint for inline DEFAULT values"
+    );
+    // Verify specific default constraints
+    assert!(
+        model_xml.contains("DF_Customer_Balance") || model_xml.contains("DF_Customer"),
+        "Model should contain default constraint for Balance column"
+    );
+
+    // Inline UNIQUE constraints should be captured as SqlUniqueConstraint
+    assert!(
+        model_xml.contains("SqlUniqueConstraint"),
+        "Model should contain SqlUniqueConstraint for inline UNIQUE on Email"
+    );
+
+    // Inline CHECK constraints should be captured as SqlCheckConstraint
+    assert!(
+        model_xml.contains("SqlCheckConstraint"),
+        "Model should contain SqlCheckConstraint for inline CHECK ([Age] >= 18)"
+    );
+    // Verify CHECK expression content
+    assert!(
+        model_xml.contains("[Age] >= 18"),
+        "Model should contain the Age check expression"
+    );
+    assert!(
+        model_xml.contains("[Salary] > 0"),
+        "Model should contain the Salary check expression"
+    );
+
+    // Inline PRIMARY KEY constraints should be captured as SqlPrimaryKeyConstraint
+    assert!(
+        model_xml.contains("SqlPrimaryKeyConstraint"),
+        "Model should contain SqlPrimaryKeyConstraint for inline PRIMARY KEY"
     );
 }
 
 #[test]
-#[ignore = "Inline CHECK constraints not yet captured"]
 fn test_build_with_inline_check_constraints() {
     let ctx = TestContext::with_fixture("inline_constraints");
     let result = ctx.build();
@@ -262,6 +296,24 @@ fn test_build_with_inline_check_constraints() {
     assert!(
         has_check,
         "Model should contain SqlCheckConstraint for inline CHECK ([Age] >= 18)"
+    );
+
+    // Verify all expected CHECK constraints are present
+    assert!(
+        model_xml.contains("CK_Employee_Age"),
+        "Model should have check constraint for Age column"
+    );
+    assert!(
+        model_xml.contains("CK_Employee_Salary"),
+        "Model should have check constraint for Salary column"
+    );
+    assert!(
+        model_xml.contains("CK_Account_Balance"),
+        "Model should have check constraint for Account.Balance column"
+    );
+    assert!(
+        model_xml.contains("CK_Account_Status"),
+        "Model should have check constraint for Account.Status column"
     );
 }
 

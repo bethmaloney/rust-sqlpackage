@@ -1503,10 +1503,27 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
             r"(?i)DEFAULT\s+(\w+\(\))"
         ).ok()?;
 
+        // Try unnamed default with string literal: DEFAULT 'value'
+        let unnamed_default_string_re = Regex::new(
+            r"(?i)DEFAULT\s+('(?:[^']|'')*')"
+        ).ok()?;
+
+        // Try unnamed default with bare number: DEFAULT 0.00 or DEFAULT 1
+        // Match numbers that are NOT followed by CHECK to avoid matching constraint names
+        let unnamed_default_number_re = Regex::new(
+            r"(?i)DEFAULT\s+(-?\d+(?:\.\d+)?)\s*(?:CHECK|UNIQUE|PRIMARY|FOREIGN|CONSTRAINT|,|$|\))"
+        ).ok()?;
+
         if let Some(caps) = unnamed_default_paren_re.captures(col_def) {
             default_constraint_name = None;
             default_value = caps.get(1).map(|m| m.as_str().to_string());
         } else if let Some(caps) = unnamed_default_func_re.captures(col_def) {
+            default_constraint_name = None;
+            default_value = caps.get(1).map(|m| m.as_str().to_string());
+        } else if let Some(caps) = unnamed_default_string_re.captures(col_def) {
+            default_constraint_name = None;
+            default_value = caps.get(1).map(|m| m.as_str().to_string());
+        } else if let Some(caps) = unnamed_default_number_re.captures(col_def) {
             default_constraint_name = None;
             default_value = caps.get(1).map(|m| m.as_str().to_string());
         } else {

@@ -180,11 +180,14 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 
                     // Add inline default constraints from column definitions
                     for col in columns {
-                        if let (Some(constraint_name), Some(default_value)) =
-                            (&col.default_constraint_name, &col.default_value)
-                        {
+                        if let Some(default_value) = &col.default_value {
+                            // Use explicit constraint name if provided, otherwise generate one
+                            let constraint_name = col
+                                .default_constraint_name
+                                .clone()
+                                .unwrap_or_else(|| format!("DF_{}_{}", name, col.name));
                             model.add_element(ModelElement::Constraint(ConstraintElement {
-                                name: constraint_name.clone(),
+                                name: constraint_name,
                                 table_schema: schema.clone(),
                                 table_name: name.clone(),
                                 constraint_type: ConstraintType::Default,
@@ -336,26 +339,25 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 }
                             }
                             ColumnOption::Default(expr) => {
-                                // Use explicit name on DEFAULT, or pending name from NOT NULL
+                                // Use explicit name on DEFAULT, pending name from NOT NULL, or generate one
                                 let constraint_name = option
                                     .name
                                     .as_ref()
                                     .map(|n| n.value.clone())
-                                    .or(pending_constraint_name.take());
+                                    .or(pending_constraint_name.take())
+                                    .unwrap_or_else(|| format!("DF_{}_{}", name, col.name.value));
 
-                                if let Some(constraint_name) = constraint_name {
-                                    model.add_element(ModelElement::Constraint(ConstraintElement {
-                                        name: constraint_name,
-                                        table_schema: schema.clone(),
-                                        table_name: name.clone(),
-                                        constraint_type: ConstraintType::Default,
-                                        columns: vec![ConstraintColumn::new(col.name.value.clone())],
-                                        definition: Some(expr.to_string()),
-                                        referenced_table: None,
-                                        referenced_columns: None,
-                                        is_clustered: None,
-                                    }));
-                                }
+                                model.add_element(ModelElement::Constraint(ConstraintElement {
+                                    name: constraint_name,
+                                    table_schema: schema.clone(),
+                                    table_name: name.clone(),
+                                    constraint_type: ConstraintType::Default,
+                                    columns: vec![ConstraintColumn::new(col.name.value.clone())],
+                                    definition: Some(expr.to_string()),
+                                    referenced_table: None,
+                                    referenced_columns: None,
+                                    is_clustered: None,
+                                }));
                                 // Reset pending name
                                 pending_constraint_name = None;
                             }

@@ -5,8 +5,8 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 ## Summary
 
 - **Total Ignored Tests**: 12
-- **Fixed**: 4
-- **Remaining**: 8
+- **Fixed**: 6
+- **Remaining**: 6
 
 ## Test Fixes
 
@@ -62,35 +62,30 @@ This document tracks progress on fixing failing/ignored integration tests to ach
 
 ---
 
-### 5. Inline Constraint Annotations
+### 5. Inline Constraints (Complete)
 
-- [ ] **Test**: `test_build_with_inline_constraint_annotations`
-- **Ignore Reason**: SqlInlineConstraintAnnotation not yet implemented
-- **Impact**: Missing metadata linking columns to constraints
-- **Files to Modify**:
-  - `src/model/table.rs` - Track which constraints are inline
-  - `src/dacpac/xml.rs` - Generate SqlInlineConstraintAnnotation elements
-- **Implementation Notes**:
-  - DacFx uses annotations to track inline vs standalone constraints
-  - Annotations link column to its inline constraint
-  - Format: `<Element Type="SqlInlineConstraintAnnotation" Name="...">`
+- [x] **Test**: `test_build_with_inline_constraints`
+- **Status**: ✅ FIXED - Inline constraints now fully captured and serialized correctly
+- **Notes**: Investigation revealed that modern .NET DacFx does NOT use `SqlInlineConstraintAnnotation`.
+  Instead, inline constraints (DEFAULT, CHECK, UNIQUE, PRIMARY KEY) are converted to separate
+  constraint elements with auto-generated names (e.g., `DF_TableName_ColumnName`, `CK_TableName_ColumnName`).
+  The implementation now:
+  - Captures inline DEFAULT constraints from column definitions (including bare literals like `0.00`, `1`,
+    string literals like `'Active'`, and function calls like `GETDATE()`, `NEWID()`)
+  - Captures inline CHECK constraints with auto-generated names if not explicitly named
+  - Captures inline UNIQUE constraints on columns
+  - Captures inline PRIMARY KEY constraints on columns
+  - The parser regex was extended to handle DEFAULT values without parentheses
 - **Fixture**: `tests/fixtures/inline_constraints/`
 
 ---
 
 ### 6. Inline CHECK Constraints
 
-- [ ] **Test**: `test_build_with_inline_check_constraints`
-- **Ignore Reason**: Inline CHECK constraints not yet captured
-- **Impact**: Missing CHECK constraints defined inline in column definitions
-- **Files to Modify**:
-  - `src/parser/table.rs` - Parse inline CHECK (expression) after column type
-  - `src/model/table.rs` - Store inline check constraints
-  - `src/dacpac/xml.rs` - Output SqlCheckConstraint elements
-- **Implementation Notes**:
-  - Pattern: `[Age] INT CHECK ([Age] >= 18)`
-  - Different from standalone: `CONSTRAINT CK_Age CHECK ([Age] >= 18)`
-  - Need to generate constraint name if not provided
+- [x] **Test**: `test_build_with_inline_check_constraints`
+- **Status**: ✅ FIXED - Covered by inline constraints fix above
+- **Notes**: Inline CHECK constraints are now parsed via sqlparser-rs AST and serialized as
+  `SqlCheckConstraint` elements with auto-generated names if no explicit constraint name is provided.
 - **Fixture**: `tests/fixtures/inline_constraints/`
 
 ---
