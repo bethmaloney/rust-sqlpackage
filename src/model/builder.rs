@@ -6,15 +6,16 @@ use anyhow::Result;
 use sqlparser::ast::{ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint};
 
 use crate::parser::{
-    ExtractedTableColumn, ExtractedTableConstraint, ExtractedTableTypeColumn, FallbackFunctionType,
-    FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL,
+    ExtractedFunctionParameter, ExtractedTableColumn, ExtractedTableConstraint,
+    ExtractedTableTypeColumn, FallbackFunctionType, FallbackStatementType, ParsedStatement,
+    BINARY_MAX_SENTINEL,
 };
 use crate::project::SqlProject;
 
 use super::{
     ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
-    FunctionElement, FunctionType, IndexElement, ModelElement, ProcedureElement, RawElement,
-    SchemaElement, SequenceElement, TableElement, UserDefinedTypeElement, ViewElement,
+    FunctionElement, FunctionType, IndexElement, ModelElement, ParameterElement, ProcedureElement,
+    RawElement, SchemaElement, SequenceElement, TableElement, UserDefinedTypeElement, ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -44,6 +45,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     schema,
                     name,
                     function_type,
+                    parameters,
+                    return_type,
                 } => {
                     schemas.insert(schema.clone());
                     let func_type = match function_type {
@@ -51,13 +54,17 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         FallbackFunctionType::TableValued => FunctionType::TableValued,
                     };
                     let is_natively_compiled = is_natively_compiled(&parsed.sql_text);
+                    let param_elements = parameters
+                        .iter()
+                        .map(|p| param_from_extracted(p))
+                        .collect();
                     model.add_element(ModelElement::Function(FunctionElement {
                         schema: schema.clone(),
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
                         function_type: func_type,
-                        parameters: vec![], // T-SQL params not extracted - stored in definition
-                        return_type: None,  // Return type is in the definition
+                        parameters: param_elements,
+                        return_type: return_type.clone(),
                         is_natively_compiled,
                     }));
                 }
@@ -561,6 +568,16 @@ fn column_from_extracted(col: &ExtractedTableTypeColumn) -> ColumnElement {
         max_length,
         precision,
         scale,
+    }
+}
+
+/// Convert an extracted function parameter to a ParameterElement
+fn param_from_extracted(param: &ExtractedFunctionParameter) -> ParameterElement {
+    ParameterElement {
+        name: param.name.clone(),
+        data_type: param.data_type.clone(),
+        is_output: false, // Function parameters are typically input-only
+        default_value: None,
     }
 }
 

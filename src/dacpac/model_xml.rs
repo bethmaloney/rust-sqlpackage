@@ -140,13 +140,13 @@ fn write_column<W: Write>(
     write_column_with_type(writer, column, table_name, "SqlSimpleColumn")
 }
 
-/// Write a table type column (uses SqlSimpleColumn - same as tables)
+/// Write a table type column (uses SqlTableTypeSimpleColumn for user-defined table types)
 fn write_table_type_column<W: Write>(
     writer: &mut Writer<W>,
     column: &ColumnElement,
     type_name: &str,
 ) -> anyhow::Result<()> {
-    write_column_with_type(writer, column, type_name, "SqlSimpleColumn")
+    write_column_with_type(writer, column, type_name, "SqlTableTypeSimpleColumn")
 }
 
 fn write_column_with_type<W: Write>(
@@ -619,9 +619,9 @@ fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> a
     }
 
     // Write FunctionBody relationship with SqlScriptFunctionImplementation
-    // Extract just the body (after final AS)
-    let body = extract_function_body(&func.definition);
-    write_function_body(writer, &body)?;
+    // Include everything from RETURNS onwards to preserve return type and parameters
+    let body = extract_function_body_with_returns(&func.definition);
+    write_function_body(writer, &body, None)?;
 
     write_schema_relationship(writer, &func.schema)?;
 
@@ -630,7 +630,11 @@ fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> a
 }
 
 /// Write FunctionBody relationship for functions with nested SqlScriptFunctionImplementation
-fn write_function_body<W: Write>(writer: &mut Writer<W>, definition: &str) -> anyhow::Result<()> {
+fn write_function_body<W: Write>(
+    writer: &mut Writer<W>,
+    body: &str,
+    _return_type: Option<&str>,
+) -> anyhow::Result<()> {
     let mut rel = BytesStart::new("Relationship");
     rel.push_attribute(("Name", "FunctionBody"));
     writer.write_event(Event::Start(rel))?;
@@ -641,9 +645,9 @@ fn write_function_body<W: Write>(writer: &mut Writer<W>, definition: &str) -> an
     elem.push_attribute(("Type", "SqlScriptFunctionImplementation"));
     writer.write_event(Event::Start(elem))?;
 
-    // Extract just the body part from the function definition
-    let body = extract_function_body(definition);
-    write_script_property(writer, "BodyScript", &body)?;
+    // Write BodyScript property with the function body
+    // This includes everything from RETURNS onwards for proper DacFx compatibility
+    write_script_property(writer, "BodyScript", body)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -653,7 +657,8 @@ fn write_function_body<W: Write>(writer: &mut Writer<W>, definition: &str) -> an
 }
 
 /// Extract the body part from a CREATE FUNCTION definition
-/// Returns just the body (BEGIN...END) without the CREATE FUNCTION header
+/// Returns just the body (BEGIN...END or RETURN(...)) without the header
+#[allow(dead_code)]
 fn extract_function_body(definition: &str) -> String {
     let def_upper = definition.to_uppercase();
 
@@ -662,22 +667,35 @@ fn extract_function_body(definition: &str) -> String {
     // AS can be preceded by space or newline
     if let Some(returns_pos) = def_upper.find("RETURNS") {
         let after_returns = &def_upper[returns_pos..];
-        // Find AS (could be "\nAS" or " AS")
-        if let Some(as_pos) = after_returns
-            .find("\nAS")
-            .or_else(|| after_returns.find(" AS"))
-        {
+        // Find AS (could be "\nAS" or " AS" - with word boundary)
+        // We need to find " AS " or "\nAS" to avoid matching within a type like "ALIAS"
+        let as_regex = regex::Regex::new(r"(?i)[\s\n]AS[\s\n]").unwrap();
+        if let Some(m) = as_regex.find(after_returns) {
             // Calculate absolute position in original string
-            let abs_as_pos = returns_pos + as_pos;
-            // Skip the newline/space and "AS"
-            let as_keyword_start = abs_as_pos + 1; // skip \n or space
-            let remaining = &definition[as_keyword_start..];
-            // Skip "AS" and any following whitespace
-            let trimmed = remaining.trim_start();
-            if trimmed.to_uppercase().starts_with("AS") {
-                let body = trimmed[2..].trim_start().to_string();
-                return body;
-            }
+            let abs_as_pos = returns_pos + m.end();
+            // Return everything after AS
+            return definition[abs_as_pos..].trim().to_string();
+        }
+    }
+
+    // Fallback: return the original definition
+    definition.to_string()
+}
+
+/// Extract everything from the parameter list onwards for function body
+/// This includes parameters, return type, AS keyword, and body
+fn extract_function_body_with_returns(definition: &str) -> String {
+    let def_upper = definition.to_uppercase();
+
+    // Find the opening paren of the parameter list
+    // Pattern: CREATE FUNCTION [name](params) RETURNS type AS BEGIN ... END
+    if let Some(func_pos) = def_upper.find("FUNCTION") {
+        let after_func = &def_upper[func_pos..];
+        // Find the opening paren (start of parameters)
+        if let Some(paren_pos) = after_func.find('(') {
+            let abs_paren_pos = func_pos + paren_pos;
+            // Return everything from the opening paren onwards
+            return definition[abs_paren_pos..].trim().to_string();
         }
     }
 
@@ -877,6 +895,12 @@ fn write_constraint<W: Write>(
         // Default constraint expression
         if let Some(ref definition) = constraint.definition {
             write_script_property(writer, "DefaultExpressionScript", definition)?;
+        }
+        // Default constraints need a ForColumn relationship to specify the target column
+        if !constraint.columns.is_empty() {
+            let table_ref = format!("[{}].[{}]", constraint.table_schema, constraint.table_name);
+            let col_ref = format!("{}.[{}]", table_ref, constraint.columns[0].name);
+            write_relationship(writer, "ForColumn", &[&col_ref])?;
         }
     }
 

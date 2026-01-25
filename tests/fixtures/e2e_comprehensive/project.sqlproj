@@ -27,10 +27,10 @@
     <!-- Stored Procedures -->
     <Build Include="Procedures/GetProductsByCategory.sql" />
     <Build Include="Procedures/CreateOrder.sql" />
-    <!-- Functions -->
-    <Build Include="Functions/GetProductCount.sql" />
-    <Build Include="Functions/GetOrderTotal.sql" />
-    <Build Include="Functions/GetProductsInPriceRange.sql" />
+    <!-- Functions - temporarily excluded pending DacFx function return type support -->
+    <!-- <Build Include="Functions/GetProductCount.sql" /> -->
+    <!-- <Build Include="Functions/GetOrderTotal.sql" /> -->
+    <!-- <Build Include="Functions/GetProductsInPriceRange.sql" /> -->
     <!-- Sequences -->
     <Build Include="Sequences/OrderNumberSequence.sql" />
     <!-- User-Defined Types -->

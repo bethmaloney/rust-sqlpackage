@@ -485,16 +485,16 @@ async fn test_e2e_deploy_to_sql_server() {
         "Products table should exist"
     );
     assert!(
-        table_exists(&mut client, "dbo", "Customers")
+        table_exists(&mut client, "Sales", "Customers")
             .await
             .expect("Query should succeed"),
-        "Customers table should exist"
+        "Customers table should exist in Sales schema"
     );
     assert!(
-        table_exists(&mut client, "dbo", "Orders")
+        table_exists(&mut client, "Sales", "Orders")
             .await
             .expect("Query should succeed"),
-        "Orders table should exist"
+        "Orders table should exist in Sales schema"
     );
 
     // ========================================================================
@@ -611,20 +611,35 @@ async fn test_e2e_deploy_comprehensive_with_post_deploy() {
     // ========================================================================
     println!("Verifying comprehensive tables...");
 
-    let expected_tables = [
-        "Categories",
-        "Products",
-        "Customers",
-        "Orders",
-        "OrderItems",
-        "InventoryLog",
-    ];
-    for table in &expected_tables {
+    // Tables with their schemas
+    let dbo_tables = ["Categories", "Products"];
+    let sales_tables = ["Customers", "Orders", "OrderItems"];
+    let inventory_tables = ["InventoryLog"];
+
+    for table in &dbo_tables {
         assert!(
             table_exists(&mut client, "dbo", table)
                 .await
                 .expect("Query should succeed"),
-            "{} table should exist",
+            "{} table should exist in dbo schema",
+            table
+        );
+    }
+    for table in &sales_tables {
+        assert!(
+            table_exists(&mut client, "Sales", table)
+                .await
+                .expect("Query should succeed"),
+            "{} table should exist in Sales schema",
+            table
+        );
+    }
+    for table in &inventory_tables {
+        assert!(
+            table_exists(&mut client, "Inventory", table)
+                .await
+                .expect("Query should succeed"),
+            "{} table should exist in Inventory schema",
             table
         );
     }
@@ -660,13 +675,13 @@ async fn test_e2e_deploy_comprehensive_with_post_deploy() {
         view_exists(&mut client, "dbo", "ActiveProducts")
             .await
             .expect("Query should succeed"),
-        "ActiveProducts view should exist"
+        "ActiveProducts view should exist in dbo schema"
     );
     assert!(
-        view_exists(&mut client, "dbo", "CustomerOrderSummary")
+        view_exists(&mut client, "Sales", "CustomerOrderSummary")
             .await
             .expect("Query should succeed"),
-        "CustomerOrderSummary view should exist"
+        "CustomerOrderSummary view should exist in Sales schema"
     );
 
     // ========================================================================
@@ -678,10 +693,10 @@ async fn test_e2e_deploy_comprehensive_with_post_deploy() {
         procedure_exists(&mut client, "dbo", "GetProductsByCategory")
             .await
             .expect("Query should succeed"),
-        "GetProductsByCategory stored procedure should exist"
+        "GetProductsByCategory stored procedure should exist in dbo schema"
     );
     assert!(
-        procedure_exists(&mut client, "dbo", "CreateOrder")
+        procedure_exists(&mut client, "Sales", "CreateOrder")
             .await
             .expect("Query should succeed"),
         "CreateOrder stored procedure should exist"

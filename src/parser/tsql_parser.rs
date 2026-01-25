@@ -48,6 +48,15 @@ pub struct ExtractedTableTypeColumn {
     pub is_nullable: bool,
 }
 
+/// A parameter extracted from a function definition
+#[derive(Debug, Clone)]
+pub struct ExtractedFunctionParameter {
+    /// Parameter name (including @ prefix)
+    pub name: String,
+    /// Data type (e.g., "INT", "DECIMAL(18, 2)")
+    pub data_type: String,
+}
+
 /// A column extracted from a table definition (with additional properties)
 #[derive(Debug, Clone)]
 pub struct ExtractedTableColumn {
@@ -133,6 +142,8 @@ pub enum FallbackStatementType {
         schema: String,
         name: String,
         function_type: FallbackFunctionType,
+        parameters: Vec<ExtractedFunctionParameter>,
+        return_type: Option<String>,
     },
     Index {
         name: String,
@@ -338,10 +349,14 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     if sql_upper.contains("CREATE FUNCTION") || sql_upper.contains("CREATE OR ALTER FUNCTION") {
         if let Some((schema, name)) = extract_function_name(sql) {
             let function_type = detect_function_type(sql);
+            let parameters = extract_function_parameters(sql);
+            let return_type = extract_function_return_type(sql);
             return Some(FallbackStatementType::Function {
                 schema,
                 name,
                 function_type,
+                parameters,
+                return_type,
             });
         }
     }
@@ -351,10 +366,14 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     if sql_upper.contains("ALTER FUNCTION") {
         if let Some((schema, name)) = extract_alter_function_name(sql) {
             let function_type = detect_function_type(sql);
+            let parameters = extract_function_parameters(sql);
+            let return_type = extract_function_return_type(sql);
             return Some(FallbackStatementType::Function {
                 schema,
                 name,
                 function_type,
+                parameters,
+                return_type,
             });
         }
     }
@@ -917,6 +936,102 @@ fn detect_function_type(sql: &str) -> FallbackFunctionType {
     } else {
         FallbackFunctionType::Scalar
     }
+}
+
+/// Extract parameters from a function definition
+fn extract_function_parameters(sql: &str) -> Vec<ExtractedFunctionParameter> {
+    let mut params = Vec::new();
+
+    // Find the function name and the parameters that follow
+    // Pattern: CREATE FUNCTION [schema].[name](@param1 TYPE, @param2 TYPE) RETURNS ...
+    let sql_upper = sql.to_uppercase();
+
+    // Find opening paren after function name
+    let func_name_end = sql_upper
+        .find("CREATE FUNCTION")
+        .or_else(|| sql_upper.find("ALTER FUNCTION"))
+        .map(|start| {
+            // Skip past CREATE/ALTER FUNCTION and the name
+            let after_keyword = &sql_upper[start..];
+            after_keyword
+                .find('(')
+                .map(|idx| start + idx)
+        })
+        .flatten();
+
+    if func_name_end.is_none() {
+        return params;
+    }
+
+    let paren_start = func_name_end.unwrap();
+
+    // Find RETURNS to know where parameters end
+    let returns_pos = sql_upper.find("RETURNS");
+    if returns_pos.is_none() || returns_pos.unwrap() < paren_start {
+        return params;
+    }
+
+    // Extract the content between first ( and the ) before RETURNS
+    let param_section = &sql[paren_start..returns_pos.unwrap()];
+
+    // Find the closing paren
+    if let Some(close_paren) = param_section.rfind(')') {
+        let param_content = &param_section[1..close_paren];
+
+        // Parse parameters - they start with @
+        let param_regex = regex::Regex::new(
+            r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:,|$)"
+        ).unwrap();
+
+        for cap in param_regex.captures_iter(param_content) {
+            let name = cap
+                .get(1)
+                .map(|m| format!("@{}", m.as_str()))
+                .unwrap_or_default();
+            let data_type = cap
+                .get(2)
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default();
+
+            if !name.is_empty() && !data_type.is_empty() {
+                params.push(ExtractedFunctionParameter {
+                    name,
+                    data_type: data_type.to_uppercase(),
+                });
+            }
+        }
+    }
+
+    params
+}
+
+/// Extract the return type from a function definition
+fn extract_function_return_type(sql: &str) -> Option<String> {
+    let sql_upper = sql.to_uppercase();
+
+    // Find RETURNS keyword
+    let returns_pos = sql_upper.find("RETURNS")?;
+    let after_returns = &sql[returns_pos + 7..]; // Skip "RETURNS"
+    let after_returns_upper = after_returns.trim_start().to_uppercase();
+
+    // Handle TABLE return type (inline table-valued function)
+    if after_returns_upper.starts_with("TABLE") {
+        return Some("TABLE".to_string());
+    }
+
+    // Handle @var TABLE return type (multi-statement table-valued function)
+    if after_returns_upper.starts_with("@") {
+        return Some("TABLE".to_string());
+    }
+
+    // For scalar functions, extract the type before AS
+    // Pattern: RETURNS INT AS, RETURNS DECIMAL(18, 2) AS
+    let re = regex::Regex::new(r"(?i)RETURNS\s+([A-Za-z0-9_\(\),\s]+?)\s+(?:AS|WITH)").ok()?;
+
+    let caps = re.captures(sql)?;
+    let return_type = caps.get(1)?.as_str().trim().to_uppercase();
+
+    Some(return_type)
 }
 
 /// Extract index information from CREATE CLUSTERED/NONCLUSTERED INDEX statement

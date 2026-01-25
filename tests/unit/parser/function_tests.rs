@@ -49,6 +49,7 @@ END
             schema,
             name,
             function_type,
+            ..
         }) => {
             assert_eq!(schema, "dbo");
             assert_eq!(name, "GetFullName");
@@ -90,6 +91,7 @@ RETURN
             schema,
             name,
             function_type,
+            ..
         }) => {
             assert_eq!(schema, "dbo");
             assert_eq!(name, "GetUserOrders");
@@ -136,6 +138,7 @@ END
             schema,
             name,
             function_type,
+            ..
         }) => {
             assert_eq!(schema, "dbo");
             assert_eq!(name, "GetFilteredData");
