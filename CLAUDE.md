@@ -17,11 +17,6 @@ just test-e2e                           # E2E tests (requires SQL Server)
 just test-all                           # All tests including e2e
 just test-one test_name                 # Single test by name
 
-# Lint and format
-just lint                               # Run clippy
-just fmt                                # Format code
-just check                              # Format check + lint + test
-
 # Run the CLI
 just run build --project path/to/Database.sqlproj
 just build-project path/to/Database.sqlproj
@@ -46,11 +41,6 @@ The codebase follows a pipeline architecture:
 | **model** | `src/model/` | Transform AST into `DatabaseModel` with tables, views, constraints |
 | **dacpac** | `src/dacpac/` | Generate model.xml, DacMetadata.xml, Origin.xml and package as ZIP |
 
-### Key Entry Points
-
-- **CLI**: `src/main.rs` - clap-based argument parsing
-- **Library**: `src/lib.rs` - `build_dacpac(options: BuildOptions) -> Result<PathBuf>`
-
 ### Data Flow
 
 1. `parse_sqlproj()` reads XML, discovers SQL files (legacy or SDK-style glob patterns)
@@ -58,18 +48,11 @@ The codebase follows a pipeline architecture:
 3. `build_model()` transforms AST statements into `ModelElement` variants (Table, View, Index, etc.)
 4. `create_dacpac()` generates XML files and packages into ZIP
 
-## Test Fixtures
+## Tests
+
+**Important:** This project follows a TDD approach. Any new feature or bug fix must first have either a unit, integration or e2e test created for it.
 
 Test fixtures in `tests/fixtures/` are self-contained SQL projects:
-
-| Fixture | Tests |
-|---------|-------|
-| `simple_table/` | Basic single table |
-| `constraints/` | PK, FK, unique, check constraints |
-| `indexes/` | Index definitions with clustered/nonclustered indexes |
-| `views/` | View definitions |
-| `pre_post_deploy/` | Deployment scripts |
-| `build_with_exclude/` | SDK-style project with exclusions |
 
 ## Dacpac File Format
 

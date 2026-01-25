@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Script to repeatedly run Claude Code with fix_tests_prompt.md
+# Script to repeatedly run Claude Code with prompt.md
 # Exits early if "ALL TODO ITEMS COMPLETE" is detected
 
 set -e
 
-PROMPT_FILE="docs/fix_tests_prompt.md"
+PROMPT_FILE="docs/reference_db_failures_prompt.md"
 MAX_ITERATIONS=20
 ITERATION=0
 CURRENT_BRANCH=$(git branch --show-current)
