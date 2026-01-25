@@ -230,6 +230,47 @@ END
 }
 
 // ============================================================================
+// Ampersand in Function Name Tests
+// ============================================================================
+
+#[test]
+fn test_ampersand_in_function_name() {
+    let sql = r#"
+CREATE FUNCTION [dbo].[Get_P&L_Report]()
+RETURNS TABLE
+AS
+RETURN (SELECT 1 AS Value)
+"#;
+
+    let file = create_sql_file(sql);
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+
+    if let Ok(statements) = result {
+        let project = create_test_project();
+        let model = rust_sqlpackage::model::build_model(&statements, &project).unwrap();
+
+        let func = model.elements.iter().find_map(|e| {
+            if let rust_sqlpackage::model::ModelElement::Function(f) = e {
+                Some(f)
+            } else {
+                None
+            }
+        });
+
+        if let Some(f) = func {
+            // Should contain full name with ampersand (not truncated to "Get_P")
+            assert!(
+                f.name.contains("P&L"),
+                "Function name should contain P&L, not be truncated: {}",
+                f.name
+            );
+        } else {
+            panic!("Function should have been parsed");
+        }
+    }
+}
+
+// ============================================================================
 // Procedure Parameter Tests
 // ============================================================================
 

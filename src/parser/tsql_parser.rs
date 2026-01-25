@@ -736,14 +736,21 @@ fn try_xml_method_fallback(sql: &str) -> Option<FallbackStatementType> {
 
 /// Extract schema and name from ALTER TABLE statement
 fn extract_alter_table_name(sql: &str) -> Option<(String, String)> {
-    let re = regex::Regex::new(r"(?i)ALTER\s+TABLE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
+    // Use [^\]]+ for bracketed identifiers to capture special characters like &
+    let re = regex::Regex::new(
+        r"(?i)ALTER\s+TABLE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
+    )
+    .ok()?;
 
     let caps = re.captures(sql)?;
+    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
     let schema = caps
         .get(1)
+        .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(2)?.as_str().to_string();
+    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
+    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
 }
@@ -817,18 +824,22 @@ fn try_generic_create_fallback(sql: &str) -> Option<FallbackStatementType> {
 
 /// Extract schema and name for a specific object type
 fn extract_generic_object_name(sql: &str, object_type: &str) -> Option<(String, String)> {
+    // Use [^\]]+ for bracketed identifiers to capture special characters like &
     let pattern = format!(
-        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?{}\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
+        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?{}\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
         object_type
     );
     let re = regex::Regex::new(&pattern).ok()?;
 
     let caps = re.captures(sql)?;
+    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
     let schema = caps
         .get(1)
+        .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(2)?.as_str().to_string();
+    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
+    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
 }
@@ -838,14 +849,21 @@ fn extract_sequence_name(sql: &str) -> Option<(String, String)> {
     // Match patterns like:
     // CREATE SEQUENCE [dbo].[SeqName]
     // CREATE SEQUENCE dbo.SeqName
-    let re = regex::Regex::new(r"(?i)CREATE\s+SEQUENCE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
+    // Use [^\]]+ for bracketed identifiers to capture special characters like &
+    let re = regex::Regex::new(
+        r"(?i)CREATE\s+SEQUENCE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
+    )
+    .ok()?;
 
     let caps = re.captures(sql)?;
+    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
     let schema = caps
         .get(1)
+        .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(2)?.as_str().to_string();
+    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
+    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
 }
@@ -855,14 +873,21 @@ fn extract_type_name(sql: &str) -> Option<(String, String)> {
     // Match patterns like:
     // CREATE TYPE [dbo].[TypeName] AS TABLE
     // CREATE TYPE dbo.TypeName AS TABLE
-    let re = regex::Regex::new(r"(?i)CREATE\s+TYPE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
+    // Use [^\]]+ for bracketed identifiers to capture special characters like &
+    let re = regex::Regex::new(
+        r"(?i)CREATE\s+TYPE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
+    )
+    .ok()?;
 
     let caps = re.captures(sql)?;
+    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
     let schema = caps
         .get(1)
+        .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(2)?.as_str().to_string();
+    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
+    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
 }
@@ -1093,14 +1118,21 @@ fn extract_alter_function_name(sql: &str) -> Option<(String, String)> {
     // Match patterns like:
     // ALTER FUNCTION [dbo].[FuncName]
     // ALTER FUNCTION dbo.FuncName
-    let re = regex::Regex::new(r"(?i)ALTER\s+FUNCTION\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
+    // Use [^\]]+ for bracketed identifiers to capture special characters like &
+    let re = regex::Regex::new(
+        r"(?i)ALTER\s+FUNCTION\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
+    )
+    .ok()?;
 
     let caps = re.captures(sql)?;
+    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
     let schema = caps
         .get(1)
+        .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(2)?.as_str().to_string();
+    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
+    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
 }
@@ -1110,14 +1142,21 @@ fn extract_alter_sequence_name(sql: &str) -> Option<(String, String)> {
     // Match patterns like:
     // ALTER SEQUENCE [dbo].[SeqName]
     // ALTER SEQUENCE dbo.SeqName
-    let re = regex::Regex::new(r"(?i)ALTER\s+SEQUENCE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
+    // Use [^\]]+ for bracketed identifiers to capture special characters like &
+    let re = regex::Regex::new(
+        r"(?i)ALTER\s+SEQUENCE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
+    )
+    .ok()?;
 
     let caps = re.captures(sql)?;
+    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
     let schema = caps
         .get(1)
+        .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(2)?.as_str().to_string();
+    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
+    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
 }
@@ -1128,17 +1167,21 @@ fn extract_function_name(sql: &str) -> Option<(String, String)> {
     // CREATE FUNCTION [dbo].[FuncName]
     // CREATE FUNCTION dbo.FuncName
     // CREATE OR ALTER FUNCTION [schema].[name]
+    // Use [^\]]+ for bracketed identifiers to capture special characters like &
     let re = regex::Regex::new(
-        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?FUNCTION\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
+        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?FUNCTION\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
     )
     .ok()?;
 
     let caps = re.captures(sql)?;
+    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
     let schema = caps
         .get(1)
+        .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(2)?.as_str().to_string();
+    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
+    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
 }
