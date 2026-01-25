@@ -30,9 +30,9 @@ use tempfile::TempDir;
 
 use crate::dacpac_compare::{
     compare_all_properties, compare_dacpacs, compare_dacpacs_with_options,
-    compare_element_inventory, compare_element_properties, compare_element_relationships,
-    compare_with_sqlpackage, extract_model_xml, sqlpackage_available, ComparisonOptions,
-    DacpacModel, Layer1Error,
+    compare_element_inventory, compare_element_order, compare_element_properties,
+    compare_element_relationships, compare_with_sqlpackage, extract_model_xml,
+    sqlpackage_available, ComparisonOptions, DacpacModel, Layer1Error,
 };
 
 // =============================================================================
@@ -821,6 +821,152 @@ fn test_relationship_comparison_options() {
 
     if !by_error_type.is_empty() {
         println!("\nRelationship errors by type:");
+        for (error_type, count) in &by_error_type {
+            println!("  {}: {}", error_type, count);
+        }
+    }
+}
+
+// =============================================================================
+// Layer 4: Element Order Comparison Tests (Phase 4)
+// =============================================================================
+
+/// Test element order comparison between Rust and DotNet dacpacs.
+/// This tests the element ordering comparison mode introduced in Phase 4.
+///
+/// Purpose: Identifies ordering differences between Rust and DotNet output.
+/// DotNet DacFx generates elements in a specific, deterministic order that
+/// may affect certain DAC tools. This test tracks ordering parity progress.
+#[test]
+fn test_element_order_comparison() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    let rust_model = DacpacModel::from_dacpac(&rust_dacpac).expect("Parse rust dacpac");
+    let dotnet_model = DacpacModel::from_dacpac(&dotnet_dacpac).expect("Parse dotnet dacpac");
+
+    // Use the element order comparison function
+    let errors = compare_element_order(&rust_model, &dotnet_model);
+
+    println!("\n=== Element Order Comparison Test (Phase 4) ===\n");
+
+    if errors.is_empty() {
+        println!("All elements are in the same order!");
+    } else {
+        // Group errors by type for readability
+        let mut type_order_errors = Vec::new();
+        let mut element_order_errors = Vec::new();
+
+        for err in &errors {
+            match err {
+                crate::dacpac_compare::Layer4Error::TypeOrderMismatch { .. } => {
+                    type_order_errors.push(err);
+                }
+                crate::dacpac_compare::Layer4Error::ElementOrderMismatch { .. } => {
+                    element_order_errors.push(err);
+                }
+            }
+        }
+
+        if !type_order_errors.is_empty() {
+            println!("Type ordering mismatches ({}):", type_order_errors.len());
+            for err in type_order_errors.iter().take(10) {
+                println!("  - {}", err);
+            }
+            if type_order_errors.len() > 10 {
+                println!("  ... and {} more", type_order_errors.len() - 10);
+            }
+            println!();
+        }
+
+        if !element_order_errors.is_empty() {
+            println!(
+                "Element ordering mismatches ({}):",
+                element_order_errors.len()
+            );
+            for err in element_order_errors.iter().take(10) {
+                println!("  - {}", err);
+            }
+            if element_order_errors.len() > 10 {
+                println!("  ... and {} more", element_order_errors.len() - 10);
+            }
+        }
+
+        println!("\nTotal ordering mismatches: {}", errors.len());
+        println!("This test is informational - mismatches indicate ordering differences");
+        println!("that need to be addressed for exact 1-1 matching.");
+    }
+
+    // Note: We don't assert here because this is a progress tracking test.
+    // Ordering mismatches are expected until element ordering is fully implemented.
+}
+
+/// Test using ComparisonOptions with check_element_order=true
+#[test]
+fn test_element_order_comparison_options() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Test with check_element_order enabled
+    let options = ComparisonOptions {
+        include_layer3: false,
+        strict_properties: false,
+        check_relationships: false,
+        check_element_order: true,
+    };
+
+    let result =
+        compare_dacpacs_with_options(&rust_dacpac, &dotnet_dacpac, &options).expect("Comparison");
+
+    println!("\n=== Element Order ComparisonOptions Test (Phase 4) ===\n");
+    println!("Layer 1 errors: {}", result.layer1_errors.len());
+    println!("Layer 2 errors: {}", result.layer2_errors.len());
+    println!("Relationship errors: {}", result.relationship_errors.len());
+    println!("Layer 4 (ordering) errors: {}", result.layer4_errors.len());
+
+    // Show summary of Layer 4 errors by type
+    let mut by_error_type: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for err in &result.layer4_errors {
+        let key = match err {
+            crate::dacpac_compare::Layer4Error::TypeOrderMismatch { .. } => "TypeOrder",
+            crate::dacpac_compare::Layer4Error::ElementOrderMismatch { .. } => "ElementOrder",
+        };
+        *by_error_type.entry(key).or_default() += 1;
+    }
+
+    if !by_error_type.is_empty() {
+        println!("\nLayer 4 errors by type:");
         for (error_type, count) in &by_error_type {
             println!("  {}: {}", error_type, count);
         }

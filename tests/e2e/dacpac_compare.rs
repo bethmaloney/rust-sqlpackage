@@ -63,6 +63,7 @@ pub struct ComparisonResult {
     pub layer1_errors: Vec<Layer1Error>,
     pub layer2_errors: Vec<Layer2Error>,
     pub relationship_errors: Vec<RelationshipError>,
+    pub layer4_errors: Vec<Layer4Error>,
     pub layer3_result: Option<Layer3Result>,
 }
 
@@ -135,6 +136,41 @@ pub enum RelationshipError {
     },
 }
 
+/// Layer 4: Element ordering errors (Phase 4)
+///
+/// DotNet DacFx generates elements in a specific, deterministic order within model.xml.
+/// This error type captures ordering mismatches between Rust and DotNet output.
+/// Element ordering may affect certain DAC tools and operations, so matching
+/// the exact order is important for true 1-1 parity.
+#[derive(Debug)]
+pub enum Layer4Error {
+    /// Element appears at different position in output
+    /// DotNet has specific ordering rules - typically schemas first, then tables,
+    /// views, procedures, etc. Within a type, elements may be ordered alphabetically
+    /// or by dependency.
+    ElementOrderMismatch {
+        /// The type of element (e.g., "SqlTable", "SqlView")
+        element_type: String,
+        /// The element name (e.g., "[dbo].[Products]")
+        element_name: String,
+        /// Position in Rust output (0-indexed)
+        rust_position: usize,
+        /// Position in DotNet output (0-indexed)
+        dotnet_position: usize,
+    },
+    /// Element types appear in different order
+    /// For example, DotNet might output all schemas, then all tables, then all views,
+    /// while Rust might interleave them.
+    TypeOrderMismatch {
+        /// The element type that's out of order
+        element_type: String,
+        /// First position this type appears in Rust output
+        rust_first_position: usize,
+        /// First position this type appears in DotNet output
+        dotnet_first_position: usize,
+    },
+}
+
 /// Options for controlling comparison behavior
 #[derive(Debug, Clone, Default)]
 pub struct ComparisonOptions {
@@ -144,7 +180,7 @@ pub struct ComparisonOptions {
     pub strict_properties: bool,
     /// Validate all relationships between elements
     pub check_relationships: bool,
-    /// Validate element ordering (Phase 4 - not yet implemented)
+    /// Validate element ordering matches DotNet output (Phase 4)
     pub check_element_order: bool,
 }
 
@@ -828,6 +864,117 @@ fn compare_relationship_pair(
 }
 
 // =============================================================================
+// Layer 4: Element Order Comparison (Phase 4)
+// =============================================================================
+
+/// Compare the ordering of elements between two models.
+///
+/// DotNet DacFx generates elements in a specific, deterministic order:
+/// 1. Elements are typically grouped by type (schemas, tables, views, procedures, etc.)
+/// 2. Within each type, elements may be ordered alphabetically or by dependency
+///
+/// This function compares:
+/// - Type ordering: Which element types appear first
+/// - Element ordering: Position of individual elements within the model
+///
+/// Returns errors for any ordering mismatches found.
+pub fn compare_element_order(
+    rust_model: &DacpacModel,
+    dotnet_model: &DacpacModel,
+) -> Vec<Layer4Error> {
+    let mut errors = Vec::new();
+
+    // Build position maps for named elements
+    // Position is the index in the elements vector (order in XML)
+    let rust_positions = build_element_position_map(rust_model);
+    let dotnet_positions = build_element_position_map(dotnet_model);
+
+    // Compare type ordering - which types appear first in each model
+    errors.extend(compare_type_ordering(rust_model, dotnet_model));
+
+    // Compare individual element positions
+    // Only compare elements that exist in both models (Layer 1 catches missing/extra)
+    for ((elem_type, elem_name), &rust_pos) in &rust_positions {
+        if let Some(&dotnet_pos) = dotnet_positions.get(&(elem_type.clone(), elem_name.clone())) {
+            if rust_pos != dotnet_pos {
+                errors.push(Layer4Error::ElementOrderMismatch {
+                    element_type: elem_type.clone(),
+                    element_name: elem_name.clone(),
+                    rust_position: rust_pos,
+                    dotnet_position: dotnet_pos,
+                });
+            }
+        }
+    }
+
+    errors
+}
+
+/// Build a map of (element_type, element_name) -> position index
+fn build_element_position_map(model: &DacpacModel) -> HashMap<(String, String), usize> {
+    let mut positions = HashMap::new();
+
+    for (idx, element) in model.elements.iter().enumerate() {
+        if let Some(ref name) = element.name {
+            positions.insert((element.element_type.clone(), name.clone()), idx);
+        }
+    }
+
+    positions
+}
+
+/// Compare the ordering of element types between models.
+///
+/// For example, if DotNet outputs schemas at position 0-2, tables at 3-10,
+/// and views at 11-15, Rust should follow the same pattern.
+fn compare_type_ordering(rust_model: &DacpacModel, dotnet_model: &DacpacModel) -> Vec<Layer4Error> {
+    let mut errors = Vec::new();
+
+    // Find first occurrence of each type
+    let rust_type_first_pos = find_type_first_positions(rust_model);
+    let dotnet_type_first_pos = find_type_first_positions(dotnet_model);
+
+    // Get all types that appear in both models
+    let all_types: BTreeSet<_> = rust_type_first_pos
+        .keys()
+        .chain(dotnet_type_first_pos.keys())
+        .cloned()
+        .collect();
+
+    for elem_type in all_types {
+        if let (Some(&rust_first), Some(&dotnet_first)) = (
+            rust_type_first_pos.get(&elem_type),
+            dotnet_type_first_pos.get(&elem_type),
+        ) {
+            // Compare relative ordering of types
+            // We don't require exact positions, but check if the relative order differs significantly
+            if rust_first != dotnet_first {
+                errors.push(Layer4Error::TypeOrderMismatch {
+                    element_type: elem_type,
+                    rust_first_position: rust_first,
+                    dotnet_first_position: dotnet_first,
+                });
+            }
+        }
+    }
+
+    errors
+}
+
+/// Find the first position where each element type appears in the model
+fn find_type_first_positions(model: &DacpacModel) -> HashMap<String, usize> {
+    let mut first_positions = HashMap::new();
+
+    for (idx, element) in model.elements.iter().enumerate() {
+        first_positions
+            .entry(element.element_type.clone())
+            .or_insert(idx);
+    }
+
+    first_positions
+}
+
+// =============================================================================
 // Layer 3: SqlPackage DeployReport
 // =============================================================================
 
@@ -942,7 +1089,7 @@ pub fn compare_dacpacs(
 /// - `include_layer3`: Run SqlPackage DeployReport comparison
 /// - `strict_properties`: Compare ALL properties (not just key properties)
 /// - `check_relationships`: Validate all relationships between elements
-/// - `check_element_order`: Validate element ordering (Phase 4 - not yet implemented)
+/// - `check_element_order`: Validate element ordering matches DotNet output (Phase 4)
 pub fn compare_dacpacs_with_options(
     rust_dacpac: &Path,
     dotnet_dacpac: &Path,
@@ -965,6 +1112,12 @@ pub fn compare_dacpacs_with_options(
         Vec::new()
     };
 
+    let layer4_errors = if options.check_element_order {
+        compare_element_order(&rust_model, &dotnet_model)
+    } else {
+        Vec::new()
+    };
+
     let layer3_result = if options.include_layer3 {
         Some(compare_with_sqlpackage(rust_dacpac, dotnet_dacpac))
     } else {
@@ -975,6 +1128,7 @@ pub fn compare_dacpacs_with_options(
         layer1_errors,
         layer2_errors,
         relationship_errors,
+        layer4_errors,
         layer3_result,
     })
 }
@@ -1089,11 +1243,42 @@ impl fmt::Display for RelationshipError {
     }
 }
 
+impl fmt::Display for Layer4Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Layer4Error::ElementOrderMismatch {
+                element_type,
+                element_name,
+                rust_position,
+                dotnet_position,
+            } => {
+                write!(
+                    f,
+                    "ELEMENT ORDER MISMATCH: {} {} (Rust pos: {}, DotNet pos: {})",
+                    element_type, element_name, rust_position, dotnet_position
+                )
+            }
+            Layer4Error::TypeOrderMismatch {
+                element_type,
+                rust_first_position,
+                dotnet_first_position,
+            } => {
+                write!(
+                    f,
+                    "TYPE ORDER MISMATCH: {} first appears at (Rust pos: {}, DotNet pos: {})",
+                    element_type, rust_first_position, dotnet_first_position
+                )
+            }
+        }
+    }
+}
+
 impl ComparisonResult {
     pub fn is_success(&self) -> bool {
         self.layer1_errors.is_empty()
             && self.layer2_errors.is_empty()
             && self.relationship_errors.is_empty()
+            && self.layer4_errors.is_empty()
             && self
                 .layer3_result
                 .as_ref()
@@ -1134,6 +1319,16 @@ impl ComparisonResult {
             println!("Relationship Comparison");
             println!("{}", "-".repeat(40));
             for err in &self.relationship_errors {
+                println!("  {}", err);
+            }
+            println!();
+        }
+
+        // Layer 4: Element Ordering
+        if !self.layer4_errors.is_empty() {
+            println!("Layer 4: Element Ordering");
+            println!("{}", "-".repeat(40));
+            for err in &self.layer4_errors {
                 println!("  {}", err);
             }
             println!();
