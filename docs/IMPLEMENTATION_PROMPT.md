@@ -6,8 +6,8 @@
 4. When the tests pass, update @IMPLEMENTATION_PLAN.md, then `git add -A` then `git commit` with a message describing the changes.
 
 999. You must implement ONE and only ONE item from the implementation plan
-9999. If there are no further items then you must reply "ALL TODO ITEMS COMPLETE"
-99999. Important: When authoring documentation, capture the why — tests and implementation importance.
+9999. If there are no further items then check for any failing tests or formatting issues. If you discover any issues add them to the plan and then finish
+99999. Important: If there are no more further items and no other issues then you must reply "ALL TODO ITEMS COMPLETE"
 999999. Important: Single sources of truth, no migrations/adapters. If tests unrelated to your work fail, resolve them as part of the increment.
 9999999. You may add extra logging if required to debug issues.
 99999999. Keep @IMPLEMENTATION_PLAN.md current with learnings using a subagent — future work depends on this to avoid duplicating efforts. Update especially after finishing your turn.
