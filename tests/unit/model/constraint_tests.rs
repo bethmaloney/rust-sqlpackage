@@ -100,22 +100,19 @@ CREATE TABLE [dbo].[T] (
     assert!(table.is_some(), "Should find table T");
     let table = table.unwrap();
 
-    // Id column should NOT have inline constraint disambiguator
+    // Id column should NOT have attached annotations
     let id_col = table.columns.iter().find(|c| c.name == "Id");
     assert!(id_col.is_some());
     assert!(
-        id_col.unwrap().inline_constraint_disambiguator.is_none(),
-        "Id column should not have inline constraint annotation"
+        id_col.unwrap().attached_annotations.is_empty(),
+        "Id column should not have inline constraint annotations"
     );
 
-    // Status column SHOULD have inline constraint disambiguator (has DEFAULT)
+    // Status column SHOULD have attached annotations (has inline DEFAULT)
     let status_col = table.columns.iter().find(|c| c.name == "Status");
     assert!(status_col.is_some());
     assert!(
-        status_col
-            .unwrap()
-            .inline_constraint_disambiguator
-            .is_some(),
+        !status_col.unwrap().attached_annotations.is_empty(),
         "Status column should have inline constraint annotation due to DEFAULT"
     );
 }
@@ -141,19 +138,19 @@ CREATE TABLE [dbo].[T] (
     assert!(table.is_some(), "Should find table T");
     let table = table.unwrap();
 
-    // Id column should NOT have inline constraint disambiguator
+    // Id column should NOT have attached annotations
     let id_col = table.columns.iter().find(|c| c.name == "Id");
     assert!(id_col.is_some());
     assert!(
-        id_col.unwrap().inline_constraint_disambiguator.is_none(),
-        "Id column should not have inline constraint annotation"
+        id_col.unwrap().attached_annotations.is_empty(),
+        "Id column should not have inline constraint annotations"
     );
 
-    // Age column SHOULD have inline constraint disambiguator (has CHECK)
+    // Age column SHOULD have attached annotations (has inline CHECK)
     let age_col = table.columns.iter().find(|c| c.name == "Age");
     assert!(age_col.is_some());
     assert!(
-        age_col.unwrap().inline_constraint_disambiguator.is_some(),
+        !age_col.unwrap().attached_annotations.is_empty(),
         "Age column should have inline constraint annotation due to CHECK"
     );
 }
@@ -179,19 +176,19 @@ CREATE TABLE [dbo].[T] (
     assert!(table.is_some(), "Should find table T");
     let table = table.unwrap();
 
-    // Id column SHOULD have inline constraint disambiguator (has inline PRIMARY KEY)
+    // Id column SHOULD have attached annotations (has inline PRIMARY KEY)
     let id_col = table.columns.iter().find(|c| c.name == "Id");
     assert!(id_col.is_some());
     assert!(
-        id_col.unwrap().inline_constraint_disambiguator.is_some(),
+        !id_col.unwrap().attached_annotations.is_empty(),
         "Id column should have inline constraint annotation due to PRIMARY KEY"
     );
 
-    // Name column should NOT have inline constraint disambiguator
+    // Name column should NOT have attached annotations
     let name_col = table.columns.iter().find(|c| c.name == "Name");
     assert!(name_col.is_some());
     assert!(
-        name_col.unwrap().inline_constraint_disambiguator.is_none(),
-        "Name column should not have inline constraint annotation"
+        name_col.unwrap().attached_annotations.is_empty(),
+        "Name column should not have inline constraint annotations"
     );
 }

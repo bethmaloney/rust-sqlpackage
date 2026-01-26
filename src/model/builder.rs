@@ -166,6 +166,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         columns: model_columns,
                         is_node: *is_node,
                         is_edge: *is_edge,
+                        inline_constraint_disambiguator: None, // Set during post-processing
                     }));
 
                     // Add constraints as separate elements
@@ -185,6 +186,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 .default_constraint_name
                                 .clone()
                                 .unwrap_or_else(|| format!("DF_{}_{}", name, col.name));
+                            let is_inline = col.default_constraint_name.is_none();
                             model.add_element(ModelElement::Constraint(ConstraintElement {
                                 name: constraint_name,
                                 table_schema: schema.clone(),
@@ -195,6 +197,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
+                                is_inline,
+                                inline_constraint_disambiguator: None,
                             }));
                         }
                     }
@@ -202,6 +206,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     // Add inline CHECK constraints from column definitions
                     for col in columns {
                         if let Some(check_expr) = &col.check_expression {
+                            let is_inline = col.check_constraint_name.is_none();
                             let constraint_name = col
                                 .check_constraint_name
                                 .clone()
@@ -216,6 +221,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
+                                is_inline,
+                                inline_constraint_disambiguator: None,
                             }));
                         }
                     }
@@ -278,6 +285,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     columns,
                     is_node: false,
                     is_edge: false,
+                    inline_constraint_disambiguator: None, // Set during post-processing
                 }));
 
                 // Extract constraints from table definition (table-level constraints)
@@ -293,6 +301,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }
 
                 // Extract inline column constraints (PRIMARY KEY, UNIQUE on columns)
+                // These are always inline (no CONSTRAINT keyword) since they're defined on the column
                 for col in &create_table.columns {
                     for option in &col.options {
                         if let ColumnOption::Unique { is_primary, .. } = &option.option {
@@ -318,6 +327,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
+                                is_inline: true, // Inline since defined on column without CONSTRAINT keyword
+                                inline_constraint_disambiguator: None,
                             }));
                         }
                     }
@@ -340,6 +351,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                             }
                             ColumnOption::Default(expr) => {
                                 // Use explicit name on DEFAULT, pending name from NOT NULL, or generate one
+                                let has_explicit_name =
+                                    option.name.is_some() || pending_constraint_name.is_some();
                                 let constraint_name = option
                                     .name
                                     .as_ref()
@@ -357,6 +370,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                     referenced_table: None,
                                     referenced_columns: None,
                                     is_clustered: None,
+                                    is_inline: !has_explicit_name,
+                                    inline_constraint_disambiguator: None,
                                 }));
                                 // Reset pending name
                                 pending_constraint_name = None;
@@ -373,6 +388,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 for col in &create_table.columns {
                     for option in &col.options {
                         if let ColumnOption::Check(expr) = &option.option {
+                            let is_inline = option.name.is_none();
                             let constraint_name = option
                                 .name
                                 .as_ref()
@@ -388,12 +404,15 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
+                                is_inline,
+                                inline_constraint_disambiguator: None,
                             }));
                         }
                     }
                 }
 
                 // Add extracted default constraints (from T-SQL DEFAULT FOR syntax)
+                // These are always named since they use explicit CONSTRAINT keyword
                 for default_constraint in &parsed.extracted_defaults {
                     model.add_element(ModelElement::Constraint(ConstraintElement {
                         name: default_constraint.name.clone(),
@@ -405,6 +424,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         referenced_table: None,
                         referenced_columns: None,
                         is_clustered: None,
+                        is_inline: false, // Named constraint (uses CONSTRAINT keyword)
+                        inline_constraint_disambiguator: None,
                     }));
                 }
             }
@@ -561,6 +582,10 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
     // Sort elements by type (following DotNet order) then by name for deterministic output
     sort_elements(&mut model.elements);
 
+    // Assign disambiguators to inline constraints and link to columns/tables
+    // This must happen after sorting because disambiguator values follow element order
+    assign_inline_constraint_disambiguators(&mut model.elements);
+
     Ok(model)
 }
 
@@ -627,6 +652,107 @@ fn sort_elements(elements: &mut [ModelElement]) {
     });
 }
 
+/// Assign disambiguator values to inline constraints and build linkages to columns/tables.
+///
+/// DotNet's DacFx assigns sequential disambiguator values starting at 3 for inline constraints.
+/// The order is:
+/// 1. Each inline constraint gets a disambiguator in element order
+/// 2. Each table with inline constraints gets a disambiguator after all constraints
+/// 3. Columns with inline constraints get AttachedAnnotation referencing their constraints
+/// 4. Named constraints at table-level get AttachedAnnotation referencing their table
+fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
+    use std::collections::HashMap;
+
+    // DotNet starts disambiguator values at 3
+    let mut next_disambiguator: u32 = 3;
+
+    // Map: (table_schema, table_name, column_name) -> Vec<disambiguator>
+    let mut column_annotations: HashMap<(String, String, String), Vec<u32>> = HashMap::new();
+
+    // Map: (table_schema, table_name) -> table_disambiguator
+    let mut table_disambiguators: HashMap<(String, String), u32> = HashMap::new();
+
+    // Tables that have inline constraints
+    let mut tables_with_inline_constraints: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+
+    // First pass: Assign disambiguators to inline constraints and track columns
+    for element in elements.iter_mut() {
+        if let ModelElement::Constraint(constraint) = element {
+            if constraint.is_inline {
+                let disambiguator = next_disambiguator;
+                next_disambiguator += 1;
+                constraint.inline_constraint_disambiguator = Some(disambiguator);
+
+                // Track that this table has inline constraints
+                tables_with_inline_constraints.insert((
+                    constraint.table_schema.clone(),
+                    constraint.table_name.clone(),
+                ));
+
+                // Link the constraint's column(s) to this disambiguator
+                for col in &constraint.columns {
+                    let key = (
+                        constraint.table_schema.clone(),
+                        constraint.table_name.clone(),
+                        col.name.clone(),
+                    );
+                    column_annotations
+                        .entry(key)
+                        .or_default()
+                        .push(disambiguator);
+                }
+            }
+        }
+    }
+
+    // Second pass: Assign disambiguators to tables that have inline constraints
+    // and link named constraints to their table's disambiguator
+    for element in elements.iter_mut() {
+        if let ModelElement::Table(table) = element {
+            let table_key = (table.schema.clone(), table.name.clone());
+            if tables_with_inline_constraints.contains(&table_key) {
+                let disambiguator = next_disambiguator;
+                next_disambiguator += 1;
+                table.inline_constraint_disambiguator = Some(disambiguator);
+                table_disambiguators.insert(table_key, disambiguator);
+            }
+        }
+    }
+
+    // Third pass: Link named (non-inline) table-level constraints to their table's disambiguator
+    for element in elements.iter_mut() {
+        if let ModelElement::Constraint(constraint) = element {
+            if !constraint.is_inline {
+                // Named constraint - link to table's disambiguator if table has inline constraints
+                let table_key = (
+                    constraint.table_schema.clone(),
+                    constraint.table_name.clone(),
+                );
+                if let Some(&table_disambiguator) = table_disambiguators.get(&table_key) {
+                    constraint.inline_constraint_disambiguator = Some(table_disambiguator);
+                }
+            }
+        }
+    }
+
+    // Fourth pass: Assign attached_annotations to columns
+    for element in elements.iter_mut() {
+        if let ModelElement::Table(table) = element {
+            for column in &mut table.columns {
+                let key = (
+                    table.schema.clone(),
+                    table.name.clone(),
+                    column.name.clone(),
+                );
+                if let Some(annotations) = column_annotations.get(&key) {
+                    column.attached_annotations = annotations.clone();
+                }
+            }
+        }
+    }
+}
+
 fn extract_schema_and_name(name: &ObjectName, default_schema: &str) -> (String, String) {
     let parts: Vec<_> = name.0.iter().map(|p| p.value.clone()).collect();
 
@@ -640,12 +766,11 @@ fn extract_schema_and_name(name: &ObjectName, default_schema: &str) -> (String, 
     }
 }
 
-fn column_from_def(col: &ColumnDef, schema: &str, table_name: &str) -> ColumnElement {
+fn column_from_def(col: &ColumnDef, _schema: &str, _table_name: &str) -> ColumnElement {
     // Track explicit nullability: None = not specified, Some(true) = explicit NULL, Some(false) = explicit NOT NULL
     let mut nullability: Option<bool> = None;
     let mut is_identity = false;
     let mut default_value = None;
-    let mut has_inline_constraint = false;
     let mut computed_expression: Option<String> = None;
     let mut is_persisted = false;
 
@@ -655,15 +780,8 @@ fn column_from_def(col: &ColumnDef, schema: &str, table_name: &str) -> ColumnEle
             ColumnOption::Null => nullability = Some(true),
             ColumnOption::Default(expr) => {
                 default_value = Some(expr.to_string());
-                has_inline_constraint = true;
             }
             ColumnOption::Identity(_) => is_identity = true,
-            ColumnOption::Check(_) => {
-                has_inline_constraint = true;
-            }
-            ColumnOption::Unique { .. } => {
-                has_inline_constraint = true;
-            }
             ColumnOption::Generated {
                 generation_expr,
                 generation_expr_mode,
@@ -706,12 +824,8 @@ fn column_from_def(col: &ColumnDef, schema: &str, table_name: &str) -> ColumnEle
 
     let (max_length, precision, scale) = extract_type_params(&col.data_type);
 
-    // Generate disambiguator from full qualified name hash if column has inline constraints
-    let inline_constraint_disambiguator = if has_inline_constraint {
-        Some(generate_disambiguator(schema, table_name, &col.name.value))
-    } else {
-        None
-    };
+    // Note: attached_annotations are populated during post-processing
+    // after disambiguators are assigned to inline constraints
 
     ColumnElement {
         name: col.name.value.clone(),
@@ -725,7 +839,7 @@ fn column_from_def(col: &ColumnDef, schema: &str, table_name: &str) -> ColumnEle
         max_length,
         precision,
         scale,
-        inline_constraint_disambiguator,
+        attached_annotations: Vec::new(), // Populated during post-processing
         computed_expression,
         is_persisted,
     }
@@ -887,20 +1001,13 @@ fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option
 /// Convert an extracted table column (from fallback parser) to a model column
 fn column_from_fallback_table(
     col: &ExtractedTableColumn,
-    schema: &str,
-    table_name: &str,
+    _schema: &str,
+    _table_name: &str,
 ) -> ColumnElement {
     let (max_length, precision, scale) = extract_type_params_from_string(&col.data_type);
 
-    // Check if column has inline constraints (default or check)
-    let has_inline_constraint = col.default_value.is_some() || col.check_expression.is_some();
-
-    // Generate disambiguator from full qualified name hash if column has inline constraints
-    let inline_constraint_disambiguator = if has_inline_constraint {
-        Some(generate_disambiguator(schema, table_name, &col.name))
-    } else {
-        None
-    };
+    // Note: attached_annotations are populated during post-processing
+    // after disambiguators are assigned to inline constraints
 
     ColumnElement {
         name: col.name.clone(),
@@ -914,27 +1021,14 @@ fn column_from_fallback_table(
         max_length,
         precision,
         scale,
-        inline_constraint_disambiguator,
+        attached_annotations: Vec::new(), // Populated during post-processing
         computed_expression: col.computed_expression.clone(),
         is_persisted: col.is_persisted,
     }
 }
 
-/// Generate a disambiguator value from the full qualified column name (schema.table.column)
-/// Uses a simple hash to generate a consistent numeric value unique per column
-fn generate_disambiguator(schema: &str, table_name: &str, column_name: &str) -> u32 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    // Hash the full qualified name to ensure uniqueness across tables
-    let qualified_name = format!("{}.{}.{}", schema, table_name, column_name);
-    qualified_name.hash(&mut hasher);
-    // Use modulo to keep the number in a reasonable range similar to DacFx output
-    (hasher.finish() % 1_000_000) as u32
-}
-
 /// Convert an extracted table constraint (from fallback parser) to a model constraint
+/// These are table-level constraints (defined with CONSTRAINT keyword) so they are not inline
 fn constraint_from_extracted(
     constraint: &ExtractedTableConstraint,
     table_schema: &str,
@@ -958,6 +1052,8 @@ fn constraint_from_extracted(
             referenced_table: None,
             referenced_columns: None,
             is_clustered: Some(*is_clustered),
+            is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
+            inline_constraint_disambiguator: None,
         }),
         ExtractedTableConstraint::ForeignKey {
             name,
@@ -977,6 +1073,8 @@ fn constraint_from_extracted(
             referenced_table: Some(referenced_table.clone()),
             referenced_columns: Some(referenced_columns.clone()),
             is_clustered: None,
+            is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
+            inline_constraint_disambiguator: None,
         }),
         ExtractedTableConstraint::Unique {
             name,
@@ -995,6 +1093,8 @@ fn constraint_from_extracted(
             referenced_table: None,
             referenced_columns: None,
             is_clustered: Some(*is_clustered),
+            is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
+            inline_constraint_disambiguator: None,
         }),
         ExtractedTableConstraint::Check { name, expression } => Some(ConstraintElement {
             name: name.clone(),
@@ -1006,6 +1106,8 @@ fn constraint_from_extracted(
             referenced_table: None,
             referenced_columns: None,
             is_clustered: None,
+            is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
+            inline_constraint_disambiguator: None,
         }),
     }
 }
@@ -1082,6 +1184,8 @@ fn extract_constraint_clustering(
     Some(is_primary_key)
 }
 
+/// Convert a table-level constraint from sqlparser to a ConstraintElement
+/// Table-level constraints are defined using CONSTRAINT keyword so they are not inline
 fn constraint_from_table_constraint(
     constraint: &TableConstraint,
     table_name: &ObjectName,
@@ -1114,6 +1218,8 @@ fn constraint_from_table_constraint(
                 referenced_table: None,
                 referenced_columns: None,
                 is_clustered,
+                is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
+                inline_constraint_disambiguator: None,
             })
         }
         TableConstraint::ForeignKey {
@@ -1148,6 +1254,8 @@ fn constraint_from_table_constraint(
                     referred_columns.iter().map(|c| c.value.clone()).collect(),
                 ),
                 is_clustered: None,
+                is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
+                inline_constraint_disambiguator: None,
             })
         }
         TableConstraint::Unique { name, columns, .. } => {
@@ -1173,6 +1281,8 @@ fn constraint_from_table_constraint(
                 referenced_table: None,
                 referenced_columns: None,
                 is_clustered,
+                is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
+                inline_constraint_disambiguator: None,
             })
         }
         TableConstraint::Check { name, expr } => {
@@ -1191,6 +1301,8 @@ fn constraint_from_table_constraint(
                 referenced_table: None,
                 referenced_columns: None,
                 is_clustered: None,
+                is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
+                inline_constraint_disambiguator: None,
             })
         }
         _ => None,

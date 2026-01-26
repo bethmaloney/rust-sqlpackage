@@ -393,9 +393,6 @@ fn write_table<W: Write>(writer: &mut Writer<W>, table: &TableElement) -> anyhow
     // Write IsAnsiNullsOn property (always true for tables - ANSI_NULLS ON is default)
     write_property(writer, "IsAnsiNullsOn", "True")?;
 
-    // Relationship to schema
-    write_schema_relationship(writer, &table.schema)?;
-
     // Relationship to columns
     if !table.columns.is_empty() {
         let mut rel = BytesStart::new("Relationship");
@@ -407,6 +404,18 @@ fn write_table<W: Write>(writer: &mut Writer<W>, table: &TableElement) -> anyhow
         }
 
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // Relationship to schema (comes after Columns in DotNet output)
+    write_schema_relationship(writer, &table.schema)?;
+
+    // Write SqlInlineConstraintAnnotation if table has inline constraints
+    // DotNet assigns a disambiguator to tables with inline constraints
+    if let Some(disambiguator) = table.inline_constraint_disambiguator {
+        let mut annotation = BytesStart::new("Annotation");
+        annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
+        annotation.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
+        writer.write_event(Event::Empty(annotation))?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -529,10 +538,10 @@ fn write_column_with_type<W: Write>(
         column.scale,
     )?;
 
-    // Write SqlInlineConstraintAnnotation if column has inline constraints
-    if let Some(disambiguator) = column.inline_constraint_disambiguator {
-        let mut annotation = BytesStart::new("Annotation");
-        annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
+    // Write AttachedAnnotation elements linking column to inline constraints
+    // DotNet uses <AttachedAnnotation Disambiguator="X" /> (no Type attribute)
+    for disambiguator in &column.attached_annotations {
+        let mut annotation = BytesStart::new("AttachedAnnotation");
         annotation.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
         writer.write_event(Event::Empty(annotation))?;
     }
@@ -2271,6 +2280,7 @@ fn write_constraint<W: Write>(
     constraint: &ConstraintElement,
 ) -> anyhow::Result<()> {
     // DotNet uses two-part names for constraints: [schema].[constraint_name]
+    // But inline constraints (without CONSTRAINT keyword) have no Name attribute
     let full_name = format!("[{}].[{}]", constraint.table_schema, constraint.name);
 
     let type_name = match constraint.constraint_type {
@@ -2283,7 +2293,10 @@ fn write_constraint<W: Write>(
 
     let mut elem = BytesStart::new("Element");
     elem.push_attribute(("Type", type_name));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Inline constraints have no Name attribute - only named constraints do
+    if !constraint.is_inline {
+        elem.push_attribute(("Name", full_name.as_str()));
+    }
     writer.write_event(Event::Start(elem))?;
 
     // Write IsClustered property for primary keys and unique constraints
@@ -2422,6 +2435,24 @@ fn write_constraint<W: Write>(
             let table_ref = format!("[{}].[{}]", constraint.table_schema, constraint.table_name);
             let col_ref = format!("{}.[{}]", table_ref, constraint.columns[0].name);
             write_relationship(writer, "ForColumn", &[&col_ref])?;
+        }
+    }
+
+    // Write annotation at the end of the constraint element
+    // - Inline constraints: <Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="X" />
+    // - Named constraints: <AttachedAnnotation Disambiguator="X" /> (referencing table's disambiguator)
+    if let Some(disambiguator) = constraint.inline_constraint_disambiguator {
+        if constraint.is_inline {
+            // Inline constraint gets its own SqlInlineConstraintAnnotation
+            let mut annotation = BytesStart::new("Annotation");
+            annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
+            annotation.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
+            writer.write_event(Event::Empty(annotation))?;
+        } else {
+            // Named constraint references the table's disambiguator via AttachedAnnotation
+            let mut annotation = BytesStart::new("AttachedAnnotation");
+            annotation.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
+            writer.write_event(Event::Empty(annotation))?;
         }
     }
 

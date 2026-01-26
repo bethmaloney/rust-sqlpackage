@@ -101,6 +101,10 @@ pub struct TableElement {
     pub is_node: bool,
     /// Whether this is a graph edge table (CREATE TABLE AS EDGE)
     pub is_edge: bool,
+    /// Disambiguator for SqlInlineConstraintAnnotation (if table has inline constraints)
+    /// Tables with inline constraints get their own annotation, and named table-level
+    /// constraints (like CONSTRAINT [PK_Table]) reference this via AttachedAnnotation
+    pub inline_constraint_disambiguator: Option<u32>,
 }
 
 /// Column element
@@ -118,8 +122,10 @@ pub struct ColumnElement {
     pub max_length: Option<i32>,
     pub precision: Option<u8>,
     pub scale: Option<u8>,
-    /// Disambiguator for inline constraint annotation (if column has inline constraints)
-    pub inline_constraint_disambiguator: Option<u32>,
+    /// Attached annotations from inline constraints (CHECK, DEFAULT, UNIQUE, PRIMARY KEY on column)
+    /// Each u32 is a disambiguator linking this column to its inline constraint(s)
+    /// A column can have multiple (e.g., both a CHECK and DEFAULT constraint)
+    pub attached_annotations: Vec<u32>,
     /// Computed column expression (e.g., "[Qty] * [Price]")
     /// If Some, this is a computed column (SqlComputedColumn) instead of SqlSimpleColumn
     pub computed_expression: Option<String>,
@@ -287,6 +293,12 @@ pub struct ConstraintElement {
     pub referenced_columns: Option<Vec<String>>,
     /// Whether this constraint is clustered (for PK/unique)
     pub is_clustered: Option<bool>,
+    /// Whether this is an inline constraint (defined on column without CONSTRAINT keyword)
+    /// Inline constraints have no Name attribute in XML and get SqlInlineConstraintAnnotation
+    pub is_inline: bool,
+    /// Disambiguator for SqlInlineConstraintAnnotation (inline constraints only)
+    /// Also used for AttachedAnnotation on named constraints that reference a table's disambiguator
+    pub inline_constraint_disambiguator: Option<u32>,
 }
 
 /// Sequence element

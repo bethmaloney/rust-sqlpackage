@@ -457,17 +457,24 @@ CREATE TABLE [dbo].[T] (
 "#;
     let xml = generate_model_xml(sql);
 
-    // The Status column should have SqlInlineConstraintAnnotation due to DEFAULT
+    // The inline DEFAULT constraint should have SqlInlineConstraintAnnotation
     assert!(
         xml.contains("SqlInlineConstraintAnnotation"),
-        "Column with inline DEFAULT should have SqlInlineConstraintAnnotation. Got:\n{}",
+        "Inline DEFAULT constraint should have SqlInlineConstraintAnnotation. Got:\n{}",
         xml
     );
 
-    // The annotation should have Disambiguator attribute
+    // The constraint annotation should have Disambiguator attribute
     assert!(
         xml.contains(r#"Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="#),
         "SqlInlineConstraintAnnotation should have Disambiguator attribute. Got:\n{}",
+        xml
+    );
+
+    // The Status column should have AttachedAnnotation linking to the constraint
+    assert!(
+        xml.contains(r#"AttachedAnnotation Disambiguator="#),
+        "Column with inline constraint should have AttachedAnnotation. Got:\n{}",
         xml
     );
 }

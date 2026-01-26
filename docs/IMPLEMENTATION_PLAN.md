@@ -27,10 +27,10 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 11/46 | 23.9% | |
-| Layer 2 (Properties) | 35/46 | 76.1% | |
+| Layer 1 (Inventory) | 34/46 | 73.9% | |
+| Layer 2 (Properties) | 37/46 | 80.4% | |
 | Layer 3 (Relationships) | 30/46 | 65.2% | Improved from 28/46 due to CheckExpressionDependencies |
-| Layer 4 (Structure) | 5/46 | 10.9% | |
+| Layer 4 (Structure) | 6/46 | 13.0% | |
 | Layer 5 (Metadata) | 44/46 | 95.7% | Improved from 89.1%; remaining 2 are ERROR (DotNet build failures for external_reference and unresolved_reference) |
 
 ### 9.1 Deterministic Element Ordering
@@ -181,9 +181,16 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - DotNet only emits columns/dependencies for schema-bound or with-check-option views
   - **Actual impact**: views fixture now passes 100% parity, view_options improved significantly
 
-- [ ] **9.5.2 Inline constraint annotation disambiguator**
-  - Match DotNet's hashing algorithm if different
-  - Expected impact: 2-3 fixtures
+- [x] **9.5.2 Inline constraint annotation disambiguator** ✓
+  - Implemented sequential disambiguator assignment starting at 3 (matching DotNet)
+  - Added is_inline and inline_constraint_disambiguator fields to ConstraintElement
+  - Added inline_constraint_disambiguator to TableElement
+  - Changed column field from inline_constraint_disambiguator to attached_annotations Vec<u32>
+  - Inline constraints now emit Annotation Type="SqlInlineConstraintAnnotation" (no Name attribute)
+  - Named constraints emit AttachedAnnotation referencing table's disambiguator
+  - Columns emit AttachedAnnotation referencing their inline constraints
+  - Tables with inline constraints emit their own annotation
+  - **Actual impact**: Layer 1: +23 fixtures now passing (from 11/46 to 34/46, 23.9% → 73.9%), Layer 2: +2 (from 35/46 to 37/46, 76.1% → 80.4%)
 
 - [ ] **9.5.3 Trigger support verification**
   - Verify SqlDmlTrigger properties match DotNet
@@ -199,9 +206,9 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | 9.2 Property Value Fixes | COMPLETE | 6/6 |
 | 9.3 Relationship Completeness | COMPLETE | 4/4 |
 | 9.4 Metadata File Alignment | COMPLETE | 4/4 |
-| 9.5 Edge Cases | IN PROGRESS | 1/3 |
+| 9.5 Edge Cases | IN PROGRESS | 2/3 |
 
-**Phase 9 Overall**: 17/19 tasks
+**Phase 9 Overall**: 18/19 tasks
 
 ### Expected Outcomes
 
@@ -230,6 +237,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 17/19 |
+| Phase 9 | **IN PROGRESS** 18/19 |
 
-**Total**: 56/58 tasks complete
+**Total**: 57/58 tasks complete
