@@ -24,7 +24,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 36/46 | 78.3% | Extended property key format differences |
+| Layer 1 (Inventory) | 37/46 | 80.4% | Extended property key format fixed |
 | Layer 2 (Properties) | 37/46 | 80.4% | View IsAnsiNullsOn missing |
 | Layer 3 (Relationships) | 30/46 | 65.2% | |
 | Layer 4 (Structure) | 6/46 | 13.0% | |
@@ -44,7 +44,7 @@ Tests with remaining issues:
 
 **Issue:** Rust emits `[schema].[table].[MS_Description]` but DotNet emits `[SqlTableBase].[schema].[table].[MS_Description]` (includes parent element type like `SqlColumn`, `SqlTableBase`).
 
-- [ ] **10.1.1 Add parent type to extended property keys**
+- [x] **10.1.1 Add parent type to extended property keys**
   - File: `src/dacpac/model_xml.rs`
   - Extended properties on tables need `[SqlTableBase]` prefix
   - Extended properties on columns need `[SqlColumn]` prefix
@@ -100,13 +100,13 @@ Tests with remaining issues:
 
 | Section | Status | Completion |
 |---------|--------|------------|
-| 10.1 Extended Property Key Format | PENDING | 0/1 |
+| 10.1 Extended Property Key Format | COMPLETE | 1/1 |
 | 10.2 Function Type Classification | COMPLETE | 1/1 |
 | 10.3 View IsAnsiNullsOn Property | ~~REMOVED~~ | N/A |
 | 10.4 Extra Default Constraints | PENDING | 0/1 |
 | 10.5 SqlPackage Test Configuration | COMPLETE | 1/1 |
 
-**Phase 10 Overall**: 2/4 tasks (task 10.3 removed - was invalid)
+**Phase 10 Overall**: 3/4 tasks (task 10.3 removed - was invalid)
 
 ---
 
@@ -127,9 +127,9 @@ cargo test --test e2e_tests test_layered_dacpac_comparison -- --nocapture  # Run
 | Phase | Status |
 |-------|--------|
 | Phases 1-9 | **COMPLETE** ✓ 58/58 |
-| Phase 10 | **IN PROGRESS** 2/4 |
+| Phase 10 | **IN PROGRESS** 3/4 |
 
-**Total**: 60/62 tasks complete (task 10.3 removed - was invalid)
+**Total**: 61/62 tasks complete (task 10.3 removed - was invalid)
 
 ---
 

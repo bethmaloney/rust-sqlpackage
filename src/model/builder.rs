@@ -1360,6 +1360,8 @@ fn extended_property_from_extracted(
         target_schema: property.level0name.clone(),
         target_object: property.level1name.clone().unwrap_or_default(),
         target_column: property.level2name.clone(),
+        level1type: property.level1type.clone(),
+        level2type: property.level2type.clone(),
     }
 }
 

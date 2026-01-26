@@ -403,22 +403,59 @@ pub struct ExtendedPropertyElement {
     pub target_object: String,
     /// Target column (if level2 is COLUMN, e.g., "Id")
     pub target_column: Option<String>,
+    /// Level 1 type (e.g., "TABLE", "VIEW", "PROCEDURE", "FUNCTION")
+    pub level1type: Option<String>,
+    /// Level 2 type (e.g., "COLUMN", "INDEX", "CONSTRAINT")
+    pub level2type: Option<String>,
 }
 
 impl ExtendedPropertyElement {
+    /// Convert SQL Server level type to DotNet SqlType prefix for extended property naming.
+    /// DotNet uses different type names than SQL Server's sp_addextendedproperty:
+    /// - TABLE -> SqlTableBase (not SqlTable)
+    /// - COLUMN -> SqlColumn
+    /// - VIEW -> SqlView
+    /// - PROCEDURE -> SqlProcedure
+    /// - FUNCTION -> SqlScalarFunction (simplified, functions could vary)
+    fn level_type_to_sql_type_prefix(level_type: &str) -> &'static str {
+        match level_type.to_uppercase().as_str() {
+            "TABLE" => "SqlTableBase",
+            "COLUMN" => "SqlColumn",
+            "VIEW" => "SqlView",
+            "PROCEDURE" => "SqlProcedure",
+            "FUNCTION" => "SqlScalarFunction",
+            "INDEX" => "SqlIndex",
+            "CONSTRAINT" => "SqlConstraint",
+            _ => "SqlTableBase", // Default fallback for unknown types
+        }
+    }
+
     /// Get the full qualified name for this extended property
-    /// Format: [schema].[object].[property] for table-level properties
-    /// Format: [schema].[object].[column].[property] for column-level properties
+    /// Format: [ParentType].[schema].[object].[property] for table-level properties
+    /// Format: [ParentType].[schema].[object].[column].[property] for column-level properties
+    /// Where ParentType is the SqlType of the object being extended (e.g., SqlTableBase, SqlColumn)
     pub fn full_name(&self) -> String {
         if let Some(ref column) = self.target_column {
+            // Column-level property: prefix is SqlColumn (from level2type)
+            let prefix = self
+                .level2type
+                .as_ref()
+                .map(|t| Self::level_type_to_sql_type_prefix(t))
+                .unwrap_or("SqlColumn");
             format!(
-                "[{}].[{}].[{}].[{}]",
-                self.target_schema, self.target_object, column, self.property_name
+                "[{}].[{}].[{}].[{}].[{}]",
+                prefix, self.target_schema, self.target_object, column, self.property_name
             )
         } else {
+            // Table/View/Procedure-level property: prefix is from level1type
+            let prefix = self
+                .level1type
+                .as_ref()
+                .map(|t| Self::level_type_to_sql_type_prefix(t))
+                .unwrap_or("SqlTableBase");
             format!(
-                "[{}].[{}].[{}]",
-                self.target_schema, self.target_object, self.property_name
+                "[{}].[{}].[{}].[{}]",
+                prefix, self.target_schema, self.target_object, self.property_name
             )
         }
     }
