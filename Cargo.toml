@@ -35,6 +35,7 @@ regex = "1"
 
 # Cryptography
 sha2 = "0.10"
+hex = "0.4"
 
 # Encoding
 encoding_rs = "0.8"

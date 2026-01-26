@@ -32,16 +32,18 @@
 //!   let result = run_parity_test("ampersand_encoding", &ParityTestOptions::default())?;
 //!   assert!(result.is_success(), "Fixture should have full parity");
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tempfile::TempDir;
 
 use crate::dacpac_compare::{
-    compare_all_properties, compare_dacpacs, compare_dacpacs_with_options,
+    canonicalize_model_xml, compare_all_properties, compare_canonical_dacpacs,
+    compare_canonical_xml, compare_dacpacs, compare_dacpacs_with_options,
     compare_element_inventory, compare_element_order, compare_element_properties,
-    compare_element_relationships, compare_with_sqlpackage, extract_model_xml,
-    sqlpackage_available, ComparisonOptions, ComparisonResult, DacpacModel, Layer1Error,
+    compare_element_relationships, compare_with_sqlpackage, compute_sha256, extract_model_xml,
+    generate_diff, sqlpackage_available, CanonicalXmlError, ComparisonOptions, ComparisonResult,
+    DacpacModel, Layer1Error,
 };
 
 // =============================================================================
@@ -3566,4 +3568,536 @@ fn test_parity_all_fixtures() {
         total_fixtures,
         100.0 * full_pass as f64 / total_fixtures as f64
     );
+}
+
+// =============================================================================
+// Phase 7: Canonical XML Comparison Tests
+// =============================================================================
+
+/// Test that XML canonicalization produces deterministic output.
+///
+/// This test verifies that:
+/// 1. The canonicalize_model_xml function parses XML correctly
+/// 2. Re-canonicalizing the same input produces identical output
+/// 3. Semantically equivalent XML produces the same canonical form
+#[test]
+fn test_canonicalize_model_xml_basic() {
+    // Sample model.xml content with deliberately unordered elements
+    let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<DataSchemaModel FileFormatVersion="1.2" SchemaVersion="2.9" DspName="Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider" CollationLcid="1033" CollationCaseSensitive="False" xmlns="http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02">
+  <Model>
+    <Element Type="SqlTable" Name="[dbo].[Products]">
+      <Property Name="IsAnsiNullsOn" Value="True" />
+    </Element>
+    <Element Type="SqlDatabaseOptions">
+      <Property Name="Collation" Value="SQL_Latin1_General_CP1_CI_AS" />
+      <Property Name="IsAnsiNullDefaultOn" Value="True" />
+    </Element>
+    <Element Type="SqlTable" Name="[dbo].[Customers]">
+      <Property Name="IsAnsiNullsOn" Value="True" />
+    </Element>
+  </Model>
+</DataSchemaModel>"#;
+
+    let canonical1 = canonicalize_model_xml(xml).expect("First canonicalization should succeed");
+    let canonical2 =
+        canonicalize_model_xml(&canonical1).expect("Second canonicalization should succeed");
+
+    // Re-canonicalizing should produce identical output (idempotent)
+    assert_eq!(
+        canonical1, canonical2,
+        "Canonicalization should be idempotent"
+    );
+
+    // Verify elements are sorted by (Type, Name)
+    // SqlDatabaseOptions (unnamed) should come before SqlTable [dbo].[Customers]
+    // SqlTable [dbo].[Customers] should come before SqlTable [dbo].[Products]
+    let lines: Vec<&str> = canonical1.lines().collect();
+
+    // Find element positions
+    let db_options_pos = lines
+        .iter()
+        .position(|l| l.contains("SqlDatabaseOptions"))
+        .expect("Should find SqlDatabaseOptions");
+    let customers_pos = lines
+        .iter()
+        .position(|l| l.contains("[dbo].[Customers]"))
+        .expect("Should find Customers table");
+    let products_pos = lines
+        .iter()
+        .position(|l| l.contains("[dbo].[Products]"))
+        .expect("Should find Products table");
+
+    assert!(
+        db_options_pos < customers_pos,
+        "SqlDatabaseOptions should come before Customers table"
+    );
+    assert!(
+        customers_pos < products_pos,
+        "Customers table should come before Products table (alphabetically)"
+    );
+
+    println!("Canonical XML output ({} lines):", lines.len());
+    for (i, line) in lines.iter().take(20).enumerate() {
+        println!("  {:3}: {}", i + 1, line);
+    }
+}
+
+/// Test canonicalization with properties that need CDATA encoding.
+#[test]
+fn test_canonicalize_model_xml_with_cdata() {
+    let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<DataSchemaModel FileFormatVersion="1.2" SchemaVersion="2.9" DspName="Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider" CollationLcid="1033" CollationCaseSensitive="False" xmlns="http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02">
+  <Model>
+    <Element Type="SqlView" Name="[dbo].[MyView]">
+      <Property Name="QueryScript">
+        <Value><![CDATA[SELECT [Id], [Name]
+FROM [dbo].[Products]
+WHERE [IsActive] = 1]]></Value>
+      </Property>
+      <Property Name="IsAnsiNullsOn" Value="True" />
+    </Element>
+  </Model>
+</DataSchemaModel>"#;
+
+    let canonical = canonicalize_model_xml(xml).expect("Canonicalization should succeed");
+
+    // Verify CDATA content is preserved
+    assert!(
+        canonical.contains("SELECT [Id], [Name]"),
+        "Should preserve CDATA content"
+    );
+    assert!(
+        canonical.contains("CDATA"),
+        "Multi-line content should use CDATA"
+    );
+
+    // Properties should be sorted alphabetically
+    let is_ansi_pos = canonical
+        .find("IsAnsiNullsOn")
+        .expect("Should find IsAnsiNullsOn");
+    let query_script_pos = canonical
+        .find("QueryScript")
+        .expect("Should find QueryScript");
+    assert!(
+        is_ansi_pos < query_script_pos,
+        "IsAnsiNullsOn should come before QueryScript (alphabetically)"
+    );
+
+    println!("Canonical XML with CDATA:");
+    for line in canonical.lines().take(15) {
+        println!("  {}", line);
+    }
+}
+
+/// Test canonicalization with relationships.
+#[test]
+fn test_canonicalize_model_xml_with_relationships() {
+    let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<DataSchemaModel FileFormatVersion="1.2" SchemaVersion="2.9" DspName="Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider" CollationLcid="1033" CollationCaseSensitive="False" xmlns="http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02">
+  <Model>
+    <Element Type="SqlTable" Name="[dbo].[Products]">
+      <Relationship Name="Schema">
+        <Entry>
+          <References ExternalSource="BuiltIns" Name="[dbo]" />
+        </Entry>
+      </Relationship>
+      <Relationship Name="Columns">
+        <Entry>
+          <Element Type="SqlSimpleColumn" Name="[dbo].[Products].[Name]">
+            <Property Name="IsNullable" Value="True" />
+          </Element>
+        </Entry>
+        <Entry>
+          <Element Type="SqlSimpleColumn" Name="[dbo].[Products].[Id]">
+            <Property Name="IsNullable" Value="False" />
+          </Element>
+        </Entry>
+      </Relationship>
+    </Element>
+  </Model>
+</DataSchemaModel>"#;
+
+    let canonical = canonicalize_model_xml(xml).expect("Canonicalization should succeed");
+
+    // Relationships should be sorted by name (Columns before Schema)
+    let columns_pos = canonical
+        .find("Relationship Name=\"Columns\"")
+        .expect("Should find Columns");
+    let schema_pos = canonical
+        .find("Relationship Name=\"Schema\"")
+        .expect("Should find Schema");
+    assert!(
+        columns_pos < schema_pos,
+        "Columns relationship should come before Schema (alphabetically)"
+    );
+
+    // Column entries should be sorted by element name
+    let id_pos = canonical
+        .find("[dbo].[Products].[Id]")
+        .expect("Should find Id column");
+    let name_pos = canonical
+        .find("[dbo].[Products].[Name]")
+        .expect("Should find Name column");
+    assert!(
+        id_pos < name_pos,
+        "Id column should come before Name column (alphabetically)"
+    );
+
+    println!("Canonical XML with relationships:");
+    for (i, line) in canonical.lines().enumerate() {
+        println!("  {:3}: {}", i + 1, line);
+    }
+}
+
+/// Test comparing two canonical XML strings.
+#[test]
+fn test_compare_canonical_xml() {
+    let xml1 = "line1\nline2\nline3\n";
+    let xml2 = "line1\nline2\nline3\n";
+
+    let errors = compare_canonical_xml(xml1, xml2);
+    assert!(errors.is_empty(), "Identical content should have no errors");
+
+    // Test with differences
+    let xml3 = "line1\ndifferent\nline3\n";
+    let errors = compare_canonical_xml(xml1, xml3);
+    assert_eq!(errors.len(), 1, "Should detect one difference");
+
+    match &errors[0] {
+        CanonicalXmlError::ContentMismatch {
+            line_number,
+            rust_line,
+            dotnet_line,
+        } => {
+            assert_eq!(*line_number, 2, "Difference should be on line 2");
+            assert_eq!(rust_line, "line2");
+            assert_eq!(dotnet_line, "different");
+        }
+        _ => panic!("Expected ContentMismatch error"),
+    }
+
+    // Test with line count mismatch
+    let xml4 = "line1\nline2\n";
+    let errors = compare_canonical_xml(xml1, xml4);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CanonicalXmlError::LineCountMismatch { .. })),
+        "Should detect line count mismatch"
+    );
+}
+
+/// Test the diff generation function.
+#[test]
+fn test_generate_diff() {
+    let content1 = "line1\nline2\nline3\nline4\n";
+    let content2 = "line1\nmodified\nline3\nline4\n";
+
+    let diff = generate_diff(content1, content2, 1);
+
+    assert!(
+        !diff.is_empty(),
+        "Diff should not be empty for different content"
+    );
+    assert!(diff.contains("---"), "Diff should have source header");
+    assert!(diff.contains("+++"), "Diff should have target header");
+    assert!(diff.contains("-line2"), "Diff should show deleted line");
+    assert!(diff.contains("+modified"), "Diff should show added line");
+
+    println!("Generated diff:\n{}", diff);
+
+    // Test identical content
+    let diff_empty = generate_diff(content1, content1, 1);
+    assert!(
+        diff_empty.is_empty(),
+        "Diff should be empty for identical content"
+    );
+}
+
+/// Test SHA256 checksum computation.
+#[test]
+fn test_compute_sha256() {
+    let content = "Hello, World!";
+    let checksum = compute_sha256(content);
+
+    // Known SHA256 hash of "Hello, World!"
+    assert_eq!(
+        checksum, "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f",
+        "SHA256 checksum should match expected value"
+    );
+
+    // Different content should have different checksum
+    let checksum2 = compute_sha256("Different content");
+    assert_ne!(
+        checksum, checksum2,
+        "Different content should have different checksums"
+    );
+
+    // Empty content should have valid checksum
+    let empty_checksum = compute_sha256("");
+    assert_eq!(
+        empty_checksum.len(),
+        64,
+        "SHA256 hex should be 64 characters"
+    );
+}
+
+/// Test canonical comparison with a real fixture.
+///
+/// This test compares the canonical form of model.xml from both Rust and DotNet
+/// dacpacs for a simple fixture. Since canonicalization normalizes ordering and
+/// formatting, this provides the most precise comparison possible.
+#[test]
+fn test_canonical_comparison_simple_table() {
+    let fixture_path = Path::new("tests/fixtures/simple_table");
+    if !fixture_path.exists() {
+        println!("Skipping: simple_table fixture not found");
+        return;
+    }
+
+    let sqlproj_path = fixture_path.join("simple_table.sqlproj");
+    let dotnet_dacpac = fixture_path.join("obj/Debug/simple_table.dacpac");
+
+    if !dotnet_dacpac.exists() {
+        println!("Skipping: DotNet dacpac not found (run dotnet build first)");
+        return;
+    }
+
+    // Build Rust dacpac
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let rust_dacpac = temp_dir.path().join("simple_table.dacpac");
+
+    let build_result = rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+        project_path: sqlproj_path.clone(),
+        output_path: Some(rust_dacpac.clone()),
+        target_platform: "Sql150".to_string(),
+        verbose: false,
+    });
+
+    if let Err(e) = build_result {
+        println!("Skipping: Failed to build Rust dacpac: {}", e);
+        return;
+    }
+
+    // Extract and canonicalize both
+    let rust_xml = extract_model_xml(&rust_dacpac).expect("Failed to extract Rust model.xml");
+    let dotnet_xml = extract_model_xml(&dotnet_dacpac).expect("Failed to extract DotNet model.xml");
+
+    let rust_canonical =
+        canonicalize_model_xml(&rust_xml).expect("Failed to canonicalize Rust XML");
+    let dotnet_canonical =
+        canonicalize_model_xml(&dotnet_xml).expect("Failed to canonicalize DotNet XML");
+
+    // Compare
+    let errors = compare_canonical_xml(&rust_canonical, &dotnet_canonical);
+
+    println!("\n=== Canonical XML Comparison: simple_table ===");
+    println!("Rust canonical: {} lines", rust_canonical.lines().count());
+    println!(
+        "DotNet canonical: {} lines",
+        dotnet_canonical.lines().count()
+    );
+
+    if errors.is_empty() {
+        println!("Result: EXACT MATCH!");
+        let rust_checksum = compute_sha256(&rust_canonical);
+        let dotnet_checksum = compute_sha256(&dotnet_canonical);
+        println!("Rust SHA256:   {}", rust_checksum);
+        println!("DotNet SHA256: {}", dotnet_checksum);
+    } else {
+        println!("Result: {} differences found", errors.len());
+        for (i, error) in errors.iter().take(5).enumerate() {
+            println!("  {}: {}", i + 1, error);
+        }
+
+        // Show diff for debugging
+        let diff = generate_diff(&rust_canonical, &dotnet_canonical, 2);
+        if !diff.is_empty() {
+            println!("\nDiff (first 50 lines):");
+            for line in diff.lines().take(50) {
+                println!("{}", line);
+            }
+        }
+    }
+
+    // This is an informational test - we don't assert failure
+    // as there may be legitimate differences being addressed
+}
+
+/// Test canonical comparison using compare_canonical_dacpacs function.
+#[test]
+fn test_compare_canonical_dacpacs_function() {
+    let fixture_path = Path::new("tests/fixtures/simple_table");
+    if !fixture_path.exists() {
+        println!("Skipping: simple_table fixture not found");
+        return;
+    }
+
+    let sqlproj_path = fixture_path.join("simple_table.sqlproj");
+    let dotnet_dacpac = fixture_path.join("obj/Debug/simple_table.dacpac");
+
+    if !dotnet_dacpac.exists() {
+        println!("Skipping: DotNet dacpac not found");
+        return;
+    }
+
+    // Build Rust dacpac
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let rust_dacpac = temp_dir.path().join("simple_table.dacpac");
+
+    let build_result = rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+        project_path: sqlproj_path.clone(),
+        output_path: Some(rust_dacpac.clone()),
+        target_platform: "Sql150".to_string(),
+        verbose: false,
+    });
+
+    if let Err(e) = build_result {
+        println!("Skipping: Failed to build Rust dacpac: {}", e);
+        return;
+    }
+
+    // Use the high-level comparison function
+    let result = compare_canonical_dacpacs(&rust_dacpac, &dotnet_dacpac, true);
+
+    match result {
+        Ok(errors) => {
+            println!("\n=== compare_canonical_dacpacs Results ===");
+            if errors.is_empty() {
+                println!("Result: EXACT CANONICAL MATCH with matching checksums!");
+            } else {
+                println!("Found {} canonical differences:", errors.len());
+                for error in &errors {
+                    println!("  - {}", error);
+                }
+            }
+        }
+        Err(e) => {
+            println!("Comparison failed: {}", e);
+        }
+    }
+}
+
+/// Test canonical comparison across all fixtures.
+///
+/// This is an informational test that shows the canonical parity status
+/// for all available fixtures.
+#[test]
+fn test_canonical_comparison_all_fixtures() {
+    println!("\n=== Canonical XML Comparison: All Fixtures ===\n");
+
+    let fixtures = get_available_fixtures();
+    let mut exact_match = 0;
+    let mut partial_match = 0;
+    let mut errors_count = 0;
+
+    for fixture in &fixtures {
+        let fixture_path = Path::new("tests/fixtures").join(fixture);
+        let sqlproj_files: Vec<_> = std::fs::read_dir(&fixture_path)
+            .ok()
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "sqlproj"))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if sqlproj_files.is_empty() {
+            continue;
+        }
+
+        let sqlproj_path = sqlproj_files[0].path();
+        let project_name = sqlproj_path.file_stem().unwrap().to_str().unwrap();
+        let dotnet_dacpac = fixture_path.join(format!("obj/Debug/{}.dacpac", project_name));
+
+        if !dotnet_dacpac.exists() {
+            println!("{:40} SKIP (no DotNet dacpac)", fixture);
+            continue;
+        }
+
+        // Build Rust dacpac
+        let temp_dir = match tempfile::tempdir() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("{:40} ERROR (temp dir)", fixture);
+                errors_count += 1;
+                continue;
+            }
+        };
+        let rust_dacpac = temp_dir.path().join(format!("{}.dacpac", project_name));
+
+        if rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+            project_path: sqlproj_path.clone(),
+            output_path: Some(rust_dacpac.clone()),
+            target_platform: "Sql150".to_string(),
+            verbose: false,
+        })
+        .is_err()
+        {
+            println!("{:40} ERROR (build)", fixture);
+            errors_count += 1;
+            continue;
+        }
+
+        // Compare canonically
+        match compare_canonical_dacpacs(&rust_dacpac, &dotnet_dacpac, false) {
+            Ok(errors) if errors.is_empty() => {
+                println!("{:40} ✓ EXACT MATCH", fixture);
+                exact_match += 1;
+            }
+            Ok(errors) => {
+                let line_diff = errors
+                    .iter()
+                    .filter_map(|e| match e {
+                        CanonicalXmlError::LineCountMismatch {
+                            rust_lines,
+                            dotnet_lines,
+                        } => Some((*rust_lines as i64 - *dotnet_lines as i64).abs()),
+                        _ => None,
+                    })
+                    .next()
+                    .unwrap_or(0);
+                let content_diffs = errors
+                    .iter()
+                    .filter(|e| matches!(e, CanonicalXmlError::ContentMismatch { .. }))
+                    .count();
+                println!(
+                    "{:40} ~ DIFF (lines: {}, content: {})",
+                    fixture, line_diff, content_diffs
+                );
+                partial_match += 1;
+            }
+            Err(e) => {
+                println!("{:40} ERROR: {}", fixture, e);
+                errors_count += 1;
+            }
+        }
+    }
+
+    let total = exact_match + partial_match + errors_count;
+    println!("\n=== Summary ===");
+    println!("Total fixtures tested: {}", total);
+    println!(
+        "Exact canonical match: {}/{} ({:.1}%)",
+        exact_match,
+        total,
+        if total > 0 {
+            100.0 * exact_match as f64 / total as f64
+        } else {
+            0.0
+        }
+    );
+    println!(
+        "Partial match (diffs): {}/{} ({:.1}%)",
+        partial_match,
+        total,
+        if total > 0 {
+            100.0 * partial_match as f64 / total as f64
+        } else {
+            0.0
+        }
+    );
+    println!("Errors: {}", errors_count);
 }

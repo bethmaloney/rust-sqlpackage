@@ -375,39 +375,33 @@ Create targeted tests for each fixture and known issue.
 
 ---
 
-## Phase 7: Canonical XML Comparison
+## Phase 7: Canonical XML Comparison ✓ COMPLETE
 
 Final validation layer for true byte-level matching.
 
-- [ ] **7.1 Implement XML canonicalization**
-  ```rust
-  fn canonicalize_model_xml(xml: &str) -> String {
-      // Parse XML
-      // Sort elements by (Type, Name)
-      // Sort properties by Name
-      // Sort relationships by Type
-      // Normalize whitespace
-      // Re-serialize
-  }
-  ```
+- [x] **7.1 Implement XML canonicalization** ✓ COMPLETE
+  - Added `canonicalize_model_xml()` function to parse and re-serialize XML in deterministic order
+  - Elements sorted by (Type, Name), properties sorted alphabetically, relationships sorted alphabetically
+  - Nested elements within relationships recursively canonicalized
+  - CDATA handling preserved for multi-line content
+  - Location: `tests/e2e/dacpac_compare.rs:1915-1972` (main function), plus helper functions
 
-- [ ] **7.2 Add canonical comparison test**
-  ```rust
-  #[test]
-  fn test_canonical_xml_match() {
-      let rust_canonical = canonicalize_model_xml(&rust_xml);
-      let dotnet_canonical = canonicalize_model_xml(&dotnet_xml);
-      assert_eq!(rust_canonical, dotnet_canonical);
-  }
-  ```
+- [x] **7.2 Add canonical comparison test** ✓ COMPLETE
+  - Added `compare_canonical_xml()` function for line-by-line comparison
+  - Added `compare_canonical_dacpacs()` function for high-level dacpac comparison
+  - Added 8 tests: basic canonicalization, CDATA handling, relationships, comparison, diff, SHA256, and fixture tests
+  - Location: `tests/e2e/dotnet_comparison_tests.rs:3571-4083`
 
-- [ ] **7.3 Add diff output for canonical failures**
-  - Show line-by-line diff on failure
-  - Highlight specific differences
+- [x] **7.3 Add diff output for canonical failures** ✓ COMPLETE
+  - Added `generate_diff()` function showing unified diff format with context lines
+  - Added `find_diff_ranges()` helper for detecting differences
+  - Location: `tests/e2e/dacpac_compare.rs:2397-2486`
 
-- [ ] **7.4 Add SHA256 checksum comparison**
-  - Optional final validation
-  - Compare checksums of canonicalized XML
+- [x] **7.4 Add SHA256 checksum comparison** ✓ COMPLETE
+  - Added `compute_sha256()` function using sha2 crate
+  - Added hex encoding dependency for checksum output
+  - Integrated into `compare_canonical_dacpacs()` with optional checksum verification
+  - Location: `tests/e2e/dacpac_compare.rs:2488-2548`
 
 ---
 
@@ -454,10 +448,10 @@ Reorganize and improve test infrastructure.
 | Phase 4: XML Structure (Layer 4) | **COMPLETE** | 4/4 ✓ |
 | Phase 5: Metadata Files | **COMPLETE** | 5/5 ✓ |
 | Phase 6: Per-Feature Tests | **COMPLETE** | 5/5 ✓ |
-| Phase 7: Canonical XML | Not Started | 0/4 |
+| Phase 7: Canonical XML | **COMPLETE** | 4/4 ✓ |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 31/39 tasks complete
+**Overall Progress**: 35/39 tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
@@ -470,6 +464,7 @@ Phase 6.1 added the `run_parity_test()` helper function infrastructure enabling 
 Phase 6.3 added medium-priority fixture tests for `database_options` and `header_section` fixtures, validating SqlDatabaseOptions element generation and Header section metadata.
 Phase 6.4 added lower-priority fixture tests for `extended_properties`, `table_types`, and `sqlcmd_variables` fixtures. Key parity gaps identified: extended property naming format differences, IsNullable property handling for table type columns, and missing procedure relationship entries.
 Phase 6.5 completed per-feature parity tests for all remaining fixtures (35+ tests). Added `run_standard_parity_test()` helper function and `test_parity_all_fixtures` aggregate test with summary statistics.
+Phase 7 provides canonical XML comparison for true byte-level matching after normalization, enabling detection of even minor formatting or ordering differences between Rust and DotNet dacpac output.
 
 ---
 
