@@ -113,10 +113,12 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - Built-in types from DECLARE statements extracted for functions
   - **Actual impact**: Layer 2: +3 (32→35 fixtures passing, 69.6%→76.1%)
 
-- [ ] **9.3.2 Parameter relationships**
+- [x] **9.3.2 Parameter relationships** ✓
   - File: `src/dacpac/model_xml.rs`
-  - Ensure SqlSubroutineParameter has correct TypeSpecifier relationship
-  - Expected impact: 3-5 fixtures
+  - Enhanced `FunctionParameter` struct to include `data_type` and `default_value` fields
+  - Updated `extract_function_parameters` to extract full parameter details (not just names)
+  - Added `write_function_parameters` function to write the Parameters relationship for functions
+  - **Actual impact**: Relationships layer now passes for `procedure_parameters` fixture
 
 - [ ] **9.3.3 Foreign key relationship ordering**
   - File: `src/dacpac/model_xml.rs`
@@ -177,11 +179,11 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 |---------|--------|------------|
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
 | 9.2 Property Value Fixes | COMPLETE | 6/6 |
-| 9.3 Relationship Completeness | IN PROGRESS | 1/4 |
+| 9.3 Relationship Completeness | IN PROGRESS | 2/4 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 9/19 tasks
+**Phase 9 Overall**: 10/19 tasks
 
 ### Expected Outcomes
 
@@ -210,6 +212,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 8/19 |
+| Phase 9 | **IN PROGRESS** 10/19 |
 
-**Total**: 48/58 tasks complete
+**Total**: 49/58 tasks complete

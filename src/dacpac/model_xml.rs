@@ -822,10 +822,12 @@ fn extract_procedure_parameters(definition: &str) -> Vec<ProcedureParameter> {
     params
 }
 
-/// Simple parameter info for functions
+/// Represents an extracted function parameter with full details
 #[derive(Debug)]
 struct FunctionParameter {
     name: String,
+    data_type: String,
+    default_value: Option<String>,
 }
 
 /// Extract parameters from a CREATE FUNCTION definition
@@ -843,20 +845,54 @@ fn extract_function_parameters(definition: &str) -> Vec<FunctionParameter> {
     let after_create = &definition[func_start.unwrap()..];
 
     // Function parameters are in parentheses after the function name
-    // Find opening paren
+    // Find opening paren after the function name
     if let Some(open_paren) = after_create.find('(') {
-        // Find matching close paren
+        // Find matching close paren - need to handle nested parens for types like DECIMAL(18,2)
         let rest = &after_create[open_paren + 1..];
-        if let Some(close_paren) = rest.find(')') {
+        let mut paren_depth = 1;
+        let mut close_pos = None;
+        for (i, ch) in rest.char_indices() {
+            match ch {
+                '(' => paren_depth += 1,
+                ')' => {
+                    paren_depth -= 1;
+                    if paren_depth == 0 {
+                        close_pos = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(close_paren) = close_pos {
             let param_section = &rest[..close_paren];
 
-            // Extract parameter names (we only need the names for dependency matching)
-            let param_regex = regex::Regex::new(r"@(\w+)").unwrap();
+            // Extract parameters with full details - same regex as procedure parameters
+            // but without OUTPUT since function parameters are always input
+            let param_regex = regex::Regex::new(
+                r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:\s*=\s*([^,@]+?))?(?:,|$|\s*\n)",
+            )
+            .unwrap();
 
             for cap in param_regex.captures_iter(param_section) {
-                if let Some(name_match) = cap.get(1) {
+                let name = cap
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+                let data_type = cap
+                    .get(2)
+                    .map(|m| m.as_str().trim().to_string())
+                    .unwrap_or_default();
+                let default_value = cap.get(3).map(|m| m.as_str().trim().to_string());
+
+                if !name.is_empty() && !data_type.is_empty() {
+                    // Clean up data type
+                    let clean_type = clean_data_type(&data_type);
                     params.push(FunctionParameter {
-                        name: name_match.as_str().to_string(),
+                        name,
+                        data_type: clean_type,
+                        default_value,
                     });
                 }
             }
@@ -864,6 +900,51 @@ fn extract_function_parameters(definition: &str) -> Vec<FunctionParameter> {
     }
 
     params
+}
+
+/// Write Parameters relationship for function parameters
+fn write_function_parameters<W: Write>(
+    writer: &mut Writer<W>,
+    params: &[FunctionParameter],
+    full_name: &str,
+) -> anyhow::Result<()> {
+    if params.is_empty() {
+        return Ok(());
+    }
+
+    let mut param_rel = BytesStart::new("Relationship");
+    param_rel.push_attribute(("Name", "Parameters"));
+    writer.write_event(Event::Start(param_rel))?;
+
+    for param in params.iter() {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        // Parameter name must include @ prefix
+        let param_name_with_at = if param.name.starts_with('@') {
+            param.name.clone()
+        } else {
+            format!("@{}", param.name)
+        };
+        let param_name = format!("{}.[{}]", full_name, param_name_with_at);
+        let mut param_elem = BytesStart::new("Element");
+        param_elem.push_attribute(("Type", "SqlSubroutineParameter"));
+        param_elem.push_attribute(("Name", param_name.as_str()));
+        writer.write_event(Event::Start(param_elem))?;
+
+        // Write default value if present
+        if let Some(ref default_val) = param.default_value {
+            write_script_property(writer, "DefaultExpressionScript", default_val)?;
+        }
+
+        // Data type relationship
+        write_data_type_relationship(writer, &param.data_type)?;
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
 }
 
 /// Find the standalone AS keyword that separates procedure header from body
@@ -1357,6 +1438,9 @@ fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> a
     // Write FunctionBody relationship with SqlScriptFunctionImplementation
     // BodyScript contains only the function body (BEGIN...END), not the header
     write_function_body_with_annotation(writer, &body, &header)?;
+
+    // Write Parameters relationship for function parameters
+    write_function_parameters(writer, &func_params, &full_name)?;
 
     write_schema_relationship(writer, &func.schema)?;
 
