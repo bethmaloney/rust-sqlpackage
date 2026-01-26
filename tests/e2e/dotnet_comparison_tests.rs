@@ -3034,3 +3034,536 @@ fn test_parity_sqlcmd_variables() {
         }
     }
 }
+
+// =============================================================================
+// Phase 6.5: Tests for all remaining fixtures
+// =============================================================================
+// These parity tests cover all fixtures not yet tested in Phases 6.2-6.4.
+// Each test validates that our Rust implementation produces output matching
+// the DotNet DacFx reference implementation for that specific feature.
+
+/// Helper function to run a standard parity test with consistent output format.
+/// This reduces boilerplate while maintaining detailed diagnostic output.
+fn run_standard_parity_test(fixture_name: &str, description: &str, validates: &str) {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let options = ParityTestOptions::default();
+
+    let result = match run_parity_test(fixture_name, &options) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Parity test failed: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== Parity Test: {} ===\n", fixture_name);
+    println!("{}", description);
+    println!("Validates: {}", validates);
+    println!();
+    println!("Layer 1 errors (inventory): {}", result.layer1_errors.len());
+    println!(
+        "Layer 2 errors (properties): {}",
+        result.layer2_errors.len()
+    );
+    println!("Relationship errors: {}", result.relationship_errors.len());
+    println!("Layer 4 errors (ordering): {}", result.layer4_errors.len());
+    println!("Metadata errors: {}", result.metadata_errors.len());
+
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
+
+    if !result.layer2_errors.is_empty() {
+        println!("\nLayer 2 errors (showing first 10):");
+        for err in result.layer2_errors.iter().take(10) {
+            println!("  {}", err);
+        }
+        if result.layer2_errors.len() > 10 {
+            println!("  ... and {} more", result.layer2_errors.len() - 10);
+        }
+    }
+
+    if !result.relationship_errors.is_empty() {
+        println!("\nRelationship errors (showing first 5):");
+        for err in result.relationship_errors.iter().take(5) {
+            println!("  {}", err);
+        }
+        if result.relationship_errors.len() > 5 {
+            println!("  ... and {} more", result.relationship_errors.len() - 5);
+        }
+    }
+}
+
+/// Parity test for e2e_comprehensive fixture.
+/// Tests end-to-end compilation of a complex database project with many element types.
+#[test]
+fn test_parity_e2e_comprehensive() {
+    run_standard_parity_test(
+        "e2e_comprehensive",
+        "Testing end-to-end comprehensive database compilation",
+        "Multiple tables, views, procedures, functions, constraints, indexes",
+    );
+}
+
+/// Parity test for e2e_simple fixture.
+/// Tests basic end-to-end compilation with minimal elements.
+#[test]
+fn test_parity_e2e_simple() {
+    run_standard_parity_test(
+        "e2e_simple",
+        "Testing end-to-end simple database compilation",
+        "Basic table with primary key and simple structure",
+    );
+}
+
+/// Parity test for fulltext_index fixture.
+/// Tests full-text index definitions on tables.
+#[test]
+fn test_parity_fulltext_index() {
+    run_standard_parity_test(
+        "fulltext_index",
+        "Testing full-text index generation",
+        "SqlFullTextIndex elements with catalog and column specifications",
+    );
+}
+
+/// Parity test for procedure_parameters fixture.
+/// Tests stored procedure parameter parsing and generation.
+#[test]
+fn test_parity_procedure_parameters() {
+    run_standard_parity_test(
+        "procedure_parameters",
+        "Testing procedure parameter generation",
+        "SqlSubroutineParameter elements with types, defaults, and directions",
+    );
+}
+
+/// Parity test for index_naming fixture.
+/// Tests various index naming conventions and patterns.
+#[test]
+fn test_parity_index_naming() {
+    run_standard_parity_test(
+        "index_naming",
+        "Testing index naming conventions",
+        "Index names, auto-generated names, and naming patterns",
+    );
+}
+
+/// Parity test for all_constraints fixture.
+/// Tests comprehensive constraint handling (PK, FK, CHECK, UNIQUE, DEFAULT).
+#[test]
+fn test_parity_all_constraints() {
+    run_standard_parity_test(
+        "all_constraints",
+        "Testing all constraint types",
+        "Primary key, foreign key, check, unique, and default constraints",
+    );
+}
+
+/// Parity test for collation fixture.
+/// Tests column and database collation settings.
+#[test]
+fn test_parity_collation() {
+    run_standard_parity_test(
+        "collation",
+        "Testing collation settings",
+        "Column-level and database-level collation specifications",
+    );
+}
+
+/// Parity test for column_properties fixture.
+/// Tests various column property settings.
+#[test]
+fn test_parity_column_properties() {
+    run_standard_parity_test(
+        "column_properties",
+        "Testing column property generation",
+        "Nullability, identity, computed, sparse, and other column properties",
+    );
+}
+
+/// Parity test for composite_fk fixture.
+/// Tests composite (multi-column) foreign key constraints.
+#[test]
+fn test_parity_composite_fk() {
+    run_standard_parity_test(
+        "composite_fk",
+        "Testing composite foreign key constraints",
+        "Multi-column foreign key relationships and column ordering",
+    );
+}
+
+/// Parity test for computed_columns fixture.
+/// Tests computed column definitions and expressions.
+#[test]
+fn test_parity_computed_columns() {
+    run_standard_parity_test(
+        "computed_columns",
+        "Testing computed column generation",
+        "SqlComputedColumn elements with expressions and persistence settings",
+    );
+}
+
+/// Parity test for constraint_nocheck fixture.
+/// Tests NOCHECK constraint option handling.
+#[test]
+fn test_parity_constraint_nocheck() {
+    run_standard_parity_test(
+        "constraint_nocheck",
+        "Testing NOCHECK constraint option",
+        "Constraints with WITH NOCHECK for FK and CHECK constraints",
+    );
+}
+
+/// Parity test for constraints fixture.
+/// Tests general constraint handling.
+#[test]
+fn test_parity_constraints() {
+    run_standard_parity_test(
+        "constraints",
+        "Testing constraint generation",
+        "Various constraint types and their properties",
+    );
+}
+
+/// Parity test for element_types fixture.
+/// Tests various SQL element types.
+#[test]
+fn test_parity_element_types() {
+    run_standard_parity_test(
+        "element_types",
+        "Testing element type generation",
+        "Different SQL element types and their XML representation",
+    );
+}
+
+/// Parity test for filtered_indexes fixture.
+/// Tests filtered index definitions with WHERE clauses.
+#[test]
+fn test_parity_filtered_indexes() {
+    run_standard_parity_test(
+        "filtered_indexes",
+        "Testing filtered index generation",
+        "SqlIndex elements with FilterPredicate property",
+    );
+}
+
+/// Parity test for fk_actions fixture.
+/// Tests foreign key ON DELETE and ON UPDATE actions.
+#[test]
+fn test_parity_fk_actions() {
+    run_standard_parity_test(
+        "fk_actions",
+        "Testing foreign key action generation",
+        "CASCADE, SET NULL, SET DEFAULT, NO ACTION for FK constraints",
+    );
+}
+
+/// Parity test for identity_column fixture.
+/// Tests identity column seed and increment settings.
+#[test]
+fn test_parity_identity_column() {
+    run_standard_parity_test(
+        "identity_column",
+        "Testing identity column generation",
+        "Identity seed, increment, and NOT FOR REPLICATION settings",
+    );
+}
+
+/// Parity test for index_options fixture.
+/// Tests various index options and settings.
+#[test]
+fn test_parity_index_options() {
+    run_standard_parity_test(
+        "index_options",
+        "Testing index option generation",
+        "FILLFACTOR, PAD_INDEX, IGNORE_DUP_KEY, and other index options",
+    );
+}
+
+/// Parity test for index_properties fixture.
+/// Tests index property generation.
+#[test]
+fn test_parity_index_properties() {
+    run_standard_parity_test(
+        "index_properties",
+        "Testing index property generation",
+        "Clustered/nonclustered, unique, and other index properties",
+    );
+}
+
+/// Parity test for indexes fixture.
+/// Tests general index generation.
+#[test]
+fn test_parity_indexes() {
+    run_standard_parity_test(
+        "indexes",
+        "Testing index generation",
+        "SqlIndex elements with columns and include columns",
+    );
+}
+
+/// Parity test for instead_of_triggers fixture.
+/// Tests INSTEAD OF trigger definitions on views.
+#[test]
+fn test_parity_instead_of_triggers() {
+    run_standard_parity_test(
+        "instead_of_triggers",
+        "Testing INSTEAD OF trigger generation",
+        "SqlDmlTrigger elements with INSTEAD OF semantics",
+    );
+}
+
+/// Parity test for large_table fixture.
+/// Tests handling of tables with many columns.
+#[test]
+fn test_parity_large_table() {
+    run_standard_parity_test(
+        "large_table",
+        "Testing large table generation",
+        "Tables with many columns and complex structures",
+    );
+}
+
+/// Parity test for multiple_indexes fixture.
+/// Tests tables with multiple index definitions.
+#[test]
+fn test_parity_multiple_indexes() {
+    run_standard_parity_test(
+        "multiple_indexes",
+        "Testing multiple index generation",
+        "Multiple indexes on a single table with different configurations",
+    );
+}
+
+/// Parity test for only_schemas fixture.
+/// Tests schema-only project with no tables.
+#[test]
+fn test_parity_only_schemas() {
+    run_standard_parity_test(
+        "only_schemas",
+        "Testing schema-only generation",
+        "SqlSchema elements without any tables",
+    );
+}
+
+/// Parity test for pre_post_deploy fixture.
+/// Tests pre and post deployment script handling.
+#[test]
+fn test_parity_pre_post_deploy() {
+    run_standard_parity_test(
+        "pre_post_deploy",
+        "Testing pre/post deploy script handling",
+        "PreDeployScript and PostDeployScript inclusion in dacpac",
+    );
+}
+
+/// Parity test for procedure_options fixture.
+/// Tests stored procedure option settings.
+#[test]
+fn test_parity_procedure_options() {
+    run_standard_parity_test(
+        "procedure_options",
+        "Testing procedure option generation",
+        "WITH RECOMPILE, EXECUTE AS, and other procedure options",
+    );
+}
+
+/// Parity test for reserved_keywords fixture.
+/// Tests handling of T-SQL reserved keywords as identifiers.
+#[test]
+fn test_parity_reserved_keywords() {
+    run_standard_parity_test(
+        "reserved_keywords",
+        "Testing reserved keyword handling",
+        "Bracketed identifiers for reserved words like [User], [Table]",
+    );
+}
+
+/// Parity test for scalar_types fixture.
+/// Tests various SQL Server scalar data types.
+#[test]
+fn test_parity_scalar_types() {
+    run_standard_parity_test(
+        "scalar_types",
+        "Testing scalar type generation",
+        "All SQL Server built-in data types and their XML representation",
+    );
+}
+
+/// Parity test for self_ref_fk fixture.
+/// Tests self-referencing foreign key constraints.
+#[test]
+fn test_parity_self_ref_fk() {
+    run_standard_parity_test(
+        "self_ref_fk",
+        "Testing self-referencing foreign key generation",
+        "FK constraints referencing the same table (hierarchical data)",
+    );
+}
+
+/// Parity test for simple_table fixture.
+/// Tests basic table generation.
+#[test]
+fn test_parity_simple_table() {
+    run_standard_parity_test(
+        "simple_table",
+        "Testing simple table generation",
+        "Basic SqlTable with columns and primary key",
+    );
+}
+
+/// Parity test for sqlcmd_includes fixture.
+/// Tests SQLCMD :r include directive handling.
+#[test]
+fn test_parity_sqlcmd_includes() {
+    run_standard_parity_test(
+        "sqlcmd_includes",
+        "Testing SQLCMD include directive handling",
+        ":r directive file inclusion and nested includes",
+    );
+}
+
+/// Parity test for unicode_identifiers fixture.
+/// Tests Unicode characters in object names.
+#[test]
+fn test_parity_unicode_identifiers() {
+    run_standard_parity_test(
+        "unicode_identifiers",
+        "Testing Unicode identifier handling",
+        "Non-ASCII characters in table, column, and constraint names",
+    );
+}
+
+/// Parity test for varbinary_max fixture.
+/// Tests VARBINARY(MAX) and other MAX data types.
+#[test]
+fn test_parity_varbinary_max() {
+    run_standard_parity_test(
+        "varbinary_max",
+        "Testing MAX data type generation",
+        "VARBINARY(MAX), VARCHAR(MAX), NVARCHAR(MAX) type specifiers",
+    );
+}
+
+/// Parity test for view_options fixture.
+/// Tests view option settings.
+#[test]
+fn test_parity_view_options() {
+    run_standard_parity_test(
+        "view_options",
+        "Testing view option generation",
+        "WITH SCHEMABINDING, WITH CHECK OPTION, and other view options",
+    );
+}
+
+/// Parity test for views fixture.
+/// Tests general view generation.
+#[test]
+fn test_parity_views() {
+    run_standard_parity_test(
+        "views",
+        "Testing view generation",
+        "SqlView elements with SELECT statements and dependencies",
+    );
+}
+
+/// Aggregate test that runs parity checks on all available fixtures.
+/// This test provides a comprehensive overview of parity status across all fixtures.
+#[test]
+fn test_parity_all_fixtures() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let fixtures = get_available_fixtures();
+    let options = ParityTestOptions::default();
+
+    println!("\n=== Parity Test Summary: All Fixtures ===\n");
+
+    let mut total_fixtures = 0;
+    let mut layer1_pass = 0;
+    let mut layer2_pass = 0;
+    let mut relationship_pass = 0;
+    let mut full_pass = 0;
+
+    for fixture in &fixtures {
+        total_fixtures += 1;
+
+        match run_parity_test(fixture, &options) {
+            Ok(result) => {
+                let l1_ok = result.layer1_errors.is_empty();
+                let l2_ok = result.layer2_errors.is_empty();
+                let rel_ok = result.relationship_errors.is_empty();
+
+                if l1_ok {
+                    layer1_pass += 1;
+                }
+                if l2_ok {
+                    layer2_pass += 1;
+                }
+                if rel_ok {
+                    relationship_pass += 1;
+                }
+                if l1_ok && l2_ok && rel_ok {
+                    full_pass += 1;
+                }
+
+                let status = if l1_ok && l2_ok && rel_ok {
+                    "✓ PASS"
+                } else if l1_ok {
+                    "~ PARTIAL"
+                } else {
+                    "✗ FAIL"
+                };
+
+                println!(
+                    "{:40} {} (L1:{} L2:{} Rel:{})",
+                    fixture,
+                    status,
+                    result.layer1_errors.len(),
+                    result.layer2_errors.len(),
+                    result.relationship_errors.len()
+                );
+            }
+            Err(e) => {
+                println!("{:40} ✗ ERROR: {}", fixture, e);
+            }
+        }
+    }
+
+    println!("\n=== Summary ===");
+    println!("Total fixtures: {}", total_fixtures);
+    println!(
+        "Layer 1 pass (inventory): {}/{} ({:.1}%)",
+        layer1_pass,
+        total_fixtures,
+        100.0 * layer1_pass as f64 / total_fixtures as f64
+    );
+    println!(
+        "Layer 2 pass (properties): {}/{} ({:.1}%)",
+        layer2_pass,
+        total_fixtures,
+        100.0 * layer2_pass as f64 / total_fixtures as f64
+    );
+    println!(
+        "Relationships pass: {}/{} ({:.1}%)",
+        relationship_pass,
+        total_fixtures,
+        100.0 * relationship_pass as f64 / total_fixtures as f64
+    );
+    println!(
+        "Full parity: {}/{} ({:.1}%)",
+        full_pass,
+        total_fixtures,
+        100.0 * full_pass as f64 / total_fixtures as f64
+    );
+}

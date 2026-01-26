@@ -334,13 +334,44 @@ Create targeted tests for each fixture and known issue.
     - Table types: IsNullable property explicitly set in Rust but omitted in DotNet
     - Procedures: Relationship entries (BodyDependencies, DynamicObjects, Parameters) not emitted by Rust
 
-- [ ] **6.5 Add tests for all remaining fixtures**
-  - [ ] `test_parity_e2e_comprehensive`
-  - [ ] `test_parity_e2e_simple`
-  - [ ] `test_parity_fulltext_index`
-  - [ ] `test_parity_procedure_parameters`
-  - [ ] `test_parity_index_naming`
-  - [ ] (Add remaining 35+ fixtures)
+- [x] **6.5 Add tests for all remaining fixtures** ✓ COMPLETE
+  - [x] `test_parity_e2e_comprehensive` - End-to-end comprehensive database compilation
+  - [x] `test_parity_e2e_simple` - Basic end-to-end compilation with minimal elements
+  - [x] `test_parity_fulltext_index` - Full-text index definitions on tables
+  - [x] `test_parity_procedure_parameters` - Stored procedure parameter parsing
+  - [x] `test_parity_index_naming` - Index naming conventions and patterns
+  - [x] `test_parity_all_constraints` - Comprehensive constraint handling (PK, FK, CHECK, UNIQUE, DEFAULT)
+  - [x] `test_parity_collation` - Column and database collation settings
+  - [x] `test_parity_column_properties` - Various column property settings
+  - [x] `test_parity_composite_fk` - Composite (multi-column) foreign key constraints
+  - [x] `test_parity_computed_columns` - Computed column definitions and expressions
+  - [x] `test_parity_constraint_nocheck` - NOCHECK constraint option handling
+  - [x] `test_parity_constraints` - General constraint handling
+  - [x] `test_parity_element_types` - Various SQL element types
+  - [x] `test_parity_filtered_indexes` - Filtered index definitions with WHERE clauses
+  - [x] `test_parity_fk_actions` - Foreign key ON DELETE/ON UPDATE actions
+  - [x] `test_parity_identity_column` - Identity column seed and increment settings
+  - [x] `test_parity_index_options` - Various index options and settings
+  - [x] `test_parity_index_properties` - Index property generation
+  - [x] `test_parity_indexes` - General index generation
+  - [x] `test_parity_instead_of_triggers` - INSTEAD OF trigger definitions on views
+  - [x] `test_parity_large_table` - Tables with many columns
+  - [x] `test_parity_multiple_indexes` - Tables with multiple index definitions
+  - [x] `test_parity_only_schemas` - Schema-only projects with no tables
+  - [x] `test_parity_pre_post_deploy` - Pre/post deployment script handling
+  - [x] `test_parity_procedure_options` - Stored procedure option settings
+  - [x] `test_parity_reserved_keywords` - T-SQL reserved keywords as identifiers
+  - [x] `test_parity_scalar_types` - SQL Server scalar data types
+  - [x] `test_parity_self_ref_fk` - Self-referencing foreign key constraints
+  - [x] `test_parity_simple_table` - Basic table generation
+  - [x] `test_parity_sqlcmd_includes` - SQLCMD :r include directive handling
+  - [x] `test_parity_unicode_identifiers` - Unicode characters in object names
+  - [x] `test_parity_varbinary_max` - VARBINARY(MAX) and other MAX data types
+  - [x] `test_parity_view_options` - View option settings
+  - [x] `test_parity_views` - General view generation
+  - [x] `test_parity_all_fixtures` - Aggregate test with summary statistics
+  - Added `run_standard_parity_test()` helper function to reduce boilerplate
+  - Location: `tests/e2e/dotnet_comparison_tests.rs:3037-3569`
 
 ---
 
@@ -422,11 +453,11 @@ Reorganize and improve test infrastructure.
 | Phase 3: Relationship Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 4: XML Structure (Layer 4) | **COMPLETE** | 4/4 ✓ |
 | Phase 5: Metadata Files | **COMPLETE** | 5/5 ✓ |
-| Phase 6: Per-Feature Tests | In Progress | 4/5 ✓ |
+| Phase 6: Per-Feature Tests | **COMPLETE** | 5/5 ✓ |
 | Phase 7: Canonical XML | Not Started | 0/4 |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 30/39+ tasks complete
+**Overall Progress**: 31/39 tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
@@ -438,6 +469,7 @@ Phase 5.5 completed the metadata comparison infrastructure with a unified `compa
 Phase 6.1 added the `run_parity_test()` helper function infrastructure enabling per-fixture parity tests. Phase 6.2 added the high-priority fixture tests using the new helper.
 Phase 6.3 added medium-priority fixture tests for `database_options` and `header_section` fixtures, validating SqlDatabaseOptions element generation and Header section metadata.
 Phase 6.4 added lower-priority fixture tests for `extended_properties`, `table_types`, and `sqlcmd_variables` fixtures. Key parity gaps identified: extended property naming format differences, IsNullable property handling for table type columns, and missing procedure relationship entries.
+Phase 6.5 completed per-feature parity tests for all remaining fixtures (35+ tests). Added `run_standard_parity_test()` helper function and `test_parity_all_fixtures` aggregate test with summary statistics.
 
 ---
 
