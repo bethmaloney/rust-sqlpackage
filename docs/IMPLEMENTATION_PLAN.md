@@ -323,10 +323,16 @@ Create targeted tests for each fixture and known issue.
   - Note: These tests use `ParityTestOptions::default()` for full comparison including property validation
   - Location: `tests/e2e/dotnet_comparison_tests.rs:2688-2817`
 
-- [ ] **6.4 Add tests for lower-priority fixtures**
-  - [ ] `test_parity_extended_properties`
-  - [ ] `test_parity_table_types`
-  - [ ] `test_parity_sqlcmd_variables`
+- [x] **6.4 Add tests for lower-priority fixtures** ✓ COMPLETE
+  - [x] `test_parity_extended_properties` - Tests Phase 1.7 (SqlExtendedProperty element generation)
+  - [x] `test_parity_table_types` - Tests Phase 1.8 (SqlTableType columns and structure)
+  - [x] `test_parity_sqlcmd_variables` - Tests Phase 1.9 (SqlCmdVariables element generation)
+  - Note: These tests use `ParityTestOptions::default()` for full comparison
+  - Location: `tests/e2e/dotnet_comparison_tests.rs:2819-3034`
+  - Key findings from test output:
+    - Extended properties: Rust uses different naming format than DotNet (missing element type prefix like `[SqlColumn]`)
+    - Table types: IsNullable property explicitly set in Rust but omitted in DotNet
+    - Procedures: Relationship entries (BodyDependencies, DynamicObjects, Parameters) not emitted by Rust
 
 - [ ] **6.5 Add tests for all remaining fixtures**
   - [ ] `test_parity_e2e_comprehensive`
@@ -416,11 +422,11 @@ Reorganize and improve test infrastructure.
 | Phase 3: Relationship Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 4: XML Structure (Layer 4) | **COMPLETE** | 4/4 ✓ |
 | Phase 5: Metadata Files | **COMPLETE** | 5/5 ✓ |
-| Phase 6: Per-Feature Tests | In Progress | 3/5 ✓ |
+| Phase 6: Per-Feature Tests | In Progress | 4/5 ✓ |
 | Phase 7: Canonical XML | Not Started | 0/4 |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 29/39+ tasks complete
+**Overall Progress**: 30/39+ tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
@@ -431,6 +437,7 @@ Phase 5.4 added pre/post-deploy script comparison with whitespace normalization 
 Phase 5.5 completed the metadata comparison infrastructure with a unified `compare_dacpac_files()` function that consolidates all metadata comparisons into a single entry point.
 Phase 6.1 added the `run_parity_test()` helper function infrastructure enabling per-fixture parity tests. Phase 6.2 added the high-priority fixture tests using the new helper.
 Phase 6.3 added medium-priority fixture tests for `database_options` and `header_section` fixtures, validating SqlDatabaseOptions element generation and Header section metadata.
+Phase 6.4 added lower-priority fixture tests for `extended_properties`, `table_types`, and `sqlcmd_variables` fixtures. Key parity gaps identified: extended property naming format differences, IsNullable property handling for table type columns, and missing procedure relationship entries.
 
 ---
 

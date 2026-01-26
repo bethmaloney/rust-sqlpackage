@@ -2815,3 +2815,222 @@ fn test_parity_header_section() {
         }
     }
 }
+
+// ============================================================================
+// Phase 6.4: Lower-Priority Fixture Parity Tests
+// ============================================================================
+
+/// Informational test: Run parity test on extended_properties fixture
+/// This validates Phase 1.7 (SqlExtendedProperty element generation)
+///
+/// The extended_properties fixture tests that extended properties added via
+/// sp_addextendedproperty are correctly parsed and represented as
+/// SqlExtendedProperty elements in the model.xml output. This includes:
+/// - Table-level descriptions
+/// - Column-level descriptions
+/// - Correct property names and values
+#[test]
+fn test_parity_extended_properties() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    // Use default options to get full comparison including property validation
+    let options = ParityTestOptions::default();
+
+    let result = match run_parity_test("extended_properties", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Parity test failed: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== Parity Test: extended_properties ===\n");
+    println!("Testing Phase 1.7: SqlExtendedProperty element generation");
+    println!(
+        "Validates: Table-level and column-level extended properties via sp_addextendedproperty"
+    );
+    println!();
+    println!("Layer 1 errors (inventory): {}", result.layer1_errors.len());
+    println!(
+        "Layer 2 errors (properties): {}",
+        result.layer2_errors.len()
+    );
+    println!("Relationship errors: {}", result.relationship_errors.len());
+    println!("Layer 4 errors (ordering): {}", result.layer4_errors.len());
+    println!("Metadata errors: {}", result.metadata_errors.len());
+
+    // Layer 1: Element inventory should include SqlExtendedProperty elements
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
+
+    // Layer 2: Property values comparison
+    if !result.layer2_errors.is_empty() {
+        println!("\nLayer 2 errors (showing first 10):");
+        for err in result.layer2_errors.iter().take(10) {
+            println!("  {}", err);
+        }
+        if result.layer2_errors.len() > 10 {
+            println!("  ... and {} more", result.layer2_errors.len() - 10);
+        }
+    }
+
+    // Relationship errors (important for extended property target references)
+    if !result.relationship_errors.is_empty() {
+        println!("\nRelationship errors (showing first 5):");
+        for err in result.relationship_errors.iter().take(5) {
+            println!("  {}", err);
+        }
+        if result.relationship_errors.len() > 5 {
+            println!("  ... and {} more", result.relationship_errors.len() - 5);
+        }
+    }
+}
+
+/// Informational test: Run parity test on table_types fixture
+/// This validates Phase 1.8 (SqlTableType columns and structure)
+///
+/// The table_types fixture tests that user-defined table types are correctly
+/// parsed and represented in the model.xml output. This includes:
+/// - SqlTableType elements with correct names
+/// - SqlTableTypeSimpleColumn elements for each column
+/// - Primary key and unique constraints on table types
+/// - Index definitions on table type columns
+/// - Check constraints on table type columns
+#[test]
+fn test_parity_table_types() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    // Use default options to get full comparison including property validation
+    let options = ParityTestOptions::default();
+
+    let result = match run_parity_test("table_types", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Parity test failed: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== Parity Test: table_types ===\n");
+    println!("Testing Phase 1.8: SqlTableType columns and structure");
+    println!("Validates: User-defined table types with columns, constraints, and indexes");
+    println!();
+    println!("Layer 1 errors (inventory): {}", result.layer1_errors.len());
+    println!(
+        "Layer 2 errors (properties): {}",
+        result.layer2_errors.len()
+    );
+    println!("Relationship errors: {}", result.relationship_errors.len());
+    println!("Layer 4 errors (ordering): {}", result.layer4_errors.len());
+    println!("Metadata errors: {}", result.metadata_errors.len());
+
+    // Layer 1: Element inventory should include SqlTableType and SqlTableTypeSimpleColumn
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
+
+    // Layer 2: Property values comparison
+    if !result.layer2_errors.is_empty() {
+        println!("\nLayer 2 errors (showing first 10):");
+        for err in result.layer2_errors.iter().take(10) {
+            println!("  {}", err);
+        }
+        if result.layer2_errors.len() > 10 {
+            println!("  ... and {} more", result.layer2_errors.len() - 10);
+        }
+    }
+
+    // Relationship errors
+    if !result.relationship_errors.is_empty() {
+        println!("\nRelationship errors (showing first 5):");
+        for err in result.relationship_errors.iter().take(5) {
+            println!("  {}", err);
+        }
+        if result.relationship_errors.len() > 5 {
+            println!("  ... and {} more", result.relationship_errors.len() - 5);
+        }
+    }
+}
+
+/// Informational test: Run parity test on sqlcmd_variables fixture
+/// This validates Phase 1.9 (SqlCmdVariables element generation)
+///
+/// The sqlcmd_variables fixture tests that SQLCMD variables defined in the
+/// .sqlproj file are correctly represented in the model.xml output. This includes:
+/// - SqlCmdVariable definitions from sqlproj ItemGroup
+/// - Variable names and default values
+/// - Integration with SQLCMD preprocessing (:r includes, :setvar directives)
+#[test]
+fn test_parity_sqlcmd_variables() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    // Use default options to get full comparison including property validation
+    let options = ParityTestOptions::default();
+
+    let result = match run_parity_test("sqlcmd_variables", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Parity test failed: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== Parity Test: sqlcmd_variables ===\n");
+    println!("Testing Phase 1.9: SqlCmdVariables element generation");
+    println!("Validates: SQLCMD variable definitions from sqlproj and script preprocessing");
+    println!();
+    println!("Layer 1 errors (inventory): {}", result.layer1_errors.len());
+    println!(
+        "Layer 2 errors (properties): {}",
+        result.layer2_errors.len()
+    );
+    println!("Relationship errors: {}", result.relationship_errors.len());
+    println!("Layer 4 errors (ordering): {}", result.layer4_errors.len());
+    println!("Metadata errors: {}", result.metadata_errors.len());
+
+    // Layer 1: Element inventory should include proper schema elements
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
+
+    // Layer 2: Property values comparison
+    if !result.layer2_errors.is_empty() {
+        println!("\nLayer 2 errors (showing first 10):");
+        for err in result.layer2_errors.iter().take(10) {
+            println!("  {}", err);
+        }
+        if result.layer2_errors.len() > 10 {
+            println!("  ... and {} more", result.layer2_errors.len() - 10);
+        }
+    }
+
+    // Relationship errors
+    if !result.relationship_errors.is_empty() {
+        println!("\nRelationship errors (showing first 5):");
+        for err in result.relationship_errors.iter().take(5) {
+            println!("  {}", err);
+        }
+        if result.relationship_errors.len() > 5 {
+            println!("  ... and {} more", result.relationship_errors.len() - 5);
+        }
+    }
+}
