@@ -77,6 +77,9 @@ pub fn generate_origin_xml<W: Write>(writer: W, model_xml_checksum: &str) -> any
     xml_writer.write_event(Event::End(BytesEnd::new("Checksum")))?;
     xml_writer.write_event(Event::End(BytesEnd::new("Checksums")))?;
 
+    // ModelSchemaVersion (after Checksums, matches DotNet behavior)
+    write_element(&mut xml_writer, "ModelSchemaVersion", "2.9")?;
+
     // Close root
     xml_writer.write_event(Event::End(BytesEnd::new("DacOrigin")))?;
 

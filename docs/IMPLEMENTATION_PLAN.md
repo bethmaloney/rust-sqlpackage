@@ -138,10 +138,15 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 
 **Goal:** Fix metadata differences that cause Layer 5 failures.
 
-- [ ] **9.4.1 Origin.xml adjustments**
+- [x] **9.4.1 Origin.xml adjustments** ✓
   - File: `src/dacpac/origin_xml.rs`
-  - Match StreamVersions format
-  - Expected impact: 40+ fixtures
+  - Added `ModelSchemaVersion` element (value: "2.9") after Checksums, before closing DacOrigin tag
+  - Added unit test `test_origin_xml_has_model_schema_version` to verify the element
+  - **Finding**: Remaining 5 metadata failures are due to:
+    - 2 fixtures (`pre_post_deploy`, `sqlcmd_includes`) - SQLCMD `:r` include expansion differs
+    - 1 fixture (`e2e_comprehensive`) - Deploy script differences
+    - 2 fixtures (`external_reference`, `unresolved_reference`) - DotNet build failures (expected)
+  - **Actual impact**: Improves Origin.xml parity but doesn't change metadata pass rate (comparison logic doesn't validate this field)
 
 - [x] **9.4.2 Update comparison tolerance** ✓
   - File: `tests/e2e/parity/layer6_metadata.rs`
@@ -184,10 +189,10 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
 | 9.2 Property Value Fixes | COMPLETE | 6/6 |
 | 9.3 Relationship Completeness | COMPLETE | 4/4 |
-| 9.4 Metadata File Alignment | IN PROGRESS | 1/4 |
+| 9.4 Metadata File Alignment | IN PROGRESS | 2/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 13/19 tasks
+**Phase 9 Overall**: 14/19 tasks
 
 ### Expected Outcomes
 
@@ -216,6 +221,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 13/19 |
+| Phase 9 | **IN PROGRESS** 14/19 |
 
-**Total**: 52/58 tasks complete
+**Total**: 53/58 tasks complete

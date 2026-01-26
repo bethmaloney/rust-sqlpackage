@@ -826,6 +826,31 @@ fn test_origin_xml_product_schema_is_url() {
     );
 }
 
+#[test]
+fn test_origin_xml_has_model_schema_version() {
+    let origin = rust_sqlpackage::dacpac::generate_origin_xml_string("ABCD1234");
+
+    // ModelSchemaVersion should be 2.9 to match DotNet DacFx
+    assert!(
+        origin.contains("<ModelSchemaVersion>2.9</ModelSchemaVersion>"),
+        "Should have ModelSchemaVersion 2.9 (matches DotNet). Got:\n{}",
+        origin
+    );
+
+    // ModelSchemaVersion should come after Checksums (at the end before closing tag)
+    let checksums_end_pos = origin
+        .find("</Checksums>")
+        .expect("Should have Checksums closing element");
+    let model_schema_pos = origin
+        .find("<ModelSchemaVersion>")
+        .expect("Should have ModelSchemaVersion element");
+    assert!(
+        checksums_end_pos < model_schema_pos,
+        "ModelSchemaVersion should come after Checksums. Got:\n{}",
+        origin
+    );
+}
+
 // ============================================================================
 // [Content_Types].xml Tests
 // ============================================================================
