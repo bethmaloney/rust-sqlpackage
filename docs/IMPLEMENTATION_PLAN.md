@@ -27,11 +27,11 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 2/46 | 4.3% | Decreased slightly due to fresh DotNet builds used |
+| Layer 1 (Inventory) | 11/46 | 23.9% | Improved from 2/46 (4.3%) |
 | Layer 2 (Properties) | 32/46 | 69.6% | |
-| Layer 3 (Relationships) | 28/46 | 60.9% | |
+| Layer 3 (Relationships) | 26/46 | 56.5% | Slightly decreased due to CheckExpressionDependencies detection |
 | Layer 4 (Structure) | 5/46 | 10.9% | |
-| Layer 5 (Metadata) | 0/46 | 0.0% | Decreased due to fresh DotNet builds |
+| Layer 5 (Metadata) | 0/46 | 0.0% | |
 
 ### 9.1 Deterministic Element Ordering
 
@@ -86,10 +86,13 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - **Finding**: Already correctly implemented - all boolean properties use capitalized "True"/"False"
   - No changes needed
 
-- [ ] **9.2.4 Constraint expression properties**
-  - File: `src/dacpac/model_xml.rs`
-  - Verify `CheckExpressionScript` and `DefaultExpressionScript`
-  - Expected impact: 3-5 fixtures
+- [x] **9.2.4 Constraint expression properties** ✓
+  - Files: `src/model/builder.rs`, `src/dacpac/model_xml.rs`, `src/parser/tsql_parser.rs`
+  - CheckExpressionScript and DefaultExpressionScript properties were already working correctly (Layer 2 passes)
+  - The investigation revealed the real issue was constraint element naming convention
+  - Fixed constraint naming from 3-part ([schema].[table].[constraint]) to 2-part ([schema].[constraint]) to match DotNet
+  - Fixed IsClustered property emission to only emit non-default values (PK: only emit False, Unique: only emit True)
+  - Added is_clustered extraction from raw SQL for sqlparser path since sqlparser doesn't expose CLUSTERED/NONCLUSTERED
 
 - [x] **9.2.5 IsNullable emission fix** ✓
   - File: `src/dacpac/model_xml.rs`
@@ -115,6 +118,12 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - File: `src/dacpac/model_xml.rs`
   - Order: DefiningTable, Columns, ForeignTable, ForeignColumns
   - Expected impact: 2-4 fixtures
+
+- [ ] **9.3.4 CheckExpressionDependencies relationship**
+  - File: `src/dacpac/model_xml.rs`
+  - DotNet emits CheckExpressionDependencies relationship for CHECK constraints referencing the columns used in the expression
+  - This is now detected due to correct constraint naming in 9.2.4
+  - Expected impact: 2 fixtures (all_constraints, constraints)
 
 ### 9.4 Metadata File Alignment
 
@@ -163,12 +172,12 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | Section | Status | Completion |
 |---------|--------|------------|
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
-| 9.2 Property Value Fixes | IN PROGRESS | 5/6 |
-| 9.3 Relationship Completeness | PENDING | 0/3 |
+| 9.2 Property Value Fixes | COMPLETE | 6/6 |
+| 9.3 Relationship Completeness | PENDING | 0/4 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 6/18 tasks
+**Phase 9 Overall**: 8/19 tasks
 
 ### Expected Outcomes
 
@@ -197,6 +206,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 6/17 |
+| Phase 9 | **IN PROGRESS** 8/19 |
 
-**Total**: 45/56 tasks complete
+**Total**: 47/58 tasks complete

@@ -1320,10 +1320,8 @@ fn write_constraint<W: Write>(
     writer: &mut Writer<W>,
     constraint: &ConstraintElement,
 ) -> anyhow::Result<()> {
-    let full_name = format!(
-        "[{}].[{}].[{}]",
-        constraint.table_schema, constraint.table_name, constraint.name
-    );
+    // DotNet uses two-part names for constraints: [schema].[constraint_name]
+    let full_name = format!("[{}].[{}]", constraint.table_schema, constraint.name);
 
     let type_name = match constraint.constraint_type {
         ConstraintType::PrimaryKey => "SqlPrimaryKeyConstraint",
@@ -1339,16 +1337,22 @@ fn write_constraint<W: Write>(
     writer.write_event(Event::Start(elem))?;
 
     // Write IsClustered property for primary keys and unique constraints
-    if matches!(
-        constraint.constraint_type,
-        ConstraintType::PrimaryKey | ConstraintType::Unique
-    ) {
-        if let Some(is_clustered) = constraint.is_clustered {
-            write_property(
-                writer,
-                "IsClustered",
-                if is_clustered { "True" } else { "False" },
-            )?;
+    // DotNet only emits IsClustered when it differs from the default:
+    // - Primary Key: default is CLUSTERED, so only emit when NONCLUSTERED (False)
+    // - Unique: default is NONCLUSTERED, so only emit when CLUSTERED (True)
+    if let Some(is_clustered) = constraint.is_clustered {
+        match constraint.constraint_type {
+            ConstraintType::PrimaryKey if !is_clustered => {
+                // PK is nonclustered (non-default), emit IsClustered=False
+                write_property(writer, "IsClustered", "False")?;
+            }
+            ConstraintType::Unique if is_clustered => {
+                // Unique is clustered (non-default), emit IsClustered=True
+                write_property(writer, "IsClustered", "True")?;
+            }
+            _ => {
+                // Default values - don't emit
+            }
         }
     }
 

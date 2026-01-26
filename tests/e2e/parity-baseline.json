@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "updated": "2026-01-26T07:40:03.084821812+00:00",
-  "commit": "303ae7e",
+  "updated": "2026-01-26T08:58:07.182618120+00:00",
+  "commit": "800462f",
   "fixtures": [
     {
       "name": "all_constraints",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": true,
+      "relationship_pass": false,
       "layer4_pass": false,
       "metadata_pass": false
     },
@@ -29,7 +29,7 @@
     },
     {
       "name": "collation",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": true,
@@ -45,7 +45,7 @@
     },
     {
       "name": "composite_fk",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
@@ -71,7 +71,7 @@
       "name": "constraints",
       "layer1_pass": false,
       "layer2_pass": true,
-      "relationship_pass": true,
+      "relationship_pass": false,
       "layer4_pass": false,
       "metadata_pass": false
     },
@@ -141,7 +141,7 @@
     },
     {
       "name": "filtered_indexes",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": true,
@@ -149,7 +149,7 @@
     },
     {
       "name": "fk_actions",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
@@ -197,7 +197,7 @@
     },
     {
       "name": "index_properties",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
@@ -205,7 +205,7 @@
     },
     {
       "name": "indexes",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": true,
@@ -293,7 +293,7 @@
     },
     {
       "name": "self_ref_fk",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
@@ -309,7 +309,7 @@
     },
     {
       "name": "sqlcmd_includes",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,

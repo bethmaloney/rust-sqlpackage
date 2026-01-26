@@ -74,7 +74,8 @@ impl ModelElement {
                 format!("[{}]", c.name)
             }
             ModelElement::Constraint(c) => {
-                format!("[{}].[{}].[{}]", c.table_schema, c.table_name, c.name)
+                // DotNet uses two-part names for constraints: [schema].[constraint_name]
+                format!("[{}].[{}]", c.table_schema, c.name)
             }
             ModelElement::Sequence(s) => format!("[{}].[{}]", s.schema, s.name),
             ModelElement::UserDefinedType(u) => format!("[{}].[{}]", u.schema, u.name),

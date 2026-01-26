@@ -286,6 +286,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         constraint,
                         &create_table.name,
                         &project.default_schema,
+                        &parsed.sql_text,
                     ) {
                         model.add_element(ModelElement::Constraint(constraint_element));
                     }
@@ -1002,10 +1003,83 @@ fn constraint_from_extracted(
     }
 }
 
+/// Extract clustering info for a constraint from raw SQL.
+///
+/// sqlparser doesn't expose CLUSTERED/NONCLUSTERED keywords, so we need to
+/// look at the raw SQL to determine the clustering mode.
+///
+/// - For PRIMARY KEY: default is CLUSTERED, returns Some(false) if NONCLUSTERED found
+/// - For UNIQUE: default is NONCLUSTERED, returns Some(true) if CLUSTERED found
+///
+/// Returns None if the constraint cannot be found in the SQL (shouldn't happen).
+fn extract_constraint_clustering(
+    raw_sql: &str,
+    constraint_name: &str,
+    is_primary_key: bool,
+) -> Option<bool> {
+    let upper_sql = raw_sql.to_uppercase();
+
+    // Try to find the constraint definition in the SQL
+    // First, try to find a named constraint
+    let constraint_name_upper = constraint_name.to_uppercase();
+    let constraint_pattern = format!("CONSTRAINT [{}]", constraint_name_upper);
+    let constraint_pattern_bare = format!("CONSTRAINT {}", constraint_name_upper);
+
+    // Find the position of the constraint in the SQL
+    let constraint_start = upper_sql
+        .find(&constraint_pattern)
+        .or_else(|| upper_sql.find(&constraint_pattern_bare));
+
+    if let Some(start_pos) = constraint_start {
+        // Look at the text after the constraint name for CLUSTERED/NONCLUSTERED
+        let remaining = &upper_sql[start_pos..];
+
+        // Find the end of this constraint definition (next CONSTRAINT or end of CREATE TABLE)
+        let end_pos = remaining[20..]
+            .find("CONSTRAINT")
+            .map(|p| p + 20)
+            .unwrap_or(remaining.len());
+        let constraint_def = &remaining[..end_pos];
+
+        // Check for NONCLUSTERED before CLUSTERED to avoid matching "NONCLUSTERED" as "CLUSTERED"
+        if constraint_def.contains("NONCLUSTERED") {
+            return Some(false);
+        } else if constraint_def.contains("CLUSTERED") {
+            return Some(true);
+        }
+    }
+
+    // If not found by name, look for PRIMARY KEY or UNIQUE patterns
+    let keyword = if is_primary_key {
+        "PRIMARY KEY"
+    } else {
+        "UNIQUE"
+    };
+
+    if let Some(keyword_pos) = upper_sql.find(keyword) {
+        // Look at the text after PRIMARY KEY or UNIQUE
+        let remaining = &upper_sql[keyword_pos..];
+        let end_pos = remaining
+            .find('(')
+            .unwrap_or_else(|| remaining.len().min(100));
+        let constraint_def = &remaining[..end_pos];
+
+        if constraint_def.contains("NONCLUSTERED") {
+            return Some(false);
+        } else if constraint_def.contains("CLUSTERED") {
+            return Some(true);
+        }
+    }
+
+    // Return the default: PRIMARY KEY is clustered, UNIQUE is not
+    Some(is_primary_key)
+}
+
 fn constraint_from_table_constraint(
     constraint: &TableConstraint,
     table_name: &ObjectName,
     default_schema: &str,
+    raw_sql: &str,
 ) -> Option<ConstraintElement> {
     let (table_schema, table_name_str) = extract_schema_and_name(table_name, default_schema);
 
@@ -1015,6 +1089,10 @@ fn constraint_from_table_constraint(
                 .as_ref()
                 .map(|n| n.value.clone())
                 .unwrap_or_else(|| format!("PK_{}", table_name_str));
+
+            // Determine clustering from raw SQL since sqlparser doesn't expose it
+            // Default for PRIMARY KEY is CLUSTERED, so only set to false if NONCLUSTERED is found
+            let is_clustered = extract_constraint_clustering(raw_sql, &constraint_name, true);
 
             Some(ConstraintElement {
                 name: constraint_name,
@@ -1028,7 +1106,7 @@ fn constraint_from_table_constraint(
                 definition: None,
                 referenced_table: None,
                 referenced_columns: None,
-                is_clustered: None,
+                is_clustered,
             })
         }
         TableConstraint::ForeignKey {
@@ -1071,6 +1149,10 @@ fn constraint_from_table_constraint(
                 .map(|n| n.value.clone())
                 .unwrap_or_else(|| format!("UQ_{}", table_name_str));
 
+            // Determine clustering from raw SQL since sqlparser doesn't expose it
+            // Default for UNIQUE is NONCLUSTERED, so only set to true if CLUSTERED is found
+            let is_clustered = extract_constraint_clustering(raw_sql, &constraint_name, false);
+
             Some(ConstraintElement {
                 name: constraint_name,
                 table_schema,
@@ -1083,7 +1165,7 @@ fn constraint_from_table_constraint(
                 definition: None,
                 referenced_table: None,
                 referenced_columns: None,
-                is_clustered: None,
+                is_clustered,
             })
         }
         TableConstraint::Check { name, expr } => {
