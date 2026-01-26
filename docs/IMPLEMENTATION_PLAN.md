@@ -65,11 +65,13 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - **Actual impact**: Layer 2: +1 (15→16), Relationships: +1 (27→28)
   - Fixed fixtures: `table_types` now passes Layer 2
 
-- [ ] **9.2.1 Type specifier properties**
-  - File: `src/dacpac/model_xml.rs`
-  - Ensure Length, Precision, Scale, IsMax output correctly
-  - Handle datetime2(7), time(7), datetimeoffset(7) precision
-  - Expected impact: 5-10 fixtures
+- [x] **9.2.1 Type specifier properties** ✓
+  - Files: `src/model/builder.rs`, `src/dacpac/model_xml.rs`
+  - Fixed property order in SqlTypeSpecifier: Scale, Precision, Length/IsMax now come BEFORE Type relationship
+  - Scale comes before Precision (matching DotNet ordering)
+  - Added datetime2/time/datetimeoffset precision extraction using Scale property (not Precision)
+  - Default Scale="7" for datetime2, time, datetimeoffset when no explicit precision specified
+  - **Key finding**: DotNet uses "Scale" property for fractional seconds precision on datetime types
 
 - [ ] **9.2.2 Script content normalization**
   - File: `src/dacpac/model_xml.rs`
@@ -153,12 +155,12 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | Section | Status | Completion |
 |---------|--------|------------|
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
-| 9.2 Property Value Fixes | IN PROGRESS | 1/5 |
+| 9.2 Property Value Fixes | IN PROGRESS | 2/5 |
 | 9.3 Relationship Completeness | PENDING | 0/3 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 3/17 tasks
+**Phase 9 Overall**: 4/17 tasks
 
 ### Expected Outcomes
 
@@ -187,6 +189,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 3/17 |
+| Phase 9 | **IN PROGRESS** 4/17 |
 
-**Total**: 42/56 tasks complete
+**Total**: 43/56 tasks complete

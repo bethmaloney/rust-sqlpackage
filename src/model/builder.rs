@@ -805,20 +805,37 @@ fn extract_type_params_from_string(data_type: &str) -> (Option<i32>, Option<u8>,
         return (Some(-1), None, None);
     }
 
+    let base_type = data_type.to_uppercase();
+
     // Parse parameters from type string like "NVARCHAR(50)" or "DECIMAL(18, 2)"
     let re = regex::Regex::new(r"\((\d+)(?:\s*,\s*(\d+))?\)").unwrap();
     if let Some(caps) = re.captures(data_type) {
         let first: Option<i32> = caps.get(1).and_then(|m| m.as_str().parse().ok());
         let second: Option<u8> = caps.get(2).and_then(|m| m.as_str().parse().ok());
 
-        let base_type = data_type.to_uppercase();
         if base_type.starts_with("DECIMAL") || base_type.starts_with("NUMERIC") {
             // For DECIMAL/NUMERIC: first is precision, second is scale
             return (None, first.map(|v| v as u8), second);
+        } else if base_type.starts_with("DATETIME2")
+            || base_type.starts_with("TIME")
+            || base_type.starts_with("DATETIMEOFFSET")
+        {
+            // For datetime types with fractional seconds: use Scale property (not Precision)
+            // The value is the fractional seconds precision (0-7)
+            return (None, None, first.map(|v| v as u8));
         } else {
             // For string/binary types: first is length
             return (first, None, None);
         }
+    }
+
+    // Handle datetime types without explicit precision - they default to 7
+    if base_type.starts_with("DATETIME2")
+        || base_type.starts_with("TIME")
+        || base_type.starts_with("DATETIMEOFFSET")
+    {
+        // DotNet always emits Scale="7" for these types when no explicit precision
+        return (None, None, Some(7));
     }
 
     (None, None, None)
@@ -854,7 +871,8 @@ fn extract_type_params(data_type: &DataType) -> (Option<i32>, Option<u8>, Option
             };
             (None, precision, scale)
         }
-        _ => (None, None, None),
+        // For other types (including datetime2, time, datetimeoffset), use string-based extraction
+        _ => extract_type_params_from_string(&data_type.to_string()),
     }
 }
 

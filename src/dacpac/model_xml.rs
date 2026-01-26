@@ -563,11 +563,16 @@ fn write_type_specifier<W: Write>(
     elem.push_attribute(("Type", "SqlTypeSpecifier"));
     writer.write_event(Event::Start(elem))?;
 
-    // Write type reference based on data type (with ExternalSource for built-ins)
-    let type_ref = sql_type_to_reference(data_type);
-    write_builtin_type_relationship(writer, "Type", &type_ref)?;
+    // DotNet order: Properties first, then Type relationship
+    // Properties order: Scale, Precision, Length/IsMax
+    if let Some(s) = scale {
+        write_property(writer, "Scale", &s.to_string())?;
+    }
 
-    // Write length/precision/scale if applicable
+    if let Some(p) = precision {
+        write_property(writer, "Precision", &p.to_string())?;
+    }
+
     if let Some(len) = max_length {
         if len == -1 {
             write_property(writer, "IsMax", "True")?;
@@ -576,13 +581,9 @@ fn write_type_specifier<W: Write>(
         }
     }
 
-    if let Some(p) = precision {
-        write_property(writer, "Precision", &p.to_string())?;
-    }
-
-    if let Some(s) = scale {
-        write_property(writer, "Scale", &s.to_string())?;
-    }
+    // Write type reference based on data type (with ExternalSource for built-ins)
+    let type_ref = sql_type_to_reference(data_type);
+    write_builtin_type_relationship(writer, "Type", &type_ref)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
