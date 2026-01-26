@@ -43,7 +43,7 @@ use crate::dacpac_compare::{
     compare_element_inventory, compare_element_order, compare_element_properties,
     compare_element_relationships, compare_with_sqlpackage, compute_sha256, extract_model_xml,
     generate_diff, sqlpackage_available, CanonicalXmlError, ComparisonOptions, ComparisonResult,
-    DacpacModel, Layer1Error, ParityMetrics,
+    DacpacModel, FixtureBaseline, Layer1Error, ParityBaseline, ParityMetrics, Regression,
 };
 
 // =============================================================================
@@ -4488,4 +4488,359 @@ fn test_canonical_comparison_all_fixtures() {
         }
     );
     println!("Errors: {}", errors_count);
+}
+
+// =============================================================================
+// Phase 8.4: Regression Detection Tests
+// =============================================================================
+
+/// Default path to the parity baseline file, relative to the test directory.
+fn get_baseline_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("e2e")
+        .join("parity-baseline.json")
+}
+
+/// Load the parity baseline, or create a new empty one if not found.
+fn load_or_create_baseline() -> ParityBaseline {
+    let path = get_baseline_path();
+    match ParityBaseline::from_file(&path) {
+        Ok(baseline) => baseline,
+        Err(e) => {
+            eprintln!(
+                "Warning: Could not load baseline from {}: {}",
+                path.display(),
+                e
+            );
+            eprintln!("Using empty baseline (no regressions will be detected)");
+            ParityBaseline::new()
+        }
+    }
+}
+
+/// CI test that checks for regressions against the baseline.
+///
+/// This test:
+/// 1. Loads the parity baseline from `tests/e2e/parity-baseline.json`
+/// 2. Runs parity tests on all fixtures
+/// 3. Compares current results against the baseline
+/// 4. FAILS if any regressions are detected (previously passing tests now fail)
+/// 5. Reports improvements (previously failing tests now pass)
+///
+/// To update the baseline after fixing issues or accepting new behavior:
+///   PARITY_UPDATE_BASELINE=1 cargo test --test e2e_tests test_parity_regression_check -- --nocapture
+#[test]
+fn test_parity_regression_check() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    // Load the baseline
+    let baseline = load_or_create_baseline();
+    println!("Loaded baseline with {} fixtures", baseline.fixtures.len());
+    if let Some(ref commit) = baseline.commit {
+        println!("Baseline commit: {}", commit);
+    }
+    println!("Baseline updated: {}", baseline.updated);
+
+    // Collect current metrics
+    let options = ParityTestOptions::default();
+    let metrics = collect_parity_metrics(&options);
+
+    // Print summary
+    metrics.print_summary();
+
+    // Check for regressions
+    let regressions = baseline.detect_regressions(&metrics);
+    let improvements = baseline.detect_improvements(&metrics);
+
+    baseline.print_regression_summary(&metrics);
+
+    // Handle baseline update request
+    if std::env::var("PARITY_UPDATE_BASELINE").is_ok() {
+        let new_baseline = ParityBaseline::from_metrics(&metrics);
+        let path = get_baseline_path();
+        match new_baseline.to_file(&path) {
+            Ok(_) => println!("\n✓ Baseline updated: {}", path.display()),
+            Err(e) => eprintln!("Failed to write baseline: {}", e),
+        }
+        return;
+    }
+
+    // Report improvements (informational only)
+    if !improvements.is_empty() {
+        println!("\n💡 Consider updating the baseline to capture these improvements:");
+        println!("   PARITY_UPDATE_BASELINE=1 cargo test --test e2e_tests test_parity_regression_check -- --nocapture\n");
+    }
+
+    // Fail if regressions detected
+    if !regressions.is_empty() {
+        let mut error_msg = format!("\n{} REGRESSION(S) DETECTED:\n", regressions.len());
+        for regression in &regressions {
+            error_msg.push_str(&format!("  - {}\n", regression));
+        }
+        error_msg.push_str("\nPreviously passing parity tests are now failing.");
+        error_msg.push_str(
+            "\nInvestigate the changes and either fix the regression or update the baseline.",
+        );
+        panic!("{}", error_msg);
+    }
+}
+
+/// Test that FixtureBaseline correctly serializes and deserializes JSON.
+#[test]
+fn test_fixture_baseline_json_roundtrip() {
+    let baseline = FixtureBaseline {
+        name: "test_fixture".to_string(),
+        layer1_pass: true,
+        layer2_pass: false,
+        relationship_pass: true,
+        layer4_pass: false,
+        metadata_pass: true,
+    };
+
+    let json = baseline.to_json();
+    println!("Serialized JSON:\n{}", json);
+
+    let parsed = FixtureBaseline::from_json(&json).expect("Should parse JSON");
+    assert_eq!(baseline, parsed, "Roundtrip should preserve values");
+}
+
+/// Test that ParityBaseline correctly serializes and deserializes JSON.
+#[test]
+fn test_parity_baseline_json_roundtrip() {
+    let mut baseline = ParityBaseline::new();
+    baseline.fixtures.push(FixtureBaseline {
+        name: "fixture_a".to_string(),
+        layer1_pass: true,
+        layer2_pass: true,
+        relationship_pass: false,
+        layer4_pass: false,
+        metadata_pass: false,
+    });
+    baseline.fixtures.push(FixtureBaseline {
+        name: "fixture_b".to_string(),
+        layer1_pass: false,
+        layer2_pass: false,
+        relationship_pass: false,
+        layer4_pass: false,
+        metadata_pass: false,
+    });
+
+    let json = baseline.to_json();
+    println!("Serialized ParityBaseline JSON:\n{}", json);
+
+    let parsed = ParityBaseline::from_json(&json).expect("Should parse JSON");
+    assert_eq!(baseline.version, parsed.version);
+    assert_eq!(baseline.fixtures.len(), parsed.fixtures.len());
+    assert_eq!(baseline.fixtures[0], parsed.fixtures[0]);
+    assert_eq!(baseline.fixtures[1], parsed.fixtures[1]);
+}
+
+/// Test that regression detection correctly identifies regressions.
+#[test]
+fn test_regression_detection_logic() {
+    // Create a baseline where fixture_a passes Layer 1 and Layer 2
+    let mut baseline = ParityBaseline::new();
+    baseline.fixtures.push(FixtureBaseline {
+        name: "fixture_a".to_string(),
+        layer1_pass: true,
+        layer2_pass: true,
+        relationship_pass: false,
+        layer4_pass: false,
+        metadata_pass: false,
+    });
+
+    // Create current metrics where fixture_a fails Layer 2 (regression!)
+    let mut metrics = ParityMetrics::new();
+    metrics
+        .fixtures
+        .push(crate::dacpac_compare::FixtureMetrics {
+            name: "fixture_a".to_string(),
+            status: "PARTIAL".to_string(),
+            layer1_errors: 0, // Still passes
+            layer2_errors: 5, // Regression!
+            relationship_errors: 0,
+            layer4_errors: 0,
+            metadata_errors: 0,
+            error_message: None,
+        });
+
+    let regressions = baseline.detect_regressions(&metrics);
+
+    assert_eq!(regressions.len(), 1, "Should detect one regression");
+    assert_eq!(regressions[0].fixture, "fixture_a");
+    assert!(regressions[0].layer.contains("Layer 2"));
+
+    println!("Detected regression: {}", regressions[0]);
+}
+
+/// Test that improvement detection correctly identifies improvements.
+#[test]
+fn test_improvement_detection_logic() {
+    // Create a baseline where fixture_a fails Layer 2 but passes others
+    let mut baseline = ParityBaseline::new();
+    baseline.fixtures.push(FixtureBaseline {
+        name: "fixture_a".to_string(),
+        layer1_pass: true,
+        layer2_pass: false,      // Was failing
+        relationship_pass: true, // Already passing
+        layer4_pass: true,       // Already passing
+        metadata_pass: true,     // Already passing
+    });
+
+    // Create current metrics where fixture_a now passes Layer 2 (improvement!)
+    let mut metrics = ParityMetrics::new();
+    metrics
+        .fixtures
+        .push(crate::dacpac_compare::FixtureMetrics {
+            name: "fixture_a".to_string(),
+            status: "PASS".to_string(),
+            layer1_errors: 0,
+            layer2_errors: 0,       // Now passes!
+            relationship_errors: 0, // Still passes
+            layer4_errors: 0,       // Still passes
+            metadata_errors: 0,     // Still passes
+            error_message: None,
+        });
+
+    let improvements = baseline.detect_improvements(&metrics);
+
+    assert_eq!(improvements.len(), 1, "Should detect one improvement");
+    assert!(improvements[0].contains("fixture_a"));
+    assert!(improvements[0].contains("Layer 2"));
+
+    println!("Detected improvement: {}", improvements[0]);
+}
+
+/// Test that new fixtures don't cause regressions.
+#[test]
+fn test_new_fixture_no_regression() {
+    // Create a baseline without fixture_b
+    let mut baseline = ParityBaseline::new();
+    baseline.fixtures.push(FixtureBaseline {
+        name: "fixture_a".to_string(),
+        layer1_pass: true,
+        layer2_pass: true,
+        relationship_pass: false,
+        layer4_pass: false,
+        metadata_pass: false,
+    });
+
+    // Create current metrics with a new fixture_b (not in baseline)
+    let mut metrics = ParityMetrics::new();
+    metrics
+        .fixtures
+        .push(crate::dacpac_compare::FixtureMetrics {
+            name: "fixture_a".to_string(),
+            status: "PARTIAL".to_string(),
+            layer1_errors: 0,
+            layer2_errors: 0,
+            relationship_errors: 5,
+            layer4_errors: 0,
+            metadata_errors: 0,
+            error_message: None,
+        });
+    metrics
+        .fixtures
+        .push(crate::dacpac_compare::FixtureMetrics {
+            name: "fixture_b".to_string(), // New fixture!
+            status: "FAIL".to_string(),
+            layer1_errors: 3,
+            layer2_errors: 2,
+            relationship_errors: 0,
+            layer4_errors: 0,
+            metadata_errors: 0,
+            error_message: None,
+        });
+
+    let regressions = baseline.detect_regressions(&metrics);
+
+    // New fixture shouldn't cause regression
+    assert!(
+        regressions.is_empty(),
+        "New fixtures shouldn't be flagged as regressions"
+    );
+}
+
+/// Test that ParityBaseline can be created from ParityMetrics.
+#[test]
+fn test_baseline_from_metrics() {
+    let mut metrics = ParityMetrics::new();
+    metrics
+        .fixtures
+        .push(crate::dacpac_compare::FixtureMetrics {
+            name: "test_fixture".to_string(),
+            status: "PARTIAL".to_string(),
+            layer1_errors: 0,
+            layer2_errors: 0,
+            relationship_errors: 3,
+            layer4_errors: 2,
+            metadata_errors: 1,
+            error_message: None,
+        });
+
+    let baseline = ParityBaseline::from_metrics(&metrics);
+
+    assert_eq!(baseline.fixtures.len(), 1);
+    assert_eq!(baseline.fixtures[0].name, "test_fixture");
+    assert!(baseline.fixtures[0].layer1_pass);
+    assert!(baseline.fixtures[0].layer2_pass);
+    assert!(!baseline.fixtures[0].relationship_pass); // Has errors
+    assert!(!baseline.fixtures[0].layer4_pass); // Has errors
+    assert!(!baseline.fixtures[0].metadata_pass); // Has errors
+}
+
+/// Generate a fresh baseline file from current test results.
+///
+/// Run with:
+///   cargo test --test e2e_tests test_generate_baseline -- --nocapture
+///
+/// This test generates a new baseline but does NOT automatically save it.
+/// Use PARITY_UPDATE_BASELINE=1 with test_parity_regression_check to save.
+#[test]
+fn test_generate_baseline() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let options = ParityTestOptions::default();
+    let metrics = collect_parity_metrics(&options);
+    let baseline = ParityBaseline::from_metrics(&metrics);
+
+    println!("\n=== Generated Baseline ===");
+    println!("{}", baseline.to_json());
+
+    println!("\n=== Summary ===");
+    let layer1_passing = baseline.fixtures.iter().filter(|f| f.layer1_pass).count();
+    let layer2_passing = baseline.fixtures.iter().filter(|f| f.layer2_pass).count();
+    let rel_passing = baseline
+        .fixtures
+        .iter()
+        .filter(|f| f.relationship_pass)
+        .count();
+    let total = baseline.fixtures.len();
+
+    println!("Total fixtures: {}", total);
+    println!(
+        "Layer 1 passing: {}/{} ({:.1}%)",
+        layer1_passing,
+        total,
+        100.0 * layer1_passing as f64 / total as f64
+    );
+    println!(
+        "Layer 2 passing: {}/{} ({:.1}%)",
+        layer2_passing,
+        total,
+        100.0 * layer2_passing as f64 / total as f64
+    );
+    println!(
+        "Relationships passing: {}/{} ({:.1}%)",
+        rel_passing,
+        total,
+        100.0 * rel_passing as f64 / total as f64
+    );
 }

@@ -1,0 +1,375 @@
+{
+  "version": 1,
+  "updated": "2026-01-26T03:36:38.380257697+00:00",
+  "commit": "c43b5d9",
+  "fixtures": [
+    {
+      "name": "all_constraints",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "ampersand_encoding",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "build_with_exclude",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "collation",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "column_properties",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "composite_fk",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "computed_columns",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "constraint_nocheck",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "constraints",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "database_options",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "default_constraints_named",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "e2e_comprehensive",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "e2e_simple",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "element_types",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "empty_project",
+      "layer1_pass": true,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": true,
+      "metadata_pass": false
+    },
+    {
+      "name": "extended_properties",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "external_reference",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "filtered_indexes",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "fk_actions",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "fulltext_index",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "header_section",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "identity_column",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "index_naming",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "index_options",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "index_properties",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "indexes",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "inline_constraints",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "instead_of_triggers",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "large_table",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "multiple_indexes",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "only_schemas",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": true,
+      "metadata_pass": false
+    },
+    {
+      "name": "pre_post_deploy",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "procedure_options",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "procedure_parameters",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "reserved_keywords",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "scalar_types",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "self_ref_fk",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "simple_table",
+      "layer1_pass": true,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "sqlcmd_includes",
+      "layer1_pass": false,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "sqlcmd_variables",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "table_types",
+      "layer1_pass": true,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "unicode_identifiers",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "unresolved_reference",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "varbinary_max",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "view_options",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    },
+    {
+      "name": "views",
+      "layer1_pass": false,
+      "layer2_pass": false,
+      "relationship_pass": false,
+      "layer4_pass": false,
+      "metadata_pass": false
+    }
+  ]
+}

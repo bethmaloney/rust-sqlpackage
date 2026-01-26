@@ -1695,3 +1695,533 @@ fn get_git_commit_hash() -> Option<String> {
             }
         })
 }
+
+// =============================================================================
+// Phase 8.4: Regression Detection
+// =============================================================================
+
+/// Per-fixture baseline state capturing which layers pass.
+///
+/// This represents the expected state of a fixture as recorded in the baseline.
+/// When running regression tests, current results are compared against this baseline
+/// to detect regressions (previously passing layers now failing).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FixtureBaseline {
+    /// Fixture name (directory name in tests/fixtures/)
+    pub name: String,
+    /// Whether Layer 1 (inventory) passes
+    pub layer1_pass: bool,
+    /// Whether Layer 2 (properties) passes
+    pub layer2_pass: bool,
+    /// Whether relationship comparison passes
+    pub relationship_pass: bool,
+    /// Whether Layer 4 (ordering) passes
+    pub layer4_pass: bool,
+    /// Whether metadata comparison passes
+    pub metadata_pass: bool,
+}
+
+impl FixtureBaseline {
+    /// Create a new FixtureBaseline from a fixture name with all layers failing.
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            layer1_pass: false,
+            layer2_pass: false,
+            relationship_pass: false,
+            layer4_pass: false,
+            metadata_pass: false,
+        }
+    }
+
+    /// Create a FixtureBaseline from FixtureMetrics (current test results).
+    pub fn from_metrics(metrics: &FixtureMetrics) -> Self {
+        Self {
+            name: metrics.name.clone(),
+            layer1_pass: metrics.layer1_errors == 0 && metrics.status != "ERROR",
+            layer2_pass: metrics.layer2_errors == 0 && metrics.status != "ERROR",
+            relationship_pass: metrics.relationship_errors == 0 && metrics.status != "ERROR",
+            layer4_pass: metrics.layer4_errors == 0 && metrics.status != "ERROR",
+            metadata_pass: metrics.metadata_errors == 0 && metrics.status != "ERROR",
+        }
+    }
+
+    /// Parse a FixtureBaseline from a JSON object string.
+    ///
+    /// Expected format:
+    /// ```json
+    /// {
+    ///   "name": "fixture_name",
+    ///   "layer1_pass": true,
+    ///   "layer2_pass": false,
+    ///   ...
+    /// }
+    /// ```
+    pub fn from_json(json: &str) -> Result<Self, String> {
+        // Simple JSON parsing without external dependencies
+        let name = extract_json_string(json, "name")?;
+        let layer1_pass = extract_json_bool(json, "layer1_pass")?;
+        let layer2_pass = extract_json_bool(json, "layer2_pass")?;
+        let relationship_pass = extract_json_bool(json, "relationship_pass")?;
+        let layer4_pass = extract_json_bool(json, "layer4_pass")?;
+        let metadata_pass = extract_json_bool(json, "metadata_pass")?;
+
+        Ok(Self {
+            name,
+            layer1_pass,
+            layer2_pass,
+            relationship_pass,
+            layer4_pass,
+            metadata_pass,
+        })
+    }
+
+    /// Serialize to JSON format.
+    pub fn to_json(&self) -> String {
+        format!(
+            r#"    {{
+      "name": "{}",
+      "layer1_pass": {},
+      "layer2_pass": {},
+      "relationship_pass": {},
+      "layer4_pass": {},
+      "metadata_pass": {}
+    }}"#,
+            self.name,
+            self.layer1_pass,
+            self.layer2_pass,
+            self.relationship_pass,
+            self.layer4_pass,
+            self.metadata_pass
+        )
+    }
+}
+
+/// A regression detected when a previously passing layer now fails.
+#[derive(Debug, Clone)]
+pub struct Regression {
+    /// Fixture name
+    pub fixture: String,
+    /// Which layer regressed
+    pub layer: String,
+    /// Description of the regression
+    pub message: String,
+}
+
+impl std::fmt::Display for Regression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}] {}: {}", self.fixture, self.layer, self.message)
+    }
+}
+
+/// Parity baseline containing expected states for all fixtures.
+///
+/// The baseline is stored as a JSON file (`tests/e2e/parity-baseline.json`) and
+/// tracks which fixtures pass at each layer. This enables:
+/// - Detecting regressions: previously passing tests now failing
+/// - Tracking progress: new fixtures passing that were previously failing
+/// - CI enforcement: fail the build if regressions are detected
+#[derive(Debug, Clone)]
+pub struct ParityBaseline {
+    /// Baseline format version for future compatibility
+    pub version: u32,
+    /// ISO 8601 timestamp when baseline was last updated
+    pub updated: String,
+    /// Git commit hash when baseline was established
+    pub commit: Option<String>,
+    /// Per-fixture baseline states
+    pub fixtures: Vec<FixtureBaseline>,
+}
+
+impl ParityBaseline {
+    /// Create a new empty baseline.
+    pub fn new() -> Self {
+        Self {
+            version: 1,
+            updated: chrono::Utc::now().to_rfc3339(),
+            commit: get_git_commit_hash(),
+            fixtures: Vec::new(),
+        }
+    }
+
+    /// Create a baseline from current ParityMetrics (captures current state as baseline).
+    pub fn from_metrics(metrics: &ParityMetrics) -> Self {
+        let fixtures = metrics
+            .fixtures
+            .iter()
+            .map(FixtureBaseline::from_metrics)
+            .collect();
+
+        Self {
+            version: 1,
+            updated: chrono::Utc::now().to_rfc3339(),
+            commit: get_git_commit_hash(),
+            fixtures,
+        }
+    }
+
+    /// Load baseline from JSON string.
+    pub fn from_json(json: &str) -> Result<Self, String> {
+        // Parse version
+        let version = extract_json_number(json, "version")? as u32;
+
+        // Parse updated timestamp
+        let updated = extract_json_string(json, "updated")?;
+
+        // Parse commit (may be null)
+        let commit = extract_json_string_optional(json, "commit");
+
+        // Parse fixtures array
+        let fixtures = parse_fixtures_array(json)?;
+
+        Ok(Self {
+            version,
+            updated,
+            commit,
+            fixtures,
+        })
+    }
+
+    /// Load baseline from a file path.
+    pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read baseline file: {}", e))?;
+        Self::from_json(&content)
+    }
+
+    /// Serialize baseline to JSON format.
+    pub fn to_json(&self) -> String {
+        let mut json = String::new();
+        json.push_str("{\n");
+        json.push_str(&format!("  \"version\": {},\n", self.version));
+        json.push_str(&format!("  \"updated\": \"{}\",\n", self.updated));
+
+        if let Some(ref commit) = self.commit {
+            json.push_str(&format!("  \"commit\": \"{}\",\n", commit));
+        } else {
+            json.push_str("  \"commit\": null,\n");
+        }
+
+        json.push_str("  \"fixtures\": [\n");
+        for (i, fixture) in self.fixtures.iter().enumerate() {
+            json.push_str(&fixture.to_json());
+            if i < self.fixtures.len() - 1 {
+                json.push_str(",\n");
+            } else {
+                json.push('\n');
+            }
+        }
+        json.push_str("  ]\n");
+        json.push_str("}\n");
+
+        json
+    }
+
+    /// Save baseline to a file.
+    pub fn to_file(&self, path: &std::path::Path) -> Result<(), String> {
+        std::fs::write(path, self.to_json())
+            .map_err(|e| format!("Failed to write baseline file: {}", e))
+    }
+
+    /// Get baseline for a specific fixture by name.
+    pub fn get_fixture(&self, name: &str) -> Option<&FixtureBaseline> {
+        self.fixtures.iter().find(|f| f.name == name)
+    }
+
+    /// Compare current metrics against this baseline to detect regressions.
+    ///
+    /// A regression occurs when a layer that passed in the baseline now fails.
+    /// Returns a list of all detected regressions.
+    pub fn detect_regressions(&self, current: &ParityMetrics) -> Vec<Regression> {
+        let mut regressions = Vec::new();
+
+        for current_fixture in &current.fixtures {
+            // Skip fixtures that had errors (build failures, etc.)
+            if current_fixture.status == "ERROR" {
+                // If the fixture exists in baseline and had passing layers,
+                // treat ERROR as regression for those layers
+                if let Some(baseline) = self.get_fixture(&current_fixture.name) {
+                    if baseline.layer1_pass {
+                        regressions.push(Regression {
+                            fixture: current_fixture.name.clone(),
+                            layer: "Layer 1".to_string(),
+                            message: format!(
+                                "Build error (was passing): {}",
+                                current_fixture
+                                    .error_message
+                                    .as_deref()
+                                    .unwrap_or("unknown error")
+                            ),
+                        });
+                    }
+                }
+                continue;
+            }
+
+            // Find the baseline for this fixture
+            let Some(baseline) = self.get_fixture(&current_fixture.name) else {
+                // New fixture not in baseline - not a regression
+                continue;
+            };
+
+            // Check each layer for regression
+            if baseline.layer1_pass && current_fixture.layer1_errors > 0 {
+                regressions.push(Regression {
+                    fixture: current_fixture.name.clone(),
+                    layer: "Layer 1 (inventory)".to_string(),
+                    message: format!(
+                        "was passing, now has {} errors",
+                        current_fixture.layer1_errors
+                    ),
+                });
+            }
+
+            if baseline.layer2_pass && current_fixture.layer2_errors > 0 {
+                regressions.push(Regression {
+                    fixture: current_fixture.name.clone(),
+                    layer: "Layer 2 (properties)".to_string(),
+                    message: format!(
+                        "was passing, now has {} errors",
+                        current_fixture.layer2_errors
+                    ),
+                });
+            }
+
+            if baseline.relationship_pass && current_fixture.relationship_errors > 0 {
+                regressions.push(Regression {
+                    fixture: current_fixture.name.clone(),
+                    layer: "Relationships".to_string(),
+                    message: format!(
+                        "was passing, now has {} errors",
+                        current_fixture.relationship_errors
+                    ),
+                });
+            }
+
+            if baseline.layer4_pass && current_fixture.layer4_errors > 0 {
+                regressions.push(Regression {
+                    fixture: current_fixture.name.clone(),
+                    layer: "Layer 4 (ordering)".to_string(),
+                    message: format!(
+                        "was passing, now has {} errors",
+                        current_fixture.layer4_errors
+                    ),
+                });
+            }
+
+            if baseline.metadata_pass && current_fixture.metadata_errors > 0 {
+                regressions.push(Regression {
+                    fixture: current_fixture.name.clone(),
+                    layer: "Metadata".to_string(),
+                    message: format!(
+                        "was passing, now has {} errors",
+                        current_fixture.metadata_errors
+                    ),
+                });
+            }
+        }
+
+        regressions
+    }
+
+    /// Find improvements: layers that were failing but now pass.
+    pub fn detect_improvements(&self, current: &ParityMetrics) -> Vec<String> {
+        let mut improvements = Vec::new();
+
+        for current_fixture in &current.fixtures {
+            // Skip fixtures with errors
+            if current_fixture.status == "ERROR" {
+                continue;
+            }
+
+            let Some(baseline) = self.get_fixture(&current_fixture.name) else {
+                // New fixture - if it has any passing layers, note that
+                if current_fixture.layer1_errors == 0 {
+                    improvements.push(format!(
+                        "[{}] New fixture with passing Layer 1",
+                        current_fixture.name
+                    ));
+                }
+                continue;
+            };
+
+            // Check each layer for improvement
+            if !baseline.layer1_pass && current_fixture.layer1_errors == 0 {
+                improvements.push(format!(
+                    "[{}] Layer 1 (inventory) now passes!",
+                    current_fixture.name
+                ));
+            }
+
+            if !baseline.layer2_pass && current_fixture.layer2_errors == 0 {
+                improvements.push(format!(
+                    "[{}] Layer 2 (properties) now passes!",
+                    current_fixture.name
+                ));
+            }
+
+            if !baseline.relationship_pass && current_fixture.relationship_errors == 0 {
+                improvements.push(format!(
+                    "[{}] Relationships now pass!",
+                    current_fixture.name
+                ));
+            }
+
+            if !baseline.layer4_pass && current_fixture.layer4_errors == 0 {
+                improvements.push(format!(
+                    "[{}] Layer 4 (ordering) now passes!",
+                    current_fixture.name
+                ));
+            }
+
+            if !baseline.metadata_pass && current_fixture.metadata_errors == 0 {
+                improvements.push(format!("[{}] Metadata now passes!", current_fixture.name));
+            }
+        }
+
+        improvements
+    }
+
+    /// Generate a summary of regression check results.
+    pub fn print_regression_summary(&self, current: &ParityMetrics) {
+        let regressions = self.detect_regressions(current);
+        let improvements = self.detect_improvements(current);
+
+        println!("\n{}", "=".repeat(60));
+        println!("REGRESSION CHECK RESULTS");
+        println!("{}\n", "=".repeat(60));
+
+        if regressions.is_empty() {
+            println!("✓ No regressions detected!");
+        } else {
+            println!("✗ {} REGRESSIONS DETECTED:\n", regressions.len());
+            for regression in &regressions {
+                println!("  - {}", regression);
+            }
+        }
+
+        if !improvements.is_empty() {
+            println!("\n✓ {} improvements detected:\n", improvements.len());
+            for improvement in &improvements {
+                println!("  + {}", improvement);
+            }
+        }
+
+        println!();
+    }
+}
+
+impl Default for ParityBaseline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Helper functions for simple JSON parsing without external dependencies
+
+fn extract_json_string(json: &str, key: &str) -> Result<String, String> {
+    let pattern = format!(r#""{}"\s*:\s*""#, key);
+    let re = regex::Regex::new(&pattern).map_err(|e| e.to_string())?;
+
+    if let Some(m) = re.find(json) {
+        let start = m.end();
+        let remaining = &json[start..];
+        if let Some(end) = remaining.find('"') {
+            return Ok(remaining[..end].to_string());
+        }
+    }
+    Err(format!("Failed to parse JSON key: {}", key))
+}
+
+fn extract_json_string_optional(json: &str, key: &str) -> Option<String> {
+    // Check for null value
+    let null_pattern = format!(r#""{}"\s*:\s*null"#, key);
+    if regex::Regex::new(&null_pattern).ok()?.is_match(json) {
+        return None;
+    }
+    extract_json_string(json, key).ok()
+}
+
+fn extract_json_bool(json: &str, key: &str) -> Result<bool, String> {
+    let pattern = format!(r#""{}"\s*:\s*(true|false)"#, key);
+    let re = regex::Regex::new(&pattern).map_err(|e| e.to_string())?;
+
+    if let Some(caps) = re.captures(json) {
+        if let Some(m) = caps.get(1) {
+            return Ok(m.as_str() == "true");
+        }
+    }
+    Err(format!("Failed to parse JSON boolean: {}", key))
+}
+
+fn extract_json_number(json: &str, key: &str) -> Result<i64, String> {
+    let pattern = format!(r#""{}"\s*:\s*(\d+)"#, key);
+    let re = regex::Regex::new(&pattern).map_err(|e| e.to_string())?;
+
+    if let Some(caps) = re.captures(json) {
+        if let Some(m) = caps.get(1) {
+            return m
+                .as_str()
+                .parse()
+                .map_err(|e: std::num::ParseIntError| e.to_string());
+        }
+    }
+    Err(format!("Failed to parse JSON number: {}", key))
+}
+
+fn parse_fixtures_array(json: &str) -> Result<Vec<FixtureBaseline>, String> {
+    // Find the fixtures array
+    let fixtures_start = json.find(r#""fixtures""#).ok_or("Missing fixtures array")?;
+    let array_start = json[fixtures_start..]
+        .find('[')
+        .ok_or("Missing array start")?
+        + fixtures_start;
+
+    // Find matching closing bracket
+    let mut depth = 0;
+    let mut array_end = array_start;
+    for (i, c) in json[array_start..].chars().enumerate() {
+        match c {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    array_end = array_start + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let array_content = &json[array_start + 1..array_end];
+
+    // Parse each fixture object
+    let mut fixtures = Vec::new();
+    let mut depth = 0;
+    let mut obj_start = None;
+
+    for (i, c) in array_content.chars().enumerate() {
+        match c {
+            '{' => {
+                if depth == 0 {
+                    obj_start = Some(i);
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(start) = obj_start {
+                        let obj = &array_content[start..=i];
+                        fixtures.push(FixtureBaseline::from_json(obj)?);
+                    }
+                    obj_start = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(fixtures)
+}

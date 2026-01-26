@@ -482,9 +482,27 @@ Reorganize and improve test infrastructure.
   - Location: `tests/e2e/parity/types.rs:1244-1680` (types), `tests/e2e/dotnet_comparison_tests.rs:3719-3958` (tests), `.github/workflows/ci.yml:91-138`
   - Acceptance: Generate Markdown report of all differences ✓, Save as CI artifact ✓
 
-- [ ] **8.4 Add regression detection**
-  - Fail CI if previously passing parity tests now fail
-  - Track known failures vs new failures
+- [x] **8.4 Add regression detection** ✓ COMPLETE
+  - Added `FixtureBaseline` struct in `tests/e2e/parity/types.rs` to capture per-fixture pass/fail state per layer
+  - Added `ParityBaseline` struct for storing baseline state of all fixtures with JSON serialization
+  - Added `Regression` struct to represent detected regressions with fixture, layer, and message
+  - Implemented `detect_regressions()` method to compare current results against baseline
+  - Implemented `detect_improvements()` method to find layers that improved since baseline
+  - Added `print_regression_summary()` for CI-friendly output of regression check results
+  - Added `tests/e2e/parity-baseline.json` baseline file tracking known fixture states
+  - Tests added:
+    - `test_parity_regression_check` - CI test that FAILS if regressions detected
+    - `test_fixture_baseline_json_roundtrip` - Tests JSON serialization of FixtureBaseline
+    - `test_parity_baseline_json_roundtrip` - Tests JSON serialization of ParityBaseline
+    - `test_regression_detection_logic` - Tests regression detection algorithm
+    - `test_improvement_detection_logic` - Tests improvement detection algorithm
+    - `test_new_fixture_no_regression` - Verifies new fixtures don't trigger false regressions
+    - `test_baseline_from_metrics` - Tests creating baseline from ParityMetrics
+    - `test_generate_baseline` - Generates new baseline from current test results
+  - Updated `.github/workflows/ci.yml` with "Check for regressions" step before metrics collection
+  - To update baseline: `PARITY_UPDATE_BASELINE=1 cargo test --test e2e_tests test_parity_regression_check -- --nocapture`
+  - Location: `tests/e2e/parity/types.rs:1699-2232` (types), `tests/e2e/dotnet_comparison_tests.rs:4493-4808` (tests)
+  - Acceptance: CI fails on regressions ✓, tracks known vs new failures ✓, baseline update workflow ✓
 
 ---
 
@@ -499,9 +517,9 @@ Reorganize and improve test infrastructure.
 | Phase 5: Metadata Files | **COMPLETE** | 5/5 ✓ |
 | Phase 6: Per-Feature Tests | **COMPLETE** | 5/5 ✓ |
 | Phase 7: Canonical XML | **COMPLETE** | 4/4 ✓ |
-| Phase 8: Infrastructure | In Progress | 3/4 |
+| Phase 8: Infrastructure | **COMPLETE** | 4/4 ✓ |
 
-**Overall Progress**: 38/39 tasks complete
+**Overall Progress**: 39/39 tasks complete ✓
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
@@ -518,6 +536,7 @@ Phase 7 provides canonical XML comparison for true byte-level matching after nor
 Phase 8.1 reorganized the parity test infrastructure into a modular structure with 7 separate comparison layers, moving comparison logic from monolithic `dacpac_compare.rs` into `tests/e2e/parity/` with each layer handling a distinct responsibility (inventory, properties, SqlPackage, structure, relationships, metadata, canonical XML). This organization improves maintainability and makes it easy to extend with new comparison layers in future phases.
 Phase 8.2 added CI progress tracking with `ParityMetrics` struct that collects structured test results across all fixtures. The metrics include per-layer pass rates, per-fixture error counts, and are output as JSON for CI systems to parse and track over time. The CI workflow now collects metrics, displays a summary, and uploads the JSON as an artifact.
 Phase 8.3 added Markdown report generation with `ParityReport` struct and `to_markdown()` method. The report includes summary tables with pass rates per layer, per-fixture results with status emojis, and detailed error breakdowns (truncated to 10 errors per section for readability). CI workflow generates the report, displays a summary in logs, and uploads the Markdown file as an artifact alongside the JSON metrics.
+Phase 8.4 added regression detection with `ParityBaseline` struct and `detect_regressions()` method. The baseline file (`tests/e2e/parity-baseline.json`) tracks which fixtures pass at each layer. CI now runs `test_parity_regression_check` which compares current results against baseline and FAILS the build if any previously passing layers now fail. This prevents regressions while still allowing known failures to exist.
 
 ---
 
