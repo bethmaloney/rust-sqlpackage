@@ -474,23 +474,9 @@ pub fn compare_origin_xml(rust_dacpac: &Path, dotnet_dacpac: &Path) -> Vec<Metad
         });
     }
 
-    // Compare ProductName (informational - expected to differ)
-    if rust_origin.product_name != dotnet_origin.product_name {
-        errors.push(MetadataFileError::OriginXmlMismatch {
-            field_name: "Operation/ProductName".to_string(),
-            rust_value: rust_origin.product_name.clone(),
-            dotnet_value: dotnet_origin.product_name.clone(),
-        });
-    }
-
-    // Compare ProductVersion (informational - expected to differ)
-    if rust_origin.product_version != dotnet_origin.product_version {
-        errors.push(MetadataFileError::OriginXmlMismatch {
-            field_name: "Operation/ProductVersion".to_string(),
-            rust_value: rust_origin.product_version.clone(),
-            dotnet_value: dotnet_origin.product_version.clone(),
-        });
-    }
+    // Note: ProductName and ProductVersion are intentionally NOT compared.
+    // These are expected to differ between rust-sqlpackage and DotNet DacFx
+    // as they identify the tool that generated the dacpac.
 
     // Compare ProductSchema
     if rust_origin.product_schema != dotnet_origin.product_schema {

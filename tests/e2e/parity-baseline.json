@@ -1,15 +1,15 @@
 {
   "version": 1,
-  "updated": "2026-01-26T09:50:06.524802067+00:00",
-  "commit": "53b73e9",
+  "updated": "2026-01-26T10:46:46.561426052+00:00",
+  "commit": "e8363a1",
   "fixtures": [
     {
       "name": "all_constraints",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "ampersand_encoding",
@@ -17,7 +17,7 @@
       "layer2_pass": false,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "build_with_exclude",
@@ -25,7 +25,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "collation",
@@ -33,7 +33,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": true,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "column_properties",
@@ -41,7 +41,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "composite_fk",
@@ -49,7 +49,7 @@
       "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "computed_columns",
@@ -57,7 +57,7 @@
       "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "constraint_nocheck",
@@ -65,15 +65,15 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "constraints",
       "layer1_pass": false,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "database_options",
@@ -81,7 +81,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "default_constraints_named",
@@ -89,7 +89,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "e2e_comprehensive",
@@ -105,7 +105,7 @@
       "layer2_pass": false,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "element_types",
@@ -113,7 +113,7 @@
       "layer2_pass": false,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "empty_project",
@@ -121,7 +121,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": true,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "extended_properties",
@@ -129,7 +129,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "external_reference",
@@ -145,7 +145,7 @@
       "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": true,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "fk_actions",
@@ -153,7 +153,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "fulltext_index",
@@ -161,7 +161,7 @@
       "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "header_section",
@@ -169,7 +169,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "identity_column",
@@ -177,7 +177,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "index_naming",
@@ -185,7 +185,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "index_options",
@@ -193,7 +193,7 @@
       "layer2_pass": false,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "index_properties",
@@ -201,7 +201,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "indexes",
@@ -209,7 +209,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": true,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "inline_constraints",
@@ -217,7 +217,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "instead_of_triggers",
@@ -225,7 +225,7 @@
       "layer2_pass": false,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "large_table",
@@ -233,7 +233,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "multiple_indexes",
@@ -241,7 +241,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "only_schemas",
@@ -249,7 +249,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": true,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "pre_post_deploy",
@@ -265,7 +265,7 @@
       "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "procedure_parameters",
@@ -273,7 +273,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "reserved_keywords",
@@ -281,7 +281,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "scalar_types",
@@ -289,7 +289,7 @@
       "layer2_pass": false,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "self_ref_fk",
@@ -297,7 +297,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "simple_table",
@@ -305,7 +305,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "sqlcmd_includes",
@@ -321,7 +321,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "table_types",
@@ -329,7 +329,7 @@
       "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "unicode_identifiers",
@@ -337,7 +337,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "unresolved_reference",
@@ -353,7 +353,7 @@
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "view_options",
@@ -361,7 +361,7 @@
       "layer2_pass": false,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     },
     {
       "name": "views",
@@ -369,7 +369,7 @@
       "layer2_pass": false,
       "relationship_pass": false,
       "layer4_pass": false,
-      "metadata_pass": false
+      "metadata_pass": true
     }
   ]
 }

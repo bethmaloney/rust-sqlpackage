@@ -31,7 +31,7 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | Layer 2 (Properties) | 35/46 | 76.1% | |
 | Layer 3 (Relationships) | 30/46 | 65.2% | Improved from 28/46 due to CheckExpressionDependencies |
 | Layer 4 (Structure) | 5/46 | 10.9% | |
-| Layer 5 (Metadata) | 0/46 | 0.0% | |
+| Layer 5 (Metadata) | 41/46 | 89.1% | |
 
 ### 9.1 Deterministic Element Ordering
 
@@ -143,10 +143,11 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - Match StreamVersions format
   - Expected impact: 40+ fixtures
 
-- [ ] **9.4.2 Update comparison tolerance**
+- [x] **9.4.2 Update comparison tolerance** ✓
   - File: `tests/e2e/parity/layer6_metadata.rs`
-  - Allow ProductName/ProductVersion to differ (expected)
-  - Expected impact: 40+ fixtures
+  - Changed comparison logic to NOT compare ProductName and ProductVersion since these are expected to differ between rust-sqlpackage and DotNet
+  - These fields identify the tool that generated the dacpac, so differences are expected
+  - **Actual impact**: Metadata layer improved from 0/46 (0%) to 41/46 (89.1%)
 
 - [ ] **9.4.3 DacMetadata.xml alignment**
   - File: `src/dacpac/metadata_xml.rs`
@@ -183,10 +184,10 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
 | 9.2 Property Value Fixes | COMPLETE | 6/6 |
 | 9.3 Relationship Completeness | COMPLETE | 4/4 |
-| 9.4 Metadata File Alignment | PENDING | 0/4 |
+| 9.4 Metadata File Alignment | IN PROGRESS | 1/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 12/19 tasks
+**Phase 9 Overall**: 13/19 tasks
 
 ### Expected Outcomes
 
@@ -215,6 +216,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 12/19 |
+| Phase 9 | **IN PROGRESS** 13/19 |
 
-**Total**: 51/58 tasks complete
+**Total**: 52/58 tasks complete
