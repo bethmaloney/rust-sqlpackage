@@ -172,9 +172,14 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 
 **Goal:** Fix remaining edge cases for final push to 100%.
 
-- [ ] **9.5.1 View columns (if needed)**
-  - Add SqlViewColumn elements for view column definitions
-  - Expected impact: 2-3 fixtures
+- [x] **9.5.1 View columns** ✓
+  - Added SqlComputedColumn elements for view columns (matching DotNet's representation)
+  - Implemented proper view options detection: IsSchemaBound, IsWithCheckOption, IsMetadataReported
+  - Added IsAnsiNullsOn property emission only for views with options (matching DotNet behavior)
+  - Added Columns relationship with ExpressionDependencies for direct column references
+  - Added QueryDependencies relationship listing all referenced tables and columns
+  - DotNet only emits columns/dependencies for schema-bound or with-check-option views
+  - **Actual impact**: views fixture now passes 100% parity, view_options improved significantly
 
 - [ ] **9.5.2 Inline constraint annotation disambiguator**
   - Match DotNet's hashing algorithm if different
@@ -194,9 +199,9 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | 9.2 Property Value Fixes | COMPLETE | 6/6 |
 | 9.3 Relationship Completeness | COMPLETE | 4/4 |
 | 9.4 Metadata File Alignment | COMPLETE | 4/4 |
-| 9.5 Edge Cases | PENDING | 0/3 |
+| 9.5 Edge Cases | IN PROGRESS | 1/3 |
 
-**Phase 9 Overall**: 16/19 tasks
+**Phase 9 Overall**: 17/19 tasks
 
 ### Expected Outcomes
 
@@ -225,6 +230,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 16/19 |
+| Phase 9 | **IN PROGRESS** 17/19 |
 
-**Total**: 55/58 tasks complete
+**Total**: 56/58 tasks complete

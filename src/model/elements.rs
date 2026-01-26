@@ -133,6 +133,12 @@ pub struct ViewElement {
     pub schema: String,
     pub name: String,
     pub definition: String,
+    /// Whether the view has WITH SCHEMABINDING option
+    pub is_schema_bound: bool,
+    /// Whether the view has WITH CHECK OPTION
+    pub is_with_check_option: bool,
+    /// Whether the view has WITH VIEW_METADATA option
+    pub is_metadata_reported: bool,
 }
 
 /// Stored procedure element

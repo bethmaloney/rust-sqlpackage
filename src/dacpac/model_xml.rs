@@ -637,11 +637,49 @@ fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::R
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    // Extract just the query part (after AS) from the view definition
-    // QueryScript should not include the CREATE VIEW ... AS prefix
+    // Write properties in DotNet order:
+    // 1. IsSchemaBound (if true)
+    if view.is_schema_bound {
+        write_property(writer, "IsSchemaBound", "True")?;
+    }
+
+    // 2. IsMetadataReported (if true)
+    if view.is_metadata_reported {
+        write_property(writer, "IsMetadataReported", "True")?;
+    }
+
+    // 3. QueryScript
     let query_script = extract_view_query(&view.definition);
     write_script_property(writer, "QueryScript", &query_script)?;
 
+    // 4. IsWithCheckOption (if true)
+    if view.is_with_check_option {
+        write_property(writer, "IsWithCheckOption", "True")?;
+    }
+
+    // 5. IsAnsiNullsOn - only emit for views with options (DotNet behavior)
+    if view.is_schema_bound || view.is_with_check_option || view.is_metadata_reported {
+        write_property(writer, "IsAnsiNullsOn", "True")?;
+    }
+
+    // Only emit Columns and QueryDependencies for schema-bound or with-check-option views
+    // DotNet only analyzes dependencies for these types of views
+    if view.is_schema_bound || view.is_with_check_option {
+        // Extract view columns and dependencies from the query
+        let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &view.schema);
+
+        // 6. Write Columns relationship with SqlComputedColumn elements
+        if !columns.is_empty() {
+            write_view_columns(writer, &full_name, &columns)?;
+        }
+
+        // 7. Write QueryDependencies relationship
+        if !query_deps.is_empty() {
+            write_query_dependencies(writer, &query_deps)?;
+        }
+    }
+
+    // 8. Schema relationship
     write_schema_relationship(writer, &view.schema)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -671,6 +709,409 @@ fn extract_view_query(definition: &str) -> String {
     }
     // Fallback: return the original definition if we can't find AS
     definition.to_string()
+}
+
+/// Represents a view column with its name and optional source dependency
+#[derive(Debug, Clone)]
+struct ViewColumn {
+    /// The output column name (alias or original name)
+    name: String,
+    /// The source column reference (if direct column reference), e.g., "[dbo].[Products].[Id]"
+    source_ref: Option<String>,
+}
+
+/// Extract view columns and query dependencies from a SELECT statement
+/// Returns: (columns, query_dependencies)
+/// - columns: List of output columns with their source references
+/// - query_dependencies: All tables and columns referenced in the query
+fn extract_view_columns_and_deps(
+    query: &str,
+    default_schema: &str,
+) -> (Vec<ViewColumn>, Vec<String>) {
+    let mut columns = Vec::new();
+    let mut query_deps = Vec::new();
+
+    // Parse table aliases from FROM clause and JOINs
+    let table_aliases = extract_table_aliases(query, default_schema);
+
+    // Extract SELECT column list
+    let select_columns = extract_select_columns(query);
+
+    for col_expr in select_columns {
+        let (col_name, source_ref) =
+            parse_column_expression(&col_expr, &table_aliases, default_schema);
+        columns.push(ViewColumn {
+            name: col_name,
+            source_ref,
+        });
+    }
+
+    // Build QueryDependencies: tables first, then columns
+    // Add all referenced tables (unique)
+    for (_alias, table_ref) in &table_aliases {
+        if !query_deps.contains(table_ref) {
+            query_deps.push(table_ref.clone());
+        }
+    }
+
+    // Add column references from the SELECT columns (the ones we already parsed)
+    for col in &columns {
+        if let Some(ref source_ref) = col.source_ref {
+            if !query_deps.contains(source_ref) {
+                query_deps.push(source_ref.clone());
+            }
+        }
+    }
+
+    // Add all column references from the rest of the query (WHERE, ON, GROUP BY, etc.)
+    let all_column_refs = extract_all_column_references(query, &table_aliases, default_schema);
+    for col_ref in all_column_refs {
+        if !query_deps.contains(&col_ref) {
+            query_deps.push(col_ref);
+        }
+    }
+
+    (columns, query_deps)
+}
+
+/// Extract table aliases from FROM and JOIN clauses
+/// Returns a map of alias -> full table reference (e.g., "p" -> "[dbo].[Products]")
+fn extract_table_aliases(query: &str, default_schema: &str) -> Vec<(String, String)> {
+    let mut aliases = Vec::new();
+
+    // Regex to find table references with optional aliases
+    // Matches patterns like:
+    // - FROM [dbo].[Products] p
+    // - FROM [dbo].[Products] AS p
+    // - JOIN [dbo].[Categories] c ON
+    // - FROM Products (without schema)
+    // - FROM [dbo].[Products]; (with trailing semicolon)
+    let table_pattern = regex::Regex::new(
+        r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+(\[?[^\]\s]+\]?\.\[?[^\]\s]+\]?|\[?[^\]\s;]+\]?)\s*(?:AS\s+)?(\w+)?",
+    )
+    .unwrap();
+
+    for cap in table_pattern.captures_iter(query) {
+        let table_name = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let alias = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+
+        // Clean up any trailing semicolons or whitespace
+        let table_name_cleaned = table_name.trim_end_matches(|c| c == ';' || c == ' ');
+
+        let full_table_ref = normalize_table_reference(table_name_cleaned, default_schema);
+
+        if !alias.is_empty() {
+            let alias_upper = alias.to_uppercase();
+            // Skip if alias is actually a keyword
+            if !matches!(
+                alias_upper.as_str(),
+                "ON" | "WHERE"
+                    | "INNER"
+                    | "LEFT"
+                    | "RIGHT"
+                    | "OUTER"
+                    | "CROSS"
+                    | "GROUP"
+                    | "ORDER"
+                    | "HAVING"
+                    | "UNION"
+                    | "WITH"
+                    | "AS"
+            ) {
+                aliases.push((alias.to_string(), full_table_ref.clone()));
+            }
+        }
+
+        // Also add the table name itself as an alias (for unaliased references)
+        let simple_name = extract_simple_table_name(&full_table_ref);
+        if !simple_name.is_empty() {
+            aliases.push((simple_name, full_table_ref));
+        }
+    }
+
+    aliases
+}
+
+/// Extract simple table name from full reference like "[dbo].[Products]" -> "Products"
+fn extract_simple_table_name(full_ref: &str) -> String {
+    let parts: Vec<&str> = full_ref.split('.').collect();
+    if parts.len() >= 2 {
+        parts[1].trim_matches(|c| c == '[' || c == ']').to_string()
+    } else if !parts.is_empty() {
+        parts[0].trim_matches(|c| c == '[' || c == ']').to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Normalize a table reference to [schema].[table] format
+fn normalize_table_reference(table_name: &str, default_schema: &str) -> String {
+    let cleaned = table_name.trim();
+
+    // Check if already has schema
+    if cleaned.contains('.') {
+        // Split and normalize
+        let parts: Vec<&str> = cleaned.split('.').collect();
+        if parts.len() >= 2 {
+            let schema = parts[0].trim_matches(|c| c == '[' || c == ']');
+            let table = parts[1].trim_matches(|c| c == '[' || c == ']');
+            return format!("[{}].[{}]", schema, table);
+        }
+    }
+
+    // No schema, add default
+    let table = cleaned.trim_matches(|c| c == '[' || c == ']');
+    format!("[{}].[{}]", default_schema, table)
+}
+
+/// Extract SELECT column expressions from the query
+fn extract_select_columns(query: &str) -> Vec<String> {
+    let mut columns = Vec::new();
+
+    // Find the SELECT ... FROM section
+    let upper = query.to_uppercase();
+    let select_pos = upper.find("SELECT");
+    let from_pos = upper.find("FROM");
+
+    if let (Some(start), Some(end)) = (select_pos, from_pos) {
+        let select_section = &query[start + 6..end].trim();
+
+        // Split by comma, but handle nested parentheses
+        let mut current = String::new();
+        let mut paren_depth = 0;
+
+        for ch in select_section.chars() {
+            match ch {
+                '(' => {
+                    paren_depth += 1;
+                    current.push(ch);
+                }
+                ')' => {
+                    paren_depth -= 1;
+                    current.push(ch);
+                }
+                ',' if paren_depth == 0 => {
+                    let trimmed = current.trim().to_string();
+                    if !trimmed.is_empty() {
+                        columns.push(trimmed);
+                    }
+                    current = String::new();
+                }
+                _ => current.push(ch),
+            }
+        }
+
+        // Add the last column
+        let trimmed = current.trim().to_string();
+        if !trimmed.is_empty() {
+            columns.push(trimmed);
+        }
+    }
+
+    columns
+}
+
+/// Parse a column expression and return (output_name, source_reference)
+fn parse_column_expression(
+    expr: &str,
+    table_aliases: &[(String, String)],
+    default_schema: &str,
+) -> (String, Option<String>) {
+    let trimmed = expr.trim();
+    let upper = trimmed.to_uppercase();
+
+    // Check for AS alias
+    // Handle both "column AS alias" and "column alias" forms
+    let (col_expr, alias) = if let Some(as_pos) = upper.rfind(" AS ") {
+        let alias = trimmed[as_pos + 4..]
+            .trim()
+            .trim_matches(|c| c == '[' || c == ']');
+        let col = trimmed[..as_pos].trim();
+        (col.to_string(), Some(alias.to_string()))
+    } else {
+        // No AS keyword - check for space-separated alias (but not function calls)
+        // Only treat last word as alias if it's a simple identifier
+        (trimmed.to_string(), None)
+    };
+
+    // Determine the output column name
+    let output_name = alias.unwrap_or_else(|| {
+        // Extract the column name from the expression
+        extract_column_name_from_expr(&col_expr)
+    });
+
+    // Determine the source reference (for simple column references)
+    let source_ref = resolve_column_reference(&col_expr, table_aliases, default_schema);
+
+    (output_name, source_ref)
+}
+
+/// Extract the column name from an expression like "[Id]", "t.[Name]", "COUNT(*)"
+fn extract_column_name_from_expr(expr: &str) -> String {
+    let trimmed = expr.trim();
+
+    // If it's a function call (contains parentheses), return the expression as-is
+    if trimmed.contains('(') {
+        return trimmed.to_string();
+    }
+
+    // If it's a qualified reference like "t.[Name]" or "[dbo].[Products].[Name]"
+    let parts: Vec<&str> = trimmed.split('.').collect();
+    if let Some(last) = parts.last() {
+        return last.trim_matches(|c| c == '[' || c == ']').to_string();
+    }
+
+    trimmed.trim_matches(|c| c == '[' || c == ']').to_string()
+}
+
+/// Resolve a column reference to its full [schema].[table].[column] form
+/// Returns None for aggregate/function expressions
+fn resolve_column_reference(
+    expr: &str,
+    table_aliases: &[(String, String)],
+    _default_schema: &str,
+) -> Option<String> {
+    let trimmed = expr.trim();
+
+    // If it's a function call (contains parentheses), no direct reference
+    if trimmed.contains('(') {
+        return None;
+    }
+
+    // Parse the column reference
+    let parts: Vec<&str> = trimmed.split('.').collect();
+
+    match parts.len() {
+        1 => {
+            // Just column name, try to resolve using first table alias
+            let col_name = parts[0].trim_matches(|c| c == '[' || c == ']');
+            if let Some((_, table_ref)) = table_aliases.first() {
+                return Some(format!("{}.[{}]", table_ref, col_name));
+            }
+            None
+        }
+        2 => {
+            // alias.column or schema.table
+            let alias_or_schema = parts[0].trim_matches(|c| c == '[' || c == ']');
+            let col_or_table = parts[1].trim_matches(|c| c == '[' || c == ']');
+
+            // Try to find matching alias
+            for (alias, table_ref) in table_aliases {
+                if alias.eq_ignore_ascii_case(alias_or_schema) {
+                    return Some(format!("{}.[{}]", table_ref, col_or_table));
+                }
+            }
+
+            // If not found as alias, assume it's schema.table (unusual for column ref)
+            None
+        }
+        3 => {
+            // schema.table.column
+            let schema = parts[0].trim_matches(|c| c == '[' || c == ']');
+            let table = parts[1].trim_matches(|c| c == '[' || c == ']');
+            let column = parts[2].trim_matches(|c| c == '[' || c == ']');
+            Some(format!("[{}].[{}].[{}]", schema, table, column))
+        }
+        _ => None,
+    }
+}
+
+/// Extract all column references from the entire query (SELECT, WHERE, ON, GROUP BY, etc.)
+fn extract_all_column_references(
+    query: &str,
+    table_aliases: &[(String, String)],
+    default_schema: &str,
+) -> Vec<String> {
+    let mut refs = Vec::new();
+
+    // Find all column-like references: alias.column or [schema].[table].[column]
+    // Pattern matches: word.word, [word].[word], word.[word], etc.
+    let col_pattern = regex::Regex::new(r"(\[?\w+\]?)\.(\[?\w+\]?)(?:\.(\[?\w+\]?))?").unwrap();
+
+    for cap in col_pattern.captures_iter(query) {
+        let full_match = cap.get(0).map(|m| m.as_str()).unwrap_or("");
+
+        // Skip if it looks like a function call argument position
+        if full_match.contains("(") || full_match.contains(")") {
+            continue;
+        }
+
+        // Try to resolve to full column reference
+        if let Some(resolved) = resolve_column_reference(full_match, table_aliases, default_schema)
+        {
+            if !refs.contains(&resolved) {
+                refs.push(resolved);
+            }
+        }
+    }
+
+    refs
+}
+
+/// Write view columns as SqlComputedColumn elements
+fn write_view_columns<W: Write>(
+    writer: &mut Writer<W>,
+    view_full_name: &str,
+    columns: &[ViewColumn],
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "Columns"));
+    writer.write_event(Event::Start(rel))?;
+
+    for col in columns {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let col_full_name = format!("{}.[{}]", view_full_name, col.name);
+        let mut elem = BytesStart::new("Element");
+        elem.push_attribute(("Type", "SqlComputedColumn"));
+        elem.push_attribute(("Name", col_full_name.as_str()));
+        writer.write_event(Event::Start(elem))?;
+
+        // Write ExpressionDependencies if this column has a source reference
+        if let Some(source_ref) = &col.source_ref {
+            let mut dep_rel = BytesStart::new("Relationship");
+            dep_rel.push_attribute(("Name", "ExpressionDependencies"));
+            writer.write_event(Event::Start(dep_rel))?;
+
+            writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+            let mut refs = BytesStart::new("References");
+            refs.push_attribute(("Name", source_ref.as_str()));
+            writer.write_event(Event::Empty(refs))?;
+
+            writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+            writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write QueryDependencies relationship
+fn write_query_dependencies<W: Write>(
+    writer: &mut Writer<W>,
+    deps: &[String],
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "QueryDependencies"));
+    writer.write_event(Event::Start(rel))?;
+
+    for dep in deps {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let mut refs = BytesStart::new("References");
+        refs.push_attribute(("Name", dep.as_str()));
+        writer.write_event(Event::Empty(refs))?;
+
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
 }
 
 fn write_procedure<W: Write>(
@@ -2403,6 +2844,11 @@ fn write_table_type_indexed_column_spec<W: Write>(
 }
 
 fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {
+    // Handle SqlView specially to get full property/relationship support
+    if raw.sql_type == "SqlView" {
+        return write_raw_view(writer, raw);
+    }
+
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
 
     let mut elem = BytesStart::new("Element");
@@ -2414,6 +2860,79 @@ fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Resu
     write_script_property(writer, "BodyScript", &raw.definition)?;
 
     // Relationship to schema
+    write_schema_relationship(writer, &raw.schema)?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write a view from a RawElement (for views parsed via fallback)
+/// Mirrors the write_view function but works with raw definition text
+fn write_raw_view<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {
+    let full_name = format!("[{}].[{}]", raw.schema, raw.name);
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlView"));
+    elem.push_attribute(("Name", full_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Extract view options from raw SQL text
+    let upper = raw.definition.to_uppercase();
+
+    // WITH SCHEMABINDING appears before AS in the view definition
+    let is_schema_bound = upper.contains("WITH SCHEMABINDING")
+        || upper.contains("WITH SCHEMABINDING,")
+        || upper.contains(", SCHEMABINDING")
+        || upper.contains(",SCHEMABINDING");
+
+    // WITH CHECK OPTION appears at the end of the view definition
+    let is_with_check_option = upper.contains("WITH CHECK OPTION");
+
+    // VIEW_METADATA appears in WITH clause before AS
+    let is_metadata_reported = upper.contains("VIEW_METADATA");
+
+    // Write properties in DotNet order:
+    // 1. IsSchemaBound (if true)
+    if is_schema_bound {
+        write_property(writer, "IsSchemaBound", "True")?;
+    }
+
+    // 2. IsMetadataReported (if true)
+    if is_metadata_reported {
+        write_property(writer, "IsMetadataReported", "True")?;
+    }
+
+    // 3. QueryScript
+    let query_script = extract_view_query(&raw.definition);
+    write_script_property(writer, "QueryScript", &query_script)?;
+
+    // 4. IsWithCheckOption (if true)
+    if is_with_check_option {
+        write_property(writer, "IsWithCheckOption", "True")?;
+    }
+
+    // 5. IsAnsiNullsOn - only emit for views with options (DotNet behavior)
+    if is_schema_bound || is_with_check_option || is_metadata_reported {
+        write_property(writer, "IsAnsiNullsOn", "True")?;
+    }
+
+    // Only emit Columns and QueryDependencies for schema-bound or with-check-option views
+    if is_schema_bound || is_with_check_option {
+        // Extract view columns and dependencies from the query
+        let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &raw.schema);
+
+        // 6. Write Columns relationship with SqlComputedColumn elements
+        if !columns.is_empty() {
+            write_view_columns(writer, &full_name, &columns)?;
+        }
+
+        // 7. Write QueryDependencies relationship
+        if !query_deps.is_empty() {
+            write_query_dependencies(writer, &query_deps)?;
+        }
+    }
+
+    // 8. Schema relationship
     write_schema_relationship(writer, &raw.schema)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;

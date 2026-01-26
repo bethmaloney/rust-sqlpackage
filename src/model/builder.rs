@@ -413,10 +413,17 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 let (schema, view_name) = extract_schema_and_name(name, &project.default_schema);
                 schemas.insert(schema.clone());
 
+                // Extract view options from raw SQL text
+                let (is_schema_bound, is_with_check_option, is_metadata_reported) =
+                    extract_view_options(&parsed.sql_text);
+
                 model.add_element(ModelElement::View(ViewElement {
                     schema,
                     name: view_name,
                     definition: parsed.sql_text.clone(),
+                    is_schema_bound,
+                    is_with_check_option,
+                    is_metadata_reported,
                 }));
             }
 
@@ -1209,4 +1216,24 @@ fn extended_property_from_extracted(
         target_object: property.level1name.clone().unwrap_or_default(),
         target_column: property.level2name.clone(),
     }
+}
+
+/// Extract view options (SCHEMABINDING, WITH CHECK OPTION, VIEW_METADATA) from SQL text
+/// Returns (is_schema_bound, is_with_check_option, is_metadata_reported)
+fn extract_view_options(sql: &str) -> (bool, bool, bool) {
+    let upper = sql.to_uppercase();
+
+    // WITH SCHEMABINDING appears before AS in the view definition
+    let is_schema_bound = upper.contains("WITH SCHEMABINDING")
+        || upper.contains("WITH SCHEMABINDING,")
+        || upper.contains(", SCHEMABINDING")
+        || upper.contains(",SCHEMABINDING");
+
+    // WITH CHECK OPTION appears at the end of the view definition
+    let is_with_check_option = upper.contains("WITH CHECK OPTION");
+
+    // VIEW_METADATA appears in WITH clause before AS
+    let is_metadata_reported = upper.contains("VIEW_METADATA");
+
+    (is_schema_bound, is_with_check_option, is_metadata_reported)
 }
