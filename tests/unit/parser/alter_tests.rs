@@ -157,14 +157,13 @@ ADD CONSTRAINT [DF_Products_IsActive] DEFAULT (1) FOR [IsActive];
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
     // ALTER TABLE ADD DEFAULT FOR may use fallback parsing
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!(
-            "Note: ALTER TABLE ADD DEFAULT FOR uses fallback: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: ALTER TABLE ADD DEFAULT FOR uses fallback: {:?}", e);
+        }
     }
 }
 
@@ -221,14 +220,13 @@ SELECT [Id] FROM [dbo].[Users];
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
     // WITH SCHEMABINDING may or may not be supported
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!(
-            "Note: ALTER VIEW WITH SCHEMABINDING not supported: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: ALTER VIEW WITH SCHEMABINDING not supported: {:?}", e);
+        }
     }
 }
 
@@ -444,14 +442,13 @@ END
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
     // ALTER TRIGGER may use fallback parsing
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!(
-            "Note: ALTER TRIGGER not fully supported: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: ALTER TRIGGER not fully supported: {:?}", e);
+        }
     }
 }
 
@@ -470,14 +467,13 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!(
-            "Note: ALTER TRIGGER INSTEAD OF not supported: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: ALTER TRIGGER INSTEAD OF not supported: {:?}", e);
+        }
     }
 }
 
@@ -496,14 +492,16 @@ END
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!(
-            "Note: ALTER TRIGGER FOR multiple events not supported: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!(
+                "Note: ALTER TRIGGER FOR multiple events not supported: {:?}",
+                e
+            );
+        }
     }
 }
 
@@ -520,14 +518,13 @@ ALTER SCHEMA [sales] TRANSFER [dbo].[Orders];
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
     // ALTER SCHEMA TRANSFER may not be supported by sqlparser
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!(
-            "Note: ALTER SCHEMA TRANSFER not supported: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: ALTER SCHEMA TRANSFER not supported: {:?}", e);
+        }
     }
 }
 
@@ -539,14 +536,13 @@ ALTER AUTHORIZATION ON SCHEMA::[sales] TO [dbo];
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!(
-            "Note: ALTER AUTHORIZATION ON SCHEMA not supported: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: ALTER AUTHORIZATION ON SCHEMA not supported: {:?}", e);
+        }
     }
 }
 
@@ -565,13 +561,16 @@ ALTER TYPE [dbo].[StatusType] ADD VALUE 'pending';
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
     // This syntax may not be valid T-SQL, documenting behavior
-    if result.is_ok() {
-        println!("ALTER TYPE ADD VALUE accepted");
-    } else {
-        println!(
-            "Note: ALTER TYPE ADD VALUE not supported (expected for T-SQL): {:?}",
-            result.err()
-        );
+    match result {
+        Ok(_) => {
+            println!("ALTER TYPE ADD VALUE accepted");
+        }
+        Err(e) => {
+            println!(
+                "Note: ALTER TYPE ADD VALUE not supported (expected for T-SQL): {:?}",
+                e
+            );
+        }
     }
 }
 
@@ -665,14 +664,13 @@ REBUILD;
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!(
-            "Note: ALTER INDEX REBUILD not supported: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: ALTER INDEX REBUILD not supported: {:?}", e);
+        }
     }
 }
 
@@ -685,14 +683,13 @@ DISABLE;
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!(
-            "Note: ALTER INDEX DISABLE not supported: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: ALTER INDEX DISABLE not supported: {:?}", e);
+        }
     }
 }
 
@@ -705,14 +702,13 @@ REORGANIZE;
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!(
-            "Note: ALTER INDEX REORGANIZE not supported: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: ALTER INDEX REORGANIZE not supported: {:?}", e);
+        }
     }
 }
 
@@ -725,11 +721,13 @@ REBUILD WITH (ONLINE = ON);
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!("Note: ALTER INDEX ALL not supported: {:?}", result.err());
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: ALTER INDEX ALL not supported: {:?}", e);
+        }
     }
 }
 
@@ -762,7 +760,10 @@ SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = [dbo].[ExistingTableHistory]));
     );
 
     let statements = result.unwrap();
-    assert!(statements.len() >= 1, "Should parse ALTER TABLE statements");
+    assert!(
+        !statements.is_empty(),
+        "Should parse ALTER TABLE statements"
+    );
 }
 
 #[test]

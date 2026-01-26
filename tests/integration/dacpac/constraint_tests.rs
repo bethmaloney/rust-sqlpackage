@@ -41,7 +41,7 @@ fn test_primary_key_constraint() {
     // Verify the named constraint exists
     let has_pk_primary_key_table = pk_constraints.iter().any(|pk| {
         pk.attribute("Name")
-            .map_or(false, |n| n.contains("PK_PrimaryKeyTable"))
+            .is_some_and(|n| n.contains("PK_PrimaryKeyTable"))
     });
     assert!(
         has_pk_primary_key_table,
@@ -93,7 +93,7 @@ fn test_foreign_key_constraint_with_referenced_table() {
     // Verify the named constraint exists
     let has_fk_foreign_key_table = fk_constraints.iter().any(|fk| {
         fk.attribute("Name")
-            .map_or(false, |n| n.contains("FK_ForeignKeyTable_Parent"))
+            .is_some_and(|n| n.contains("FK_ForeignKeyTable_Parent"))
     });
     assert!(
         has_fk_foreign_key_table,
@@ -149,7 +149,7 @@ fn test_check_constraint_with_definition() {
     // Verify named constraints exist
     let has_age_check = ck_constraints.iter().any(|ck| {
         ck.attribute("Name")
-            .map_or(false, |n| n.contains("CK_CheckConstraintTable_Age"))
+            .is_some_and(|n| n.contains("CK_CheckConstraintTable_Age"))
     });
     assert!(
         has_age_check,

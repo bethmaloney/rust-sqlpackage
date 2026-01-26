@@ -91,19 +91,18 @@ fn test_split_batches_go_with_count() {
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
     // This test documents behavior - GO with count is NOT recognized as a separator
     // The entire content is treated as one batch, and fallback parsing extracts what it can
-    if result.is_ok() {
-        let statements = result.unwrap();
-        // Only 1 statement extracted via fallback parsing (first CREATE TABLE)
-        assert!(
-            statements.len() >= 1,
-            "Should extract at least 1 statement via fallback parsing"
-        );
-    } else {
-        // If parsing fails entirely, that's also acceptable behavior
-        println!(
-            "Note: GO with count causes parse failure: {:?}",
-            result.err()
-        );
+    match result {
+        Ok(statements) => {
+            // Only 1 statement extracted via fallback parsing (first CREATE TABLE)
+            assert!(
+                !statements.is_empty(),
+                "Should extract at least 1 statement via fallback parsing"
+            );
+        }
+        Err(e) => {
+            // If parsing fails entirely, that's also acceptable behavior
+            println!("Note: GO with count causes parse failure: {:?}", e);
+        }
     }
 }
 
@@ -163,16 +162,18 @@ CREATE TABLE t2 (id INT)
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
     // This documents current behavior - if the batch splitter is not comment-aware,
     // it will fail. If it is comment-aware, it should produce 2 statements.
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(
-            statements.len(),
-            2,
-            "GO in block comment should not cause split"
-        );
-    } else {
-        // Document that GO in block comments is not currently handled
-        println!("Note: GO in block comments not handled: {:?}", result.err());
+    match result {
+        Ok(statements) => {
+            assert_eq!(
+                statements.len(),
+                2,
+                "GO in block comment should not cause split"
+            );
+        }
+        Err(e) => {
+            // Document that GO in block comments is not currently handled
+            println!("Note: GO in block comments not handled: {:?}", e);
+        }
     }
 }
 
@@ -239,8 +240,7 @@ fn test_parse_comment_only_file() {
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
     // This might succeed with 0 statements or fail depending on parser behavior
     // Either is acceptable for a baseline test
-    if result.is_ok() {
-        let statements = result.unwrap();
+    if let Ok(statements) = result {
         assert_eq!(
             statements.len(),
             0,

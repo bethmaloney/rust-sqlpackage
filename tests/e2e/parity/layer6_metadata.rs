@@ -370,7 +370,7 @@ impl OriginXml {
                     }
                 } else if node
                     .parent()
-                    .map_or(false, |p| p.has_tag_name("PackageProperties"))
+                    .is_some_and(|p| p.has_tag_name("PackageProperties"))
                 {
                     origin.package_version = node.text().map(|s| s.to_string());
                 }
@@ -555,7 +555,7 @@ pub fn normalize_script_whitespace(content: &str) -> String {
 
     // Remove trailing empty lines
     let mut result: Vec<&str> = lines;
-    while result.last().map_or(false, |line| line.is_empty()) {
+    while result.last().is_some_and(|line| line.is_empty()) {
         result.pop();
     }
 

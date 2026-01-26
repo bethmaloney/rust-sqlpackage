@@ -76,11 +76,13 @@ SELECT 1 AS [Value];
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
     // SCHEMABINDING may or may not be supported
-    if result.is_ok() {
-        let statements = result.unwrap();
-        assert_eq!(statements.len(), 1);
-    } else {
-        println!("Note: WITH SCHEMABINDING not supported: {:?}", result.err());
+    match result {
+        Ok(statements) => {
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Note: WITH SCHEMABINDING not supported: {:?}", e);
+        }
     }
 }
 

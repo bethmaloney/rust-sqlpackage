@@ -38,7 +38,7 @@ pub(crate) fn find_column_by_name<'a>(
         n.tag_name().name() == "Element"
             && n.attribute("Type") == Some("SqlSimpleColumn")
             && n.attribute("Name")
-                .map_or(false, |name| name.contains(column_name))
+                .is_some_and(|name| name.contains(column_name))
     })
 }
 
@@ -74,6 +74,6 @@ pub(crate) fn find_index_by_name<'a>(
         n.tag_name().name() == "Element"
             && n.attribute("Type") == Some("SqlIndex")
             && n.attribute("Name")
-                .map_or(false, |name| name.ends_with(&suffix))
+                .is_some_and(|name| name.ends_with(&suffix))
     })
 }

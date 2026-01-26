@@ -114,7 +114,7 @@ fn test_column_type_specifier() {
     let has_type_ref = type_specifier_rel.descendants().any(|d| {
         d.tag_name().name() == "References"
             && d.attribute("ExternalSource") == Some("BuiltIns")
-            && d.attribute("Name").map_or(false, |n| n.contains("varchar"))
+            && d.attribute("Name").is_some_and(|n| n.contains("varchar"))
     });
 
     assert!(

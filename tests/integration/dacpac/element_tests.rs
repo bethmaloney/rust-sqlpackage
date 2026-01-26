@@ -39,7 +39,7 @@ fn test_model_contains_all_views() {
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
-        info.views.len() >= 1,
+        !info.views.is_empty(),
         "Should have at least 1 view. Found: {:?}",
         info.views
     );
@@ -137,10 +137,9 @@ fn test_model_contains_procedures() {
     );
 
     // Verify the GetUsers procedure exists
-    let has_get_users = procedures.iter().any(|p| {
-        p.attribute("Name")
-            .map_or(false, |n| n.contains("GetUsers"))
-    });
+    let has_get_users = procedures
+        .iter()
+        .any(|p| p.attribute("Name").is_some_and(|n| n.contains("GetUsers")));
     assert!(
         has_get_users,
         "Should have GetUsers procedure. Found: {:?}",
@@ -173,7 +172,7 @@ fn test_model_contains_scalar_functions() {
     // Verify the GetUserCount function exists
     let has_get_user_count = scalar_funcs.iter().any(|f| {
         f.attribute("Name")
-            .map_or(false, |n| n.contains("GetUserCount"))
+            .is_some_and(|n| n.contains("GetUserCount"))
     });
     assert!(
         has_get_user_count,
@@ -231,7 +230,7 @@ fn test_model_contains_sequences() {
     // Verify the OrderSequence exists
     let has_order_sequence = sequences.iter().any(|s| {
         s.attribute("Name")
-            .map_or(false, |n| n.contains("OrderSequence"))
+            .is_some_and(|n| n.contains("OrderSequence"))
     });
     assert!(
         has_order_sequence,
@@ -265,7 +264,7 @@ fn test_model_contains_user_defined_types() {
     // Verify the UserTableType exists
     let has_user_table_type = udts.iter().any(|u| {
         u.attribute("Name")
-            .map_or(false, |n| n.contains("UserTableType"))
+            .is_some_and(|n| n.contains("UserTableType"))
     });
     assert!(
         has_user_table_type,
@@ -298,7 +297,7 @@ fn test_model_contains_triggers() {
     // Verify the AuditTrigger exists
     let has_audit_trigger = triggers.iter().any(|t| {
         t.attribute("Name")
-            .map_or(false, |n| n.contains("TR_Users_Audit"))
+            .is_some_and(|n| n.contains("TR_Users_Audit"))
     });
     assert!(
         has_audit_trigger,
@@ -332,7 +331,7 @@ fn test_model_contains_schemas() {
     // Verify the custom Sales schema exists (in addition to dbo)
     let has_sales_schema = schemas
         .iter()
-        .any(|s| s.attribute("Name").map_or(false, |n| n.contains("Sales")));
+        .any(|s| s.attribute("Name").is_some_and(|n| n.contains("Sales")));
     assert!(
         has_sales_schema,
         "Should have Sales schema. Found: {:?}",

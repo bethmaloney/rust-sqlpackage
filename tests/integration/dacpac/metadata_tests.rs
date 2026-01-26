@@ -227,7 +227,7 @@ fn test_content_types_has_correct_mime_types() {
     // Verify XML content types are defined
     let has_xml_type = overrides.iter().any(|n| {
         n.attribute("ContentType")
-            .map_or(false, |ct| ct.contains("xml"))
+            .is_some_and(|ct| ct.contains("xml"))
     });
 
     assert!(

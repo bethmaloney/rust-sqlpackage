@@ -52,9 +52,8 @@ pub mod layer7_canonical;
 // Re-export commonly used types from types module
 pub use types::{
     CanonicalXmlError, ComparisonOptions, ComparisonResult, ContentTypesXml, DacMetadataXml,
-    DacpacModel, DetailedFixtureResult, FixtureBaseline, FixtureMetrics, Layer1Error, Layer2Error,
-    Layer3Result, Layer4Error, MetadataFileError, ModelElement, OriginXml, ParityBaseline,
-    ParityMetrics, ParityReport, ReferenceEntry, Regression, Relationship, RelationshipError,
+    DacpacModel, FixtureBaseline, FixtureMetrics, Layer1Error, Layer2Error, Layer4Error,
+    MetadataFileError, OriginXml, ParityBaseline, ParityMetrics, ParityReport, RelationshipError,
 };
 
 // Re-export extract_model_xml for convenience
@@ -62,16 +61,14 @@ pub use types::extract_model_xml;
 
 // Re-export layer functions
 pub use layer1_inventory::compare_element_inventory;
-pub use layer2_properties::{
-    compare_all_properties, compare_element_properties, get_all_properties,
-};
+pub use layer2_properties::{compare_all_properties, compare_element_properties};
 pub use layer3_sqlpackage::{compare_with_sqlpackage, sqlpackage_available};
 pub use layer4_structure::compare_element_order;
-pub use layer5_relationships::{compare_element_relationships, compare_relationships};
+pub use layer5_relationships::compare_element_relationships;
 pub use layer6_metadata::{
     compare_content_types, compare_dac_metadata, compare_dacpac_files, compare_deploy_scripts,
     compare_origin_xml, extract_content_types_xml, extract_dac_metadata_xml, extract_deploy_script,
-    extract_origin_xml, normalize_script_whitespace,
+    extract_origin_xml,
 };
 pub use layer7_canonical::{
     canonicalize_model_xml, compare_canonical_dacpacs, compare_canonical_xml, compute_sha256,

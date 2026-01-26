@@ -634,6 +634,7 @@ impl fmt::Display for MetadataFileError {
 /// These errors indicate differences between canonicalized XML representations,
 /// providing the final validation layer for true byte-level matching.
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum CanonicalXmlError {
     /// Canonicalized XML content differs
     ContentMismatch {
@@ -744,7 +745,7 @@ impl ComparisonResult {
             && self
                 .layer3_result
                 .as_ref()
-                .map_or(true, |r| !r.has_differences)
+                .is_none_or(|r| !r.has_differences)
     }
 
     pub fn print_report(&self) {
@@ -1722,18 +1723,6 @@ pub struct FixtureBaseline {
 }
 
 impl FixtureBaseline {
-    /// Create a new FixtureBaseline from a fixture name with all layers failing.
-    pub fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            layer1_pass: false,
-            layer2_pass: false,
-            relationship_pass: false,
-            layer4_pass: false,
-            metadata_pass: false,
-        }
-    }
-
     /// Create a FixtureBaseline from FixtureMetrics (current test results).
     pub fn from_metrics(metrics: &FixtureMetrics) -> Self {
         Self {
@@ -2201,7 +2190,7 @@ fn parse_fixtures_array(json: &str) -> Result<Vec<FixtureBaseline>, String> {
     let mut depth = 0;
     let mut obj_start = None;
 
-    for (i, c) in array_content.chars().enumerate() {
+    for (i, c) in array_content.char_indices() {
         match c {
             '{' => {
                 if depth == 0 {

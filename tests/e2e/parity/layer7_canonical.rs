@@ -545,23 +545,23 @@ pub fn generate_diff(rust_content: &str, dotnet_content: &str, context_lines: us
         ));
 
         // Output context before
-        for i in ctx_start_rust..rust_start {
-            output.push_str(&format!(" {}\n", rust_lines[i]));
+        for line in rust_lines.iter().take(rust_start).skip(ctx_start_rust) {
+            output.push_str(&format!(" {}\n", line));
         }
 
         // Output deleted lines (from Rust)
-        for i in rust_start..rust_end {
-            output.push_str(&format!("-{}\n", rust_lines[i]));
+        for line in rust_lines.iter().take(rust_end).skip(rust_start) {
+            output.push_str(&format!("-{}\n", line));
         }
 
         // Output added lines (from DotNet)
-        for i in dotnet_start..dotnet_end {
-            output.push_str(&format!("+{}\n", dotnet_lines[i]));
+        for line in dotnet_lines.iter().take(dotnet_end).skip(dotnet_start) {
+            output.push_str(&format!("+{}\n", line));
         }
 
         // Output context after
-        for i in rust_end..ctx_end_rust {
-            output.push_str(&format!(" {}\n", rust_lines[i]));
+        for line in rust_lines.iter().take(ctx_end_rust).skip(rust_end) {
+            output.push_str(&format!(" {}\n", line));
         }
     }
 
@@ -597,22 +597,24 @@ fn find_diff_ranges(
         let mut found_sync = false;
         for look_ahead in 1..=20 {
             // Check if Rust catches up to DotNet
-            if i + look_ahead < rust_lines.len() && j < dotnet_lines.len() {
-                if rust_lines[i + look_ahead] == dotnet_lines[j] {
-                    ranges.push((rust_diff_start, i + look_ahead, dotnet_diff_start, j));
-                    i += look_ahead;
-                    found_sync = true;
-                    break;
-                }
+            if i + look_ahead < rust_lines.len()
+                && j < dotnet_lines.len()
+                && rust_lines[i + look_ahead] == dotnet_lines[j]
+            {
+                ranges.push((rust_diff_start, i + look_ahead, dotnet_diff_start, j));
+                i += look_ahead;
+                found_sync = true;
+                break;
             }
             // Check if DotNet catches up to Rust
-            if j + look_ahead < dotnet_lines.len() && i < rust_lines.len() {
-                if dotnet_lines[j + look_ahead] == rust_lines[i] {
-                    ranges.push((rust_diff_start, i, dotnet_diff_start, j + look_ahead));
-                    j += look_ahead;
-                    found_sync = true;
-                    break;
-                }
+            if j + look_ahead < dotnet_lines.len()
+                && i < rust_lines.len()
+                && dotnet_lines[j + look_ahead] == rust_lines[i]
+            {
+                ranges.push((rust_diff_start, i, dotnet_diff_start, j + look_ahead));
+                j += look_ahead;
+                found_sync = true;
+                break;
             }
         }
 

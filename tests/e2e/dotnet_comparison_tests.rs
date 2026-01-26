@@ -43,7 +43,7 @@ use crate::dacpac_compare::{
     compare_element_inventory, compare_element_order, compare_element_properties,
     compare_element_relationships, compare_with_sqlpackage, compute_sha256, extract_model_xml,
     generate_diff, sqlpackage_available, CanonicalXmlError, ComparisonOptions, ComparisonResult,
-    DacpacModel, FixtureBaseline, Layer1Error, ParityBaseline, ParityMetrics, Regression,
+    DacpacModel, FixtureBaseline, Layer1Error, ParityBaseline, ParityMetrics,
 };
 
 // =============================================================================
@@ -2056,7 +2056,7 @@ fn test_script_whitespace_normalization() {
         let content = s.replace("\r\n", "\n");
         let lines: Vec<&str> = content.lines().map(|line| line.trim_end()).collect();
         let mut result: Vec<&str> = lines;
-        while result.last().map_or(false, |line| line.is_empty()) {
+        while result.last().is_some_and(|line| line.is_empty()) {
             result.pop();
         }
         result.join("\n")
@@ -4387,7 +4387,7 @@ fn test_canonical_comparison_all_fixtures() {
             .map(|entries| {
                 entries
                     .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "sqlproj"))
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "sqlproj"))
                     .collect()
             })
             .unwrap_or_default();
