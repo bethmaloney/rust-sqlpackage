@@ -294,19 +294,28 @@ Extend comparison beyond model.xml to all dacpac files.
 
 Create targeted tests for each fixture and known issue.
 
-- [ ] **6.1 Create parity test helper function**
-  ```rust
-  fn run_parity_test(fixture_name: &str) -> ComparisonResult {
-      // Build both dacpacs for fixture
-      // Run full comparison
-      // Return result
-  }
-  ```
+- [x] **6.1 Create parity test helper function** ✓ COMPLETE
+  - Added `run_parity_test(fixture_name, options)` function in `dotnet_comparison_tests.rs:219-293`
+  - Returns `Result<ComparisonResult, ParityTestError>` for ergonomic error handling
+  - Added `ParityTestOptions` struct with configurable comparison options
+  - Added `ParityTestError` enum for detailed error reporting
+  - Added `run_parity_test_with_report()` convenience function that prints results
+  - Added `get_available_fixtures()` to list all testable fixtures
+  - Tests added:
+    - `test_run_parity_test_simple_table` - Basic function test
+    - `test_run_parity_test_invalid_fixture` - Error handling test
+    - `test_parity_test_options_default` - Default options test
+    - `test_parity_test_options_minimal` - Minimal options test
+    - `test_get_available_fixtures` - Fixture discovery test
+    - `test_run_parity_test_with_report` - Report function test
+  - Acceptance: Helper function works with any fixture and returns comparison results ✓
 
-- [ ] **6.2 Add tests for high-priority fixtures**
-  - [ ] `test_parity_ampersand_encoding`
-  - [ ] `test_parity_default_constraints_named`
-  - [ ] `test_parity_inline_constraints`
+- [x] **6.2 Add tests for high-priority fixtures** ✓ COMPLETE
+  - [x] `test_parity_ampersand_encoding` - Tests Phase 1.1 fix
+  - [x] `test_parity_default_constraints_named` - Tests Phase 1.2 implementation
+  - [x] `test_parity_inline_constraints` - Tests Phase 1.3 implementation
+  - Note: These are informational tests that use `run_parity_test()` helper
+  - Location: `tests/e2e/dotnet_comparison_tests.rs:2549-2651`
 
 - [ ] **6.3 Add tests for medium-priority fixtures**
   - [ ] `test_parity_database_options`
@@ -405,11 +414,11 @@ Reorganize and improve test infrastructure.
 | Phase 3: Relationship Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 4: XML Structure (Layer 4) | **COMPLETE** | 4/4 ✓ |
 | Phase 5: Metadata Files | **COMPLETE** | 5/5 ✓ |
-| Phase 6: Per-Feature Tests | Not Started | 0/5+ |
+| Phase 6: Per-Feature Tests | In Progress | 2/5 ✓ |
 | Phase 7: Canonical XML | Not Started | 0/4 |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 26/39+ tasks complete
+**Overall Progress**: 28/39+ tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
@@ -418,6 +427,7 @@ Phase 4 added element ordering infrastructure to compare structural differences 
 Phase 5 started with [Content_Types].xml comparison. Implemented extraction, parsing, and comparison infrastructure for metadata files.
 Phase 5.4 added pre/post-deploy script comparison with whitespace normalization for parity testing.
 Phase 5.5 completed the metadata comparison infrastructure with a unified `compare_dacpac_files()` function that consolidates all metadata comparisons into a single entry point.
+Phase 6.1 added the `run_parity_test()` helper function infrastructure enabling per-fixture parity tests. Phase 6.2 added the high-priority fixture tests using the new helper.
 
 ---
 

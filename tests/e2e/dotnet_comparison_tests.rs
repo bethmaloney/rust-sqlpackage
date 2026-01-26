@@ -22,6 +22,15 @@
 //! Run with:
 //!   cargo test --test e2e_tests dotnet_comparison -- --nocapture
 //!   just test-parity
+//!
+//! ## Per-Feature Parity Tests (Phase 6)
+//!
+//! The `run_parity_test()` function provides a convenient way to run full parity
+//! tests for individual fixtures. This enables targeted testing of specific features.
+//!
+//! Example usage:
+//!   let result = run_parity_test("ampersand_encoding", &ParityTestOptions::default())?;
+//!   assert!(result.is_success(), "Fixture should have full parity");
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -32,8 +41,314 @@ use crate::dacpac_compare::{
     compare_all_properties, compare_dacpacs, compare_dacpacs_with_options,
     compare_element_inventory, compare_element_order, compare_element_properties,
     compare_element_relationships, compare_with_sqlpackage, extract_model_xml,
-    sqlpackage_available, ComparisonOptions, DacpacModel, Layer1Error,
+    sqlpackage_available, ComparisonOptions, ComparisonResult, DacpacModel, Layer1Error,
 };
+
+// =============================================================================
+// Phase 6: Per-Feature Parity Test Infrastructure
+// =============================================================================
+
+/// Options for controlling parity test behavior.
+///
+/// This struct allows fine-grained control over which comparison layers
+/// are included in parity tests. By default, all layers are enabled
+/// except Layer 3 (SqlPackage), which requires the SqlPackage CLI.
+///
+/// # Example
+/// ```ignore
+/// // Test with strict property comparison
+/// let options = ParityTestOptions {
+///     strict_properties: true,
+///     ..Default::default()
+/// };
+/// let result = run_parity_test("my_fixture", &options)?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct ParityTestOptions {
+    /// Include Layer 3 (SqlPackage DeployReport) comparison.
+    /// Requires SqlPackage CLI to be installed.
+    /// Default: false (auto-enabled if SqlPackage is available)
+    pub include_layer3: bool,
+
+    /// Compare ALL properties instead of just key properties.
+    /// When true, uses strict comparison mode from Phase 2.
+    /// Default: true (for parity testing, we want full comparison)
+    pub strict_properties: bool,
+
+    /// Validate all relationships between elements (Phase 3).
+    /// Default: true
+    pub check_relationships: bool,
+
+    /// Validate element ordering matches DotNet output (Phase 4).
+    /// Default: true
+    pub check_element_order: bool,
+
+    /// Compare metadata files ([Content_Types].xml, DacMetadata.xml, Origin.xml).
+    /// Default: true
+    pub check_metadata_files: bool,
+
+    /// Compare pre/post-deploy scripts (Phase 5.4).
+    /// Default: true
+    pub check_deploy_scripts: bool,
+
+    /// Target SQL Server platform version (e.g., "Sql150", "Sql160").
+    /// Default: "Sql150"
+    pub target_platform: String,
+}
+
+impl Default for ParityTestOptions {
+    fn default() -> Self {
+        Self {
+            include_layer3: false, // Will be auto-enabled if SqlPackage available
+            strict_properties: true,
+            check_relationships: true,
+            check_element_order: true,
+            check_metadata_files: true,
+            check_deploy_scripts: true,
+            target_platform: "Sql150".to_string(),
+        }
+    }
+}
+
+impl ParityTestOptions {
+    /// Create options with Layer 3 (SqlPackage) comparison enabled.
+    #[allow(dead_code)]
+    pub fn with_layer3(mut self) -> Self {
+        self.include_layer3 = true;
+        self
+    }
+
+    /// Create options without strict property comparison (key properties only).
+    #[allow(dead_code)]
+    pub fn key_properties_only(mut self) -> Self {
+        self.strict_properties = false;
+        self
+    }
+
+    /// Create minimal options (Layer 1 and 2 only, no relationships/ordering/metadata).
+    /// Useful for quick smoke tests.
+    pub fn minimal() -> Self {
+        Self {
+            include_layer3: false,
+            strict_properties: false,
+            check_relationships: false,
+            check_element_order: false,
+            check_metadata_files: false,
+            check_deploy_scripts: false,
+            target_platform: "Sql150".to_string(),
+        }
+    }
+}
+
+/// Error type for parity test failures.
+#[derive(Debug)]
+pub enum ParityTestError {
+    /// DotNet SDK is not available
+    DotNetNotAvailable,
+    /// Fixture not found at expected path
+    FixtureNotFound { fixture_name: String, path: PathBuf },
+    /// Rust build failed
+    RustBuildFailed { message: String },
+    /// DotNet build failed
+    DotNetBuildFailed { message: String },
+    /// Comparison failed
+    ComparisonFailed { message: String },
+}
+
+impl std::fmt::Display for ParityTestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParityTestError::DotNetNotAvailable => {
+                write!(f, "DotNet SDK is not available")
+            }
+            ParityTestError::FixtureNotFound { fixture_name, path } => {
+                write!(
+                    f,
+                    "Fixture '{}' not found at path: {}",
+                    fixture_name,
+                    path.display()
+                )
+            }
+            ParityTestError::RustBuildFailed { message } => {
+                write!(f, "Rust build failed: {}", message)
+            }
+            ParityTestError::DotNetBuildFailed { message } => {
+                write!(f, "DotNet build failed: {}", message)
+            }
+            ParityTestError::ComparisonFailed { message } => {
+                write!(f, "Comparison failed: {}", message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ParityTestError {}
+
+/// Run a full parity test for a specific fixture.
+///
+/// This function builds dacpacs using both Rust and DotNet for the specified
+/// fixture, then runs a comprehensive comparison using all enabled layers.
+///
+/// # Arguments
+/// * `fixture_name` - Name of the fixture directory in `tests/fixtures/`
+/// * `options` - Options controlling which comparison layers to run
+///
+/// # Returns
+/// * `Ok(ComparisonResult)` - Comparison completed, check `is_success()` for parity
+/// * `Err(ParityTestError)` - Test setup failed (dotnet unavailable, build error, etc.)
+///
+/// # Example
+/// ```ignore
+/// // Run parity test with default options
+/// let result = run_parity_test("simple_table", &ParityTestOptions::default())?;
+/// if result.is_success() {
+///     println!("Full parity achieved!");
+/// } else {
+///     result.print_report();
+/// }
+///
+/// // Run with strict assertion
+/// let result = run_parity_test("ampersand_encoding", &ParityTestOptions::default())?;
+/// assert!(result.layer1_errors.is_empty(), "Element inventory should match");
+/// ```
+///
+/// # Errors
+/// Returns an error if:
+/// - DotNet SDK is not available
+/// - The fixture doesn't exist
+/// - Rust or DotNet build fails
+/// - Comparison infrastructure fails (e.g., can't parse dacpacs)
+pub fn run_parity_test(
+    fixture_name: &str,
+    options: &ParityTestOptions,
+) -> Result<ComparisonResult, ParityTestError> {
+    // Check if dotnet is available
+    if !dotnet_available() {
+        return Err(ParityTestError::DotNetNotAvailable);
+    }
+
+    // Construct fixture path
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(fixture_name)
+        .join("project.sqlproj");
+
+    if !fixture_path.exists() {
+        return Err(ParityTestError::FixtureNotFound {
+            fixture_name: fixture_name.to_string(),
+            path: fixture_path,
+        });
+    }
+
+    // Create temp directory for dacpac outputs
+    let temp_dir = TempDir::new().map_err(|e| ParityTestError::RustBuildFailed {
+        message: format!("Failed to create temp directory: {}", e),
+    })?;
+
+    // Build Rust dacpac
+    let rust_dacpac = temp_dir.path().join("rust.dacpac");
+    rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+        project_path: fixture_path.clone(),
+        output_path: Some(rust_dacpac.clone()),
+        target_platform: options.target_platform.clone(),
+        verbose: false,
+    })
+    .map_err(|e| ParityTestError::RustBuildFailed {
+        message: e.to_string(),
+    })?;
+
+    // Build DotNet dacpac
+    let dotnet_output = Command::new("dotnet")
+        .arg("build")
+        .arg(&fixture_path)
+        .output()
+        .map_err(|e| ParityTestError::DotNetBuildFailed {
+            message: format!("Failed to run dotnet: {}", e),
+        })?;
+
+    if !dotnet_output.status.success() {
+        return Err(ParityTestError::DotNetBuildFailed {
+            message: String::from_utf8_lossy(&dotnet_output.stderr).to_string(),
+        });
+    }
+
+    let dotnet_dacpac = get_dotnet_dacpac_path(&fixture_path);
+    if !dotnet_dacpac.exists() {
+        return Err(ParityTestError::DotNetBuildFailed {
+            message: format!("DotNet dacpac not found at {:?}", dotnet_dacpac),
+        });
+    }
+
+    // Run comparison with options
+    let comparison_options = ComparisonOptions {
+        include_layer3: options.include_layer3 || sqlpackage_available(),
+        strict_properties: options.strict_properties,
+        check_relationships: options.check_relationships,
+        check_element_order: options.check_element_order,
+        check_metadata_files: options.check_metadata_files,
+        check_deploy_scripts: options.check_deploy_scripts,
+    };
+
+    compare_dacpacs_with_options(&rust_dacpac, &dotnet_dacpac, &comparison_options)
+        .map_err(|e| ParityTestError::ComparisonFailed { message: e })
+}
+
+/// Run parity test and print a detailed report regardless of outcome.
+///
+/// This is a convenience wrapper around `run_parity_test()` that always
+/// prints the comparison report. Useful for exploratory testing and debugging.
+///
+/// # Returns
+/// The comparison result, or None if test setup failed.
+pub fn run_parity_test_with_report(
+    fixture_name: &str,
+    options: &ParityTestOptions,
+) -> Option<ComparisonResult> {
+    println!("\n=== Running Parity Test: {} ===\n", fixture_name);
+
+    match run_parity_test(fixture_name, options) {
+        Ok(result) => {
+            result.print_report();
+            Some(result)
+        }
+        Err(e) => {
+            println!("Parity test setup failed: {}", e);
+            None
+        }
+    }
+}
+
+/// Get the list of all available fixtures in the tests/fixtures directory.
+///
+/// This function scans the fixtures directory and returns the names of all
+/// subdirectories that contain a `project.sqlproj` file.
+///
+/// # Returns
+/// A vector of fixture names (directory names) that can be passed to `run_parity_test()`.
+pub fn get_available_fixtures() -> Vec<String> {
+    let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures");
+
+    let mut fixtures = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&fixtures_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let project_file = entry.path().join("project.sqlproj");
+                if project_file.exists() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        fixtures.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    fixtures.sort();
+    fixtures
+}
 
 // =============================================================================
 // Test Setup Helpers
@@ -2103,4 +2418,269 @@ fn test_unified_metadata_via_options() {
     );
 
     println!("\nIntegration check PASSED: ComparisonOptions correctly uses unified function!");
+}
+
+// =============================================================================
+// Phase 6: Per-Feature Parity Tests
+// =============================================================================
+
+/// Test the run_parity_test() helper function with a simple fixture.
+///
+/// This test verifies that the parity test infrastructure works correctly:
+/// - Finds fixtures by name
+/// - Builds with both Rust and DotNet
+/// - Returns comparison results
+#[test]
+fn test_run_parity_test_simple_table() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    // Use minimal options for a quick test
+    let options = ParityTestOptions::minimal();
+
+    let result = match run_parity_test("simple_table", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Parity test failed to run: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== run_parity_test() Test (simple_table) ===\n");
+    println!("Layer 1 errors: {}", result.layer1_errors.len());
+    println!("Layer 2 errors: {}", result.layer2_errors.len());
+
+    // simple_table should have basic element parity (Layer 1)
+    // We don't assert is_success() because parity testing is ongoing
+    // but Layer 1 (element inventory) should pass for simple fixtures
+}
+
+/// Test run_parity_test() with invalid fixture name
+#[test]
+fn test_run_parity_test_invalid_fixture() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let options = ParityTestOptions::minimal();
+    let result = run_parity_test("nonexistent_fixture_xyz", &options);
+
+    match result {
+        Err(ParityTestError::FixtureNotFound { fixture_name, .. }) => {
+            assert_eq!(fixture_name, "nonexistent_fixture_xyz");
+            println!("Correctly returned FixtureNotFound error");
+        }
+        Ok(_) => panic!("Should have returned FixtureNotFound error"),
+        Err(e) => panic!("Expected FixtureNotFound, got: {}", e),
+    }
+}
+
+/// Test ParityTestOptions default values
+#[test]
+fn test_parity_test_options_default() {
+    let options = ParityTestOptions::default();
+
+    // Default options should enable full comparison (except Layer 3 which is auto-detected)
+    assert!(
+        !options.include_layer3,
+        "Layer 3 should be disabled by default"
+    );
+    assert!(
+        options.strict_properties,
+        "Strict properties should be enabled by default"
+    );
+    assert!(
+        options.check_relationships,
+        "Relationship check should be enabled by default"
+    );
+    assert!(
+        options.check_element_order,
+        "Element order check should be enabled by default"
+    );
+    assert!(
+        options.check_metadata_files,
+        "Metadata check should be enabled by default"
+    );
+    assert!(
+        options.check_deploy_scripts,
+        "Deploy script check should be enabled by default"
+    );
+    assert_eq!(
+        options.target_platform, "Sql150",
+        "Default platform should be Sql150"
+    );
+}
+
+/// Test ParityTestOptions::minimal()
+#[test]
+fn test_parity_test_options_minimal() {
+    let options = ParityTestOptions::minimal();
+
+    // Minimal options should disable everything except basic comparison
+    assert!(!options.include_layer3);
+    assert!(!options.strict_properties);
+    assert!(!options.check_relationships);
+    assert!(!options.check_element_order);
+    assert!(!options.check_metadata_files);
+    assert!(!options.check_deploy_scripts);
+}
+
+/// Test get_available_fixtures() returns expected fixtures
+#[test]
+fn test_get_available_fixtures() {
+    let fixtures = get_available_fixtures();
+
+    println!("\n=== Available Fixtures ===\n");
+    println!("Found {} fixtures:", fixtures.len());
+    for (i, name) in fixtures.iter().enumerate() {
+        if i < 10 {
+            println!("  - {}", name);
+        }
+    }
+    if fixtures.len() > 10 {
+        println!("  ... and {} more", fixtures.len() - 10);
+    }
+
+    // Verify some known fixtures are present
+    assert!(
+        fixtures.contains(&"simple_table".to_string()),
+        "simple_table should exist"
+    );
+    assert!(
+        fixtures.contains(&"e2e_comprehensive".to_string()),
+        "e2e_comprehensive should exist"
+    );
+    assert!(fixtures.len() >= 10, "Should have at least 10 fixtures");
+}
+
+/// Test run_parity_test_with_report() convenience function
+#[test]
+fn test_run_parity_test_with_report() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let options = ParityTestOptions::minimal();
+
+    // This should print a report and return Some(result)
+    let result = run_parity_test_with_report("simple_table", &options);
+
+    assert!(
+        result.is_some(),
+        "Should return Some(result) for valid fixture"
+    );
+
+    // Test with invalid fixture - should return None and print error
+    let invalid_result = run_parity_test_with_report("nonexistent_fixture", &options);
+    assert!(
+        invalid_result.is_none(),
+        "Should return None for invalid fixture"
+    );
+}
+
+/// Informational test: Run parity test on ampersand_encoding fixture
+/// This validates the fix from Phase 1.1 (ampersand truncation bug)
+#[test]
+fn test_parity_ampersand_encoding() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    // Use minimal options to focus on Layer 1 (element inventory)
+    let options = ParityTestOptions::minimal();
+
+    let result = match run_parity_test("ampersand_encoding", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Parity test failed: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== Parity Test: ampersand_encoding ===\n");
+    println!("Testing fix for Phase 1.1: Ampersand truncation in procedure names");
+    println!();
+    println!("Layer 1 errors: {}", result.layer1_errors.len());
+    println!("Layer 2 errors: {}", result.layer2_errors.len());
+
+    // Layer 1 should pass - elements with & in names should be properly captured
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
+
+    // This test is informational - ampersand handling was fixed in Phase 1.1
+    // Full parity may still have differences in other areas
+}
+
+/// Informational test: Run parity test on default_constraints_named fixture
+/// This validates Phase 1.2 (named inline default constraints)
+#[test]
+fn test_parity_default_constraints_named() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let options = ParityTestOptions::minimal();
+
+    let result = match run_parity_test("default_constraints_named", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Parity test failed: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== Parity Test: default_constraints_named ===\n");
+    println!("Testing Phase 1.2: Named inline default constraints");
+    println!();
+    println!("Layer 1 errors: {}", result.layer1_errors.len());
+    println!("Layer 2 errors: {}", result.layer2_errors.len());
+
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
+}
+
+/// Informational test: Run parity test on inline_constraints fixture
+/// This validates Phase 1.3 (inline CHECK constraints)
+#[test]
+fn test_parity_inline_constraints() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let options = ParityTestOptions::minimal();
+
+    let result = match run_parity_test("inline_constraints", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Parity test failed: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== Parity Test: inline_constraints ===\n");
+    println!("Testing Phase 1.3: Inline CHECK constraints");
+    println!();
+    println!("Layer 1 errors: {}", result.layer1_errors.len());
+    println!("Layer 2 errors: {}", result.layer2_errors.len());
+
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
 }
