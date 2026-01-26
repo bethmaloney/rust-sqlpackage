@@ -24,9 +24,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 37/46 | 80.4% | Extended property key format fixed |
-| Layer 2 (Properties) | 37/46 | 80.4% | View IsAnsiNullsOn missing |
-| Layer 3 (Relationships) | 30/46 | 65.2% | |
+| Layer 1 (Inventory) | 39/46 | 84.8% | default_constraints_named, views now pass |
+| Layer 2 (Properties) | 37/46 | 80.4% | ampersand_encoding, extended_properties, instead_of_triggers improved |
+| Layer 3 (Relationships) | 30/46 | 65.2% | View relationship differences (see 10.6) |
 | Layer 4 (Structure) | 6/46 | 13.0% | |
 | Layer 5 (Metadata) | 44/46 | 95.7% | 2 are ERROR (DotNet build failures) |
 
@@ -35,8 +35,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 ## Phase 10: Fix Remaining Test Failures
 
 Tests with remaining issues:
-- `test_layered_dacpac_comparison` - Element inventory issues (extended properties, function types, default constraints)
-- `test_layer3_sqlpackage_comparison` - ~~SqlPackage configuration issue~~ (FIXED: added /TargetDatabaseName parameter)
+- `test_layered_dacpac_comparison` - View relationship differences cause Layer 3 failures (see 10.6)
+- `test_layer3_sqlpackage_comparison` - Same issue as above (view relationships)
 
 ### 10.1 Extended Property Key Format
 
@@ -64,24 +64,27 @@ Tests with remaining issues:
   - Parse the function body to detect which pattern is used
   - Expected impact: Fix COUNT MISMATCH for SqlInlineTableValuedFunction/SqlMultiStatementTableValuedFunction
 
-### ~~10.3 View IsAnsiNullsOn Property~~ (INVALID - removed)
+### ~~10.3 View IsAnsiNullsOn Property~~ (RESOLVED)
 
-**Status:** REMOVED - Original analysis was incorrect.
+**Status:** RESOLVED - Updated implementation to emit `IsAnsiNullsOn` for all views.
 
-**Finding:** The current implementation is correct. DotNet only emits `IsAnsiNullsOn` for views with options (SCHEMABINDING, CHECK OPTION, or VIEW_METADATA). Simple views without any options do NOT get this property. The `views` fixture confirmed this - DotNet's dacpac for `[dbo].[ActiveItems]` (a simple view) does not include `IsAnsiNullsOn`, while `view_options` fixture views with SCHEMABINDING do include it.
+**Finding:** After updating reference dacpacs with current .NET SDK (and DefaultSchema project setting), DotNet now emits `IsAnsiNullsOn="True"` for ALL views, not just those with options. The Rust implementation has been updated to match this behavior (in `src/dacpac/model_xml.rs`).
 
-### 10.4 Extra Default Constraints
+### 10.4 Default Constraint Naming Fix ✓
 
-**Goal:** Suppress emission of default constraints that DotNet doesn't emit.
+**Goal:** Fix incorrect default constraint naming for inline constraints.
 
-**Issue:** Rust generates 5 extra `SqlDefaultConstraint` elements for Settings table that DotNet doesn't produce.
+**Issue:** Rust was incorrectly treating inline default constraints with syntax `CONSTRAINT [name] NOT NULL DEFAULT` as named DEFAULT constraints, when in SQL Server this syntax names the NOT NULL constraint, not the DEFAULT.
 
-- [ ] **10.4.1 Investigate Settings table default constraint differences**
-  - Files: `tests/fixtures/e2e_comprehensive/`, `src/model/builder.rs`
-  - Examine the Settings table definition in the e2e_comprehensive fixture
-  - Determine why DotNet doesn't emit these constraints (inline vs named, syntax differences)
-  - Likely cause: Inline defaults without explicit constraint names may be handled differently
-  - Expected impact: Fix 5 EXTRA items in Layer 1
+**Root Cause:** In SQL Server:
+- `CONSTRAINT [name] NOT NULL DEFAULT (value)` - The constraint keyword names the NOT NULL constraint; the DEFAULT is unnamed
+- `NOT NULL CONSTRAINT [name] DEFAULT (value)` - The constraint keyword names the DEFAULT constraint
+
+- [x] **10.4.1 Fix inline constraint name handling**
+  - File: `src/model/builder.rs` - Removed `pending_constraint_name` mechanism that incorrectly passed NOT NULL constraint names to DEFAULT constraints
+  - File: `src/parser/tsql_parser.rs` - Updated regex patterns to correctly distinguish named vs unnamed DEFAULT constraints
+  - File: `tests/fixtures/e2e_comprehensive/Tables/Settings.sql` - Fixed to use correct syntax for named DEFAULT constraints (`NOT NULL CONSTRAINT [name] DEFAULT`)
+  - Impact: Layer 1 default_constraints_named now passes
 
 ### 10.5 SqlPackage Test Configuration ✓
 
@@ -94,6 +97,20 @@ Tests with remaining issues:
   - Added `/TargetDatabaseName:ParityTestDb` to SqlPackage command
   - Layer 3 now properly runs and reports schema differences (instead of configuration error)
 
+### 10.6 View Relationship Parity
+
+**Goal:** Emit Columns and QueryDependencies relationships for all views (not just schema-bound).
+
+**Issue:** After rebuilding reference dacpacs with current .NET SDK (with DefaultSchema setting), DotNet now emits Columns and QueryDependencies relationships for ALL views, not just schema-bound or check-option views. Rust currently only emits these relationships for views with SCHEMABINDING or WITH CHECK OPTION.
+
+**Status:** PENDING for future work.
+
+- [ ] **10.6.1 Emit view relationships for all views**
+  - Update view processing to emit Columns and QueryDependencies for simple views
+  - This causes Layer 3 SqlPackage test failures (schema differences detected)
+
+**Note:** The `IsAnsiNullsOn` view property is now emitted for ALL views (not just those with options) - this matches current DotNet SDK behavior.
+
 ---
 
 ### Phase 10 Progress
@@ -103,10 +120,11 @@ Tests with remaining issues:
 | 10.1 Extended Property Key Format | COMPLETE | 1/1 |
 | 10.2 Function Type Classification | COMPLETE | 1/1 |
 | 10.3 View IsAnsiNullsOn Property | ~~REMOVED~~ | N/A |
-| 10.4 Extra Default Constraints | PENDING | 0/1 |
+| 10.4 Default Constraint Naming Fix | COMPLETE | 1/1 |
 | 10.5 SqlPackage Test Configuration | COMPLETE | 1/1 |
+| 10.6 View Relationship Parity | PENDING | 0/1 |
 
-**Phase 10 Overall**: 3/4 tasks (task 10.3 removed - was invalid)
+**Phase 10 Overall**: 4/5 tasks (task 10.3 removed - was invalid)
 
 ---
 
@@ -127,9 +145,9 @@ cargo test --test e2e_tests test_layered_dacpac_comparison -- --nocapture  # Run
 | Phase | Status |
 |-------|--------|
 | Phases 1-9 | **COMPLETE** ✓ 58/58 |
-| Phase 10 | **IN PROGRESS** 3/4 |
+| Phase 10 | **IN PROGRESS** 4/5 |
 
-**Total**: 61/62 tasks complete (task 10.3 removed - was invalid)
+**Total**: 62/63 tasks complete (task 10.3 removed - was invalid)
 
 ---
 

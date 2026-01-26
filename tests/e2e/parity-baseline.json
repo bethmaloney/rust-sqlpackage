@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-26T21:28:49.857796653+00:00",
-  "commit": "18f6a4f",
+  "updated": "2026-01-26T22:33:22.561856162+00:00",
+  "commit": "589ab8f",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -14,7 +14,7 @@
     {
       "name": "ampersand_encoding",
       "layer1_pass": true,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
       "metadata_pass": true
@@ -85,7 +85,7 @@
     },
     {
       "name": "default_constraints_named",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
@@ -93,7 +93,7 @@
     },
     {
       "name": "e2e_comprehensive",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": false,
       "relationship_pass": false,
       "layer4_pass": false,
@@ -125,7 +125,7 @@
     },
     {
       "name": "extended_properties",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
@@ -222,7 +222,7 @@
     {
       "name": "instead_of_triggers",
       "layer1_pass": true,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
       "metadata_pass": true
@@ -365,10 +365,10 @@
     },
     {
       "name": "views",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": true,
-      "layer4_pass": true,
+      "relationship_pass": false,
+      "layer4_pass": false,
       "metadata_pass": true
     }
   ]

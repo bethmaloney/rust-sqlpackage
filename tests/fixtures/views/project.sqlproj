@@ -4,5 +4,6 @@
   <PropertyGroup>
     <Name>Views</Name>
     <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultSchema>dbo</DefaultSchema>
   </PropertyGroup>
 </Project>

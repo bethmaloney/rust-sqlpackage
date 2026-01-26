@@ -667,11 +667,9 @@ fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::R
         write_property(writer, "IsWithCheckOption", "True")?;
     }
 
-    // 5. IsAnsiNullsOn - only emit for views with options (DotNet behavior)
-    // DotNet only emits this for views with SCHEMABINDING, CHECK OPTION, or VIEW_METADATA
-    if view.is_schema_bound || view.is_with_check_option || view.is_metadata_reported {
-        write_property(writer, "IsAnsiNullsOn", "True")?;
-    }
+    // 5. IsAnsiNullsOn - always emit for views (current DotNet behavior)
+    // Modern .NET DacFx emits this property for all views
+    write_property(writer, "IsAnsiNullsOn", "True")?;
 
     // Only emit Columns and QueryDependencies for schema-bound or with-check-option views
     // DotNet only analyzes dependencies for these types of views
@@ -3041,11 +3039,9 @@ fn write_raw_view<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow:
         write_property(writer, "IsWithCheckOption", "True")?;
     }
 
-    // 5. IsAnsiNullsOn - only emit for views with options (DotNet behavior)
-    // DotNet only emits this for views with SCHEMABINDING, CHECK OPTION, or VIEW_METADATA
-    if is_schema_bound || is_with_check_option || is_metadata_reported {
-        write_property(writer, "IsAnsiNullsOn", "True")?;
-    }
+    // 5. IsAnsiNullsOn - always emit for views (current DotNet behavior)
+    // Modern .NET DacFx emits this property for all views
+    write_property(writer, "IsAnsiNullsOn", "True")?;
 
     // Only emit Columns and QueryDependencies for schema-bound or with-check-option views
     if is_schema_bound || is_with_check_option {

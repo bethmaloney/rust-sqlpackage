@@ -358,52 +358,35 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     }
                 }
 
-                // Extract inline named default constraints from column definitions
-                // Note: sqlparser may associate the constraint name with NOT NULL when SQL is
-                // written as "CONSTRAINT [name] NOT NULL DEFAULT (value)" - we need to handle
-                // this by looking for a named NOT NULL/NULL followed by an unnamed DEFAULT
+                // Extract inline default constraints from column definitions
+                // IMPORTANT: In SQL Server, "CONSTRAINT [name] NOT NULL DEFAULT" names the NOT NULL
+                // constraint, NOT the DEFAULT constraint. Only "NOT NULL CONSTRAINT [name] DEFAULT"
+                // names the default. Since sqlparser associates the name with NOT NULL in the first
+                // case, we should NOT use that name for the DEFAULT - it makes the default unnamed.
                 for col in &create_table.columns {
-                    let mut pending_constraint_name: Option<String> = None;
-
                     for option in &col.options {
-                        match &option.option {
-                            ColumnOption::NotNull | ColumnOption::Null => {
-                                // If this null option has a name, save it for potential DEFAULT
-                                if let Some(constraint_name) = &option.name {
-                                    pending_constraint_name = Some(constraint_name.value.clone());
-                                }
-                            }
-                            ColumnOption::Default(expr) => {
-                                // Use explicit name on DEFAULT, pending name from NOT NULL, or generate one
-                                let has_explicit_name =
-                                    option.name.is_some() || pending_constraint_name.is_some();
-                                let constraint_name = option
-                                    .name
-                                    .as_ref()
-                                    .map(|n| n.value.clone())
-                                    .or(pending_constraint_name.take())
-                                    .unwrap_or_else(|| format!("DF_{}_{}", name, col.name.value));
+                        if let ColumnOption::Default(expr) = &option.option {
+                            // Only use a name if explicitly on the DEFAULT option itself
+                            let has_explicit_name = option.name.is_some();
+                            let constraint_name = option
+                                .name
+                                .as_ref()
+                                .map(|n| n.value.clone())
+                                .unwrap_or_else(|| format!("DF_{}_{}", name, col.name.value));
 
-                                model.add_element(ModelElement::Constraint(ConstraintElement {
-                                    name: constraint_name,
-                                    table_schema: schema.clone(),
-                                    table_name: name.clone(),
-                                    constraint_type: ConstraintType::Default,
-                                    columns: vec![ConstraintColumn::new(col.name.value.clone())],
-                                    definition: Some(expr.to_string()),
-                                    referenced_table: None,
-                                    referenced_columns: None,
-                                    is_clustered: None,
-                                    is_inline: !has_explicit_name,
-                                    inline_constraint_disambiguator: None,
-                                }));
-                                // Reset pending name
-                                pending_constraint_name = None;
-                            }
-                            _ => {
-                                // Reset pending name for other options
-                                pending_constraint_name = None;
-                            }
+                            model.add_element(ModelElement::Constraint(ConstraintElement {
+                                name: constraint_name,
+                                table_schema: schema.clone(),
+                                table_name: name.clone(),
+                                constraint_type: ConstraintType::Default,
+                                columns: vec![ConstraintColumn::new(col.name.value.clone())],
+                                definition: Some(expr.to_string()),
+                                referenced_table: None,
+                                referenced_columns: None,
+                                is_clustered: None,
+                                is_inline: !has_explicit_name,
+                                inline_constraint_disambiguator: None,
+                            }));
                         }
                     }
                 }
