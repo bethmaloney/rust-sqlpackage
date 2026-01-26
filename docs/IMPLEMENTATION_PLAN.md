@@ -37,7 +37,7 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 
 **Goal:** Fix non-deterministic ordering that causes Layer 1 and Layer 4 failures.
 
-- [ ] **9.1.1 Replace HashSet with BTreeSet for schemas**
+- [x] **9.1.1 Replace HashSet with BTreeSet for schemas** ✓
   - File: `src/model/builder.rs:27`
   - Change `HashSet<String>` to `BTreeSet<String>`
   - Ensures consistent schema ordering across builds
@@ -155,13 +155,13 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 
 | Section | Status | Completion |
 |---------|--------|------------|
-| 9.1 Deterministic Ordering | PENDING | 0/2 |
+| 9.1 Deterministic Ordering | IN PROGRESS | 1/2 |
 | 9.2 Property Value Fixes | PENDING | 0/4 |
 | 9.3 Relationship Completeness | PENDING | 0/3 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 0/16 tasks
+**Phase 9 Overall**: 1/16 tasks
 
 ### Expected Outcomes
 
@@ -190,6 +190,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 0/16 |
+| Phase 9 | **IN PROGRESS** 1/16 |
 
-**Total**: 39/55 tasks complete
+**Total**: 40/55 tasks complete

@@ -1,6 +1,6 @@
 //! Build database model from parsed SQL statements
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use anyhow::Result;
 use sqlparser::ast::{ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint};
@@ -24,7 +24,7 @@ use super::{
 /// Build a database model from parsed statements
 pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Result<DatabaseModel> {
     let mut model = DatabaseModel::new();
-    let mut schemas: HashSet<String> = HashSet::new();
+    let mut schemas: BTreeSet<String> = BTreeSet::new();
 
     // Always include dbo schema
     schemas.insert("dbo".to_string());
