@@ -219,6 +219,22 @@ pub enum MetadataFileError {
         /// Value in DotNet output
         dotnet_value: Option<String>,
     },
+    /// Pre/post-deploy script content mismatch (after whitespace normalization)
+    DeployScriptMismatch {
+        /// Script name (e.g., "predeploy.sql", "postdeploy.sql")
+        script_name: String,
+        /// Content in Rust dacpac (normalized)
+        rust_content: Option<String>,
+        /// Content in DotNet dacpac (normalized)
+        dotnet_content: Option<String>,
+    },
+    /// Pre/post-deploy script exists in one dacpac but not the other
+    DeployScriptMissing {
+        /// Script name (e.g., "predeploy.sql", "postdeploy.sql")
+        script_name: String,
+        /// True if missing in Rust dacpac, false if missing in DotNet dacpac
+        missing_in_rust: bool,
+    },
 }
 
 /// Parsed [Content_Types].xml structure
@@ -290,6 +306,8 @@ pub struct ComparisonOptions {
     pub check_element_order: bool,
     /// Compare metadata files ([Content_Types].xml, DacMetadata.xml, etc.) (Phase 5)
     pub check_metadata_files: bool,
+    /// Compare pre/post-deploy scripts (predeploy.sql, postdeploy.sql) (Phase 5.4)
+    pub check_deploy_scripts: bool,
 }
 
 /// Layer 3: SqlPackage DeployReport result
@@ -1564,6 +1582,164 @@ pub fn compare_origin_xml(rust_dacpac: &Path, dotnet_dacpac: &Path) -> Vec<Metad
 }
 
 // =============================================================================
+// Phase 5.4: Pre/Post Deploy Script Comparison
+// =============================================================================
+
+/// Extract a deploy script (predeploy.sql or postdeploy.sql) from a dacpac file.
+///
+/// Returns Ok(Some(content)) if script exists, Ok(None) if not present, Err on ZIP error.
+pub fn extract_deploy_script(
+    dacpac_path: &Path,
+    script_name: &str,
+) -> Result<Option<String>, String> {
+    let file = fs::File::open(dacpac_path).map_err(|e| format!("Failed to open dacpac: {}", e))?;
+
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read ZIP entry: {}", e))?;
+
+        if file.name() == script_name {
+            let mut content = String::new();
+            file.read_to_string(&mut content)
+                .map_err(|e| format!("Failed to read {}: {}", script_name, e))?;
+            return Ok(Some(content));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Normalize whitespace in SQL script content for comparison.
+///
+/// This ensures that minor whitespace differences (trailing spaces, different line endings,
+/// trailing newlines) don't cause false positives in script comparison.
+///
+/// Normalization rules:
+/// - Convert CRLF to LF (Windows to Unix line endings)
+/// - Trim trailing whitespace from each line
+/// - Remove trailing empty lines
+/// - Preserve leading whitespace and internal blank lines (significant for readability)
+fn normalize_script_whitespace(content: &str) -> String {
+    // Convert CRLF to LF
+    let content = content.replace("\r\n", "\n");
+
+    // Process each line: trim trailing whitespace
+    let lines: Vec<&str> = content.lines().map(|line| line.trim_end()).collect();
+
+    // Remove trailing empty lines
+    let mut result: Vec<&str> = lines;
+    while result.last().map_or(false, |line| line.is_empty()) {
+        result.pop();
+    }
+
+    result.join("\n")
+}
+
+/// Compare pre/post-deploy scripts between two dacpacs.
+///
+/// Compares both predeploy.sql and postdeploy.sql files if present.
+/// Scripts are normalized (whitespace trimmed) before comparison to avoid
+/// false positives from minor formatting differences.
+///
+/// Error scenarios:
+/// - Script present in one dacpac but not the other: `DeployScriptMissing`
+/// - Script content differs after normalization: `DeployScriptMismatch`
+pub fn compare_deploy_scripts(rust_dacpac: &Path, dotnet_dacpac: &Path) -> Vec<MetadataFileError> {
+    let mut errors = Vec::new();
+
+    // Compare predeploy.sql
+    errors.extend(compare_single_deploy_script(
+        rust_dacpac,
+        dotnet_dacpac,
+        "predeploy.sql",
+    ));
+
+    // Compare postdeploy.sql
+    errors.extend(compare_single_deploy_script(
+        rust_dacpac,
+        dotnet_dacpac,
+        "postdeploy.sql",
+    ));
+
+    errors
+}
+
+/// Compare a single deploy script between two dacpacs
+fn compare_single_deploy_script(
+    rust_dacpac: &Path,
+    dotnet_dacpac: &Path,
+    script_name: &str,
+) -> Vec<MetadataFileError> {
+    let mut errors = Vec::new();
+
+    // Extract from both dacpacs
+    let rust_script = match extract_deploy_script(rust_dacpac, script_name) {
+        Ok(s) => s,
+        Err(e) => {
+            // Log extraction error but continue - treat as missing
+            eprintln!(
+                "Warning: Failed to extract {} from Rust dacpac: {}",
+                script_name, e
+            );
+            None
+        }
+    };
+
+    let dotnet_script = match extract_deploy_script(dotnet_dacpac, script_name) {
+        Ok(s) => s,
+        Err(e) => {
+            // Log extraction error but continue - treat as missing
+            eprintln!(
+                "Warning: Failed to extract {} from DotNet dacpac: {}",
+                script_name, e
+            );
+            None
+        }
+    };
+
+    match (&rust_script, &dotnet_script) {
+        // Both missing - no error
+        (None, None) => {}
+
+        // Present in DotNet only
+        (None, Some(_)) => {
+            errors.push(MetadataFileError::DeployScriptMissing {
+                script_name: script_name.to_string(),
+                missing_in_rust: true,
+            });
+        }
+
+        // Present in Rust only
+        (Some(_), None) => {
+            errors.push(MetadataFileError::DeployScriptMissing {
+                script_name: script_name.to_string(),
+                missing_in_rust: false,
+            });
+        }
+
+        // Both present - compare content
+        (Some(rust_content), Some(dotnet_content)) => {
+            let rust_normalized = normalize_script_whitespace(rust_content);
+            let dotnet_normalized = normalize_script_whitespace(dotnet_content);
+
+            if rust_normalized != dotnet_normalized {
+                errors.push(MetadataFileError::DeployScriptMismatch {
+                    script_name: script_name.to_string(),
+                    rust_content: Some(rust_normalized),
+                    dotnet_content: Some(dotnet_normalized),
+                });
+            }
+        }
+    }
+
+    errors
+}
+
+// =============================================================================
 // Layer 3: SqlPackage DeployReport
 // =============================================================================
 
@@ -1669,6 +1845,7 @@ pub fn compare_dacpacs(
         check_relationships: false,
         check_element_order: false,
         check_metadata_files: false,
+        check_deploy_scripts: false,
     };
     compare_dacpacs_with_options(rust_dacpac, dotnet_dacpac, &options)
 }
@@ -1681,6 +1858,7 @@ pub fn compare_dacpacs(
 /// - `check_relationships`: Validate all relationships between elements
 /// - `check_element_order`: Validate element ordering matches DotNet output (Phase 4)
 /// - `check_metadata_files`: Compare metadata files like [Content_Types].xml (Phase 5)
+/// - `check_deploy_scripts`: Compare pre/post-deploy scripts (Phase 5.4)
 pub fn compare_dacpacs_with_options(
     rust_dacpac: &Path,
     dotnet_dacpac: &Path,
@@ -1709,7 +1887,7 @@ pub fn compare_dacpacs_with_options(
         Vec::new()
     };
 
-    let metadata_errors = if options.check_metadata_files {
+    let mut metadata_errors = if options.check_metadata_files {
         let mut errors = compare_content_types(rust_dacpac, dotnet_dacpac);
         errors.extend(compare_dac_metadata(rust_dacpac, dotnet_dacpac));
         errors.extend(compare_origin_xml(rust_dacpac, dotnet_dacpac));
@@ -1717,6 +1895,11 @@ pub fn compare_dacpacs_with_options(
     } else {
         Vec::new()
     };
+
+    // Add deploy script comparison if enabled (Phase 5.4)
+    if options.check_deploy_scripts {
+        metadata_errors.extend(compare_deploy_scripts(rust_dacpac, dotnet_dacpac));
+    }
 
     let layer3_result = if options.include_layer3 {
         Some(compare_with_sqlpackage(rust_dacpac, dotnet_dacpac))
@@ -1930,6 +2113,37 @@ impl fmt::Display for MetadataFileError {
                     field_name, rust_value, dotnet_value
                 )
             }
+            MetadataFileError::DeployScriptMismatch {
+                script_name,
+                rust_content,
+                dotnet_content,
+            } => {
+                write!(
+                    f,
+                    "DEPLOY SCRIPT MISMATCH: {} (Rust len: {}, DotNet len: {})",
+                    script_name,
+                    rust_content.as_ref().map_or(0, |s| s.len()),
+                    dotnet_content.as_ref().map_or(0, |s| s.len())
+                )
+            }
+            MetadataFileError::DeployScriptMissing {
+                script_name,
+                missing_in_rust,
+            } => {
+                if *missing_in_rust {
+                    write!(
+                        f,
+                        "DEPLOY SCRIPT MISSING IN RUST: {} (present in DotNet)",
+                        script_name
+                    )
+                } else {
+                    write!(
+                        f,
+                        "DEPLOY SCRIPT MISSING IN DOTNET: {} (present in Rust)",
+                        script_name
+                    )
+                }
+            }
         }
     }
 }
@@ -1996,9 +2210,9 @@ impl ComparisonResult {
             println!();
         }
 
-        // Phase 5: Metadata Files Comparison
+        // Phase 5: Metadata Files & Deploy Scripts Comparison
         if !self.metadata_errors.is_empty() {
-            println!("Phase 5: Metadata Files ([Content_Types].xml, DacMetadata.xml, Origin.xml)");
+            println!("Phase 5: Metadata Files & Deploy Scripts");
             println!("{}", "-".repeat(40));
             for err in &self.metadata_errors {
                 println!("  {}", err);

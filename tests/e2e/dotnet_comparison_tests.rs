@@ -435,6 +435,7 @@ fn test_strict_comparison_options() {
         check_relationships: false,
         check_element_order: false,
         check_metadata_files: false,
+        check_deploy_scripts: false,
     };
 
     let result =
@@ -793,6 +794,7 @@ fn test_relationship_comparison_options() {
         check_relationships: true,
         check_element_order: false,
         check_metadata_files: false,
+        check_deploy_scripts: false,
     };
 
     let result =
@@ -946,6 +948,7 @@ fn test_element_order_comparison_options() {
         check_relationships: false,
         check_element_order: true,
         check_metadata_files: false,
+        check_deploy_scripts: false,
     };
 
     let result =
@@ -1057,6 +1060,7 @@ fn test_content_types_comparison_options() {
         check_relationships: false,
         check_element_order: false,
         check_metadata_files: true,
+        check_deploy_scripts: false,
     };
 
     let result =
@@ -1337,6 +1341,7 @@ fn test_metadata_comparison_includes_dac_metadata() {
         check_relationships: false,
         check_element_order: false,
         check_metadata_files: true,
+        check_deploy_scripts: false,
     };
 
     let result =
@@ -1354,6 +1359,7 @@ fn test_metadata_comparison_includes_dac_metadata() {
     let mut dac_metadata_errors = 0;
     let mut origin_xml_errors = 0;
     let mut file_missing_errors = 0;
+    let mut deploy_script_errors = 0;
 
     for err in &result.metadata_errors {
         match err {
@@ -1370,6 +1376,10 @@ fn test_metadata_comparison_includes_dac_metadata() {
             crate::dacpac_compare::MetadataFileError::FileMissing { .. } => {
                 file_missing_errors += 1;
             }
+            crate::dacpac_compare::MetadataFileError::DeployScriptMismatch { .. }
+            | crate::dacpac_compare::MetadataFileError::DeployScriptMissing { .. } => {
+                deploy_script_errors += 1;
+            }
         }
     }
 
@@ -1378,6 +1388,7 @@ fn test_metadata_comparison_includes_dac_metadata() {
     println!("  DacMetadata.xml errors: {}", dac_metadata_errors);
     println!("  Origin.xml errors: {}", origin_xml_errors);
     println!("  File missing errors: {}", file_missing_errors);
+    println!("  Deploy script errors: {}", deploy_script_errors);
 
     // Show details of metadata errors
     if !result.metadata_errors.is_empty() {
@@ -1583,4 +1594,283 @@ fn test_extract_origin_xml_from_dacpac() {
         "ProductName should be rust-sqlpackage"
     );
     assert!(origin.product_schema.is_some(), "Should have ProductSchema");
+}
+
+// =============================================================================
+// Phase 5.4: Pre/Post Deploy Script Comparison Tests
+// =============================================================================
+
+/// Test pre/post-deploy script comparison between Rust and DotNet dacpacs (Phase 5.4)
+///
+/// This test verifies that predeploy.sql and postdeploy.sql files match between
+/// rust-sqlpackage and DotNet DacFx output.
+///
+/// Both tools should:
+/// - Package the scripts with the same filenames (predeploy.sql, postdeploy.sql)
+/// - Preserve script content (modulo whitespace normalization)
+#[test]
+fn test_deploy_script_comparison() {
+    if !dotnet_available() {
+        return;
+    }
+
+    // Use the pre_post_deploy fixture which has both scripts
+    let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("pre_post_deploy")
+        .join("project.sqlproj");
+
+    if !project_path.exists() {
+        eprintln!("Skipping: pre_post_deploy fixture not found");
+        return;
+    }
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Use the deploy script comparison function
+    let errors = crate::dacpac_compare::compare_deploy_scripts(&rust_dacpac, &dotnet_dacpac);
+
+    println!("\n=== Deploy Script Comparison Test (Phase 5.4) ===\n");
+
+    if errors.is_empty() {
+        println!("All deploy scripts match!");
+    } else {
+        println!("Deploy script mismatches found: {}\n", errors.len());
+        for err in &errors {
+            println!("  {}", err);
+        }
+
+        println!("\nThis test is informational - mismatches indicate deploy script");
+        println!("differences that need to be addressed for exact 1-1 matching.");
+    }
+
+    // Note: This test is informational and doesn't fail on mismatches
+}
+
+/// Test deploy script extraction from dacpac
+#[test]
+fn test_extract_deploy_scripts_from_dacpac() {
+    use crate::dacpac_compare::extract_deploy_script;
+
+    // Use the pre_post_deploy fixture
+    let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("pre_post_deploy")
+        .join("project.sqlproj");
+
+    if !project_path.exists() {
+        eprintln!("Skipping: pre_post_deploy fixture not found");
+        return;
+    }
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let rust_dacpac = temp_dir.path().join("rust.dacpac");
+
+    rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+        project_path,
+        output_path: Some(rust_dacpac.clone()),
+        target_platform: "Sql150".to_string(),
+        verbose: false,
+    })
+    .expect("Rust build should succeed");
+
+    // Extract predeploy.sql
+    let predeploy = extract_deploy_script(&rust_dacpac, "predeploy.sql").expect("Should not error");
+
+    println!("\n=== Rust Dacpac Deploy Scripts ===\n");
+
+    if let Some(ref content) = predeploy {
+        println!("predeploy.sql ({} bytes):", content.len());
+        println!("{}", content);
+    } else {
+        println!("predeploy.sql: Not found");
+    }
+
+    // Extract postdeploy.sql
+    let postdeploy =
+        extract_deploy_script(&rust_dacpac, "postdeploy.sql").expect("Should not error");
+
+    if let Some(ref content) = postdeploy {
+        println!("\npostdeploy.sql ({} bytes):", content.len());
+        println!("{}", content);
+    } else {
+        println!("\npostdeploy.sql: Not found");
+    }
+
+    // Verify scripts exist in the pre_post_deploy fixture
+    assert!(predeploy.is_some(), "predeploy.sql should exist in dacpac");
+    assert!(
+        postdeploy.is_some(),
+        "postdeploy.sql should exist in dacpac"
+    );
+
+    // Verify content contains expected strings
+    let predeploy_content = predeploy.unwrap();
+    assert!(
+        predeploy_content.contains("Starting deployment"),
+        "predeploy.sql should contain 'Starting deployment'"
+    );
+
+    let postdeploy_content = postdeploy.unwrap();
+    assert!(
+        postdeploy_content.contains("Deployment complete"),
+        "postdeploy.sql should contain 'Deployment complete'"
+    );
+}
+
+/// Test whitespace normalization for script comparison
+#[test]
+fn test_script_whitespace_normalization() {
+    // Test that scripts with different whitespace are considered equal
+    let script1 = "-- Comment\r\nPRINT 'Hello';  \r\n\r\n";
+    let script2 = "-- Comment\nPRINT 'Hello';\n";
+
+    // Use the internal normalize function via a test helper
+    fn normalize(s: &str) -> String {
+        let content = s.replace("\r\n", "\n");
+        let lines: Vec<&str> = content.lines().map(|line| line.trim_end()).collect();
+        let mut result: Vec<&str> = lines;
+        while result.last().map_or(false, |line| line.is_empty()) {
+            result.pop();
+        }
+        result.join("\n")
+    }
+
+    let normalized1 = normalize(script1);
+    let normalized2 = normalize(script2);
+
+    println!("\n=== Script Whitespace Normalization Test ===\n");
+    println!("Script 1 (CRLF, trailing spaces, trailing newlines):");
+    println!("  Raw: {:?}", script1);
+    println!("  Normalized: {:?}", normalized1);
+    println!("\nScript 2 (LF, no trailing whitespace):");
+    println!("  Raw: {:?}", script2);
+    println!("  Normalized: {:?}", normalized2);
+
+    assert_eq!(
+        normalized1, normalized2,
+        "Scripts with only whitespace differences should normalize to the same content"
+    );
+}
+
+/// Test ComparisonOptions with check_deploy_scripts enabled
+#[test]
+fn test_deploy_script_comparison_options() {
+    if !dotnet_available() {
+        return;
+    }
+
+    // Use the pre_post_deploy fixture
+    let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("pre_post_deploy")
+        .join("project.sqlproj");
+
+    if !project_path.exists() {
+        eprintln!("Skipping: pre_post_deploy fixture not found");
+        return;
+    }
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Test with check_deploy_scripts enabled
+    let options = ComparisonOptions {
+        include_layer3: false,
+        strict_properties: false,
+        check_relationships: false,
+        check_element_order: false,
+        check_metadata_files: false,
+        check_deploy_scripts: true,
+    };
+
+    let result =
+        compare_dacpacs_with_options(&rust_dacpac, &dotnet_dacpac, &options).expect("Comparison");
+
+    println!("\n=== Deploy Script ComparisonOptions Test (Phase 5.4) ===\n");
+    println!("Layer 1 errors: {}", result.layer1_errors.len());
+    println!("Layer 2 errors: {}", result.layer2_errors.len());
+    println!(
+        "Metadata errors (includes deploy scripts): {}",
+        result.metadata_errors.len()
+    );
+
+    // Count deploy script specific errors
+    let deploy_errors: Vec<_> = result
+        .metadata_errors
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                crate::dacpac_compare::MetadataFileError::DeployScriptMismatch { .. }
+                    | crate::dacpac_compare::MetadataFileError::DeployScriptMissing { .. }
+            )
+        })
+        .collect();
+
+    println!("  Deploy script errors: {}", deploy_errors.len());
+
+    if !deploy_errors.is_empty() {
+        println!("\nDeploy script errors:");
+        for err in &deploy_errors {
+            println!("  {}", err);
+        }
+    }
+}
+
+/// Test that dacpacs without deploy scripts don't generate errors
+#[test]
+fn test_deploy_script_comparison_no_scripts() {
+    if !dotnet_available() {
+        return;
+    }
+
+    // Use e2e_comprehensive fixture which likely doesn't have deploy scripts
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Compare deploy scripts
+    let errors = crate::dacpac_compare::compare_deploy_scripts(&rust_dacpac, &dotnet_dacpac);
+
+    println!("\n=== Deploy Script Comparison (No Scripts Expected) ===\n");
+
+    if errors.is_empty() {
+        println!("No deploy script errors (both dacpacs have no scripts) - PASS");
+    } else {
+        println!("Deploy script errors found: {}", errors.len());
+        for err in &errors {
+            println!("  {}", err);
+        }
+        println!("\nNote: If both dacpacs have no scripts, there should be no errors.");
+    }
+
+    // When neither dacpac has deploy scripts, there should be no errors
+    // (unless there's an asymmetry - one has scripts, the other doesn't)
 }

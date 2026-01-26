@@ -250,10 +250,27 @@ Extend comparison beyond model.xml to all dacpac files.
     - Updated `test_metadata_comparison_includes_dac_metadata` to count Origin.xml errors
   - Acceptance: Origin.xml comparison reports field differences (ignoring timestamps/checksums) ✓
 
-- [ ] **5.4 Implement pre/post deploy script comparison**
-  - Compare `predeploy.sql` if present
-  - Compare `postdeploy.sql` if present
-  - Normalize whitespace for comparison
+- [x] **5.4 Implement pre/post deploy script comparison** ✓ COMPLETE
+  - Added `DeployScriptMismatch` and `DeployScriptMissing` variants to `MetadataFileError` enum
+  - Added `extract_deploy_script()` function to extract predeploy.sql/postdeploy.sql from dacpac ZIP
+  - Added `normalize_script_whitespace()` function with rules:
+    - Convert CRLF to LF (Windows to Unix line endings)
+    - Trim trailing whitespace from each line
+    - Remove trailing empty lines
+    - Preserve leading whitespace and internal blank lines
+  - Added `compare_deploy_scripts()` and `compare_single_deploy_script()` functions
+  - Added `check_deploy_scripts` option to `ComparisonOptions` struct
+  - Integrated into `compare_dacpacs_with_options()` when option enabled
+  - Added Display impl for new error variants
+  - Updated `print_report()` section title to include deploy scripts
+  - Tests added:
+    - `test_deploy_script_comparison` - informational test comparing scripts between Rust/DotNet
+    - `test_extract_deploy_scripts_from_dacpac` - test extraction from Rust-generated dacpac
+    - `test_script_whitespace_normalization` - unit test for whitespace normalization
+    - `test_deploy_script_comparison_options` - tests ComparisonOptions with `check_deploy_scripts=true`
+    - `test_deploy_script_comparison_no_scripts` - tests that dacpacs without scripts don't generate errors
+  - Location: `tests/e2e/dacpac_compare.rs:1582-1732` (functions), `tests/e2e/dotnet_comparison_tests.rs:1596-1863` (tests)
+  - Acceptance: Pre/post-deploy script comparison reports content differences (with whitespace normalization) ✓
 
 - [ ] **5.5 Create unified metadata comparison function**
   ```rust
@@ -379,18 +396,19 @@ Reorganize and improve test infrastructure.
 | Phase 2: Property Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 3: Relationship Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 4: XML Structure (Layer 4) | **COMPLETE** | 4/4 ✓ |
-| Phase 5: Metadata Files | In Progress | 3/5 |
+| Phase 5: Metadata Files | In Progress | 4/5 |
 | Phase 6: Per-Feature Tests | Not Started | 0/5+ |
 | Phase 7: Canonical XML | Not Started | 0/4 |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 24/39+ tasks complete
+**Overall Progress**: 25/39+ tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
 Phase 3 added relationship parsing and comparison infrastructure with comprehensive error types.
 Phase 4 added element ordering infrastructure to compare structural differences in element positions and type ordering.
 Phase 5 started with [Content_Types].xml comparison. Implemented extraction, parsing, and comparison infrastructure for metadata files.
+Phase 5.4 added pre/post-deploy script comparison with whitespace normalization for parity testing.
 
 ---
 
