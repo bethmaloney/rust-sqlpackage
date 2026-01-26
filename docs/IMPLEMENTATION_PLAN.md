@@ -409,20 +409,38 @@ Final validation layer for true byte-level matching.
 
 Reorganize and improve test infrastructure.
 
-- [ ] **8.1 Reorganize parity test files**
-  ```
-  tests/e2e/
-  ├── dotnet_comparison_tests.rs     # Main orchestration
-  ├── dacpac_compare.rs              # Comparison infrastructure
-  ├── parity/
-  │   ├── mod.rs
-  │   ├── layer1_inventory.rs
-  │   ├── layer2_properties.rs
-  │   ├── layer3_sqlpackage.rs
-  │   ├── layer4_structure.rs
-  │   ├── layer5_relationships.rs
-  │   └── layer6_metadata.rs
-  ```
+- [x] **8.1 Reorganize parity test files into modular structure** ✓ COMPLETE
+  - Created `tests/e2e/parity/` directory with modular test infrastructure
+  - **Module structure implemented**:
+    - `mod.rs` - Module coordinator with re-exports of all types and functions
+    - `types.rs` - Shared data structures (ModelElement, DacpacModel, error types, etc.)
+    - `layer1_inventory.rs` - Element inventory comparison (element names and types)
+    - `layer2_properties.rs` - Property comparison with key and strict modes
+    - `layer3_sqlpackage.rs` - SqlPackage DeployReport comparison
+    - `layer4_structure.rs` - Element ordering comparison (element and type ordering)
+    - `layer5_relationships.rs` - Relationship comparison (references and entries)
+    - `layer6_metadata.rs` - Metadata file comparison ([Content_Types].xml, DacMetadata.xml, Origin.xml, deploy scripts)
+    - `layer7_canonical.rs` - Canonical XML comparison for byte-level matching
+  - **Architectural changes**:
+    - Moved comparison infrastructure from `dacpac_compare.rs` into modular parity layers
+    - `dacpac_compare.rs` now serves as thin wrapper re-exporting from parity module
+    - All shared types and error handling consolidated in `types.rs`
+    - Each comparison layer in separate file for clarity and maintainability
+  - **Module re-exports**:
+    - `mod.rs` re-exports all public types and functions for clean public API
+    - Tests import from `e2e::parity` for standardized access pattern
+  - **Test results**:
+    - All 95 e2e tests pass
+    - All 487 total tests pass
+    - Zero regressions from infrastructure reorganization
+  - **Benefits achieved**:
+    - Clear separation of concerns (one layer per file)
+    - Reduced file sizes (each file now focused on single responsibility)
+    - Improved test discoverability (layer structure mirrors comparison pipeline)
+    - Easier to extend with new comparison layers
+    - Better code organization for future phases
+  - Location: `tests/e2e/parity/` directory structure + `tests/e2e/dacpac_compare.rs` as re-export wrapper
+  - Acceptance: Modular structure complete with all layers functional and all tests passing ✓
 
 - [ ] **8.2 Add comparison progress tracking to CI**
   - Track number of passing parity tests over time
@@ -449,9 +467,9 @@ Reorganize and improve test infrastructure.
 | Phase 5: Metadata Files | **COMPLETE** | 5/5 ✓ |
 | Phase 6: Per-Feature Tests | **COMPLETE** | 5/5 ✓ |
 | Phase 7: Canonical XML | **COMPLETE** | 4/4 ✓ |
-| Phase 8: Infrastructure | Not Started | 0/4 |
+| Phase 8: Infrastructure | In Progress | 1/4 |
 
-**Overall Progress**: 35/39 tasks complete
+**Overall Progress**: 36/39 tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
@@ -465,6 +483,7 @@ Phase 6.3 added medium-priority fixture tests for `database_options` and `header
 Phase 6.4 added lower-priority fixture tests for `extended_properties`, `table_types`, and `sqlcmd_variables` fixtures. Key parity gaps identified: extended property naming format differences, IsNullable property handling for table type columns, and missing procedure relationship entries.
 Phase 6.5 completed per-feature parity tests for all remaining fixtures (35+ tests). Added `run_standard_parity_test()` helper function and `test_parity_all_fixtures` aggregate test with summary statistics.
 Phase 7 provides canonical XML comparison for true byte-level matching after normalization, enabling detection of even minor formatting or ordering differences between Rust and DotNet dacpac output.
+Phase 8.1 reorganized the parity test infrastructure into a modular structure with 7 separate comparison layers, moving comparison logic from monolithic `dacpac_compare.rs` into `tests/e2e/parity/` with each layer handling a distinct responsibility (inventory, properties, SqlPackage, structure, relationships, metadata, canonical XML). This organization improves maintainability and makes it easy to extend with new comparison layers in future phases.
 
 ---
 
