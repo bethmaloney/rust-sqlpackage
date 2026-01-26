@@ -3717,6 +3717,248 @@ fn test_parity_metrics_pass_rate() {
 }
 
 // =============================================================================
+// Phase 8.3: Detailed Parity Report Generation
+// =============================================================================
+
+use crate::dacpac_compare::ParityReport;
+
+/// Collect detailed parity results across all fixtures for report generation.
+///
+/// This function is similar to `collect_parity_metrics()` but captures full
+/// error messages instead of just counts, enabling detailed Markdown reports.
+///
+/// # Returns
+/// A `ParityReport` struct containing:
+/// - Timestamp and git commit info
+/// - Per-fixture detailed results with full error messages
+///
+/// # Example
+/// ```ignore
+/// let report = collect_parity_report(&ParityTestOptions::default());
+/// let markdown = report.to_markdown();
+/// std::fs::write("parity-report.md", markdown).unwrap();
+/// ```
+pub fn collect_parity_report(options: &ParityTestOptions) -> ParityReport {
+    let mut report = ParityReport::new();
+    let fixtures = get_available_fixtures();
+
+    for fixture in &fixtures {
+        match run_parity_test(fixture, options) {
+            Ok(result) => {
+                report.add_result(fixture, &result);
+            }
+            Err(e) => {
+                report.add_error(fixture, &e.to_string());
+            }
+        }
+    }
+
+    report
+}
+
+/// Test that generates and outputs a detailed Markdown parity report.
+///
+/// This test:
+/// 1. Runs parity tests on all available fixtures
+/// 2. Collects detailed results with full error messages using ParityReport
+/// 3. Generates Markdown report
+/// 4. Optionally writes report to a file if PARITY_REPORT_FILE is set
+///
+/// The Markdown report includes:
+/// - Summary table with pass rates per layer
+/// - Per-fixture results table with error counts
+/// - Detailed error breakdown for failing fixtures
+///
+/// CI systems can use this report as an artifact for:
+/// - Human-readable parity status
+/// - Pull request reviews
+/// - Historical comparison
+#[test]
+fn test_parity_report_generation() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let options = ParityTestOptions::default();
+    let report = collect_parity_report(&options);
+
+    // Generate Markdown report
+    let markdown = report.to_markdown();
+
+    println!("\n=== PARITY REPORT (MARKDOWN) ===");
+    println!("{}", markdown);
+
+    // If PARITY_REPORT_FILE env var is set, write Markdown to file
+    if let Ok(file_path) = std::env::var("PARITY_REPORT_FILE") {
+        match std::fs::write(&file_path, &markdown) {
+            Ok(_) => println!("\nReport written to: {}", file_path),
+            Err(e) => eprintln!("Failed to write report to {}: {}", file_path, e),
+        }
+    }
+
+    // Basic assertions
+    assert!(
+        report.total_fixtures() > 0,
+        "Should have tested some fixtures"
+    );
+    assert!(
+        markdown.contains("# Dacpac Parity Test Report"),
+        "Report should have title"
+    );
+    assert!(
+        markdown.contains("## Summary"),
+        "Report should have summary section"
+    );
+    assert!(
+        markdown.contains("## Per-Fixture Results"),
+        "Report should have per-fixture section"
+    );
+}
+
+/// Test that ParityReport correctly tracks fixture results.
+#[test]
+fn test_parity_report_tracking() {
+    let mut report = ParityReport::new();
+
+    // Manually set timestamp for reproducible test
+    report.timestamp = "2026-01-26T10:00:00+00:00".to_string();
+    report.commit = Some("abc123".to_string());
+
+    // Create a mock ComparisonResult with no errors (passing)
+    let passing_result = ComparisonResult::default();
+    report.add_result("passing_fixture", &passing_result);
+
+    // Create a mock ComparisonResult with errors (failing)
+    let mut failing_result = ComparisonResult::default();
+    failing_result
+        .layer1_errors
+        .push(crate::dacpac_compare::Layer1Error::MissingInRust {
+            element_type: "SqlTable".to_string(),
+            name: "[dbo].[Test]".to_string(),
+        });
+    report.add_result("failing_fixture", &failing_result);
+
+    // Add an error case
+    report.add_error("error_fixture", "Build failed: some error");
+
+    // Verify counts
+    assert_eq!(report.total_fixtures(), 3);
+    assert_eq!(report.full_parity_count(), 1);
+    assert_eq!(report.layer1_pass_count(), 1);
+    assert_eq!(report.error_count(), 1);
+
+    // Generate markdown and verify structure
+    let markdown = report.to_markdown();
+    assert!(markdown.contains("**Commit:** `abc123`"));
+    assert!(markdown.contains("passing_fixture"));
+    assert!(markdown.contains("failing_fixture"));
+    assert!(markdown.contains("error_fixture"));
+    assert!(markdown.contains("✅ PASS"));
+    assert!(markdown.contains("❌ FAIL"));
+    assert!(markdown.contains("⚠️ ERROR"));
+
+    println!("Generated Markdown report:\n{}", markdown);
+}
+
+/// Test that ParityReport generates valid Markdown for detailed errors.
+#[test]
+fn test_parity_report_detailed_errors() {
+    use crate::dacpac_compare::{Layer1Error, Layer2Error, RelationshipError};
+
+    let mut report = ParityReport::new();
+
+    // Create a result with errors in multiple layers
+    let mut result = ComparisonResult::default();
+    result.layer1_errors.push(Layer1Error::MissingInRust {
+        element_type: "SqlTable".to_string(),
+        name: "[dbo].[MissingTable]".to_string(),
+    });
+    result.layer2_errors.push(Layer2Error {
+        element_type: "SqlSimpleColumn".to_string(),
+        element_name: "[dbo].[TestTable].[Col1]".to_string(),
+        property_name: "IsNullable".to_string(),
+        rust_value: Some("True".to_string()),
+        dotnet_value: Some("False".to_string()),
+    });
+    result
+        .relationship_errors
+        .push(RelationshipError::MissingRelationship {
+            element_type: "SqlProcedure".to_string(),
+            element_name: "[dbo].[TestProc]".to_string(),
+            relationship_name: "BodyDependencies".to_string(),
+        });
+
+    report.add_result("multi_error_fixture", &result);
+
+    let markdown = report.to_markdown();
+
+    // Verify detailed error sections are present
+    assert!(
+        markdown.contains("## Detailed Errors"),
+        "Should have detailed errors section"
+    );
+    assert!(
+        markdown.contains("### multi_error_fixture"),
+        "Should have fixture-specific section"
+    );
+    assert!(
+        markdown.contains("**Layer 1 - Element Inventory"),
+        "Should have Layer 1 errors"
+    );
+    assert!(
+        markdown.contains("**Layer 2 - Properties"),
+        "Should have Layer 2 errors"
+    );
+    assert!(
+        markdown.contains("**Relationships"),
+        "Should have relationship errors"
+    );
+
+    // Verify error messages are included
+    assert!(markdown.contains("[dbo].[MissingTable]"));
+    assert!(markdown.contains("IsNullable"));
+    assert!(markdown.contains("BodyDependencies"));
+
+    println!("Detailed error report:\n{}", markdown);
+}
+
+/// Test that error truncation works for fixtures with many errors.
+#[test]
+fn test_parity_report_error_truncation() {
+    let mut report = ParityReport::new();
+
+    // Create a result with many Layer 1 errors (more than 10)
+    let mut result = ComparisonResult::default();
+    for i in 0..15 {
+        result
+            .layer1_errors
+            .push(crate::dacpac_compare::Layer1Error::MissingInRust {
+                element_type: "SqlTable".to_string(),
+                name: format!("[dbo].[Table{}]", i),
+            });
+    }
+    report.add_result("many_errors_fixture", &result);
+
+    let markdown = report.to_markdown();
+
+    // Verify truncation message is present
+    assert!(
+        markdown.contains("...and 5 more errors"),
+        "Should indicate truncated errors"
+    );
+
+    // Verify first 10 errors are present
+    assert!(markdown.contains("[dbo].[Table0]"));
+    assert!(markdown.contains("[dbo].[Table9]"));
+
+    // Verify 11th error is not present (truncated)
+    assert!(!markdown.contains("[dbo].[Table10]"));
+
+    println!("Truncated error report:\n{}", markdown);
+}
+
+// =============================================================================
 // Phase 7: Canonical XML Comparison Tests
 // =============================================================================
 

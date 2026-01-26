@@ -88,6 +88,10 @@ jobs:
         run: |
           PARITY_METRICS_FILE=parity-metrics.json cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture
 
+      - name: Generate parity report
+        run: |
+          PARITY_REPORT_FILE=parity-report.md cargo test --test e2e_tests test_parity_report_generation -- --nocapture
+
       - name: Display parity metrics summary
         if: always()
         run: |
@@ -106,10 +110,29 @@ jobs:
             echo "No metrics file found"
           fi
 
+      - name: Display parity report summary
+        if: always()
+        run: |
+          if [ -f parity-report.md ]; then
+            echo "=== PARITY REPORT SUMMARY ==="
+            # Show the summary table (first 30 lines of the report)
+            head -50 parity-report.md
+          else
+            echo "No report file found"
+          fi
+
       - name: Upload parity metrics
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: parity-metrics
           path: parity-metrics.json
+          if-no-files-found: ignore
+
+      - name: Upload parity report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-report
+          path: parity-report.md
           if-no-files-found: ignore

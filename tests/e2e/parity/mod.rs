@@ -52,9 +52,9 @@ pub mod layer7_canonical;
 // Re-export commonly used types from types module
 pub use types::{
     CanonicalXmlError, ComparisonOptions, ComparisonResult, ContentTypesXml, DacMetadataXml,
-    DacpacModel, FixtureMetrics, Layer1Error, Layer2Error, Layer3Result, Layer4Error,
-    MetadataFileError, ModelElement, OriginXml, ParityMetrics, ReferenceEntry, Relationship,
-    RelationshipError,
+    DacpacModel, DetailedFixtureResult, FixtureMetrics, Layer1Error, Layer2Error, Layer3Result,
+    Layer4Error, MetadataFileError, ModelElement, OriginXml, ParityMetrics, ParityReport,
+    ReferenceEntry, Relationship, RelationshipError,
 };
 
 // Re-export extract_model_xml for convenience

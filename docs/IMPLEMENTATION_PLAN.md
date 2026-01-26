@@ -461,9 +461,26 @@ Reorganize and improve test infrastructure.
   - Location: `tests/e2e/parity/types.rs:891-1183` (metrics types), `tests/e2e/dotnet_comparison_tests.rs:3573-3715` (tests)
   - Acceptance: CI reports parity metrics per layer with JSON artifact for historical tracking ✓
 
-- [ ] **8.3 Add comparison report generation**
-  - Generate HTML/Markdown report of all differences
-  - Save as CI artifact
+- [x] **8.3 Add comparison report generation** ✓ COMPLETE
+  - Added `DetailedFixtureResult` struct in `tests/e2e/parity/types.rs` for capturing per-fixture results with full error messages
+  - Added `ParityReport` struct in `tests/e2e/parity/types.rs` for aggregate report generation with detailed errors
+  - Implemented `ParityReport::to_markdown()` method that generates a comprehensive Markdown report including:
+    - Summary table with pass rates per layer
+    - Per-fixture results table with error counts and status emojis
+    - Detailed error breakdown for failing fixtures (limited to 10 errors per section)
+  - Added `collect_parity_report()` function in `dotnet_comparison_tests.rs` for collecting detailed results
+  - Exported new types from `tests/e2e/parity/mod.rs`
+  - Updated `.github/workflows/ci.yml` with:
+    - "Generate parity report" step that runs `test_parity_report_generation` with `PARITY_REPORT_FILE=parity-report.md`
+    - "Display parity report summary" step that shows the report summary in CI logs
+    - "Upload parity report" step that saves `parity-report.md` as GitHub Actions artifact
+  - Tests added:
+    - `test_parity_report_generation` - Full report generation across all fixtures
+    - `test_parity_report_tracking` - Verifies fixture result tracking and Markdown structure
+    - `test_parity_report_detailed_errors` - Tests multi-layer error reporting
+    - `test_parity_report_error_truncation` - Verifies error truncation for fixtures with many errors
+  - Location: `tests/e2e/parity/types.rs:1244-1680` (types), `tests/e2e/dotnet_comparison_tests.rs:3719-3958` (tests), `.github/workflows/ci.yml:91-138`
+  - Acceptance: Generate Markdown report of all differences ✓, Save as CI artifact ✓
 
 - [ ] **8.4 Add regression detection**
   - Fail CI if previously passing parity tests now fail
@@ -482,9 +499,9 @@ Reorganize and improve test infrastructure.
 | Phase 5: Metadata Files | **COMPLETE** | 5/5 ✓ |
 | Phase 6: Per-Feature Tests | **COMPLETE** | 5/5 ✓ |
 | Phase 7: Canonical XML | **COMPLETE** | 4/4 ✓ |
-| Phase 8: Infrastructure | In Progress | 2/4 |
+| Phase 8: Infrastructure | In Progress | 3/4 |
 
-**Overall Progress**: 37/39 tasks complete
+**Overall Progress**: 38/39 tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
@@ -500,6 +517,7 @@ Phase 6.5 completed per-feature parity tests for all remaining fixtures (35+ tes
 Phase 7 provides canonical XML comparison for true byte-level matching after normalization, enabling detection of even minor formatting or ordering differences between Rust and DotNet dacpac output.
 Phase 8.1 reorganized the parity test infrastructure into a modular structure with 7 separate comparison layers, moving comparison logic from monolithic `dacpac_compare.rs` into `tests/e2e/parity/` with each layer handling a distinct responsibility (inventory, properties, SqlPackage, structure, relationships, metadata, canonical XML). This organization improves maintainability and makes it easy to extend with new comparison layers in future phases.
 Phase 8.2 added CI progress tracking with `ParityMetrics` struct that collects structured test results across all fixtures. The metrics include per-layer pass rates, per-fixture error counts, and are output as JSON for CI systems to parse and track over time. The CI workflow now collects metrics, displays a summary, and uploads the JSON as an artifact.
+Phase 8.3 added Markdown report generation with `ParityReport` struct and `to_markdown()` method. The report includes summary tables with pass rates per layer, per-fixture results with status emojis, and detailed error breakdowns (truncated to 10 errors per section for readability). CI workflow generates the report, displays a summary in logs, and uploads the Markdown file as an artifact alongside the JSON metrics.
 
 ---
 
