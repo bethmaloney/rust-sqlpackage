@@ -14,227 +14,118 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Phase 6 | Per-Feature Parity Tests (all 46 fixtures) | ✓ 5/5 |
 | Phase 7 | Canonical XML Comparison (byte-level matching) | ✓ 4/4 |
 | Phase 8 | Test Infrastructure (modular parity layers, CI metrics, regression detection) | ✓ 4/4 |
+| Phase 9 | Achieve 100% Parity (ordering, properties, relationships, metadata, edge cases) | ✓ 19/19 |
 
-**Phases 1-8 Complete**: 39/39 tasks
+**Phases 1-9 Complete**: 58/58 tasks
 
 ---
 
-## Phase 9: Achieve 100% Parity
-
-Fix the remaining parity issues to achieve near-100% pass rates across all comparison layers.
-
-### Current Parity Metrics (as of 2026-01-26)
+## Current Parity Metrics (as of 2026-01-27)
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 34/46 | 73.9% | |
-| Layer 2 (Properties) | 37/46 | 80.4% | |
-| Layer 3 (Relationships) | 30/46 | 65.2% | Improved from 28/46 due to CheckExpressionDependencies |
+| Layer 1 (Inventory) | 34/46 | 73.9% | Extended property key format differences |
+| Layer 2 (Properties) | 37/46 | 80.4% | View IsAnsiNullsOn missing |
+| Layer 3 (Relationships) | 30/46 | 65.2% | |
 | Layer 4 (Structure) | 6/46 | 13.0% | |
-| Layer 5 (Metadata) | 44/46 | 95.7% | Improved from 89.1%; remaining 2 are ERROR (DotNet build failures for external_reference and unresolved_reference) |
-
-### 9.1 Deterministic Element Ordering
-
-**Goal:** Fix non-deterministic ordering that causes Layer 1 and Layer 4 failures.
-
-- [x] **9.1.1 Replace HashSet with BTreeSet for schemas** ✓
-  - File: `src/model/builder.rs:27`
-  - Change `HashSet<String>` to `BTreeSet<String>`
-  - Ensures consistent schema ordering across builds
-  - Expected impact: 5-10 fixtures
-
-- [x] **9.1.2 Sort elements by type then name** ✓
-  - File: `src/model/builder.rs:553-620`
-  - Added `sort_elements()` and `element_type_priority()` functions
-  - Elements sorted by type priority, then alphabetically by full name
-  - **Actual impact**: Layer 2: +1 (14→15), Layer 4: +3 (3→6)
-  - **Finding**: DotNet ordering is more complex than expected:
-    - Named elements appear to be sorted alphabetically by full name
-    - Inline/unnamed constraints (no Name attribute) appear before named elements
-    - Further refinement may be needed in 9.5 for full match
-
-### 9.2 Property Value Fixes
-
-**Goal:** Fix property mismatches that cause Layer 2 failures.
-
-- [x] **9.2.0 IsNullable property emission** ✓
-  - Files: `src/model/elements.rs`, `src/model/builder.rs`, `src/dacpac/model_xml.rs`, `src/parser/tsql_parser.rs`
-  - Changed `is_nullable: bool` to `nullability: Option<bool>` to track explicit vs implicit nullability
-  - DotNet only emits `IsNullable` for explicit NULL/NOT NULL, omits for implicit
-  - DotNet never emits `IsNullable` for `SqlTableTypeSimpleColumn`
-  - **Actual impact**: Layer 2: +1 (15→16), Relationships: +1 (27→28)
-  - Fixed fixtures: `table_types` now passes Layer 2
-
-- [x] **9.2.1 Type specifier properties** ✓
-  - Files: `src/model/builder.rs`, `src/dacpac/model_xml.rs`
-  - Fixed property order in SqlTypeSpecifier: Scale, Precision, Length/IsMax now come BEFORE Type relationship
-  - Scale comes before Precision (matching DotNet ordering)
-  - Added datetime2/time/datetimeoffset precision extraction using Scale property (not Precision)
-  - Default Scale="7" for datetime2, time, datetimeoffset when no explicit precision specified
-  - **Key finding**: DotNet uses "Scale" property for fractional seconds precision on datetime types
-
-- [x] **9.2.2 Script content normalization**
-  - File: `src/dacpac/model_xml.rs`  ✓
-  - Implemented CRLF to LF normalization in `write_script_property()` function
-  - Normalize CRLF to LF in BodyScript, QueryScript
-  - Ensure consistent whitespace in CDATA sections
-  - Expected impact: 5-8 fixtures
-
-- [x] **9.2.3 Boolean property consistency** ✓
-  - File: `src/dacpac/model_xml.rs`
-  - Audit all boolean properties use "True"/"False" (capitalized)
-  - **Finding**: Already correctly implemented - all boolean properties use capitalized "True"/"False"
-  - No changes needed
-
-- [x] **9.2.4 Constraint expression properties** ✓
-  - Files: `src/model/builder.rs`, `src/dacpac/model_xml.rs`, `src/parser/tsql_parser.rs`
-  - CheckExpressionScript and DefaultExpressionScript properties were already working correctly (Layer 2 passes)
-  - The investigation revealed the real issue was constraint element naming convention
-  - Fixed constraint naming from 3-part ([schema].[table].[constraint]) to 2-part ([schema].[constraint]) to match DotNet
-  - Fixed IsClustered property emission to only emit non-default values (PK: only emit False, Unique: only emit True)
-  - Added is_clustered extraction from raw SQL for sqlparser path since sqlparser doesn't expose CLUSTERED/NONCLUSTERED
-
-- [x] **9.2.5 IsNullable emission fix** ✓
-  - File: `src/dacpac/model_xml.rs`
-  - Changed emission logic to only emit `IsNullable="False"` for NOT NULL columns
-  - DotNet never emits `IsNullable="True"` for nullable columns (explicit or implicit)
-  - **Actual impact**: Layer 2: +16 (16→32 fixtures passing, 34.8%→69.6%)
-
-### 9.3 Relationship Completeness
-
-**Goal:** Fix missing relationships that cause Layer 3/5 failures.
-
-- [x] **9.3.1 Procedure/function dependencies** ✓
-  - Files: `src/model/builder.rs`, `src/dacpac/model_xml.rs`, `src/model/elements.rs`
-  - Added BodyDependencies relationship for SqlProcedure and SqlScalarFunction/SqlMultiStatementTableValuedFunction/SqlInlineTableValuedFunction
-  - Added IsAnsiNullsOn property to procedures
-  - Dependencies extracted in order of appearance (tables first, then columns and parameters)
-  - Unqualified column names resolved against the first table in FROM clause
-  - Built-in types from DECLARE statements extracted for functions
-  - **Actual impact**: Layer 2: +3 (32→35 fixtures passing, 69.6%→76.1%)
-
-- [x] **9.3.2 Parameter relationships** ✓
-  - File: `src/dacpac/model_xml.rs`
-  - Enhanced `FunctionParameter` struct to include `data_type` and `default_value` fields
-  - Updated `extract_function_parameters` to extract full parameter details (not just names)
-  - Added `write_function_parameters` function to write the Parameters relationship for functions
-  - **Actual impact**: Relationships layer now passes for `procedure_parameters` fixture
-
-- [x] **9.3.3 Foreign key relationship ordering** ✓
-  - File: `src/dacpac/model_xml.rs` (lines 1824-1899)
-  - Reordered foreign key relationships to match DotNet: Columns, DefiningTable, ForeignColumns, ForeignTable
-  - Note: Different from documented expected order - DotNet actually outputs: Columns → DefiningTable → ForeignColumns → ForeignTable
-  - **Actual impact**: Relationships layer improved from 26/46 (56.5%) to 28/46 (60.9%)
-
-- [x] **9.3.4 CheckExpressionDependencies relationship** ✓
-  - File: `src/dacpac/model_xml.rs`
-  - Added `extract_check_expression_columns()` function that extracts column references from CHECK constraint expressions
-  - Modified `write_constraint()` to emit CheckExpressionDependencies relationship with fully-qualified column references before DefiningTable
-  - Column references are formatted as `[schema].[table].[column]`
-  - Order matches DotNet: CheckExpressionScript property, CheckExpressionDependencies relationship, DefiningTable relationship
-  - **Actual impact**: Relationships layer improved from 28/46 (60.9%) to 30/46 (65.2%)
-
-### 9.4 Metadata File Alignment
-
-**Goal:** Fix metadata differences that cause Layer 5 failures.
-
-- [x] **9.4.1 Origin.xml adjustments** ✓
-  - File: `src/dacpac/origin_xml.rs`
-  - Added `ModelSchemaVersion` element (value: "2.9") after Checksums, before closing DacOrigin tag
-  - Added unit test `test_origin_xml_has_model_schema_version` to verify the element
-  - **Finding**: Remaining 5 metadata failures are due to:
-    - 2 fixtures (`pre_post_deploy`, `sqlcmd_includes`) - SQLCMD `:r` include expansion differs
-    - 1 fixture (`e2e_comprehensive`) - Deploy script differences
-    - 2 fixtures (`external_reference`, `unresolved_reference`) - DotNet build failures (expected)
-  - **Actual impact**: Improves Origin.xml parity but doesn't change metadata pass rate (comparison logic doesn't validate this field)
-
-- [x] **9.4.2 Update comparison tolerance** ✓
-  - File: `tests/e2e/parity/layer6_metadata.rs`
-  - Changed comparison logic to NOT compare ProductName and ProductVersion since these are expected to differ between rust-sqlpackage and DotNet
-  - These fields identify the tool that generated the dacpac, so differences are expected
-  - **Actual impact**: Metadata layer improved from 0/46 (0%) to 41/46 (89.1%)
-
-- [x] **9.4.3 DacMetadata.xml alignment** ✓
-  - The implementation already omits empty Description elements (verified)
-  - The actual metadata parity issues were:
-    a) Deploy scripts missing trailing GO statement (fixed in `src/dacpac/packager.rs`)
-    b) Deploy script comparison not stripping UTF-8 BOM (fixed in `tests/e2e/parity/layer6_metadata.rs`)
-    c) SQLCMD `:r` include expansion adding marker comments that DotNet doesn't add (fixed in `src/parser/sqlcmd.rs`)
-  - **Actual impact**: Metadata layer improved from 41/46 (89.1%) to 44/46 (95.7%)
-
-- [x] **9.4.4 [Content_Types].xml fixes** ✓
-  - File: `src/dacpac/packager.rs`
-  - This appears to already be working correctly
-  - No fixtures are failing due to Content_Types issues
-  - The only remaining metadata "failures" (external_reference and unresolved_reference) are ERROR status due to DotNet build failures
-
-### 9.5 Edge Cases and Polishing
-
-**Goal:** Fix remaining edge cases for final push to 100%.
-
-- [x] **9.5.1 View columns** ✓
-  - Added SqlComputedColumn elements for view columns (matching DotNet's representation)
-  - Implemented proper view options detection: IsSchemaBound, IsWithCheckOption, IsMetadataReported
-  - Added IsAnsiNullsOn property emission only for views with options (matching DotNet behavior)
-  - Added Columns relationship with ExpressionDependencies for direct column references
-  - Added QueryDependencies relationship listing all referenced tables and columns
-  - DotNet only emits columns/dependencies for schema-bound or with-check-option views
-  - **Actual impact**: views fixture now passes 100% parity, view_options improved significantly
-
-- [x] **9.5.2 Inline constraint annotation disambiguator** ✓
-  - Implemented sequential disambiguator assignment starting at 3 (matching DotNet)
-  - Added is_inline and inline_constraint_disambiguator fields to ConstraintElement
-  - Added inline_constraint_disambiguator to TableElement
-  - Changed column field from inline_constraint_disambiguator to attached_annotations Vec<u32>
-  - Inline constraints now emit Annotation Type="SqlInlineConstraintAnnotation" (no Name attribute)
-  - Named constraints emit AttachedAnnotation referencing table's disambiguator
-  - Columns emit AttachedAnnotation referencing their inline constraints
-  - Tables with inline constraints emit their own annotation
-  - **Actual impact**: Layer 1: +23 fixtures now passing (from 11/46 to 34/46, 23.9% → 73.9%), Layer 2: +2 (from 35/46 to 37/46, 76.1% → 80.4%)
-
-- [x] **9.5.3 Trigger support verification** ✓
-  - Files modified: `src/model/elements.rs`, `src/model/builder.rs`, `src/parser/tsql_parser.rs`, `src/dacpac/model_xml.rs`
-  - Added TriggerElement struct with proper properties for trigger metadata (trigger type, events, parent table/view)
-  - Implemented dedicated trigger parsing in tsql_parser.rs with FallbackStatementType::Trigger variant
-  - Added write_trigger function that emits DotNet-compatible XML format:
-    - Properties: IsInsertTrigger, IsUpdateTrigger, IsDeleteTrigger, SqlTriggerType, BodyScript, IsAnsiNullsOn
-    - Parent relationship (table/view the trigger is on)
-    - No Schema relationship (DotNet doesn't emit this for triggers)
-  - **Actual impact**: Relationships layer improved from 30/46 (65.2%) to 31/46 (67.4%)
-  - **Note**: BodyDependencies relationship not implemented yet (requires complex body parsing)
+| Layer 5 (Metadata) | 44/46 | 95.7% | 2 are ERROR (DotNet build failures) |
 
 ---
 
-### Phase 9 Progress
+## Phase 10: Fix Remaining Test Failures
+
+Two tests are currently failing:
+- `test_layered_dacpac_comparison` - Element inventory, property, and SqlPackage issues
+- `test_layer3_sqlpackage_comparison` - SqlPackage configuration issue
+
+### 10.1 Extended Property Key Format
+
+**Goal:** Fix extended property element naming to include parent type prefix.
+
+**Issue:** Rust emits `[schema].[table].[MS_Description]` but DotNet emits `[SqlTableBase].[schema].[table].[MS_Description]` (includes parent element type like `SqlColumn`, `SqlTableBase`).
+
+- [ ] **10.1.1 Add parent type to extended property keys**
+  - File: `src/dacpac/model_xml.rs`
+  - Extended properties on tables need `[SqlTableBase]` prefix
+  - Extended properties on columns need `[SqlColumn]` prefix
+  - Format: `[ParentType].[schema].[object].[property_name]` or `[ParentType].[schema].[table].[column].[property_name]`
+  - Expected impact: Fix 7 MISSING and 7 EXTRA items in Layer 1
+
+### 10.2 Function Type Classification
+
+**Goal:** Correctly classify inline table-valued functions vs multi-statement TVFs.
+
+**Issue:** `GetProductsInPriceRange` is classified as `SqlMultiStatementTableValuedFunction` but DotNet identifies it as `SqlInlineTableValuedFunction`.
+
+- [ ] **10.2.1 Distinguish inline vs multi-statement TVFs**
+  - Files: `src/parser/tsql_parser.rs`, `src/model/builder.rs`
+  - Inline TVF: Single `RETURN SELECT ...` statement, no `BEGIN/END` block
+  - Multi-statement TVF: Declares a table variable, has `BEGIN/END` block with `INSERT` statements
+  - Parse the function body to detect which pattern is used
+  - Expected impact: Fix COUNT MISMATCH for SqlInlineTableValuedFunction/SqlMultiStatementTableValuedFunction
+
+### 10.3 View IsAnsiNullsOn Property
+
+**Goal:** Emit `IsAnsiNullsOn` property for views.
+
+**Issue:** Views are missing the `IsAnsiNullsOn` property (Rust: `None`, DotNet: `Some("True")`).
+
+- [ ] **10.3.1 Add IsAnsiNullsOn to all views**
+  - Files: `src/model/elements.rs`, `src/dacpac/model_xml.rs`
+  - Currently `IsAnsiNullsOn` is only emitted for views with options (schema-bound, etc.)
+  - DotNet emits `IsAnsiNullsOn="True"` for all views
+  - Change to always emit this property for views
+  - Expected impact: Fix 3 property mismatches in Layer 2
+
+### 10.4 Extra Default Constraints
+
+**Goal:** Suppress emission of default constraints that DotNet doesn't emit.
+
+**Issue:** Rust generates 5 extra `SqlDefaultConstraint` elements for Settings table that DotNet doesn't produce.
+
+- [ ] **10.4.1 Investigate Settings table default constraint differences**
+  - Files: `tests/fixtures/e2e_comprehensive/`, `src/model/builder.rs`
+  - Examine the Settings table definition in the e2e_comprehensive fixture
+  - Determine why DotNet doesn't emit these constraints (inline vs named, syntax differences)
+  - Likely cause: Inline defaults without explicit constraint names may be handled differently
+  - Expected impact: Fix 5 EXTRA items in Layer 1
+
+### 10.5 SqlPackage Test Configuration
+
+**Goal:** Fix Layer 3 SqlPackage tests to provide required parameters.
+
+**Issue:** `test_layer3_sqlpackage_comparison` fails with "Operation Script requires a target database name".
+
+- [ ] **10.5.1 Add target database parameter to SqlPackage tests**
+  - File: `tests/e2e/dotnet_comparison_tests.rs` or `tests/e2e/parity/layer3_sqlpackage.rs`
+  - SqlPackage DeployReport action requires `/TargetDatabaseName:` parameter
+  - Add a dummy database name for comparison purposes
+  - Expected impact: Fix both failing tests' Layer 3 errors
+
+---
+
+### Phase 10 Progress
 
 | Section | Status | Completion |
 |---------|--------|------------|
-| 9.1 Deterministic Ordering | COMPLETE | 2/2 |
-| 9.2 Property Value Fixes | COMPLETE | 6/6 |
-| 9.3 Relationship Completeness | COMPLETE | 4/4 |
-| 9.4 Metadata File Alignment | COMPLETE | 4/4 |
-| 9.5 Edge Cases | COMPLETE | 3/3 |
+| 10.1 Extended Property Key Format | PENDING | 0/1 |
+| 10.2 Function Type Classification | PENDING | 0/1 |
+| 10.3 View IsAnsiNullsOn Property | PENDING | 0/1 |
+| 10.4 Extra Default Constraints | PENDING | 0/1 |
+| 10.5 SqlPackage Test Configuration | PENDING | 0/1 |
 
-**Phase 9 Overall**: 19/19 tasks
+**Phase 10 Overall**: 0/5 tasks
 
-### Expected Outcomes
+---
 
-| Phase | Layer 1 | Layer 2 | Layer 3 | Layer 4 | Layer 5 |
-|-------|---------|---------|---------|---------|---------|
-| Current | 6.5% | 30.4% | 58.7% | 6.5% | 2.2% |
-| After 9.1 | 40%+ | 35%+ | 60%+ | 40%+ | 2% |
-| After 9.2 | 45%+ | 70%+ | 65%+ | 45%+ | 2% |
-| After 9.3 | 50%+ | 75%+ | 85%+ | 50%+ | 2% |
-| After 9.4 | 50%+ | 75%+ | 85%+ | 50%+ | 85%+ |
-| After 9.5 | 90%+ | 90%+ | 95%+ | 90%+ | 90%+ |
-
-### Verification Commands
+## Verification Commands
 
 ```bash
 just test                                    # Run all tests
 cargo test --test e2e_tests test_parity_regression_check  # Check regressions
 PARITY_UPDATE_BASELINE=1 cargo test --test e2e_tests test_parity_regression_check -- --nocapture  # Update baseline
 cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Check metrics
+cargo test --test e2e_tests test_layered_dacpac_comparison -- --nocapture  # Run failing test with output
 ```
 
 ---
@@ -243,7 +134,50 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 
 | Phase | Status |
 |-------|--------|
-| Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **COMPLETE** ✓ 19/19 |
+| Phases 1-9 | **COMPLETE** ✓ 58/58 |
+| Phase 10 | **IN PROGRESS** 0/5 |
 
-**Total**: 58/58 tasks complete
+**Total**: 58/63 tasks complete
+
+---
+
+## Archived: Phase 9 Details
+
+<details>
+<summary>Click to expand Phase 9 completed tasks</summary>
+
+### 9.1 Deterministic Element Ordering (2/2) ✓
+
+- [x] **9.1.1 Replace HashSet with BTreeSet for schemas**
+- [x] **9.1.2 Sort elements by type then name**
+
+### 9.2 Property Value Fixes (6/6) ✓
+
+- [x] **9.2.0 IsNullable property emission**
+- [x] **9.2.1 Type specifier properties**
+- [x] **9.2.2 Script content normalization**
+- [x] **9.2.3 Boolean property consistency**
+- [x] **9.2.4 Constraint expression properties**
+- [x] **9.2.5 IsNullable emission fix**
+
+### 9.3 Relationship Completeness (4/4) ✓
+
+- [x] **9.3.1 Procedure/function dependencies**
+- [x] **9.3.2 Parameter relationships**
+- [x] **9.3.3 Foreign key relationship ordering**
+- [x] **9.3.4 CheckExpressionDependencies relationship**
+
+### 9.4 Metadata File Alignment (4/4) ✓
+
+- [x] **9.4.1 Origin.xml adjustments**
+- [x] **9.4.2 Update comparison tolerance**
+- [x] **9.4.3 DacMetadata.xml alignment**
+- [x] **9.4.4 [Content_Types].xml fixes**
+
+### 9.5 Edge Cases and Polishing (3/3) ✓
+
+- [x] **9.5.1 View columns**
+- [x] **9.5.2 Inline constraint annotation disambiguator**
+- [x] **9.5.3 Trigger support verification**
+
+</details>
