@@ -28,7 +28,7 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 11/46 | 23.9% | Improved from 2/46 (4.3%) |
-| Layer 2 (Properties) | 32/46 | 69.6% | |
+| Layer 2 (Properties) | 35/46 | 76.1% | |
 | Layer 3 (Relationships) | 26/46 | 56.5% | Slightly decreased due to CheckExpressionDependencies detection |
 | Layer 4 (Structure) | 5/46 | 10.9% | |
 | Layer 5 (Metadata) | 0/46 | 0.0% | |
@@ -104,10 +104,14 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 
 **Goal:** Fix missing relationships that cause Layer 3/5 failures.
 
-- [ ] **9.3.1 Procedure/function dependencies**
-  - File: `src/dacpac/model_xml.rs`
-  - Add BodyDependencies relationship for procedures
-  - Expected impact: 5-8 fixtures
+- [x] **9.3.1 Procedure/function dependencies** ✓
+  - Files: `src/model/builder.rs`, `src/dacpac/model_xml.rs`, `src/model/elements.rs`
+  - Added BodyDependencies relationship for SqlProcedure and SqlScalarFunction/SqlMultiStatementTableValuedFunction/SqlInlineTableValuedFunction
+  - Added IsAnsiNullsOn property to procedures
+  - Dependencies extracted in order of appearance (tables first, then columns and parameters)
+  - Unqualified column names resolved against the first table in FROM clause
+  - Built-in types from DECLARE statements extracted for functions
+  - **Actual impact**: Layer 2: +3 (32→35 fixtures passing, 69.6%→76.1%)
 
 - [ ] **9.3.2 Parameter relationships**
   - File: `src/dacpac/model_xml.rs`
@@ -173,11 +177,11 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 |---------|--------|------------|
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
 | 9.2 Property Value Fixes | COMPLETE | 6/6 |
-| 9.3 Relationship Completeness | PENDING | 0/4 |
+| 9.3 Relationship Completeness | IN PROGRESS | 1/4 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 8/19 tasks
+**Phase 9 Overall**: 9/19 tasks
 
 ### Expected Outcomes
 
@@ -208,4 +212,4 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
 | Phase 9 | **IN PROGRESS** 8/19 |
 
-**Total**: 47/58 tasks complete
+**Total**: 48/58 tasks complete

@@ -684,15 +684,29 @@ fn write_procedure<W: Write>(
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
+    // Extract parameters for both writing and dependency extraction
+    let params = extract_procedure_parameters(&proc.definition);
+
+    // Extract just the body part (after final AS)
+    let body = extract_procedure_body_only(&proc.definition);
+
+    // Write BodyScript property first
+    write_script_property(writer, "BodyScript", &body)?;
+
+    // Write IsAnsiNullsOn property (always true for procedures)
+    write_property(writer, "IsAnsiNullsOn", "True")?;
+
     // Write IsNativelyCompiled property if true
     if proc.is_natively_compiled {
         write_property(writer, "IsNativelyCompiled", "True")?;
     }
 
-    // For procedures, BodyScript should contain only the body after the final AS keyword
-    // Parameters must be defined as separate SqlSubroutineParameter elements
-    // First, extract and write parameters
-    let params = extract_procedure_parameters(&proc.definition);
+    // Extract and write BodyDependencies
+    let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+    let body_deps = extract_body_dependencies(&body, &full_name, &param_names);
+    write_body_dependencies(writer, &body_deps)?;
+
+    // Write Parameters relationship
     if !params.is_empty() {
         let mut param_rel = BytesStart::new("Relationship");
         param_rel.push_attribute(("Name", "Parameters"));
@@ -713,6 +727,11 @@ fn write_procedure<W: Write>(
             param_elem.push_attribute(("Name", param_name.as_str()));
             writer.write_event(Event::Start(param_elem))?;
 
+            // Write default value if present
+            if let Some(ref default_val) = param.default_value {
+                write_script_property(writer, "DefaultExpressionScript", default_val)?;
+            }
+
             // IsOutput property if applicable
             if param.is_output {
                 write_property(writer, "IsOutput", "True")?;
@@ -727,10 +746,6 @@ fn write_procedure<W: Write>(
 
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     }
-
-    // Extract just the body part (after final AS)
-    let body = extract_procedure_body_only(&proc.definition);
-    write_script_property(writer, "BodyScript", &body)?;
 
     write_schema_relationship(writer, &proc.schema)?;
 
@@ -807,6 +822,50 @@ fn extract_procedure_parameters(definition: &str) -> Vec<ProcedureParameter> {
     params
 }
 
+/// Simple parameter info for functions
+#[derive(Debug)]
+struct FunctionParameter {
+    name: String,
+}
+
+/// Extract parameters from a CREATE FUNCTION definition
+fn extract_function_parameters(definition: &str) -> Vec<FunctionParameter> {
+    let mut params = Vec::new();
+
+    // Find the function name and the parameters that follow
+    let def_upper = definition.to_uppercase();
+    let func_start = def_upper.find("CREATE FUNCTION");
+
+    if func_start.is_none() {
+        return params;
+    }
+
+    let after_create = &definition[func_start.unwrap()..];
+
+    // Function parameters are in parentheses after the function name
+    // Find opening paren
+    if let Some(open_paren) = after_create.find('(') {
+        // Find matching close paren
+        let rest = &after_create[open_paren + 1..];
+        if let Some(close_paren) = rest.find(')') {
+            let param_section = &rest[..close_paren];
+
+            // Extract parameter names (we only need the names for dependency matching)
+            let param_regex = regex::Regex::new(r"@(\w+)").unwrap();
+
+            for cap in param_regex.captures_iter(param_section) {
+                if let Some(name_match) = cap.get(1) {
+                    params.push(FunctionParameter {
+                        name: name_match.as_str().to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    params
+}
+
 /// Find the standalone AS keyword that separates procedure header from body
 fn find_standalone_as(s: &str) -> Option<usize> {
     let upper = s.to_uppercase();
@@ -840,6 +899,318 @@ fn clean_data_type(dt: &str) -> String {
         .trim_end_matches(" NOT")
         .trim();
     cleaned.to_string()
+}
+
+/// Represents a dependency extracted from a procedure/function body
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum BodyDependency {
+    /// Reference to a built-in type (e.g., [int], [decimal])
+    BuiltInType(String),
+    /// Reference to a table or other object (e.g., [dbo].[Products])
+    ObjectRef(String),
+}
+
+/// Extract body dependencies from a procedure/function body
+/// This extracts dependencies in order of appearance:
+/// 1. Built-in types from DECLARE statements
+/// 2. Table references, columns, and parameters in the order they appear
+fn extract_body_dependencies(
+    body: &str,
+    full_name: &str,
+    params: &[String],
+) -> Vec<BodyDependency> {
+    use std::collections::HashSet;
+    let mut deps = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // Regex to match DECLARE @var type patterns for built-in types
+    let declare_regex =
+        regex::Regex::new(r"(?i)DECLARE\s+@\w+\s+([A-Za-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?)")
+            .unwrap();
+
+    // Extract DECLARE type dependencies first (for scalar functions)
+    for cap in declare_regex.captures_iter(body) {
+        if let Some(type_match) = cap.get(1) {
+            let type_str = type_match.as_str().trim();
+            let base_type = if let Some(paren_pos) = type_str.find('(') {
+                &type_str[..paren_pos]
+            } else {
+                type_str
+            };
+            let type_ref = format!("[{}]", base_type.to_lowercase());
+            if !seen.contains(&type_ref) {
+                seen.insert(type_ref.clone());
+                deps.push(BodyDependency::BuiltInType(type_ref));
+            }
+        }
+    }
+
+    // First pass: collect all table references [schema].[table]
+    // We need to know tables before we can resolve unqualified column names
+    let table_ref_regex = regex::Regex::new(r"\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]").unwrap();
+    let mut table_refs: Vec<String> = Vec::new();
+
+    for cap in table_ref_regex.captures_iter(body) {
+        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        if !schema.starts_with('@') && !name.starts_with('@') {
+            let table_ref = format!("[{}].[{}]", schema, name);
+            if !table_refs.contains(&table_ref) {
+                table_refs.push(table_ref);
+            }
+        }
+    }
+
+    // Output table references first
+    for table_ref in &table_refs {
+        if !seen.contains(table_ref) {
+            seen.insert(table_ref.clone());
+            deps.push(BodyDependency::ObjectRef(table_ref.clone()));
+        }
+    }
+
+    // Second pass: scan body sequentially for all references
+    // Match: [ident], [a].[b].[c] (3-part), @param
+    // Process them in order of appearance to match DotNet ordering
+    let token_regex = regex::Regex::new(
+        r"(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([A-Za-z_][A-Za-z0-9_]*)\])|(@([A-Za-z_]\w*))",
+    )
+    .unwrap();
+
+    for cap in token_regex.captures_iter(body) {
+        if cap.get(1).is_some() {
+            // Three-part reference: [schema].[table].[column]
+            let schema = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+            let table = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+            let column = cap.get(4).map(|m| m.as_str()).unwrap_or("");
+
+            if !schema.starts_with('@') && !table.starts_with('@') {
+                let col_ref = format!("[{}].[{}].[{}]", schema, table, column);
+                if !seen.contains(&col_ref) {
+                    seen.insert(col_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(col_ref));
+                }
+            }
+        } else if cap.get(5).is_some() {
+            // Single bracket: [ident] - could be unqualified column or table/schema
+            let ident = cap.get(6).map(|m| m.as_str()).unwrap_or("");
+            let upper_ident = ident.to_uppercase();
+
+            // Skip SQL keywords
+            if is_sql_keyword(&upper_ident) {
+                continue;
+            }
+
+            // Skip if this is part of a table reference
+            let is_table_or_schema = table_refs.iter().any(|t| {
+                t.ends_with(&format!("].[{}]", ident)) || t.starts_with(&format!("[{}].", ident))
+            });
+
+            // If not a table/schema, treat as unqualified column -> resolve against first table
+            if !is_table_or_schema {
+                if let Some(first_table) = table_refs.first() {
+                    let col_ref = format!("{}.[{}]", first_table, ident);
+                    if !seen.contains(&col_ref) {
+                        seen.insert(col_ref.clone());
+                        deps.push(BodyDependency::ObjectRef(col_ref));
+                    }
+                }
+            }
+        } else if cap.get(7).is_some() {
+            // Parameter reference: @param
+            let param_name = cap.get(8).map(|m| m.as_str()).unwrap_or("");
+
+            // Check if this is a declared parameter (not a local variable)
+            if params.iter().any(|p| {
+                let p_name = p.trim_start_matches('@');
+                p_name.eq_ignore_ascii_case(param_name)
+            }) {
+                let param_ref = format!("{}.[@{}]", full_name, param_name);
+                if !seen.contains(&param_ref) {
+                    seen.insert(param_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(param_ref));
+                }
+            }
+        }
+    }
+
+    deps
+}
+
+/// Check if a word is a SQL keyword (to filter out from column detection)
+fn is_sql_keyword(word: &str) -> bool {
+    matches!(
+        word,
+        "SELECT"
+            | "FROM"
+            | "WHERE"
+            | "AND"
+            | "OR"
+            | "NOT"
+            | "NULL"
+            | "IS"
+            | "IN"
+            | "AS"
+            | "ON"
+            | "JOIN"
+            | "LEFT"
+            | "RIGHT"
+            | "INNER"
+            | "OUTER"
+            | "CROSS"
+            | "FULL"
+            | "INSERT"
+            | "INTO"
+            | "VALUES"
+            | "UPDATE"
+            | "SET"
+            | "DELETE"
+            | "CREATE"
+            | "ALTER"
+            | "DROP"
+            | "TABLE"
+            | "VIEW"
+            | "INDEX"
+            | "PROCEDURE"
+            | "FUNCTION"
+            | "TRIGGER"
+            | "BEGIN"
+            | "END"
+            | "IF"
+            | "ELSE"
+            | "WHILE"
+            | "RETURN"
+            | "DECLARE"
+            | "INT"
+            | "VARCHAR"
+            | "NVARCHAR"
+            | "CHAR"
+            | "NCHAR"
+            | "TEXT"
+            | "NTEXT"
+            | "BIT"
+            | "TINYINT"
+            | "SMALLINT"
+            | "BIGINT"
+            | "DECIMAL"
+            | "NUMERIC"
+            | "FLOAT"
+            | "REAL"
+            | "MONEY"
+            | "SMALLMONEY"
+            | "DATE"
+            | "TIME"
+            | "DATETIME"
+            | "DATETIME2"
+            | "SMALLDATETIME"
+            | "DATETIMEOFFSET"
+            | "UNIQUEIDENTIFIER"
+            | "BINARY"
+            | "VARBINARY"
+            | "IMAGE"
+            | "XML"
+            | "SQL_VARIANT"
+            | "TIMESTAMP"
+            | "ROWVERSION"
+            | "GEOGRAPHY"
+            | "GEOMETRY"
+            | "HIERARCHYID"
+            | "PRIMARY"
+            | "KEY"
+            | "FOREIGN"
+            | "REFERENCES"
+            | "UNIQUE"
+            | "CHECK"
+            | "DEFAULT"
+            | "CONSTRAINT"
+            | "IDENTITY"
+            | "NOCOUNT"
+            | "COUNT"
+            | "SUM"
+            | "AVG"
+            | "MIN"
+            | "MAX"
+            | "ISNULL"
+            | "COALESCE"
+            | "CAST"
+            | "CONVERT"
+            | "CASE"
+            | "WHEN"
+            | "THEN"
+            | "EXEC"
+            | "EXECUTE"
+            | "GO"
+            | "USE"
+            | "DATABASE"
+            | "SCHEMA"
+            | "GRANT"
+            | "REVOKE"
+            | "DENY"
+            | "ORDER"
+            | "BY"
+            | "GROUP"
+            | "HAVING"
+            | "DISTINCT"
+            | "TOP"
+            | "OFFSET"
+            | "FETCH"
+            | "NEXT"
+            | "ROWS"
+            | "ONLY"
+            | "UNION"
+            | "ALL"
+            | "EXCEPT"
+            | "INTERSECT"
+            | "EXISTS"
+            | "ANY"
+            | "SOME"
+            | "LIKE"
+            | "BETWEEN"
+            | "ASC"
+            | "DESC"
+            | "CLUSTERED"
+            | "NONCLUSTERED"
+            | "OUTPUT"
+            | "SCOPE_IDENTITY"
+    )
+}
+
+/// Write BodyDependencies relationship for procedures and functions
+fn write_body_dependencies<W: Write>(
+    writer: &mut Writer<W>,
+    deps: &[BodyDependency],
+) -> anyhow::Result<()> {
+    if deps.is_empty() {
+        return Ok(());
+    }
+
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "BodyDependencies"));
+    writer.write_event(Event::Start(rel))?;
+
+    for dep in deps {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        match dep {
+            BodyDependency::BuiltInType(type_ref) => {
+                let mut refs = BytesStart::new("References");
+                refs.push_attribute(("ExternalSource", "BuiltIns"));
+                refs.push_attribute(("Name", type_ref.as_str()));
+                writer.write_event(Event::Empty(refs))?;
+            }
+            BodyDependency::ObjectRef(obj_ref) => {
+                let mut refs = BytesStart::new("References");
+                refs.push_attribute(("Name", obj_ref.as_str()));
+                writer.write_event(Event::Empty(refs))?;
+            }
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    Ok(())
 }
 
 /// Extract just the body after AS from a procedure definition
@@ -971,10 +1342,20 @@ fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> a
         write_property(writer, "IsNativelyCompiled", "True")?;
     }
 
-    // Write FunctionBody relationship with SqlScriptFunctionImplementation
-    // BodyScript contains only the function body (BEGIN...END), not the header
+    // Extract function body for dependency analysis
     let body = extract_function_body(&func.definition);
     let header = extract_function_header(&func.definition);
+
+    // Extract function parameters for dependency analysis
+    let func_params = extract_function_parameters(&func.definition);
+    let param_names: Vec<String> = func_params.iter().map(|p| p.name.clone()).collect();
+
+    // Extract and write BodyDependencies
+    let body_deps = extract_body_dependencies(&body, &full_name, &param_names);
+    write_body_dependencies(writer, &body_deps)?;
+
+    // Write FunctionBody relationship with SqlScriptFunctionImplementation
+    // BodyScript contains only the function body (BEGIN...END), not the header
     write_function_body_with_annotation(writer, &body, &header)?;
 
     write_schema_relationship(writer, &func.schema)?;
