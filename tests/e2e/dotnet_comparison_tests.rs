@@ -1163,3 +1163,222 @@ fn test_extract_content_types_from_dacpac() {
         "Should have XML type definition"
     );
 }
+
+// =============================================================================
+// Phase 5.2: DacMetadata.xml Comparison Tests
+// =============================================================================
+
+/// Test DacMetadata.xml comparison between Rust and DotNet dacpacs.
+/// This tests the DacMetadata.xml comparison mode introduced in Phase 5.2.
+///
+/// Purpose: Verifies that DacMetadata.xml files match between Rust and DotNet output.
+/// This includes Name, Version, and Description fields.
+#[test]
+fn test_dac_metadata_comparison() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Use the DacMetadata comparison function
+    let errors = crate::dacpac_compare::compare_dac_metadata(&rust_dacpac, &dotnet_dacpac);
+
+    println!("\n=== DacMetadata.xml Comparison Test (Phase 5.2) ===\n");
+
+    if errors.is_empty() {
+        println!("All DacMetadata.xml fields match!");
+    } else {
+        println!("DacMetadata mismatches found: {}\n", errors.len());
+        for err in &errors {
+            println!("  {}", err);
+        }
+
+        println!("\nThis test is informational - mismatches indicate DacMetadata.xml");
+        println!("differences that need to be addressed for exact 1-1 matching.");
+    }
+
+    // Note: We don't assert here because this is a progress tracking test.
+    // Mismatches may be expected (e.g., different project names) until fully implemented.
+}
+
+/// Test parsing DacMetadata.xml directly
+#[test]
+fn test_dac_metadata_xml_parsing() {
+    use crate::dacpac_compare::DacMetadataXml;
+
+    // Test parsing typical DotNet output
+    let dotnet_xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<DacType xmlns="http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02">
+  <Name>MyDatabase</Name>
+  <Version>1.0.0.0</Version>
+</DacType>"#;
+
+    let meta = DacMetadataXml::from_xml(dotnet_xml).expect("Should parse DacMetadata.xml");
+
+    assert_eq!(
+        meta.name,
+        Some("MyDatabase".to_string()),
+        "Name should be MyDatabase"
+    );
+    assert_eq!(
+        meta.version,
+        Some("1.0.0.0".to_string()),
+        "Version should be 1.0.0.0"
+    );
+    assert_eq!(meta.description, None, "Description should be None");
+
+    // Test parsing with Description
+    let with_desc = r#"<?xml version="1.0" encoding="utf-8"?>
+<DacType xmlns="http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02">
+  <Name>TestDB</Name>
+  <Version>2.0.0.0</Version>
+  <Description>A test database</Description>
+</DacType>"#;
+
+    let meta2 = DacMetadataXml::from_xml(with_desc).expect("Should parse DacMetadata.xml");
+
+    assert_eq!(
+        meta2.name,
+        Some("TestDB".to_string()),
+        "Name should be TestDB"
+    );
+    assert_eq!(
+        meta2.version,
+        Some("2.0.0.0".to_string()),
+        "Version should be 2.0.0.0"
+    );
+    assert_eq!(
+        meta2.description,
+        Some("A test database".to_string()),
+        "Description should match"
+    );
+}
+
+/// Test extracting DacMetadata.xml from a Rust-generated dacpac
+#[test]
+fn test_extract_dac_metadata_from_dacpac() {
+    use crate::dacpac_compare::{extract_dac_metadata_xml, DacMetadataXml};
+
+    let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("simple_table")
+        .join("project.sqlproj");
+
+    if !project_path.exists() {
+        eprintln!("Skipping: simple_table fixture not found");
+        return;
+    }
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let rust_dacpac = temp_dir.path().join("rust.dacpac");
+
+    rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+        project_path,
+        output_path: Some(rust_dacpac.clone()),
+        target_platform: "Sql150".to_string(),
+        verbose: false,
+    })
+    .expect("Rust build should succeed");
+
+    // Extract and parse DacMetadata.xml
+    let xml = extract_dac_metadata_xml(&rust_dacpac).expect("Should extract DacMetadata.xml");
+    let meta = DacMetadataXml::from_xml(&xml).expect("Should parse DacMetadata.xml");
+
+    println!("\n=== Rust Dacpac DacMetadata.xml ===");
+    println!("Raw XML:\n{}", xml);
+    println!("\nParsed fields:");
+    println!("  Name: {:?}", meta.name);
+    println!("  Version: {:?}", meta.version);
+    println!("  Description: {:?}", meta.description);
+
+    assert!(meta.name.is_some(), "Should have Name field");
+    assert!(meta.version.is_some(), "Should have Version field");
+}
+
+/// Test that metadata comparison includes both Content_Types and DacMetadata
+#[test]
+fn test_metadata_comparison_includes_dac_metadata() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Test with check_metadata_files enabled - should include both comparisons
+    let options = ComparisonOptions {
+        include_layer3: false,
+        strict_properties: false,
+        check_relationships: false,
+        check_element_order: false,
+        check_metadata_files: true,
+    };
+
+    let result =
+        compare_dacpacs_with_options(&rust_dacpac, &dotnet_dacpac, &options).expect("Comparison");
+
+    println!("\n=== Full Metadata Files ComparisonOptions Test (Phase 5) ===\n");
+    println!("Layer 1 errors: {}", result.layer1_errors.len());
+    println!("Layer 2 errors: {}", result.layer2_errors.len());
+    println!("Relationship errors: {}", result.relationship_errors.len());
+    println!("Layer 4 (ordering) errors: {}", result.layer4_errors.len());
+    println!("Metadata file errors: {}", result.metadata_errors.len());
+
+    // Categorize metadata errors
+    let mut content_type_errors = 0;
+    let mut dac_metadata_errors = 0;
+    let mut file_missing_errors = 0;
+
+    for err in &result.metadata_errors {
+        match err {
+            crate::dacpac_compare::MetadataFileError::ContentTypeMismatch { .. }
+            | crate::dacpac_compare::MetadataFileError::ContentTypeCountMismatch { .. } => {
+                content_type_errors += 1;
+            }
+            crate::dacpac_compare::MetadataFileError::DacMetadataMismatch { .. } => {
+                dac_metadata_errors += 1;
+            }
+            crate::dacpac_compare::MetadataFileError::FileMissing { .. } => {
+                file_missing_errors += 1;
+            }
+        }
+    }
+
+    println!("\nMetadata error breakdown:");
+    println!("  [Content_Types].xml errors: {}", content_type_errors);
+    println!("  DacMetadata.xml errors: {}", dac_metadata_errors);
+    println!("  File missing errors: {}", file_missing_errors);
+
+    // Show details of metadata errors
+    if !result.metadata_errors.is_empty() {
+        println!("\nAll metadata file errors:");
+        for err in &result.metadata_errors {
+            println!("  {}", err);
+        }
+    }
+}

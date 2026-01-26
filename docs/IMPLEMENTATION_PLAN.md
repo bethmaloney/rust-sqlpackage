@@ -209,10 +209,22 @@ Extend comparison beyond model.xml to all dacpac files.
   - Location: `tests/e2e/dacpac_compare.rs:176-211` (types), `tests/e2e/dacpac_compare.rs:1019-1156` (functions)
   - Acceptance: [Content_Types].xml comparison reports MIME type differences ✓
 
-- [ ] **5.2 Implement `DacMetadata.xml` comparison**
-  - Compare metadata fields
-  - Ignore timestamps/version fields that will naturally differ
-  - Compare ServerVersion, DacVersion, etc.
+- [x] **5.2 Implement `DacMetadata.xml` comparison** ✓ COMPLETE
+  - Added `DacMetadataXml` struct to represent parsed DacMetadata.xml with name, version, description fields
+  - Added `DacMetadataMismatch` variant to `MetadataFileError` enum for field mismatches
+  - Added `extract_dac_metadata_xml()` function to extract DacMetadata.xml from dacpac ZIP
+  - Implemented `DacMetadataXml::from_xml()` to parse DacMetadata.xml elements
+  - Implemented `compare_dac_metadata()` to compare metadata between Rust and DotNet dacpacs
+  - Added Display impl for `DacMetadataMismatch` error variant
+  - Integrated into `compare_dacpacs_with_options()` when `check_metadata_files` is enabled
+  - Updated `print_report()` section title to include DacMetadata.xml
+  - Tests added:
+    - `test_dac_metadata_comparison` - informational test comparing DacMetadata.xml between Rust/DotNet
+    - `test_dac_metadata_xml_parsing` - unit test for XML parsing logic
+    - `test_extract_dac_metadata_from_dacpac` - test extraction from Rust-generated dacpac
+    - `test_metadata_comparison_includes_dac_metadata` - tests ComparisonOptions with both Content_Types and DacMetadata
+  - Location: `tests/e2e/dacpac_compare.rs:204-230` (types), `tests/e2e/dacpac_compare.rs:1182-1250` (extraction/parsing), `tests/e2e/dacpac_compare.rs:1262-1317` (comparison)
+  - Acceptance: DacMetadata.xml comparison reports field differences ✓
 
 - [ ] **5.3 Implement `Origin.xml` comparison**
   - Compare origin fields
@@ -348,12 +360,12 @@ Reorganize and improve test infrastructure.
 | Phase 2: Property Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 3: Relationship Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 4: XML Structure (Layer 4) | **COMPLETE** | 4/4 ✓ |
-| Phase 5: Metadata Files | In Progress | 1/5 |
+| Phase 5: Metadata Files | In Progress | 2/5 |
 | Phase 6: Per-Feature Tests | Not Started | 0/5+ |
 | Phase 7: Canonical XML | Not Started | 0/4 |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 22/39+ tasks complete
+**Overall Progress**: 23/39+ tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.

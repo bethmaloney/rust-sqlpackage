@@ -201,6 +201,15 @@ pub enum MetadataFileError {
         /// True if missing in Rust dacpac, false if missing in DotNet dacpac
         missing_in_rust: bool,
     },
+    /// DacMetadata.xml field value mismatch
+    DacMetadataMismatch {
+        /// Field name (e.g., "Name", "Version", "Description")
+        field_name: String,
+        /// Value in Rust output
+        rust_value: Option<String>,
+        /// Value in DotNet output
+        dotnet_value: Option<String>,
+    },
 }
 
 /// Parsed [Content_Types].xml structure
@@ -209,6 +218,24 @@ pub struct ContentTypesXml {
     /// Map of file extension to MIME content type
     /// e.g., "xml" -> "text/xml", "sql" -> "text/plain"
     pub types: HashMap<String, String>,
+}
+
+/// Parsed DacMetadata.xml structure
+///
+/// DacMetadata.xml contains package metadata for the dacpac:
+/// - Name: The database/project name
+/// - Version: Package version (e.g., "1.0.0.0")
+/// - Description: Optional package description (omitted when empty)
+///
+/// Root element is `DacType` (per MS XSD schema).
+#[derive(Debug, Default)]
+pub struct DacMetadataXml {
+    /// Package name (database name)
+    pub name: Option<String>,
+    /// Package version (e.g., "1.0.0.0")
+    pub version: Option<String>,
+    /// Optional description (typically empty/omitted)
+    pub description: Option<String>,
 }
 
 /// Options for controlling comparison behavior
@@ -1152,6 +1179,143 @@ pub fn compare_content_types(rust_dacpac: &Path, dotnet_dacpac: &Path) -> Vec<Me
     errors
 }
 
+/// Extract DacMetadata.xml from a dacpac file
+pub fn extract_dac_metadata_xml(dacpac_path: &Path) -> Result<String, String> {
+    let file = fs::File::open(dacpac_path).map_err(|e| format!("Failed to open dacpac: {}", e))?;
+
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read ZIP entry: {}", e))?;
+
+        if file.name() == "DacMetadata.xml" {
+            let mut content = String::new();
+            file.read_to_string(&mut content)
+                .map_err(|e| format!("Failed to read DacMetadata.xml: {}", e))?;
+            return Ok(content);
+        }
+    }
+
+    Err("DacMetadata.xml not found in dacpac".to_string())
+}
+
+impl DacMetadataXml {
+    /// Parse DacMetadata.xml content using roxmltree
+    ///
+    /// DacMetadata.xml has the following structure:
+    /// ```xml
+    /// <?xml version="1.0" encoding="utf-8"?>
+    /// <DacType xmlns="http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02">
+    ///   <Name>project</Name>
+    ///   <Version>1.0.0.0</Version>
+    ///   <Description>Optional description</Description>
+    /// </DacType>
+    /// ```
+    ///
+    /// Note: The root element is `DacType` per the MS XSD schema.
+    /// Description is typically omitted when empty.
+    pub fn from_xml(xml: &str) -> Result<Self, String> {
+        let doc =
+            roxmltree::Document::parse(xml).map_err(|e| format!("Failed to parse XML: {}", e))?;
+
+        let mut name = None;
+        let mut version = None;
+        let mut description = None;
+
+        // Find Name, Version, and Description elements
+        for node in doc.descendants() {
+            if node.has_tag_name("Name") {
+                name = node.text().map(|s| s.to_string());
+            } else if node.has_tag_name("Version") {
+                version = node.text().map(|s| s.to_string());
+            } else if node.has_tag_name("Description") {
+                description = node.text().map(|s| s.to_string());
+            }
+        }
+
+        Ok(Self {
+            name,
+            version,
+            description,
+        })
+    }
+
+    /// Parse DacMetadata.xml from a dacpac file
+    pub fn from_dacpac(dacpac_path: &Path) -> Result<Self, String> {
+        let xml = extract_dac_metadata_xml(dacpac_path)?;
+        Self::from_xml(&xml)
+    }
+}
+
+/// Compare DacMetadata.xml between two dacpacs
+///
+/// Compares the metadata fields between Rust and DotNet output:
+/// - Name: Should match the project/database name
+/// - Version: Package version (typically "1.0.0.0")
+/// - Description: Optional, typically omitted when empty
+///
+/// Note: Version differences are expected if hardcoded differently.
+/// The comparison ignores timestamp/build-specific fields.
+pub fn compare_dac_metadata(rust_dacpac: &Path, dotnet_dacpac: &Path) -> Vec<MetadataFileError> {
+    let mut errors = Vec::new();
+
+    // Extract DacMetadata from both dacpacs
+    let rust_meta = match DacMetadataXml::from_dacpac(rust_dacpac) {
+        Ok(meta) => meta,
+        Err(_) => {
+            errors.push(MetadataFileError::FileMissing {
+                file_name: "DacMetadata.xml".to_string(),
+                missing_in_rust: true,
+            });
+            return errors;
+        }
+    };
+
+    let dotnet_meta = match DacMetadataXml::from_dacpac(dotnet_dacpac) {
+        Ok(meta) => meta,
+        Err(_) => {
+            errors.push(MetadataFileError::FileMissing {
+                file_name: "DacMetadata.xml".to_string(),
+                missing_in_rust: false,
+            });
+            return errors;
+        }
+    };
+
+    // Compare Name field
+    if rust_meta.name != dotnet_meta.name {
+        errors.push(MetadataFileError::DacMetadataMismatch {
+            field_name: "Name".to_string(),
+            rust_value: rust_meta.name.clone(),
+            dotnet_value: dotnet_meta.name.clone(),
+        });
+    }
+
+    // Compare Version field
+    if rust_meta.version != dotnet_meta.version {
+        errors.push(MetadataFileError::DacMetadataMismatch {
+            field_name: "Version".to_string(),
+            rust_value: rust_meta.version.clone(),
+            dotnet_value: dotnet_meta.version.clone(),
+        });
+    }
+
+    // Compare Description field
+    // Both None or both Some with same value are considered matching
+    if rust_meta.description != dotnet_meta.description {
+        errors.push(MetadataFileError::DacMetadataMismatch {
+            field_name: "Description".to_string(),
+            rust_value: rust_meta.description.clone(),
+            dotnet_value: dotnet_meta.description.clone(),
+        });
+    }
+
+    errors
+}
+
 // =============================================================================
 // Layer 3: SqlPackage DeployReport
 // =============================================================================
@@ -1299,7 +1463,9 @@ pub fn compare_dacpacs_with_options(
     };
 
     let metadata_errors = if options.check_metadata_files {
-        compare_content_types(rust_dacpac, dotnet_dacpac)
+        let mut errors = compare_content_types(rust_dacpac, dotnet_dacpac);
+        errors.extend(compare_dac_metadata(rust_dacpac, dotnet_dacpac));
+        errors
     } else {
         Vec::new()
     };
@@ -1494,6 +1660,17 @@ impl fmt::Display for MetadataFileError {
                     write!(f, "FILE MISSING IN DOTNET: {}", file_name)
                 }
             }
+            MetadataFileError::DacMetadataMismatch {
+                field_name,
+                rust_value,
+                dotnet_value,
+            } => {
+                write!(
+                    f,
+                    "DACMETADATA MISMATCH: {} (Rust: {:?}, DotNet: {:?})",
+                    field_name, rust_value, dotnet_value
+                )
+            }
         }
     }
 }
@@ -1562,7 +1739,7 @@ impl ComparisonResult {
 
         // Phase 5: Metadata Files Comparison
         if !self.metadata_errors.is_empty() {
-            println!("Phase 5: Metadata Files ([Content_Types].xml)");
+            println!("Phase 5: Metadata Files ([Content_Types].xml, DacMetadata.xml)");
             println!("{}", "-".repeat(40));
             for err in &self.metadata_errors {
                 println!("  {}", err);
