@@ -1456,6 +1456,15 @@ fn write_property<W: Write>(writer: &mut Writer<W>, name: &str, value: &str) -> 
     Ok(())
 }
 
+/// Normalize script content for consistent output.
+///
+/// DotNet DacFx normalizes line endings in script content to LF (Unix-style).
+/// This ensures consistent output regardless of the source file's line endings.
+fn normalize_script_content(script: &str) -> String {
+    // Convert CRLF to LF for consistent line endings
+    script.replace("\r\n", "\n")
+}
+
 /// Write a property with a CDATA value (for script content like QueryScript, BodyScript)
 fn write_script_property<W: Write>(
     writer: &mut Writer<W>,
@@ -1466,9 +1475,12 @@ fn write_script_property<W: Write>(
     prop.push_attribute(("Name", name));
     writer.write_event(Event::Start(prop))?;
 
+    // Normalize line endings before writing
+    let normalized_script = normalize_script_content(script);
+
     // Write Value element with CDATA content
     writer.write_event(Event::Start(BytesStart::new("Value")))?;
-    writer.write_event(Event::CData(BytesCData::new(script)))?;
+    writer.write_event(Event::CData(BytesCData::new(&normalized_script)))?;
     writer.write_event(Event::End(BytesEnd::new("Value")))?;
 
     writer.write_event(Event::End(BytesEnd::new("Property")))?;

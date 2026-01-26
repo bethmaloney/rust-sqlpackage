@@ -400,6 +400,49 @@ END
     );
 }
 
+#[test]
+fn test_script_content_normalizes_crlf_to_lf() {
+    // Create SQL content with Windows line endings (CRLF)
+    let sql = "CREATE PROCEDURE [dbo].[TestProc]\r\nAS\r\nBEGIN\r\n    SELECT 1;\r\nEND\r\n";
+    let xml = generate_model_xml(sql);
+
+    // The generated XML should not contain any CRLF sequences
+    assert!(
+        !xml.contains("\r\n"),
+        "Generated XML should normalize CRLF to LF. Found CRLF in output."
+    );
+
+    // Should still contain LF line endings in CDATA
+    assert!(
+        xml.contains("<![CDATA["),
+        "BodyScript should contain CDATA section"
+    );
+
+    // Verify the body content is present (with LF endings)
+    assert!(
+        xml.contains("SELECT 1;"),
+        "BodyScript should contain the procedure body"
+    );
+}
+
+#[test]
+fn test_view_query_script_normalizes_crlf() {
+    // Create view SQL with Windows line endings
+    let sql = "CREATE VIEW [dbo].[TestView]\r\nAS\r\nSELECT\r\n    1 AS Col1,\r\n    2 AS Col2\r\n";
+    let xml = generate_model_xml(sql);
+
+    // The generated XML should not contain any CRLF sequences
+    assert!(
+        !xml.contains("\r\n"),
+        "Generated XML should normalize CRLF to LF in QueryScript"
+    );
+
+    assert!(
+        xml.contains(r#"<Property Name="QueryScript">"#),
+        "View should have QueryScript property"
+    );
+}
+
 // ============================================================================
 // SqlInlineConstraintAnnotation Tests
 // ============================================================================

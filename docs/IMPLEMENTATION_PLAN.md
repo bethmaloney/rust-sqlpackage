@@ -73,8 +73,9 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - Default Scale="7" for datetime2, time, datetimeoffset when no explicit precision specified
   - **Key finding**: DotNet uses "Scale" property for fractional seconds precision on datetime types
 
-- [ ] **9.2.2 Script content normalization**
-  - File: `src/dacpac/model_xml.rs`
+- [x] **9.2.2 Script content normalization**
+  - File: `src/dacpac/model_xml.rs`  ✓
+  - Implemented CRLF to LF normalization in `write_script_property()` function
   - Normalize CRLF to LF in BodyScript, QueryScript
   - Ensure consistent whitespace in CDATA sections
   - Expected impact: 5-8 fixtures
@@ -155,12 +156,12 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | Section | Status | Completion |
 |---------|--------|------------|
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
-| 9.2 Property Value Fixes | IN PROGRESS | 2/5 |
+| 9.2 Property Value Fixes | IN PROGRESS | 3/5 |
 | 9.3 Relationship Completeness | PENDING | 0/3 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 4/17 tasks
+**Phase 9 Overall**: 5/17 tasks
 
 ### Expected Outcomes
 
@@ -189,6 +190,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 4/17 |
+| Phase 9 | **IN PROGRESS** 5/17 |
 
-**Total**: 43/56 tasks complete
+**Total**: 44/56 tasks complete
