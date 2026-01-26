@@ -1740,6 +1740,58 @@ fn compare_single_deploy_script(
 }
 
 // =============================================================================
+// Phase 5.5: Unified Metadata File Comparison
+// =============================================================================
+
+/// Compare all metadata files between two dacpacs in a single unified call.
+///
+/// This function consolidates all Phase 5 metadata file comparisons:
+/// - [Content_Types].xml - MIME type definitions (Phase 5.1)
+/// - DacMetadata.xml - Package metadata (Phase 5.2)
+/// - Origin.xml - Build/origin information (Phase 5.3)
+/// - predeploy.sql / postdeploy.sql - Deploy scripts (Phase 5.4)
+///
+/// Use this function for comprehensive metadata parity testing without needing
+/// to call each comparison function individually.
+///
+/// # Arguments
+/// * `rust_dacpac` - Path to the Rust-generated dacpac file
+/// * `dotnet_dacpac` - Path to the DotNet-generated dacpac file
+///
+/// # Returns
+/// A vector of `MetadataFileError` containing all detected differences across
+/// all metadata files. An empty vector indicates full metadata parity.
+///
+/// # Example
+/// ```ignore
+/// let errors = compare_dacpac_files(&rust_path, &dotnet_path);
+/// if errors.is_empty() {
+///     println!("All metadata files match!");
+/// } else {
+///     for error in &errors {
+///         println!("Metadata difference: {}", error);
+///     }
+/// }
+/// ```
+pub fn compare_dacpac_files(rust_dacpac: &Path, dotnet_dacpac: &Path) -> Vec<MetadataFileError> {
+    let mut errors = Vec::new();
+
+    // Phase 5.1: [Content_Types].xml comparison
+    errors.extend(compare_content_types(rust_dacpac, dotnet_dacpac));
+
+    // Phase 5.2: DacMetadata.xml comparison
+    errors.extend(compare_dac_metadata(rust_dacpac, dotnet_dacpac));
+
+    // Phase 5.3: Origin.xml comparison
+    errors.extend(compare_origin_xml(rust_dacpac, dotnet_dacpac));
+
+    // Phase 5.4: Pre/post-deploy script comparison
+    errors.extend(compare_deploy_scripts(rust_dacpac, dotnet_dacpac));
+
+    errors
+}
+
+// =============================================================================
 // Layer 3: SqlPackage DeployReport
 // =============================================================================
 
@@ -1887,19 +1939,28 @@ pub fn compare_dacpacs_with_options(
         Vec::new()
     };
 
-    let mut metadata_errors = if options.check_metadata_files {
-        let mut errors = compare_content_types(rust_dacpac, dotnet_dacpac);
-        errors.extend(compare_dac_metadata(rust_dacpac, dotnet_dacpac));
-        errors.extend(compare_origin_xml(rust_dacpac, dotnet_dacpac));
-        errors
+    // Phase 5: Metadata file comparison
+    // Use unified compare_dacpac_files() when both options are enabled,
+    // otherwise use individual comparison functions as needed
+    let metadata_errors = if options.check_metadata_files && options.check_deploy_scripts {
+        // Use unified function for complete metadata comparison
+        compare_dacpac_files(rust_dacpac, dotnet_dacpac)
     } else {
-        Vec::new()
-    };
+        let mut errors = if options.check_metadata_files {
+            let mut errs = compare_content_types(rust_dacpac, dotnet_dacpac);
+            errs.extend(compare_dac_metadata(rust_dacpac, dotnet_dacpac));
+            errs.extend(compare_origin_xml(rust_dacpac, dotnet_dacpac));
+            errs
+        } else {
+            Vec::new()
+        };
 
-    // Add deploy script comparison if enabled (Phase 5.4)
-    if options.check_deploy_scripts {
-        metadata_errors.extend(compare_deploy_scripts(rust_dacpac, dotnet_dacpac));
-    }
+        // Add deploy script comparison if enabled (Phase 5.4)
+        if options.check_deploy_scripts {
+            errors.extend(compare_deploy_scripts(rust_dacpac, dotnet_dacpac));
+        }
+        errors
+    };
 
     let layer3_result = if options.include_layer3 {
         Some(compare_with_sqlpackage(rust_dacpac, dotnet_dacpac))

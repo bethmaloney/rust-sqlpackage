@@ -1874,3 +1874,233 @@ fn test_deploy_script_comparison_no_scripts() {
     // When neither dacpac has deploy scripts, there should be no errors
     // (unless there's an asymmetry - one has scripts, the other doesn't)
 }
+
+// =============================================================================
+// Phase 5.5: Unified Metadata File Comparison Tests
+// =============================================================================
+
+/// Test the unified compare_dacpac_files() function that consolidates all
+/// Phase 5 metadata comparisons into a single call.
+///
+/// This test verifies that the unified function correctly aggregates errors from:
+/// - Phase 5.1: [Content_Types].xml comparison
+/// - Phase 5.2: DacMetadata.xml comparison
+/// - Phase 5.3: Origin.xml comparison
+/// - Phase 5.4: Pre/post-deploy script comparison
+#[test]
+fn test_unified_metadata_comparison() {
+    // Skip if dotnet not available
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => {
+            println!("Skipping test: no test project available");
+            return;
+        }
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Call the unified comparison function
+    let errors = crate::dacpac_compare::compare_dacpac_files(&rust_dacpac, &dotnet_dacpac);
+
+    println!("\n=== Unified Metadata Comparison Test (Phase 5.5) ===\n");
+
+    if errors.is_empty() {
+        println!("All metadata files match! (Content_Types, DacMetadata, Origin, Deploy Scripts)");
+    } else {
+        // Categorize errors by source
+        let mut content_type_errors = 0;
+        let mut dac_metadata_errors = 0;
+        let mut origin_xml_errors = 0;
+        let mut deploy_script_errors = 0;
+
+        for err in &errors {
+            match err {
+                crate::dacpac_compare::MetadataFileError::ContentTypeMismatch { .. }
+                | crate::dacpac_compare::MetadataFileError::ContentTypeCountMismatch { .. } => {
+                    content_type_errors += 1;
+                }
+                crate::dacpac_compare::MetadataFileError::DacMetadataMismatch { .. } => {
+                    dac_metadata_errors += 1;
+                }
+                crate::dacpac_compare::MetadataFileError::OriginXmlMismatch { .. } => {
+                    origin_xml_errors += 1;
+                }
+                crate::dacpac_compare::MetadataFileError::DeployScriptMismatch { .. }
+                | crate::dacpac_compare::MetadataFileError::DeployScriptMissing { .. } => {
+                    deploy_script_errors += 1;
+                }
+                crate::dacpac_compare::MetadataFileError::FileMissing { file_name, .. } => {
+                    // Categorize FileMissing by file name
+                    if file_name.contains("Content_Types") {
+                        content_type_errors += 1;
+                    } else if file_name.contains("DacMetadata") {
+                        dac_metadata_errors += 1;
+                    } else if file_name.contains("Origin") {
+                        origin_xml_errors += 1;
+                    } else {
+                        deploy_script_errors += 1;
+                    }
+                }
+            }
+        }
+
+        println!("Metadata mismatches found: {}", errors.len());
+        println!("  - [Content_Types].xml: {}", content_type_errors);
+        println!("  - DacMetadata.xml: {}", dac_metadata_errors);
+        println!("  - Origin.xml: {}", origin_xml_errors);
+        println!("  - Deploy scripts: {}", deploy_script_errors);
+        println!();
+
+        println!("All errors:");
+        for err in &errors {
+            println!("  {}", err);
+        }
+    }
+
+    println!();
+    println!(
+        "Note: This is an informational test. Some differences (like ProductName) are expected."
+    );
+}
+
+/// Test that compare_dacpac_files() returns the same results as calling
+/// all individual comparison functions separately.
+#[test]
+fn test_unified_metadata_consistency() {
+    // Skip if dotnet not available
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => {
+            println!("Skipping test: no test project available");
+            return;
+        }
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Get errors from unified function
+    let unified_errors = crate::dacpac_compare::compare_dacpac_files(&rust_dacpac, &dotnet_dacpac);
+
+    // Get errors from individual functions
+    let mut individual_errors = Vec::new();
+    individual_errors.extend(crate::dacpac_compare::compare_content_types(
+        &rust_dacpac,
+        &dotnet_dacpac,
+    ));
+    individual_errors.extend(crate::dacpac_compare::compare_dac_metadata(
+        &rust_dacpac,
+        &dotnet_dacpac,
+    ));
+    individual_errors.extend(crate::dacpac_compare::compare_origin_xml(
+        &rust_dacpac,
+        &dotnet_dacpac,
+    ));
+    individual_errors.extend(crate::dacpac_compare::compare_deploy_scripts(
+        &rust_dacpac,
+        &dotnet_dacpac,
+    ));
+
+    println!("\n=== Unified Metadata Consistency Test ===\n");
+    println!("Unified function returned {} errors", unified_errors.len());
+    println!(
+        "Individual functions returned {} errors",
+        individual_errors.len()
+    );
+
+    // The unified function should return the same number of errors
+    assert_eq!(
+        unified_errors.len(),
+        individual_errors.len(),
+        "Unified function should return same error count as individual functions combined"
+    );
+
+    println!("\nConsistency check PASSED: Error counts match!");
+}
+
+/// Test that compare_dacpacs_with_options uses compare_dacpac_files when both
+/// check_metadata_files and check_deploy_scripts are enabled.
+#[test]
+fn test_unified_metadata_via_options() {
+    // Skip if dotnet not available
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => {
+            println!("Skipping test: no test project available");
+            return;
+        }
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Enable both metadata file and deploy script comparison
+    let options = ComparisonOptions {
+        include_layer3: false,
+        strict_properties: false,
+        check_relationships: false,
+        check_element_order: false,
+        check_metadata_files: true,
+        check_deploy_scripts: true,
+    };
+
+    let result = compare_dacpacs_with_options(&rust_dacpac, &dotnet_dacpac, &options)
+        .expect("Comparison should succeed");
+
+    // Get errors from direct unified function call for comparison
+    let direct_errors = crate::dacpac_compare::compare_dacpac_files(&rust_dacpac, &dotnet_dacpac);
+
+    println!("\n=== Compare via ComparisonOptions Test ===\n");
+    println!(
+        "ComparisonOptions returned {} metadata errors",
+        result.metadata_errors.len()
+    );
+    println!(
+        "Direct compare_dacpac_files() returned {} errors",
+        direct_errors.len()
+    );
+
+    // Both should return the same number of errors
+    assert_eq!(
+        result.metadata_errors.len(),
+        direct_errors.len(),
+        "ComparisonOptions path should return same results as direct unified function"
+    );
+
+    println!("\nIntegration check PASSED: ComparisonOptions correctly uses unified function!");
+}

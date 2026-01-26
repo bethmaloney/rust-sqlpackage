@@ -272,13 +272,21 @@ Extend comparison beyond model.xml to all dacpac files.
   - Location: `tests/e2e/dacpac_compare.rs:1582-1732` (functions), `tests/e2e/dotnet_comparison_tests.rs:1596-1863` (tests)
   - Acceptance: Pre/post-deploy script comparison reports content differences (with whitespace normalization) ✓
 
-- [ ] **5.5 Create unified metadata comparison function**
-  ```rust
-  pub fn compare_dacpac_files(
-      rust_dacpac: &Path,
-      dotnet_dacpac: &Path,
-  ) -> Vec<FileComparisonError>
-  ```
+- [x] **5.5 Create unified metadata comparison function** ✓ COMPLETE
+  - Added `compare_dacpac_files()` function to consolidate all Phase 5 metadata comparisons
+  - Location: `tests/e2e/dacpac_compare.rs:1776-1792`
+  - Unified function aggregates:
+    - Phase 5.1: [Content_Types].xml comparison via `compare_content_types()`
+    - Phase 5.2: DacMetadata.xml comparison via `compare_dac_metadata()`
+    - Phase 5.3: Origin.xml comparison via `compare_origin_xml()`
+    - Phase 5.4: Pre/post-deploy script comparison via `compare_deploy_scripts()`
+  - Updated `compare_dacpacs_with_options()` to use unified function when both
+    `check_metadata_files` and `check_deploy_scripts` are enabled
+  - Tests added:
+    - `test_unified_metadata_comparison` - Main informational test
+    - `test_unified_metadata_consistency` - Verifies unified function returns same results as individual calls
+    - `test_unified_metadata_via_options` - Verifies ComparisonOptions integration
+  - Acceptance: Unified `compare_dacpac_files()` aggregates all Phase 5 comparisons ✓
 
 ---
 
@@ -396,12 +404,12 @@ Reorganize and improve test infrastructure.
 | Phase 2: Property Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 3: Relationship Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 4: XML Structure (Layer 4) | **COMPLETE** | 4/4 ✓ |
-| Phase 5: Metadata Files | In Progress | 4/5 |
+| Phase 5: Metadata Files | **COMPLETE** | 5/5 ✓ |
 | Phase 6: Per-Feature Tests | Not Started | 0/5+ |
 | Phase 7: Canonical XML | Not Started | 0/4 |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 25/39+ tasks complete
+**Overall Progress**: 26/39+ tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
@@ -409,6 +417,7 @@ Phase 3 added relationship parsing and comparison infrastructure with comprehens
 Phase 4 added element ordering infrastructure to compare structural differences in element positions and type ordering.
 Phase 5 started with [Content_Types].xml comparison. Implemented extraction, parsing, and comparison infrastructure for metadata files.
 Phase 5.4 added pre/post-deploy script comparison with whitespace normalization for parity testing.
+Phase 5.5 completed the metadata comparison infrastructure with a unified `compare_dacpac_files()` function that consolidates all metadata comparisons into a single entry point.
 
 ---
 
