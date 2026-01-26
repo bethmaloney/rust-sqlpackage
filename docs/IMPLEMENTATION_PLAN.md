@@ -27,9 +27,9 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 11/46 | 23.9% | Improved from 2/46 (4.3%) |
+| Layer 1 (Inventory) | 11/46 | 23.9% | |
 | Layer 2 (Properties) | 35/46 | 76.1% | |
-| Layer 3 (Relationships) | 26/46 | 56.5% | Slightly decreased due to CheckExpressionDependencies detection |
+| Layer 3 (Relationships) | 28/46 | 60.9% | Improved from 26/46 due to FK ordering fix |
 | Layer 4 (Structure) | 5/46 | 10.9% | |
 | Layer 5 (Metadata) | 0/46 | 0.0% | |
 
@@ -120,10 +120,11 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - Added `write_function_parameters` function to write the Parameters relationship for functions
   - **Actual impact**: Relationships layer now passes for `procedure_parameters` fixture
 
-- [ ] **9.3.3 Foreign key relationship ordering**
-  - File: `src/dacpac/model_xml.rs`
-  - Order: DefiningTable, Columns, ForeignTable, ForeignColumns
-  - Expected impact: 2-4 fixtures
+- [x] **9.3.3 Foreign key relationship ordering** ✓
+  - File: `src/dacpac/model_xml.rs` (lines 1824-1899)
+  - Reordered foreign key relationships to match DotNet: Columns, DefiningTable, ForeignColumns, ForeignTable
+  - Note: Different from documented expected order - DotNet actually outputs: Columns → DefiningTable → ForeignColumns → ForeignTable
+  - **Actual impact**: Relationships layer improved from 26/46 (56.5%) to 28/46 (60.9%)
 
 - [ ] **9.3.4 CheckExpressionDependencies relationship**
   - File: `src/dacpac/model_xml.rs`
@@ -179,11 +180,11 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 |---------|--------|------------|
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
 | 9.2 Property Value Fixes | COMPLETE | 6/6 |
-| 9.3 Relationship Completeness | IN PROGRESS | 2/4 |
+| 9.3 Relationship Completeness | IN PROGRESS | 3/4 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 10/19 tasks
+**Phase 9 Overall**: 11/19 tasks
 
 ### Expected Outcomes
 
@@ -212,6 +213,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 10/19 |
+| Phase 9 | **IN PROGRESS** 11/19 |
 
-**Total**: 49/58 tasks complete
+**Total**: 50/58 tasks complete

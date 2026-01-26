@@ -1823,14 +1823,16 @@ fn write_constraint<W: Write>(
 
     // Reference to table
     let table_ref = format!("[{}].[{}]", constraint.table_schema, constraint.table_name);
-    write_relationship(writer, "DefiningTable", &[&table_ref])?;
 
-    // Write column relationships based on constraint type
+    // Write column relationships and DefiningTable based on constraint type
+    // DotNet ordering for foreign keys: Columns, DefiningTable, ForeignColumns, ForeignTable
+    // DotNet ordering for PK/Unique: DefiningTable, ColumnSpecifications
     if !constraint.columns.is_empty() {
-        let table_ref = format!("[{}].[{}]", constraint.table_schema, constraint.table_name);
-
         match constraint.constraint_type {
             ConstraintType::PrimaryKey | ConstraintType::Unique => {
+                // PK/Unique: DefiningTable first, then ColumnSpecifications
+                write_relationship(writer, "DefiningTable", &[&table_ref])?;
+
                 // Primary keys and unique constraints use ColumnSpecifications with inline elements
                 let mut rel = BytesStart::new("Relationship");
                 rel.push_attribute(("Name", "ColumnSpecifications"));
@@ -1858,7 +1860,7 @@ fn write_constraint<W: Write>(
                 writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
             }
             ConstraintType::ForeignKey => {
-                // Foreign keys use Columns relationship with references
+                // Foreign keys: Columns, DefiningTable, ForeignColumns, ForeignTable (DotNet order)
                 let column_refs: Vec<String> = constraint
                     .columns
                     .iter()
@@ -1866,29 +1868,34 @@ fn write_constraint<W: Write>(
                     .collect();
                 let column_refs_str: Vec<&str> = column_refs.iter().map(|s| s.as_str()).collect();
                 write_relationship(writer, "Columns", &column_refs_str)?;
-            }
-            _ => {}
-        }
-    }
 
-    // For foreign keys, add reference to foreign table and foreign columns
-    if constraint.constraint_type == ConstraintType::ForeignKey {
-        if let Some(ref foreign_table) = constraint.referenced_table {
-            write_relationship(writer, "ForeignTable", &[foreign_table])?;
+                write_relationship(writer, "DefiningTable", &[&table_ref])?;
 
-            // Write ForeignColumns relationship
-            if let Some(ref foreign_columns) = constraint.referenced_columns {
-                if !foreign_columns.is_empty() {
-                    let foreign_col_refs: Vec<String> = foreign_columns
-                        .iter()
-                        .map(|c| format!("{}.[{}]", foreign_table, c))
-                        .collect();
-                    let foreign_col_refs_str: Vec<&str> =
-                        foreign_col_refs.iter().map(|s| s.as_str()).collect();
-                    write_relationship(writer, "ForeignColumns", &foreign_col_refs_str)?;
+                // Add ForeignColumns and ForeignTable relationships
+                if let Some(ref foreign_table) = constraint.referenced_table {
+                    // ForeignColumns comes before ForeignTable in DotNet
+                    if let Some(ref foreign_columns) = constraint.referenced_columns {
+                        if !foreign_columns.is_empty() {
+                            let foreign_col_refs: Vec<String> = foreign_columns
+                                .iter()
+                                .map(|c| format!("{}.[{}]", foreign_table, c))
+                                .collect();
+                            let foreign_col_refs_str: Vec<&str> =
+                                foreign_col_refs.iter().map(|s| s.as_str()).collect();
+                            write_relationship(writer, "ForeignColumns", &foreign_col_refs_str)?;
+                        }
+                    }
+                    write_relationship(writer, "ForeignTable", &[foreign_table])?;
                 }
             }
+            _ => {
+                // Other constraint types: DefiningTable only
+                write_relationship(writer, "DefiningTable", &[&table_ref])?;
+            }
         }
+    } else {
+        // No columns - still write DefiningTable for constraints that need it
+        write_relationship(writer, "DefiningTable", &[&table_ref])?;
     }
 
     // Check constraint expression - use CheckExpressionScript property with CDATA
