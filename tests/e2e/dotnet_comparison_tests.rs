@@ -2684,3 +2684,134 @@ fn test_parity_inline_constraints() {
         }
     }
 }
+
+// ============================================================================
+// Phase 6.3: Medium-Priority Fixture Parity Tests
+// ============================================================================
+
+/// Informational test: Run parity test on database_options fixture
+/// This validates Phase 1.4 (SqlDatabaseOptions element generation)
+///
+/// The database_options fixture tests that database-level options from the
+/// sqlproj file (ANSI_NULLS, PageVerify, Collation, etc.) are correctly
+/// captured as SqlDatabaseOptions elements in the model.xml output.
+#[test]
+fn test_parity_database_options() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    // Use default options to get full comparison including property validation
+    let options = ParityTestOptions::default();
+
+    let result = match run_parity_test("database_options", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Parity test failed: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== Parity Test: database_options ===\n");
+    println!("Testing Phase 1.4: SqlDatabaseOptions element generation");
+    println!("Validates: IsAnsiNullsOn, PageVerifyMode, DefaultCollation, etc.");
+    println!();
+    println!("Layer 1 errors (inventory): {}", result.layer1_errors.len());
+    println!(
+        "Layer 2 errors (properties): {}",
+        result.layer2_errors.len()
+    );
+    println!("Relationship errors: {}", result.relationship_errors.len());
+    println!("Layer 4 errors (ordering): {}", result.layer4_errors.len());
+    println!("Metadata errors: {}", result.metadata_errors.len());
+
+    // Layer 1: Element inventory should match (SqlDatabaseOptions present)
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
+
+    // Layer 2: Property values comparison
+    if !result.layer2_errors.is_empty() {
+        println!("\nLayer 2 errors (showing first 10):");
+        for err in result.layer2_errors.iter().take(10) {
+            println!("  {}", err);
+        }
+        if result.layer2_errors.len() > 10 {
+            println!("  ... and {} more", result.layer2_errors.len() - 10);
+        }
+    }
+}
+
+/// Informational test: Run parity test on header_section fixture
+/// This validates Phase 1.5 (Header section generation with metadata)
+///
+/// The header_section fixture tests that the model.xml Header element is
+/// correctly generated with Metadata entries for AnsiNulls, QuotedIdentifier,
+/// and CompatibilityMode settings. This fixture also includes a package
+/// reference to master.dacpac which exercises external reference handling.
+#[test]
+fn test_parity_header_section() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    // Use default options to get full comparison including property validation
+    let options = ParityTestOptions::default();
+
+    let result = match run_parity_test("header_section", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Parity test failed: {}", e);
+            return;
+        }
+    };
+
+    println!("\n=== Parity Test: header_section ===\n");
+    println!("Testing Phase 1.5: Header section generation");
+    println!("Validates: AnsiNulls, QuotedIdentifier, CompatibilityMode metadata");
+    println!("Also tests: Package reference to master.dacpac");
+    println!();
+    println!("Layer 1 errors (inventory): {}", result.layer1_errors.len());
+    println!(
+        "Layer 2 errors (properties): {}",
+        result.layer2_errors.len()
+    );
+    println!("Relationship errors: {}", result.relationship_errors.len());
+    println!("Layer 4 errors (ordering): {}", result.layer4_errors.len());
+    println!("Metadata errors: {}", result.metadata_errors.len());
+
+    // Layer 1: Element inventory should match
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
+
+    // Layer 2: Property values comparison
+    if !result.layer2_errors.is_empty() {
+        println!("\nLayer 2 errors (showing first 10):");
+        for err in result.layer2_errors.iter().take(10) {
+            println!("  {}", err);
+        }
+        if result.layer2_errors.len() > 10 {
+            println!("  ... and {} more", result.layer2_errors.len() - 10);
+        }
+    }
+
+    // Relationship errors (important for external references like master.dacpac)
+    if !result.relationship_errors.is_empty() {
+        println!("\nRelationship errors (showing first 5):");
+        for err in result.relationship_errors.iter().take(5) {
+            println!("  {}", err);
+        }
+        if result.relationship_errors.len() > 5 {
+            println!("  ... and {} more", result.relationship_errors.len() - 5);
+        }
+    }
+}

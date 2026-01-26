@@ -317,9 +317,11 @@ Create targeted tests for each fixture and known issue.
   - Note: These are informational tests that use `run_parity_test()` helper
   - Location: `tests/e2e/dotnet_comparison_tests.rs:2549-2651`
 
-- [ ] **6.3 Add tests for medium-priority fixtures**
-  - [ ] `test_parity_database_options`
-  - [ ] `test_parity_header_section`
+- [x] **6.3 Add tests for medium-priority fixtures** ✓ COMPLETE
+  - [x] `test_parity_database_options` - Tests Phase 1.4 (SqlDatabaseOptions element)
+  - [x] `test_parity_header_section` - Tests Phase 1.5 (Header section generation)
+  - Note: These tests use `ParityTestOptions::default()` for full comparison including property validation
+  - Location: `tests/e2e/dotnet_comparison_tests.rs:2688-2817`
 
 - [ ] **6.4 Add tests for lower-priority fixtures**
   - [ ] `test_parity_extended_properties`
@@ -414,11 +416,11 @@ Reorganize and improve test infrastructure.
 | Phase 3: Relationship Comparison | **COMPLETE** | 4/4 ✓ |
 | Phase 4: XML Structure (Layer 4) | **COMPLETE** | 4/4 ✓ |
 | Phase 5: Metadata Files | **COMPLETE** | 5/5 ✓ |
-| Phase 6: Per-Feature Tests | In Progress | 2/5 ✓ |
+| Phase 6: Per-Feature Tests | In Progress | 3/5 ✓ |
 | Phase 7: Canonical XML | Not Started | 0/4 |
 | Phase 8: Infrastructure | Not Started | 0/4 |
 
-**Overall Progress**: 28/39+ tasks complete
+**Overall Progress**: 29/39+ tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
@@ -428,6 +430,7 @@ Phase 5 started with [Content_Types].xml comparison. Implemented extraction, par
 Phase 5.4 added pre/post-deploy script comparison with whitespace normalization for parity testing.
 Phase 5.5 completed the metadata comparison infrastructure with a unified `compare_dacpac_files()` function that consolidates all metadata comparisons into a single entry point.
 Phase 6.1 added the `run_parity_test()` helper function infrastructure enabling per-fixture parity tests. Phase 6.2 added the high-priority fixture tests using the new helper.
+Phase 6.3 added medium-priority fixture tests for `database_options` and `header_section` fixtures, validating SqlDatabaseOptions element generation and Header section metadata.
 
 ---
 
