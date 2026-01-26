@@ -6,8 +6,8 @@ CREATE TABLE [dbo].[Products] (
     [CategoryId] INT NOT NULL,
     [Price] DECIMAL(18,2) NOT NULL,
     [Quantity] INT NOT NULL,
-    [IsActive] BIT NOT NULL,
-    [CreatedAt] DATETIME NOT NULL,
+    [IsActive] BIT NOT NULL CONSTRAINT [DF_Products_IsActive] DEFAULT (1),
+    [CreatedAt] DATETIME NOT NULL CONSTRAINT [DF_Products_CreatedAt] DEFAULT (GETDATE()),
 
     -- PK: Primary Key Constraint
     CONSTRAINT [PK_Products] PRIMARY KEY ([Id]),
@@ -20,10 +20,6 @@ CREATE TABLE [dbo].[Products] (
 
     -- CK: Check Constraint
     CONSTRAINT [CK_Products_Price] CHECK ([Price] >= 0),
-    CONSTRAINT [CK_Products_Quantity] CHECK ([Quantity] >= 0),
-
-    -- DF: Default Constraint
-    CONSTRAINT [DF_Products_IsActive] DEFAULT (1) FOR [IsActive],
-    CONSTRAINT [DF_Products_CreatedAt] DEFAULT (GETDATE()) FOR [CreatedAt]
+    CONSTRAINT [CK_Products_Quantity] CHECK ([Quantity] >= 0)
 );
 GO

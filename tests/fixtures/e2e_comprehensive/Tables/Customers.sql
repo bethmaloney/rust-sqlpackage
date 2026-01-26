@@ -4,10 +4,9 @@ CREATE TABLE [Sales].[Customers] (
     [LastName] NVARCHAR(100) NOT NULL,
     [Email] NVARCHAR(255) NOT NULL,
     [Phone] NVARCHAR(20) NULL,
-    [CreatedAt] DATETIME NOT NULL,
+    [CreatedAt] DATETIME NOT NULL CONSTRAINT [DF_Customers_CreatedAt] DEFAULT (GETDATE()),
 
     CONSTRAINT [PK_Customers] PRIMARY KEY CLUSTERED ([Id]),
-    CONSTRAINT [UQ_Customers_Email] UNIQUE ([Email]),
-    CONSTRAINT [DF_Customers_CreatedAt] DEFAULT (GETDATE()) FOR [CreatedAt]
+    CONSTRAINT [UQ_Customers_Email] UNIQUE ([Email])
 );
 GO

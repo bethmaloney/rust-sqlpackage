@@ -6,16 +6,14 @@ CREATE TABLE [dbo].[Products] (
     [Price] DECIMAL(18, 2) NOT NULL,
     [Quantity] INT NOT NULL,
     [ImageData] VARBINARY(MAX) NULL,
-    [IsActive] BIT NOT NULL,
-    [CreatedAt] DATETIME NOT NULL,
+    [IsActive] BIT NOT NULL CONSTRAINT [DF_Products_IsActive] DEFAULT (1),
+    [CreatedAt] DATETIME NOT NULL CONSTRAINT [DF_Products_CreatedAt] DEFAULT (GETDATE()),
     [ModifiedAt] DATETIME NULL,
 
     CONSTRAINT [PK_Products] PRIMARY KEY CLUSTERED ([Id]),
     CONSTRAINT [FK_Products_Categories] FOREIGN KEY ([CategoryId]) REFERENCES [dbo].[Categories]([Id]),
     CONSTRAINT [UQ_Products_SKU] UNIQUE ([SKU]),
     CONSTRAINT [CK_Products_Price] CHECK ([Price] >= 0),
-    CONSTRAINT [CK_Products_Quantity] CHECK ([Quantity] >= 0),
-    CONSTRAINT [DF_Products_IsActive] DEFAULT (1) FOR [IsActive],
-    CONSTRAINT [DF_Products_CreatedAt] DEFAULT (GETDATE()) FOR [CreatedAt]
+    CONSTRAINT [CK_Products_Quantity] CHECK ([Quantity] >= 0)
 );
 GO
