@@ -887,3 +887,373 @@ pub struct OriginXml {
     /// Product schema URL
     pub product_schema: Option<String>,
 }
+
+// =============================================================================
+// Phase 8.2: Parity Metrics for CI Progress Tracking
+// =============================================================================
+
+/// Per-fixture metrics for tracking parity test results.
+///
+/// This struct captures the outcome of a parity test for a single fixture,
+/// including error counts per layer and overall status.
+#[derive(Debug, Clone)]
+pub struct FixtureMetrics {
+    /// Fixture name (directory name in tests/fixtures/)
+    pub name: String,
+    /// Overall status: "PASS", "PARTIAL", "FAIL", or "ERROR"
+    pub status: String,
+    /// Number of Layer 1 errors (element inventory)
+    pub layer1_errors: usize,
+    /// Number of Layer 2 errors (property comparison)
+    pub layer2_errors: usize,
+    /// Number of relationship errors
+    pub relationship_errors: usize,
+    /// Number of Layer 4 errors (element ordering)
+    pub layer4_errors: usize,
+    /// Number of metadata errors
+    pub metadata_errors: usize,
+    /// Error message if test setup failed
+    pub error_message: Option<String>,
+}
+
+/// Aggregate metrics for all parity tests.
+///
+/// This struct collects metrics from multiple fixture tests to provide
+/// an overview of parity status. Designed for CI reporting and progress
+/// tracking over time.
+#[derive(Debug, Clone)]
+pub struct ParityMetrics {
+    /// ISO 8601 timestamp when metrics were collected
+    pub timestamp: String,
+    /// Git commit hash (if available)
+    pub commit: Option<String>,
+    /// Total number of fixtures tested
+    pub total_fixtures: usize,
+    /// Number of fixtures passing Layer 1 (inventory)
+    pub layer1_pass: usize,
+    /// Number of fixtures passing Layer 2 (properties)
+    pub layer2_pass: usize,
+    /// Number of fixtures passing relationship comparison
+    pub relationship_pass: usize,
+    /// Number of fixtures passing Layer 4 (element ordering)
+    pub layer4_pass: usize,
+    /// Number of fixtures passing metadata comparison
+    pub metadata_pass: usize,
+    /// Number of fixtures with full parity (all layers pass)
+    pub full_parity: usize,
+    /// Number of fixtures that failed to build/compare (errors)
+    pub error_count: usize,
+    /// Per-fixture detailed results
+    pub fixtures: Vec<FixtureMetrics>,
+}
+
+impl ParityMetrics {
+    /// Create a new empty ParityMetrics with current timestamp.
+    pub fn new() -> Self {
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let commit = get_git_commit_hash();
+
+        Self {
+            timestamp,
+            commit,
+            total_fixtures: 0,
+            layer1_pass: 0,
+            layer2_pass: 0,
+            relationship_pass: 0,
+            layer4_pass: 0,
+            metadata_pass: 0,
+            full_parity: 0,
+            error_count: 0,
+            fixtures: Vec::new(),
+        }
+    }
+
+    /// Add a successful comparison result for a fixture.
+    pub fn add_result(&mut self, fixture_name: &str, result: &ComparisonResult) {
+        self.total_fixtures += 1;
+
+        let l1_ok = result.layer1_errors.is_empty();
+        let l2_ok = result.layer2_errors.is_empty();
+        let rel_ok = result.relationship_errors.is_empty();
+        let l4_ok = result.layer4_errors.is_empty();
+        let meta_ok = result.metadata_errors.is_empty();
+
+        if l1_ok {
+            self.layer1_pass += 1;
+        }
+        if l2_ok {
+            self.layer2_pass += 1;
+        }
+        if rel_ok {
+            self.relationship_pass += 1;
+        }
+        if l4_ok {
+            self.layer4_pass += 1;
+        }
+        if meta_ok {
+            self.metadata_pass += 1;
+        }
+
+        let all_pass = l1_ok && l2_ok && rel_ok && l4_ok && meta_ok;
+        if all_pass {
+            self.full_parity += 1;
+        }
+
+        let status = if all_pass {
+            "PASS".to_string()
+        } else if l1_ok {
+            "PARTIAL".to_string()
+        } else {
+            "FAIL".to_string()
+        };
+
+        self.fixtures.push(FixtureMetrics {
+            name: fixture_name.to_string(),
+            status,
+            layer1_errors: result.layer1_errors.len(),
+            layer2_errors: result.layer2_errors.len(),
+            relationship_errors: result.relationship_errors.len(),
+            layer4_errors: result.layer4_errors.len(),
+            metadata_errors: result.metadata_errors.len(),
+            error_message: None,
+        });
+    }
+
+    /// Add an error result for a fixture that failed to build/compare.
+    pub fn add_error(&mut self, fixture_name: &str, error: &str) {
+        self.total_fixtures += 1;
+        self.error_count += 1;
+
+        self.fixtures.push(FixtureMetrics {
+            name: fixture_name.to_string(),
+            status: "ERROR".to_string(),
+            layer1_errors: 0,
+            layer2_errors: 0,
+            relationship_errors: 0,
+            layer4_errors: 0,
+            metadata_errors: 0,
+            error_message: Some(error.to_string()),
+        });
+    }
+
+    /// Calculate pass rate as a percentage.
+    pub fn pass_rate(&self, pass_count: usize) -> f64 {
+        if self.total_fixtures == 0 {
+            0.0
+        } else {
+            100.0 * pass_count as f64 / self.total_fixtures as f64
+        }
+    }
+
+    /// Serialize metrics to JSON format.
+    ///
+    /// The JSON format is designed for CI reporting and can be parsed
+    /// by tools that track metrics over time.
+    pub fn to_json(&self) -> String {
+        let mut json = String::new();
+        json.push_str("{\n");
+        json.push_str(&format!("  \"timestamp\": \"{}\",\n", self.timestamp));
+
+        if let Some(ref commit) = self.commit {
+            json.push_str(&format!("  \"commit\": \"{}\",\n", commit));
+        } else {
+            json.push_str("  \"commit\": null,\n");
+        }
+
+        json.push_str(&format!("  \"total_fixtures\": {},\n", self.total_fixtures));
+        json.push_str(&format!("  \"layer1_pass\": {},\n", self.layer1_pass));
+        json.push_str(&format!("  \"layer2_pass\": {},\n", self.layer2_pass));
+        json.push_str(&format!(
+            "  \"relationship_pass\": {},\n",
+            self.relationship_pass
+        ));
+        json.push_str(&format!("  \"layer4_pass\": {},\n", self.layer4_pass));
+        json.push_str(&format!("  \"metadata_pass\": {},\n", self.metadata_pass));
+        json.push_str(&format!("  \"full_parity\": {},\n", self.full_parity));
+        json.push_str(&format!("  \"error_count\": {},\n", self.error_count));
+
+        // Add pass rates
+        json.push_str("  \"pass_rates\": {\n");
+        json.push_str(&format!(
+            "    \"layer1\": {:.1},\n",
+            self.pass_rate(self.layer1_pass)
+        ));
+        json.push_str(&format!(
+            "    \"layer2\": {:.1},\n",
+            self.pass_rate(self.layer2_pass)
+        ));
+        json.push_str(&format!(
+            "    \"relationships\": {:.1},\n",
+            self.pass_rate(self.relationship_pass)
+        ));
+        json.push_str(&format!(
+            "    \"layer4\": {:.1},\n",
+            self.pass_rate(self.layer4_pass)
+        ));
+        json.push_str(&format!(
+            "    \"metadata\": {:.1},\n",
+            self.pass_rate(self.metadata_pass)
+        ));
+        json.push_str(&format!(
+            "    \"full_parity\": {:.1}\n",
+            self.pass_rate(self.full_parity)
+        ));
+        json.push_str("  },\n");
+
+        // Add fixtures array
+        json.push_str("  \"fixtures\": [\n");
+        for (i, fixture) in self.fixtures.iter().enumerate() {
+            json.push_str("    {\n");
+            json.push_str(&format!("      \"name\": \"{}\",\n", fixture.name));
+            json.push_str(&format!("      \"status\": \"{}\",\n", fixture.status));
+            json.push_str(&format!(
+                "      \"layer1_errors\": {},\n",
+                fixture.layer1_errors
+            ));
+            json.push_str(&format!(
+                "      \"layer2_errors\": {},\n",
+                fixture.layer2_errors
+            ));
+            json.push_str(&format!(
+                "      \"relationship_errors\": {},\n",
+                fixture.relationship_errors
+            ));
+            json.push_str(&format!(
+                "      \"layer4_errors\": {},\n",
+                fixture.layer4_errors
+            ));
+            json.push_str(&format!(
+                "      \"metadata_errors\": {},\n",
+                fixture.metadata_errors
+            ));
+            if let Some(ref err) = fixture.error_message {
+                // Escape JSON special characters in error message
+                let escaped = err
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\n");
+                json.push_str(&format!("      \"error_message\": \"{}\"\n", escaped));
+            } else {
+                json.push_str("      \"error_message\": null\n");
+            }
+            if i < self.fixtures.len() - 1 {
+                json.push_str("    },\n");
+            } else {
+                json.push_str("    }\n");
+            }
+        }
+        json.push_str("  ]\n");
+        json.push_str("}\n");
+
+        json
+    }
+
+    /// Print a summary report to stdout in a format suitable for CI logs.
+    pub fn print_summary(&self) {
+        println!("\n{}", "=".repeat(60));
+        println!("PARITY METRICS SUMMARY");
+        println!("{}\n", "=".repeat(60));
+
+        if let Some(ref commit) = self.commit {
+            println!("Commit: {}", commit);
+        }
+        println!("Timestamp: {}", self.timestamp);
+        println!();
+
+        println!("Layer Pass Rates:");
+        println!(
+            "  Layer 1 (inventory):    {:3}/{} ({:.1}%)",
+            self.layer1_pass,
+            self.total_fixtures,
+            self.pass_rate(self.layer1_pass)
+        );
+        println!(
+            "  Layer 2 (properties):   {:3}/{} ({:.1}%)",
+            self.layer2_pass,
+            self.total_fixtures,
+            self.pass_rate(self.layer2_pass)
+        );
+        println!(
+            "  Relationships:          {:3}/{} ({:.1}%)",
+            self.relationship_pass,
+            self.total_fixtures,
+            self.pass_rate(self.relationship_pass)
+        );
+        println!(
+            "  Layer 4 (ordering):     {:3}/{} ({:.1}%)",
+            self.layer4_pass,
+            self.total_fixtures,
+            self.pass_rate(self.layer4_pass)
+        );
+        println!(
+            "  Metadata files:         {:3}/{} ({:.1}%)",
+            self.metadata_pass,
+            self.total_fixtures,
+            self.pass_rate(self.metadata_pass)
+        );
+        println!(
+            "  Full parity:            {:3}/{} ({:.1}%)",
+            self.full_parity,
+            self.total_fixtures,
+            self.pass_rate(self.full_parity)
+        );
+
+        if self.error_count > 0 {
+            println!("  Errors:                 {:3}", self.error_count);
+        }
+
+        println!();
+
+        // Print per-fixture summary
+        println!("Per-Fixture Results:");
+        println!("{:-<60}", "");
+        for fixture in &self.fixtures {
+            let status_symbol = match fixture.status.as_str() {
+                "PASS" => "✓",
+                "PARTIAL" => "~",
+                "FAIL" => "✗",
+                "ERROR" => "!",
+                _ => "?",
+            };
+
+            if fixture.status == "ERROR" {
+                println!("{} {:40} ERROR", status_symbol, fixture.name);
+            } else {
+                println!(
+                    "{} {:40} L1:{:<2} L2:{:<2} Rel:{:<2} L4:{:<2} Meta:{:<2}",
+                    status_symbol,
+                    fixture.name,
+                    fixture.layer1_errors,
+                    fixture.layer2_errors,
+                    fixture.relationship_errors,
+                    fixture.layer4_errors,
+                    fixture.metadata_errors
+                );
+            }
+        }
+        println!();
+    }
+}
+
+impl Default for ParityMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Get the current git commit hash, if available.
+fn get_git_commit_hash() -> Option<String> {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
+}

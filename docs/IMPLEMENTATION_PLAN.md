@@ -442,9 +442,24 @@ Reorganize and improve test infrastructure.
   - Location: `tests/e2e/parity/` directory structure + `tests/e2e/dacpac_compare.rs` as re-export wrapper
   - Acceptance: Modular structure complete with all layers functional and all tests passing ✓
 
-- [ ] **8.2 Add comparison progress tracking to CI**
-  - Track number of passing parity tests over time
-  - Report comparison metrics in CI output
+- [x] **8.2 Add comparison progress tracking to CI** ✓ COMPLETE
+  - Added `ParityMetrics` struct in `tests/e2e/parity/types.rs` for structured metrics collection
+  - Added `FixtureMetrics` struct for per-fixture result tracking
+  - Implemented `ParityMetrics::to_json()` for machine-readable JSON output
+  - Implemented `ParityMetrics::print_summary()` for human-readable CI output
+  - Added `collect_parity_metrics()` function in `dotnet_comparison_tests.rs`
+  - Added `test_parity_metrics_collection` test that outputs JSON metrics
+  - Supports `PARITY_METRICS_FILE` environment variable to write metrics to file
+  - Updated `.github/workflows/ci.yml` with:
+    - "Collect parity metrics" step that runs metrics collection test
+    - "Display parity metrics summary" step that shows pass rates in CI logs
+    - "Upload parity metrics" step that saves `parity-metrics.json` as artifact
+  - Tests added:
+    - `test_parity_metrics_collection` - Full metrics collection across all fixtures
+    - `test_parity_metrics_json_serialization` - JSON format verification
+    - `test_parity_metrics_pass_rate` - Pass rate calculation validation
+  - Location: `tests/e2e/parity/types.rs:891-1183` (metrics types), `tests/e2e/dotnet_comparison_tests.rs:3573-3715` (tests)
+  - Acceptance: CI reports parity metrics per layer with JSON artifact for historical tracking ✓
 
 - [ ] **8.3 Add comparison report generation**
   - Generate HTML/Markdown report of all differences
@@ -467,9 +482,9 @@ Reorganize and improve test infrastructure.
 | Phase 5: Metadata Files | **COMPLETE** | 5/5 ✓ |
 | Phase 6: Per-Feature Tests | **COMPLETE** | 5/5 ✓ |
 | Phase 7: Canonical XML | **COMPLETE** | 4/4 ✓ |
-| Phase 8: Infrastructure | In Progress | 1/4 |
+| Phase 8: Infrastructure | In Progress | 2/4 |
 
-**Overall Progress**: 36/39 tasks complete
+**Overall Progress**: 37/39 tasks complete
 
 **Note**: Phase 1 was largely pre-implemented. Only item 1.1 (Ampersand truncation) required code changes.
 Phase 2 added comprehensive property documentation and strict comparison mode for parity testing.
@@ -484,6 +499,7 @@ Phase 6.4 added lower-priority fixture tests for `extended_properties`, `table_t
 Phase 6.5 completed per-feature parity tests for all remaining fixtures (35+ tests). Added `run_standard_parity_test()` helper function and `test_parity_all_fixtures` aggregate test with summary statistics.
 Phase 7 provides canonical XML comparison for true byte-level matching after normalization, enabling detection of even minor formatting or ordering differences between Rust and DotNet dacpac output.
 Phase 8.1 reorganized the parity test infrastructure into a modular structure with 7 separate comparison layers, moving comparison logic from monolithic `dacpac_compare.rs` into `tests/e2e/parity/` with each layer handling a distinct responsibility (inventory, properties, SqlPackage, structure, relationships, metadata, canonical XML). This organization improves maintainability and makes it easy to extend with new comparison layers in future phases.
+Phase 8.2 added CI progress tracking with `ParityMetrics` struct that collects structured test results across all fixtures. The metrics include per-layer pass rates, per-fixture error counts, and are output as JSON for CI systems to parse and track over time. The CI workflow now collects metrics, displays a summary, and uploads the JSON as an artifact.
 
 ---
 

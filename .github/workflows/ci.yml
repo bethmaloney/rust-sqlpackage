@@ -83,3 +83,33 @@ jobs:
 
       - name: Run parity tests
         run: cargo test --test e2e_tests dotnet_comparison -- --nocapture
+
+      - name: Collect parity metrics
+        run: |
+          PARITY_METRICS_FILE=parity-metrics.json cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture
+
+      - name: Display parity metrics summary
+        if: always()
+        run: |
+          if [ -f parity-metrics.json ]; then
+            echo "=== PARITY METRICS ==="
+            cat parity-metrics.json | head -30
+            echo ""
+            echo "=== PASS RATES ==="
+            # Extract and display key metrics using jq if available, otherwise grep
+            if command -v jq &> /dev/null; then
+              jq '.pass_rates' parity-metrics.json
+            else
+              grep -A6 '"pass_rates"' parity-metrics.json
+            fi
+          else
+            echo "No metrics file found"
+          fi
+
+      - name: Upload parity metrics
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-metrics
+          path: parity-metrics.json
+          if-no-files-found: ignore

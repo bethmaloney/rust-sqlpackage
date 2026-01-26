@@ -43,7 +43,7 @@ use crate::dacpac_compare::{
     compare_element_inventory, compare_element_order, compare_element_properties,
     compare_element_relationships, compare_with_sqlpackage, compute_sha256, extract_model_xml,
     generate_diff, sqlpackage_available, CanonicalXmlError, ComparisonOptions, ComparisonResult,
-    DacpacModel, Layer1Error,
+    DacpacModel, Layer1Error, ParityMetrics,
 };
 
 // =============================================================================
@@ -3568,6 +3568,152 @@ fn test_parity_all_fixtures() {
         total_fixtures,
         100.0 * full_pass as f64 / total_fixtures as f64
     );
+}
+
+// =============================================================================
+// Phase 8.2: Parity Metrics Collection for CI Progress Tracking
+// =============================================================================
+
+/// Collect parity metrics across all fixtures for CI reporting.
+///
+/// This function runs parity tests on all available fixtures and collects
+/// structured metrics that can be output as JSON for CI systems to parse.
+///
+/// # Returns
+/// A `ParityMetrics` struct containing:
+/// - Timestamp and git commit info
+/// - Per-layer pass counts
+/// - Per-fixture detailed results
+///
+/// # Example
+/// ```ignore
+/// let metrics = collect_parity_metrics(&ParityTestOptions::default());
+/// println!("{}", metrics.to_json());
+/// metrics.print_summary();
+/// ```
+pub fn collect_parity_metrics(options: &ParityTestOptions) -> ParityMetrics {
+    let mut metrics = ParityMetrics::new();
+    let fixtures = get_available_fixtures();
+
+    for fixture in &fixtures {
+        match run_parity_test(fixture, options) {
+            Ok(result) => {
+                metrics.add_result(fixture, &result);
+            }
+            Err(e) => {
+                metrics.add_error(fixture, &e.to_string());
+            }
+        }
+    }
+
+    metrics
+}
+
+/// Test that collects and outputs parity metrics in a CI-friendly format.
+///
+/// This test:
+/// 1. Runs parity tests on all available fixtures
+/// 2. Collects structured metrics using ParityMetrics
+/// 3. Outputs JSON to stdout for CI parsing
+/// 4. Optionally writes metrics to a file if PARITY_METRICS_FILE is set
+///
+/// The JSON output includes:
+/// - Timestamp and git commit hash
+/// - Per-layer pass counts and percentages
+/// - Per-fixture detailed results with error counts
+///
+/// CI systems can parse this output to:
+/// - Track parity progress over time
+/// - Alert on regressions
+/// - Display metrics in dashboards
+#[test]
+fn test_parity_metrics_collection() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let options = ParityTestOptions::default();
+    let metrics = collect_parity_metrics(&options);
+
+    // Print human-readable summary
+    metrics.print_summary();
+
+    // Output JSON for CI parsing
+    let json = metrics.to_json();
+    println!("\n=== PARITY METRICS JSON ===");
+    println!("{}", json);
+
+    // If PARITY_METRICS_FILE env var is set, write JSON to file
+    if let Ok(file_path) = std::env::var("PARITY_METRICS_FILE") {
+        match std::fs::write(&file_path, &json) {
+            Ok(_) => println!("\nMetrics written to: {}", file_path),
+            Err(e) => eprintln!("Failed to write metrics to {}: {}", file_path, e),
+        }
+    }
+}
+
+/// Test that ParityMetrics correctly serializes to JSON.
+#[test]
+fn test_parity_metrics_json_serialization() {
+    let mut metrics = ParityMetrics::new();
+
+    // Manually set timestamp for reproducible test
+    metrics.timestamp = "2026-01-26T10:00:00+00:00".to_string();
+    metrics.commit = Some("abc123".to_string());
+
+    // Create a mock ComparisonResult with no errors (passing)
+    let passing_result = ComparisonResult::default();
+    metrics.add_result("test_fixture", &passing_result);
+
+    // Create a mock ComparisonResult with errors (failing)
+    let mut failing_result = ComparisonResult::default();
+    failing_result
+        .layer1_errors
+        .push(crate::dacpac_compare::Layer1Error::MissingInRust {
+            element_type: "SqlTable".to_string(),
+            name: "[dbo].[Test]".to_string(),
+        });
+    metrics.add_result("failing_fixture", &failing_result);
+
+    // Add an error case
+    metrics.add_error("error_fixture", "Build failed: some error");
+
+    let json = metrics.to_json();
+
+    // Verify JSON structure
+    assert!(json.contains("\"timestamp\": \"2026-01-26T10:00:00+00:00\""));
+    assert!(json.contains("\"commit\": \"abc123\""));
+    assert!(json.contains("\"total_fixtures\": 3"));
+    assert!(json.contains("\"layer1_pass\": 1"));
+    assert!(json.contains("\"full_parity\": 1"));
+    assert!(json.contains("\"error_count\": 1"));
+    assert!(json.contains("\"name\": \"test_fixture\""));
+    assert!(json.contains("\"status\": \"PASS\""));
+    assert!(json.contains("\"status\": \"FAIL\""));
+    assert!(json.contains("\"status\": \"ERROR\""));
+    assert!(json.contains("\"error_message\": \"Build failed: some error\""));
+    assert!(json.contains("\"pass_rates\""));
+
+    println!("Serialized JSON:\n{}", json);
+}
+
+/// Test that ParityMetrics pass rate calculation works correctly.
+#[test]
+fn test_parity_metrics_pass_rate() {
+    let mut metrics = ParityMetrics::new();
+    metrics.total_fixtures = 10;
+    metrics.layer1_pass = 8;
+    metrics.full_parity = 5;
+
+    assert!((metrics.pass_rate(8) - 80.0).abs() < 0.01);
+    assert!((metrics.pass_rate(5) - 50.0).abs() < 0.01);
+    assert!((metrics.pass_rate(0) - 0.0).abs() < 0.01);
+    assert!((metrics.pass_rate(10) - 100.0).abs() < 0.01);
+
+    // Edge case: empty metrics
+    let empty_metrics = ParityMetrics::new();
+    assert!((empty_metrics.pass_rate(0) - 0.0).abs() < 0.01);
 }
 
 // =============================================================================
