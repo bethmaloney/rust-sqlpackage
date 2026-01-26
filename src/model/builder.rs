@@ -55,6 +55,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     let func_type = match function_type {
                         FallbackFunctionType::Scalar => FunctionType::Scalar,
                         FallbackFunctionType::TableValued => FunctionType::TableValued,
+                        FallbackFunctionType::InlineTableValued => FunctionType::InlineTableValued,
                     };
                     let is_natively_compiled = is_natively_compiled(&parsed.sql_text);
                     let param_elements = parameters.iter().map(param_from_extracted).collect();
@@ -526,13 +527,21 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     extract_schema_and_name(&create_func.name, &project.default_schema);
                 schemas.insert(schema.clone());
 
-                // Detect function type from return type
-                let function_type = if create_func
+                // Detect function type from raw SQL (more reliable than parsed return type)
+                // Inline TVF: "RETURNS TABLE" without table variable
+                // Multi-statement TVF: "RETURNS @variable TABLE (...)"
+                let sql_upper = parsed.sql_text.to_uppercase();
+                let function_type = if sql_upper.contains("RETURNS TABLE") {
+                    FunctionType::InlineTableValued
+                } else if sql_upper.contains("RETURNS @") {
+                    FunctionType::TableValued
+                } else if create_func
                     .return_type
                     .as_ref()
                     .map(|t| t.to_string().to_uppercase().contains("TABLE"))
                     .unwrap_or(false)
                 {
+                    // Fallback: if parsed return type contains TABLE but didn't match above patterns
                     FunctionType::TableValued
                 } else {
                     FunctionType::Scalar

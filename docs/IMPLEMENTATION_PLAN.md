@@ -24,7 +24,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 34/46 | 73.9% | Extended property key format differences |
+| Layer 1 (Inventory) | 36/46 | 78.3% | Extended property key format differences |
 | Layer 2 (Properties) | 37/46 | 80.4% | View IsAnsiNullsOn missing |
 | Layer 3 (Relationships) | 30/46 | 65.2% | |
 | Layer 4 (Structure) | 6/46 | 13.0% | |
@@ -57,7 +57,7 @@ Tests with remaining issues:
 
 **Issue:** `GetProductsInPriceRange` is classified as `SqlMultiStatementTableValuedFunction` but DotNet identifies it as `SqlInlineTableValuedFunction`.
 
-- [ ] **10.2.1 Distinguish inline vs multi-statement TVFs**
+- [x] **10.2.1 Distinguish inline vs multi-statement TVFs**
   - Files: `src/parser/tsql_parser.rs`, `src/model/builder.rs`
   - Inline TVF: Single `RETURN SELECT ...` statement, no `BEGIN/END` block
   - Multi-statement TVF: Declares a table variable, has `BEGIN/END` block with `INSERT` statements
@@ -101,12 +101,12 @@ Tests with remaining issues:
 | Section | Status | Completion |
 |---------|--------|------------|
 | 10.1 Extended Property Key Format | PENDING | 0/1 |
-| 10.2 Function Type Classification | PENDING | 0/1 |
+| 10.2 Function Type Classification | COMPLETE | 1/1 |
 | 10.3 View IsAnsiNullsOn Property | ~~REMOVED~~ | N/A |
 | 10.4 Extra Default Constraints | PENDING | 0/1 |
 | 10.5 SqlPackage Test Configuration | COMPLETE | 1/1 |
 
-**Phase 10 Overall**: 1/4 tasks (task 10.3 removed - was invalid)
+**Phase 10 Overall**: 2/4 tasks (task 10.3 removed - was invalid)
 
 ---
 
@@ -127,9 +127,9 @@ cargo test --test e2e_tests test_layered_dacpac_comparison -- --nocapture  # Run
 | Phase | Status |
 |-------|--------|
 | Phases 1-9 | **COMPLETE** ✓ 58/58 |
-| Phase 10 | **IN PROGRESS** 1/4 |
+| Phase 10 | **IN PROGRESS** 2/4 |
 
-**Total**: 59/62 tasks complete (task 10.3 removed - was invalid)
+**Total**: 60/62 tasks complete (task 10.3 removed - was invalid)
 
 ---
 

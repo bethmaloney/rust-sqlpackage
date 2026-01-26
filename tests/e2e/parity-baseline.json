@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-26T12:30:20.567270842+00:00",
-  "commit": "e381f60",
+  "updated": "2026-01-26T21:28:49.857796653+00:00",
+  "commit": "18f6a4f",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -109,7 +109,7 @@
     },
     {
       "name": "element_types",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": false,
       "relationship_pass": false,
       "layer4_pass": false,
@@ -269,10 +269,10 @@
     },
     {
       "name": "procedure_parameters",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
-      "layer4_pass": false,
+      "layer4_pass": true,
       "metadata_pass": true
     },
     {

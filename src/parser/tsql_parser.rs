@@ -285,6 +285,7 @@ pub enum FallbackStatementType {
 pub enum FallbackFunctionType {
     Scalar,
     TableValued,
+    InlineTableValued,
 }
 
 impl ParsedStatement {
@@ -1297,7 +1298,13 @@ fn detect_function_type(sql: &str) -> FallbackFunctionType {
     let sql_upper = sql.to_uppercase();
 
     // Table-valued functions return TABLE
-    if sql_upper.contains("RETURNS TABLE") || sql_upper.contains("RETURNS @") {
+    if sql_upper.contains("RETURNS TABLE") {
+        // Inline TVF: "RETURNS TABLE" without a table variable declaration
+        // Has a direct RETURN (SELECT ...) without BEGIN/END block
+        FallbackFunctionType::InlineTableValued
+    } else if sql_upper.contains("RETURNS @") {
+        // Multi-statement TVF: "RETURNS @variable TABLE (...)"
+        // Has BEGIN/END block with INSERT statements
         FallbackFunctionType::TableValued
     } else {
         FallbackFunctionType::Scalar
