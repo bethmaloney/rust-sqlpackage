@@ -806,7 +806,7 @@ fn extract_table_aliases(query: &str, default_schema: &str) -> Vec<(String, Stri
         let alias = cap.get(2).map(|m| m.as_str()).unwrap_or("");
 
         // Clean up any trailing semicolons or whitespace
-        let table_name_cleaned = table_name.trim_end_matches(|c| c == ';' || c == ' ');
+        let table_name_cleaned = table_name.trim_end_matches([';', ' ']);
 
         let full_table_ref = normalize_table_reference(table_name_cleaned, default_schema);
 
