@@ -31,7 +31,7 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | Layer 2 (Properties) | 35/46 | 76.1% | |
 | Layer 3 (Relationships) | 30/46 | 65.2% | Improved from 28/46 due to CheckExpressionDependencies |
 | Layer 4 (Structure) | 5/46 | 10.9% | |
-| Layer 5 (Metadata) | 41/46 | 89.1% | |
+| Layer 5 (Metadata) | 44/46 | 95.7% | Improved from 89.1%; remaining 2 are ERROR (DotNet build failures for external_reference and unresolved_reference) |
 
 ### 9.1 Deterministic Element Ordering
 
@@ -154,15 +154,19 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - These fields identify the tool that generated the dacpac, so differences are expected
   - **Actual impact**: Metadata layer improved from 0/46 (0%) to 41/46 (89.1%)
 
-- [ ] **9.4.3 DacMetadata.xml alignment**
-  - File: `src/dacpac/metadata_xml.rs`
-  - Omit empty Description element
-  - Expected impact: 5-10 fixtures
+- [x] **9.4.3 DacMetadata.xml alignment** ✓
+  - The implementation already omits empty Description elements (verified)
+  - The actual metadata parity issues were:
+    a) Deploy scripts missing trailing GO statement (fixed in `src/dacpac/packager.rs`)
+    b) Deploy script comparison not stripping UTF-8 BOM (fixed in `tests/e2e/parity/layer6_metadata.rs`)
+    c) SQLCMD `:r` include expansion adding marker comments that DotNet doesn't add (fixed in `src/parser/sqlcmd.rs`)
+  - **Actual impact**: Metadata layer improved from 41/46 (89.1%) to 44/46 (95.7%)
 
-- [ ] **9.4.4 [Content_Types].xml fixes**
+- [x] **9.4.4 [Content_Types].xml fixes** ✓
   - File: `src/dacpac/packager.rs`
-  - Match MIME types exactly
-  - Expected impact: 2-5 fixtures
+  - This appears to already be working correctly
+  - No fixtures are failing due to Content_Types issues
+  - The only remaining metadata "failures" (external_reference and unresolved_reference) are ERROR status due to DotNet build failures
 
 ### 9.5 Edge Cases and Polishing
 
@@ -189,10 +193,10 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
 | 9.2 Property Value Fixes | COMPLETE | 6/6 |
 | 9.3 Relationship Completeness | COMPLETE | 4/4 |
-| 9.4 Metadata File Alignment | IN PROGRESS | 2/4 |
+| 9.4 Metadata File Alignment | COMPLETE | 4/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 14/19 tasks
+**Phase 9 Overall**: 16/19 tasks
 
 ### Expected Outcomes
 
@@ -221,6 +225,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 14/19 |
+| Phase 9 | **IN PROGRESS** 16/19 |
 
-**Total**: 53/58 tasks complete
+**Total**: 55/58 tasks complete

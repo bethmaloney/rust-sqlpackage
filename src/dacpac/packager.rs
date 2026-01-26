@@ -72,6 +72,7 @@ pub fn create_dacpac(
 
     // Write predeploy.sql (if present)
     // Expands SQLCMD :r include directives to inline referenced files
+    // DotNet ensures deploy scripts end with a GO statement
     if let Some(pre_deploy_path) = &project.pre_deploy_script {
         let content = std::fs::read_to_string(pre_deploy_path).map_err(|e| {
             SqlPackageError::SqlFileReadError {
@@ -80,12 +81,14 @@ pub fn create_dacpac(
             }
         })?;
         let expanded = expand_includes(&content, pre_deploy_path)?;
+        let normalized = ensure_trailing_go(&expanded);
         zip.start_file("predeploy.sql", options)?;
-        zip.write_all(expanded.as_bytes())?;
+        zip.write_all(normalized.as_bytes())?;
     }
 
     // Write postdeploy.sql (if present)
     // Expands SQLCMD :r include directives to inline referenced files
+    // DotNet ensures deploy scripts end with a GO statement
     if let Some(post_deploy_path) = &project.post_deploy_script {
         let content = std::fs::read_to_string(post_deploy_path).map_err(|e| {
             SqlPackageError::SqlFileReadError {
@@ -94,8 +97,9 @@ pub fn create_dacpac(
             }
         })?;
         let expanded = expand_includes(&content, post_deploy_path)?;
+        let normalized = ensure_trailing_go(&expanded);
         zip.start_file("postdeploy.sql", options)?;
-        zip.write_all(expanded.as_bytes())?;
+        zip.write_all(normalized.as_bytes())?;
     }
 
     zip.finish()?;
@@ -117,5 +121,35 @@ pub(crate) fn generate_content_types_xml(include_sql: bool) -> String {
   <Default Extension="xml" ContentType="text/xml" />
 </Types>"#
             .to_string()
+    }
+}
+
+/// Ensure deploy script content ends with a GO statement (matches DotNet behavior).
+///
+/// DotNet dacpacs always end deploy scripts with a trailing GO statement.
+/// This function normalizes the content by:
+/// 1. Normalizing line endings (CRLF -> LF)
+/// 2. Trimming trailing whitespace
+/// 3. Appending a GO statement if one is not already present
+fn ensure_trailing_go(content: &str) -> String {
+    // Normalize CRLF to LF
+    let content = content.replace("\r\n", "\n");
+
+    // Trim trailing whitespace
+    let trimmed = content.trim_end();
+
+    // Check if it already ends with GO (case-insensitive, possibly followed by whitespace/newline)
+    let lines: Vec<&str> = trimmed.lines().collect();
+    let ends_with_go = lines
+        .last()
+        .map(|line| line.trim().eq_ignore_ascii_case("GO"))
+        .unwrap_or(false);
+
+    if ends_with_go {
+        // Already ends with GO, just normalize line endings
+        format!("{}\n", trimmed)
+    } else {
+        // Add GO at the end
+        format!("{}\nGO\n", trimmed)
     }
 }

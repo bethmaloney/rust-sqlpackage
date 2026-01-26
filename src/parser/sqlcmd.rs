@@ -79,10 +79,13 @@ fn expand_includes_recursive(
         variables.insert(var_name.to_string(), var_value.to_string());
     }
 
-    // Regex to match :r directives
+    // Regex to match :r directives including the trailing newline
     // Matches: :r path\to\file.sql or :r "path with spaces\file.sql"
     // The :r must be at the start of a line (possibly with leading whitespace)
-    let re = Regex::new(r#"(?m)^\s*:r\s+(?:"([^"]+)"|(\S+))\s*$"#).expect("Invalid regex pattern");
+    // We consume the trailing newline so it doesn't create extra blank lines
+    // Use [ \t]* instead of \s* at end to avoid matching newlines (blank lines)
+    let re = Regex::new(r#"(?m)^\s*:r\s+(?:"([^"]+)"|(\S+))[ \t]*\r?\n?"#)
+        .expect("Invalid regex pattern");
 
     let source_dir = source_file.parent().unwrap_or(Path::new("."));
     let mut result = String::new();
@@ -166,13 +169,14 @@ fn expand_includes_recursive(
         // Recursively expand includes in the included file
         let expanded = expand_includes_recursive(included_content, &canonical_path, visited)?;
 
-        // Add a comment to show where the included content comes from
-        result.push_str(&format!("-- BEGIN :r {}\n", include_path_str));
+        // Inline the included content (matching DotNet behavior - no marker comments)
+        // DotNet adds CRLF after each include which becomes LF after normalization
         result.push_str(&expanded);
         if !expanded.ends_with('\n') {
             result.push('\n');
         }
-        result.push_str(&format!("-- END :r {}\n", include_path_str));
+        // Add extra LF to match DotNet's CRLF behavior (normalized to LF)
+        result.push('\n');
 
         // Remove from visited after processing (allows same file in different branches)
         visited.remove(&canonical_path);
@@ -224,8 +228,9 @@ mod tests {
         assert!(result.contains("SELECT 1;"));
         assert!(result.contains("SELECT 2;"));
         assert!(result.contains("SELECT 3;"));
-        assert!(result.contains("-- BEGIN :r included.sql"));
-        assert!(result.contains("-- END :r included.sql"));
+        // DotNet doesn't add marker comments, so neither do we
+        assert!(!result.contains("-- BEGIN :r"));
+        assert!(!result.contains("-- END :r"));
     }
 
     #[test]
@@ -305,5 +310,74 @@ mod tests {
         let result = expand_includes(":r a.sql\n:r b.sql", &source).unwrap();
         assert!(result.contains("SELECT 'a';"));
         assert!(result.contains("SELECT 'b';"));
+    }
+
+    #[test]
+    fn test_include_blank_line_handling() {
+        // Test that matches DotNet behavior: content + extra LF after each include
+        let dir = TempDir::new().unwrap();
+        let _a = create_test_file(dir.path(), "a.sql", "SELECT 'a';");
+        let _b = create_test_file(dir.path(), "b.sql", "SELECT 'b';");
+        let source = create_test_file(
+            dir.path(),
+            "main.sql",
+            ":r a.sql\n:r b.sql\n\nSELECT 'end';",
+        );
+
+        let content = ":r a.sql\n:r b.sql\n\nSELECT 'end';";
+        println!("Source content: {:?}", content);
+
+        // Check regex matches
+        let re = Regex::new(r#"(?m)^\s*:r\s+(?:"([^"]+)"|(\S+))[ \t]*\r?\n?"#).unwrap();
+        for caps in re.captures_iter(content) {
+            let m = caps.get(0).unwrap();
+            println!(
+                "Regex match: {:?} at {}..{}",
+                m.as_str(),
+                m.start(),
+                m.end()
+            );
+        }
+
+        let result = expand_includes(content, &source).unwrap();
+
+        // Print for debugging
+        println!("Result: {:?}", result);
+        println!("Result bytes: {:?}", result.as_bytes());
+
+        // Expected: content_a + LF + extra_LF + content_b + LF + extra_LF + blank_from_source + SELECT
+        // Which gives: SELECT 'a';\n\nSELECT 'b';\n\n\nSELECT 'end';
+        // = 1 blank line between a and b
+        // = 2 blank lines between b and end
+
+        // Count newlines between 'a' and 'b'
+        let a_end = result.find("SELECT 'a';").unwrap() + "SELECT 'a';".len();
+        let b_start = result.find("SELECT 'b';").unwrap();
+        let between_ab = &result[a_end..b_start];
+        let newlines_ab = between_ab.chars().filter(|c| *c == '\n').count();
+        println!(
+            "Between a and b: {:?} ({} newlines)",
+            between_ab, newlines_ab
+        );
+
+        // Count newlines between 'b' and 'end'
+        let b_end = result.find("SELECT 'b';").unwrap() + "SELECT 'b';".len();
+        let end_start = result.find("SELECT 'end';").unwrap();
+        let between_bend = &result[b_end..end_start];
+        let newlines_bend = between_bend.chars().filter(|c| *c == '\n').count();
+        println!(
+            "Between b and end: {:?} ({} newlines)",
+            between_bend, newlines_bend
+        );
+
+        // DotNet has: 2 newlines (1 blank) between a and b, 3 newlines (2 blanks) between b and end
+        assert_eq!(
+            newlines_ab, 2,
+            "Expected 2 newlines (1 blank line) between includes"
+        );
+        assert_eq!(
+            newlines_bend, 3,
+            "Expected 3 newlines (2 blank lines) before final content"
+        );
     }
 }

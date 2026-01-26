@@ -525,14 +525,18 @@ pub fn extract_deploy_script(
 /// Normalize whitespace in SQL script content for comparison.
 ///
 /// This ensures that minor whitespace differences (trailing spaces, different line endings,
-/// trailing newlines) don't cause false positives in script comparison.
+/// trailing newlines, BOM) don't cause false positives in script comparison.
 ///
 /// Normalization rules:
+/// - Strip UTF-8 BOM if present
 /// - Convert CRLF to LF (Windows to Unix line endings)
 /// - Trim trailing whitespace from each line
 /// - Remove trailing empty lines
 /// - Preserve leading whitespace and internal blank lines (significant for readability)
 pub fn normalize_script_whitespace(content: &str) -> String {
+    // Strip UTF-8 BOM if present (EF BB BF)
+    let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
+
     // Convert CRLF to LF
     let content = content.replace("\r\n", "\n");
 
