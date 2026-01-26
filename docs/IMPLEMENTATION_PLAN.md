@@ -97,6 +97,11 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - DotNet never emits `IsNullable="True"` for nullable columns (explicit or implicit)
   - **Actual impact**: Layer 2: +16 (16→32 fixtures passing, 34.8%→69.6%)
 
+- [ ] **9.2.6 Fix failing tests**
+  - Run test suite and fix any failing tests
+  - Ensure all existing functionality remains working
+  - Expected impact: Maintain test stability
+
 ### 9.3 Relationship Completeness
 
 **Goal:** Fix missing relationships that cause Layer 3/5 failures.
@@ -163,12 +168,12 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | Section | Status | Completion |
 |---------|--------|------------|
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
-| 9.2 Property Value Fixes | COMPLETE | 5/5 |
+| 9.2 Property Value Fixes | IN PROGRESS | 5/6 |
 | 9.3 Relationship Completeness | PENDING | 0/3 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 6/17 tasks
+**Phase 9 Overall**: 6/18 tasks
 
 ### Expected Outcomes
 
@@ -197,6 +202,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 6/17 |
+| Phase 9 | **IN PROGRESS** 6/18 |
 
-**Total**: 45/56 tasks complete
+**Total**: 45/57 tasks complete
