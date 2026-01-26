@@ -1352,6 +1352,7 @@ fn test_metadata_comparison_includes_dac_metadata() {
     // Categorize metadata errors
     let mut content_type_errors = 0;
     let mut dac_metadata_errors = 0;
+    let mut origin_xml_errors = 0;
     let mut file_missing_errors = 0;
 
     for err in &result.metadata_errors {
@@ -1363,6 +1364,9 @@ fn test_metadata_comparison_includes_dac_metadata() {
             crate::dacpac_compare::MetadataFileError::DacMetadataMismatch { .. } => {
                 dac_metadata_errors += 1;
             }
+            crate::dacpac_compare::MetadataFileError::OriginXmlMismatch { .. } => {
+                origin_xml_errors += 1;
+            }
             crate::dacpac_compare::MetadataFileError::FileMissing { .. } => {
                 file_missing_errors += 1;
             }
@@ -1372,6 +1376,7 @@ fn test_metadata_comparison_includes_dac_metadata() {
     println!("\nMetadata error breakdown:");
     println!("  [Content_Types].xml errors: {}", content_type_errors);
     println!("  DacMetadata.xml errors: {}", dac_metadata_errors);
+    println!("  Origin.xml errors: {}", origin_xml_errors);
     println!("  File missing errors: {}", file_missing_errors);
 
     // Show details of metadata errors
@@ -1381,4 +1386,201 @@ fn test_metadata_comparison_includes_dac_metadata() {
             println!("  {}", err);
         }
     }
+}
+
+// =============================================================================
+// Phase 5.3: Origin.xml Comparison Tests
+// =============================================================================
+
+/// Test Origin.xml comparison between Rust and DotNet dacpacs (Phase 5.3)
+///
+/// This test compares Origin.xml fields between rust-sqlpackage and DotNet DacFx.
+/// Expected differences:
+/// - ProductName: rust-sqlpackage vs Microsoft.Data.Tools.Schema.Sql
+/// - ProductVersion: 0.1.0 vs DotNet SDK version
+///
+/// Fields that should match:
+/// - PackageProperties/Version: Package format version
+/// - ContainsExportedData: Boolean flag
+/// - StreamVersions (Data, DeploymentContributors)
+/// - ProductSchema: Schema URL
+#[test]
+fn test_origin_xml_comparison() {
+    if !dotnet_available() {
+        return;
+    }
+
+    let project_path = match get_test_project_path() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let (rust_dacpac, dotnet_dacpac) = match build_both_dacpacs(&project_path, &temp_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("Build failed: {}", e);
+            return;
+        }
+    };
+
+    // Use the Origin.xml comparison function
+    let errors = crate::dacpac_compare::compare_origin_xml(&rust_dacpac, &dotnet_dacpac);
+
+    println!("\n=== Origin.xml Comparison Test (Phase 5.3) ===\n");
+
+    if errors.is_empty() {
+        println!("All Origin.xml fields match!");
+    } else {
+        println!("Origin.xml mismatches found: {}\n", errors.len());
+        for err in &errors {
+            println!("  {}", err);
+        }
+
+        println!("\nThis test is informational - some differences are expected:");
+        println!("  - ProductName: rust-sqlpackage vs DotNet DacFx");
+        println!("  - ProductVersion: Tool-specific version");
+        println!("\nFields that should match:");
+        println!("  - PackageProperties/Version (package format)");
+        println!("  - ContainsExportedData");
+        println!("  - StreamVersions");
+        println!("  - ProductSchema");
+    }
+
+    // Note: We don't assert here because ProductName and ProductVersion will always differ
+}
+
+/// Test parsing Origin.xml directly
+#[test]
+fn test_origin_xml_parsing() {
+    use crate::dacpac_compare::OriginXml;
+
+    // Test parsing typical DotNet output
+    let dotnet_xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<DacOrigin xmlns="http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02">
+  <PackageProperties>
+    <Version>3.1.0.0</Version>
+    <ContainsExportedData>false</ContainsExportedData>
+    <StreamVersions>
+      <Version StreamName="Data">2.0.0.0</Version>
+      <Version StreamName="DeploymentContributors">1.0.0.0</Version>
+    </StreamVersions>
+  </PackageProperties>
+  <Operation>
+    <Identity>abc123</Identity>
+    <Start>2024-01-01T00:00:00Z</Start>
+    <End>2024-01-01T00:00:01Z</End>
+    <ProductName>Microsoft.Data.Tools.Schema.Sql, Version=16.0</ProductName>
+    <ProductVersion>16.0</ProductVersion>
+    <ProductSchema>http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02</ProductSchema>
+  </Operation>
+  <Checksums>
+    <Checksum Uri="/model.xml">ABCDEF123456</Checksum>
+  </Checksums>
+</DacOrigin>"#;
+
+    let origin = OriginXml::from_xml(dotnet_xml).expect("Should parse Origin.xml");
+
+    assert_eq!(
+        origin.package_version,
+        Some("3.1.0.0".to_string()),
+        "Package version should be 3.1.0.0"
+    );
+    assert_eq!(
+        origin.contains_exported_data,
+        Some("false".to_string()),
+        "ContainsExportedData should be false"
+    );
+    assert_eq!(
+        origin.data_stream_version,
+        Some("2.0.0.0".to_string()),
+        "Data stream version should be 2.0.0.0"
+    );
+    assert_eq!(
+        origin.deployment_contributors_version,
+        Some("1.0.0.0".to_string()),
+        "DeploymentContributors version should be 1.0.0.0"
+    );
+    assert_eq!(
+        origin.product_name,
+        Some("Microsoft.Data.Tools.Schema.Sql, Version=16.0".to_string()),
+        "ProductName should match"
+    );
+    assert_eq!(
+        origin.product_version,
+        Some("16.0".to_string()),
+        "ProductVersion should be 16.0"
+    );
+    assert_eq!(
+        origin.product_schema,
+        Some("http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02".to_string()),
+        "ProductSchema should match namespace"
+    );
+}
+
+/// Test extracting Origin.xml from a Rust-generated dacpac
+#[test]
+fn test_extract_origin_xml_from_dacpac() {
+    use crate::dacpac_compare::{extract_origin_xml, OriginXml};
+
+    let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("simple_table")
+        .join("project.sqlproj");
+
+    if !project_path.exists() {
+        eprintln!("Skipping: simple_table fixture not found");
+        return;
+    }
+
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let rust_dacpac = temp_dir.path().join("rust.dacpac");
+
+    rust_sqlpackage::build_dacpac(rust_sqlpackage::BuildOptions {
+        project_path,
+        output_path: Some(rust_dacpac.clone()),
+        target_platform: "Sql150".to_string(),
+        verbose: false,
+    })
+    .expect("Rust build should succeed");
+
+    // Extract and parse Origin.xml
+    let xml = extract_origin_xml(&rust_dacpac).expect("Should extract Origin.xml");
+    let origin = OriginXml::from_xml(&xml).expect("Should parse Origin.xml");
+
+    println!("\n=== Rust Dacpac Origin.xml ===");
+    println!("Raw XML:\n{}", xml);
+    println!("\nParsed fields:");
+    println!("  PackageVersion: {:?}", origin.package_version);
+    println!(
+        "  ContainsExportedData: {:?}",
+        origin.contains_exported_data
+    );
+    println!("  DataStreamVersion: {:?}", origin.data_stream_version);
+    println!(
+        "  DeploymentContributorsVersion: {:?}",
+        origin.deployment_contributors_version
+    );
+    println!("  ProductName: {:?}", origin.product_name);
+    println!("  ProductVersion: {:?}", origin.product_version);
+    println!("  ProductSchema: {:?}", origin.product_schema);
+
+    // Verify expected values for rust-sqlpackage
+    assert_eq!(
+        origin.package_version,
+        Some("3.1.0.0".to_string()),
+        "Package version should be 3.1.0.0"
+    );
+    assert_eq!(
+        origin.contains_exported_data,
+        Some("false".to_string()),
+        "ContainsExportedData should be false"
+    );
+    assert_eq!(
+        origin.product_name,
+        Some("rust-sqlpackage".to_string()),
+        "ProductName should be rust-sqlpackage"
+    );
+    assert!(origin.product_schema.is_some(), "Should have ProductSchema");
 }

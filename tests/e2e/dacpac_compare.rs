@@ -210,6 +210,15 @@ pub enum MetadataFileError {
         /// Value in DotNet output
         dotnet_value: Option<String>,
     },
+    /// Origin.xml field value mismatch
+    OriginXmlMismatch {
+        /// Field name (e.g., "ProductName", "ProductVersion", "ProductSchema")
+        field_name: String,
+        /// Value in Rust output
+        rust_value: Option<String>,
+        /// Value in DotNet output
+        dotnet_value: Option<String>,
+    },
 }
 
 /// Parsed [Content_Types].xml structure
@@ -236,6 +245,36 @@ pub struct DacMetadataXml {
     pub version: Option<String>,
     /// Optional description (typically empty/omitted)
     pub description: Option<String>,
+}
+
+/// Parsed Origin.xml structure
+///
+/// Origin.xml contains build/package origin metadata:
+/// - PackageProperties: Version (package format), ContainsExportedData, StreamVersions
+/// - Operation: Identity, Start/End timestamps, ProductName, ProductVersion, ProductSchema
+/// - Checksums: SHA256 checksum of model.xml
+///
+/// For comparison purposes, we ignore timestamps (Start/End) as they differ between builds.
+/// We also ignore checksums since model.xml content may legitimately differ.
+/// We focus on ProductName, ProductVersion, ProductSchema for parity testing.
+///
+/// Root element is `DacOrigin` (per MS XSD schema).
+#[derive(Debug, Default)]
+pub struct OriginXml {
+    /// Package format version (e.g., "3.1.0.0")
+    pub package_version: Option<String>,
+    /// ContainsExportedData flag (typically "false")
+    pub contains_exported_data: Option<String>,
+    /// Data stream version (e.g., "2.0.0.0")
+    pub data_stream_version: Option<String>,
+    /// DeploymentContributors stream version (e.g., "1.0.0.0")
+    pub deployment_contributors_version: Option<String>,
+    /// Product name (e.g., "Microsoft.Data.Tools.Schema.Sql, Version=...")
+    pub product_name: Option<String>,
+    /// Product version (e.g., "17.0" or "0.1.0")
+    pub product_version: Option<String>,
+    /// Product schema URL
+    pub product_schema: Option<String>,
 }
 
 /// Options for controlling comparison behavior
@@ -1316,6 +1355,214 @@ pub fn compare_dac_metadata(rust_dacpac: &Path, dotnet_dacpac: &Path) -> Vec<Met
     errors
 }
 
+/// Extract Origin.xml from a dacpac file
+pub fn extract_origin_xml(dacpac_path: &Path) -> Result<String, String> {
+    let file = fs::File::open(dacpac_path).map_err(|e| format!("Failed to open dacpac: {}", e))?;
+
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read ZIP entry: {}", e))?;
+
+        if file.name() == "Origin.xml" {
+            let mut content = String::new();
+            file.read_to_string(&mut content)
+                .map_err(|e| format!("Failed to read Origin.xml: {}", e))?;
+            return Ok(content);
+        }
+    }
+
+    Err("Origin.xml not found in dacpac".to_string())
+}
+
+impl OriginXml {
+    /// Parse Origin.xml content using roxmltree
+    ///
+    /// Origin.xml has the following structure:
+    /// ```xml
+    /// <?xml version="1.0" encoding="utf-8"?>
+    /// <DacOrigin xmlns="http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02">
+    ///   <PackageProperties>
+    ///     <Version>3.1.0.0</Version>
+    ///     <ContainsExportedData>false</ContainsExportedData>
+    ///     <StreamVersions>
+    ///       <Version StreamName="Data">2.0.0.0</Version>
+    ///       <Version StreamName="DeploymentContributors">1.0.0.0</Version>
+    ///     </StreamVersions>
+    ///   </PackageProperties>
+    ///   <Operation>
+    ///     <Identity>...</Identity>
+    ///     <Start>...</Start>
+    ///     <End>...</End>
+    ///     <ProductName>...</ProductName>
+    ///     <ProductVersion>...</ProductVersion>
+    ///     <ProductSchema>...</ProductSchema>
+    ///   </Operation>
+    ///   <Checksums>
+    ///     <Checksum Uri="/model.xml">...</Checksum>
+    ///   </Checksums>
+    /// </DacOrigin>
+    /// ```
+    pub fn from_xml(xml: &str) -> Result<Self, String> {
+        let doc =
+            roxmltree::Document::parse(xml).map_err(|e| format!("Failed to parse XML: {}", e))?;
+
+        let mut origin = OriginXml::default();
+
+        // Find elements within the document
+        for node in doc.descendants() {
+            // PackageProperties fields
+            if node.has_tag_name("Version") {
+                // Check if this is the PackageProperties/Version (direct child of PackageProperties)
+                // or StreamVersions/Version (has StreamName attribute)
+                if let Some(stream_name) = node.attribute("StreamName") {
+                    match stream_name {
+                        "Data" => origin.data_stream_version = node.text().map(|s| s.to_string()),
+                        "DeploymentContributors" => {
+                            origin.deployment_contributors_version =
+                                node.text().map(|s| s.to_string())
+                        }
+                        _ => {}
+                    }
+                } else if node
+                    .parent()
+                    .map_or(false, |p| p.has_tag_name("PackageProperties"))
+                {
+                    origin.package_version = node.text().map(|s| s.to_string());
+                }
+            } else if node.has_tag_name("ContainsExportedData") {
+                origin.contains_exported_data = node.text().map(|s| s.to_string());
+            }
+            // Operation fields
+            else if node.has_tag_name("ProductName") {
+                origin.product_name = node.text().map(|s| s.to_string());
+            } else if node.has_tag_name("ProductVersion") {
+                origin.product_version = node.text().map(|s| s.to_string());
+            } else if node.has_tag_name("ProductSchema") {
+                origin.product_schema = node.text().map(|s| s.to_string());
+            }
+        }
+
+        Ok(origin)
+    }
+
+    /// Parse Origin.xml from a dacpac file
+    pub fn from_dacpac(dacpac_path: &Path) -> Result<Self, String> {
+        let xml = extract_origin_xml(dacpac_path)?;
+        Self::from_xml(&xml)
+    }
+}
+
+/// Compare Origin.xml between two dacpacs
+///
+/// Compares the following fields between Rust and DotNet output:
+/// - PackageProperties/Version: Package format version (e.g., "3.1.0.0")
+/// - PackageProperties/ContainsExportedData: Boolean flag
+/// - PackageProperties/StreamVersions/Version[@StreamName="Data"]
+/// - PackageProperties/StreamVersions/Version[@StreamName="DeploymentContributors"]
+/// - Operation/ProductName: Product identifier
+/// - Operation/ProductVersion: Product version
+/// - Operation/ProductSchema: Schema URL
+///
+/// Note: Timestamps (Start/End) and Checksums are intentionally ignored as they
+/// will always differ between builds. ProductName and ProductVersion are expected
+/// to differ between rust-sqlpackage and DotNet DacFx - these are informational.
+pub fn compare_origin_xml(rust_dacpac: &Path, dotnet_dacpac: &Path) -> Vec<MetadataFileError> {
+    let mut errors = Vec::new();
+
+    // Extract Origin.xml from both dacpacs
+    let rust_origin = match OriginXml::from_dacpac(rust_dacpac) {
+        Ok(origin) => origin,
+        Err(_) => {
+            errors.push(MetadataFileError::FileMissing {
+                file_name: "Origin.xml".to_string(),
+                missing_in_rust: true,
+            });
+            return errors;
+        }
+    };
+
+    let dotnet_origin = match OriginXml::from_dacpac(dotnet_dacpac) {
+        Ok(origin) => origin,
+        Err(_) => {
+            errors.push(MetadataFileError::FileMissing {
+                file_name: "Origin.xml".to_string(),
+                missing_in_rust: false,
+            });
+            return errors;
+        }
+    };
+
+    // Compare PackageProperties/Version
+    if rust_origin.package_version != dotnet_origin.package_version {
+        errors.push(MetadataFileError::OriginXmlMismatch {
+            field_name: "PackageProperties/Version".to_string(),
+            rust_value: rust_origin.package_version.clone(),
+            dotnet_value: dotnet_origin.package_version.clone(),
+        });
+    }
+
+    // Compare ContainsExportedData
+    if rust_origin.contains_exported_data != dotnet_origin.contains_exported_data {
+        errors.push(MetadataFileError::OriginXmlMismatch {
+            field_name: "PackageProperties/ContainsExportedData".to_string(),
+            rust_value: rust_origin.contains_exported_data.clone(),
+            dotnet_value: dotnet_origin.contains_exported_data.clone(),
+        });
+    }
+
+    // Compare Data stream version
+    if rust_origin.data_stream_version != dotnet_origin.data_stream_version {
+        errors.push(MetadataFileError::OriginXmlMismatch {
+            field_name: "StreamVersions/Data".to_string(),
+            rust_value: rust_origin.data_stream_version.clone(),
+            dotnet_value: dotnet_origin.data_stream_version.clone(),
+        });
+    }
+
+    // Compare DeploymentContributors stream version
+    if rust_origin.deployment_contributors_version != dotnet_origin.deployment_contributors_version
+    {
+        errors.push(MetadataFileError::OriginXmlMismatch {
+            field_name: "StreamVersions/DeploymentContributors".to_string(),
+            rust_value: rust_origin.deployment_contributors_version.clone(),
+            dotnet_value: dotnet_origin.deployment_contributors_version.clone(),
+        });
+    }
+
+    // Compare ProductName (informational - expected to differ)
+    if rust_origin.product_name != dotnet_origin.product_name {
+        errors.push(MetadataFileError::OriginXmlMismatch {
+            field_name: "Operation/ProductName".to_string(),
+            rust_value: rust_origin.product_name.clone(),
+            dotnet_value: dotnet_origin.product_name.clone(),
+        });
+    }
+
+    // Compare ProductVersion (informational - expected to differ)
+    if rust_origin.product_version != dotnet_origin.product_version {
+        errors.push(MetadataFileError::OriginXmlMismatch {
+            field_name: "Operation/ProductVersion".to_string(),
+            rust_value: rust_origin.product_version.clone(),
+            dotnet_value: dotnet_origin.product_version.clone(),
+        });
+    }
+
+    // Compare ProductSchema
+    if rust_origin.product_schema != dotnet_origin.product_schema {
+        errors.push(MetadataFileError::OriginXmlMismatch {
+            field_name: "Operation/ProductSchema".to_string(),
+            rust_value: rust_origin.product_schema.clone(),
+            dotnet_value: dotnet_origin.product_schema.clone(),
+        });
+    }
+
+    errors
+}
+
 // =============================================================================
 // Layer 3: SqlPackage DeployReport
 // =============================================================================
@@ -1465,6 +1712,7 @@ pub fn compare_dacpacs_with_options(
     let metadata_errors = if options.check_metadata_files {
         let mut errors = compare_content_types(rust_dacpac, dotnet_dacpac);
         errors.extend(compare_dac_metadata(rust_dacpac, dotnet_dacpac));
+        errors.extend(compare_origin_xml(rust_dacpac, dotnet_dacpac));
         errors
     } else {
         Vec::new()
@@ -1671,6 +1919,17 @@ impl fmt::Display for MetadataFileError {
                     field_name, rust_value, dotnet_value
                 )
             }
+            MetadataFileError::OriginXmlMismatch {
+                field_name,
+                rust_value,
+                dotnet_value,
+            } => {
+                write!(
+                    f,
+                    "ORIGIN.XML MISMATCH: {} (Rust: {:?}, DotNet: {:?})",
+                    field_name, rust_value, dotnet_value
+                )
+            }
         }
     }
 }
@@ -1739,7 +1998,7 @@ impl ComparisonResult {
 
         // Phase 5: Metadata Files Comparison
         if !self.metadata_errors.is_empty() {
-            println!("Phase 5: Metadata Files ([Content_Types].xml, DacMetadata.xml)");
+            println!("Phase 5: Metadata Files ([Content_Types].xml, DacMetadata.xml, Origin.xml)");
             println!("{}", "-".repeat(40));
             for err in &self.metadata_errors {
                 println!("  {}", err);
