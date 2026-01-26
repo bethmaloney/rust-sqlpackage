@@ -459,6 +459,7 @@ fn write_computed_column<W: Write>(
 }
 
 /// Write a table type column (uses SqlTableTypeSimpleColumn for user-defined table types)
+/// Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn, so we don't either
 fn write_table_type_column<W: Write>(
     writer: &mut Writer<W>,
     column: &TableTypeColumnElement,
@@ -473,12 +474,8 @@ fn write_table_type_column<W: Write>(
     elem.push_attribute(("Name", col_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    // Properties
-    write_property(
-        writer,
-        "IsNullable",
-        if column.is_nullable { "True" } else { "False" },
-    )?;
+    // Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn
+    // regardless of whether the column is nullable or not, so we omit it
 
     // Data type relationship
     write_type_specifier(
@@ -509,12 +506,15 @@ fn write_column_with_type<W: Write>(
     elem.push_attribute(("Name", col_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    // Properties
-    write_property(
-        writer,
-        "IsNullable",
-        if column.is_nullable { "True" } else { "False" },
-    )?;
+    // Properties - only emit IsNullable if explicitly specified in SQL
+    // DotNet omits IsNullable for implicitly nullable columns (the default)
+    if let Some(is_nullable) = column.nullability {
+        write_property(
+            writer,
+            "IsNullable",
+            if is_nullable { "True" } else { "False" },
+        )?;
+    }
 
     if column.is_identity {
         write_property(writer, "IsIdentity", "True")?;

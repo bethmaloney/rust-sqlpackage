@@ -63,8 +63,8 @@ pub struct ExtractedTableTypeColumn {
     pub name: String,
     /// Data type (e.g., "NVARCHAR(50)", "INT", "DECIMAL(18, 2)")
     pub data_type: String,
-    /// Whether the column is nullable
-    pub is_nullable: bool,
+    /// Column nullability: Some(true) = explicit NULL, Some(false) = explicit NOT NULL, None = implicit
+    pub nullability: Option<bool>,
     /// Default value expression (if any)
     pub default_value: Option<String>,
 }
@@ -108,8 +108,8 @@ pub struct ExtractedTableColumn {
     /// Data type (e.g., "NVARCHAR(50)", "INT", "DECIMAL(18, 2)")
     /// For computed columns, this will be empty
     pub data_type: String,
-    /// Whether the column is nullable
-    pub is_nullable: bool,
+    /// Column nullability: Some(true) = explicit NULL, Some(false) = explicit NOT NULL, None = implicit
+    pub nullability: Option<bool>,
     /// Whether the column has IDENTITY
     pub is_identity: bool,
     /// Whether the column has ROWGUIDCOL
@@ -1021,11 +1021,14 @@ fn extract_table_type_structure(
                     .map(|m| m.as_str().trim().to_uppercase())
                     .unwrap_or_default();
 
-                // Check nullability
-                let is_nullable = if upper.contains("NOT NULL") {
-                    false
+                // Check nullability - track explicit vs implicit
+                // Some(false) = explicit NOT NULL, Some(true) = explicit NULL, None = implicit
+                let nullability = if upper.contains("NOT NULL") {
+                    Some(false)
+                } else if upper.contains(" NULL") && !upper.contains("NOT NULL") {
+                    Some(true)
                 } else {
-                    true // Default to nullable if not specified
+                    None // Implicit (not specified)
                 };
 
                 // Extract DEFAULT value if present
@@ -1035,7 +1038,7 @@ fn extract_table_type_structure(
                     columns.push(ExtractedTableTypeColumn {
                         name,
                         data_type,
-                        is_nullable,
+                        nullability,
                         default_value,
                     });
                 }
@@ -1519,14 +1522,21 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
         // Check for PERSISTED keyword
         let is_persisted = col_def.to_uppercase().contains("PERSISTED");
 
-        // Check for NOT NULL (computed columns can specify nullability)
+        // Check for nullability - track explicit vs implicit
+        // Some(false) = explicit NOT NULL, Some(true) = explicit NULL, None = implicit
         let upper = col_def.to_uppercase();
-        let is_nullable = !upper.contains("NOT NULL");
+        let nullability = if upper.contains("NOT NULL") {
+            Some(false)
+        } else if upper.contains(" NULL") && !upper.contains("NOT NULL") {
+            Some(true)
+        } else {
+            None // Implicit (not specified)
+        };
 
         return Some(ExtractedTableColumn {
             name,
             data_type: String::new(), // Computed columns have no explicit data type
-            is_nullable,
+            nullability,
             is_identity: false,
             is_rowguidcol: false,
             is_sparse: false,
@@ -1560,13 +1570,15 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     // Check for FILESTREAM
     let is_filestream = col_def.to_uppercase().contains("FILESTREAM");
 
-    // Check for nullability - look for NOT NULL or NULL
-    // NOT NULL takes precedence, default is nullable
+    // Check for nullability - track explicit vs implicit
+    // Some(false) = explicit NOT NULL, Some(true) = explicit NULL, None = implicit
     let upper = col_def.to_uppercase();
-    let is_nullable = if upper.contains("NOT NULL") {
-        false
+    let nullability = if upper.contains("NOT NULL") {
+        Some(false)
+    } else if upper.contains(" NULL") && !upper.contains("NOT NULL") {
+        Some(true)
     } else {
-        true // Default to nullable
+        None // Implicit (not specified)
     };
 
     // Extract inline DEFAULT constraint
@@ -1654,7 +1666,7 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     Some(ExtractedTableColumn {
         name,
         data_type,
-        is_nullable,
+        nullability,
         is_identity,
         is_rowguidcol,
         is_sparse,

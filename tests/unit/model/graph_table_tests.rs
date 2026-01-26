@@ -64,9 +64,10 @@ CREATE TABLE [dbo].[Employee] (
     // Verify column details
     let emp_id_col = table.columns.iter().find(|c| c.name == "EmployeeId");
     assert!(emp_id_col.is_some(), "Should have EmployeeId column");
-    assert!(
-        !emp_id_col.unwrap().is_nullable,
-        "EmployeeId should be NOT NULL"
+    assert_eq!(
+        emp_id_col.unwrap().nullability,
+        Some(false),
+        "EmployeeId should be explicitly NOT NULL"
     );
 }
 
@@ -151,14 +152,19 @@ CREATE TABLE [dbo].[WorksFor] (
     // Check nullable properties
     let start_date = table.columns.iter().find(|c| c.name == "StartDate");
     assert!(start_date.is_some());
-    assert!(
-        !start_date.unwrap().is_nullable,
-        "StartDate should be NOT NULL"
+    assert_eq!(
+        start_date.unwrap().nullability,
+        Some(false),
+        "StartDate should be explicitly NOT NULL"
     );
 
     let end_date = table.columns.iter().find(|c| c.name == "EndDate");
     assert!(end_date.is_some());
-    assert!(end_date.unwrap().is_nullable, "EndDate should be NULL");
+    assert_eq!(
+        end_date.unwrap().nullability,
+        Some(true),
+        "EndDate should be explicitly NULL"
+    );
 }
 
 // ============================================================================

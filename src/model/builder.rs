@@ -633,7 +633,8 @@ fn extract_schema_and_name(name: &ObjectName, default_schema: &str) -> (String, 
 }
 
 fn column_from_def(col: &ColumnDef, schema: &str, table_name: &str) -> ColumnElement {
-    let mut is_nullable = true;
+    // Track explicit nullability: None = not specified, Some(true) = explicit NULL, Some(false) = explicit NOT NULL
+    let mut nullability: Option<bool> = None;
     let mut is_identity = false;
     let mut default_value = None;
     let mut has_inline_constraint = false;
@@ -642,8 +643,8 @@ fn column_from_def(col: &ColumnDef, schema: &str, table_name: &str) -> ColumnEle
 
     for option in &col.options {
         match &option.option {
-            ColumnOption::NotNull => is_nullable = false,
-            ColumnOption::Null => is_nullable = true,
+            ColumnOption::NotNull => nullability = Some(false),
+            ColumnOption::Null => nullability = Some(true),
             ColumnOption::Default(expr) => {
                 default_value = Some(expr.to_string());
                 has_inline_constraint = true;
@@ -707,7 +708,7 @@ fn column_from_def(col: &ColumnDef, schema: &str, table_name: &str) -> ColumnEle
     ColumnElement {
         name: col.name.value.clone(),
         data_type: col.data_type.to_string(),
-        is_nullable,
+        nullability,
         is_identity,
         is_rowguidcol,
         is_sparse,
@@ -729,7 +730,7 @@ fn table_type_column_from_extracted(col: &ExtractedTableTypeColumn) -> TableType
     TableTypeColumnElement {
         name: col.name.clone(),
         data_type: col.data_type.clone(),
-        is_nullable: col.is_nullable,
+        nullability: col.nullability,
         default_value: col.default_value.clone(),
         max_length,
         precision,
@@ -878,7 +879,7 @@ fn column_from_fallback_table(
     ColumnElement {
         name: col.name.clone(),
         data_type: col.data_type.clone(),
-        is_nullable: col.is_nullable,
+        nullability: col.nullability,
         is_identity: col.is_identity,
         is_rowguidcol: col.is_rowguidcol,
         is_sparse: col.is_sparse,

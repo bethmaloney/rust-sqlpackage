@@ -107,7 +107,8 @@ pub struct TableElement {
 pub struct ColumnElement {
     pub name: String,
     pub data_type: String,
-    pub is_nullable: bool,
+    /// Column nullability: Some(true) = explicit NULL, Some(false) = explicit NOT NULL, None = implicit (default nullable)
+    pub nullability: Option<bool>,
     pub is_identity: bool,
     pub is_rowguidcol: bool,
     pub is_sparse: bool,
@@ -306,7 +307,9 @@ pub struct UserDefinedTypeElement {
 pub struct TableTypeColumnElement {
     pub name: String,
     pub data_type: String,
-    pub is_nullable: bool,
+    /// Column nullability: Some(true) = explicit NULL, Some(false) = explicit NOT NULL, None = implicit
+    /// Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn regardless of this value
+    pub nullability: Option<bool>,
     pub default_value: Option<String>,
     pub max_length: Option<i32>,
     pub precision: Option<u8>,

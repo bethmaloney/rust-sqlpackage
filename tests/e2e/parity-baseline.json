@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-26T03:36:38.380257697+00:00",
-  "commit": "c43b5d9",
+  "updated": "2026-01-26T05:59:55.453538936+00:00",
+  "commit": "46417b2",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -32,7 +32,7 @@
       "layer1_pass": false,
       "layer2_pass": false,
       "relationship_pass": true,
-      "layer4_pass": false,
+      "layer4_pass": true,
       "metadata_pass": false
     },
     {
@@ -144,7 +144,7 @@
       "layer1_pass": false,
       "layer2_pass": false,
       "relationship_pass": false,
-      "layer4_pass": false,
+      "layer4_pass": true,
       "metadata_pass": false
     },
     {
@@ -208,7 +208,7 @@
       "layer1_pass": false,
       "layer2_pass": false,
       "relationship_pass": true,
-      "layer4_pass": false,
+      "layer4_pass": true,
       "metadata_pass": false
     },
     {
@@ -326,7 +326,7 @@
     {
       "name": "table_types",
       "layer1_pass": true,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
       "metadata_pass": false

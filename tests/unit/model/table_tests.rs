@@ -151,7 +151,12 @@ fn test_build_column_nullable() {
 
     assert!(table.is_some());
     let col = &table.unwrap().columns[0];
-    assert!(col.is_nullable, "Column should be nullable");
+    // Explicit NULL - nullability is Some(true)
+    assert_eq!(
+        col.nullability,
+        Some(true),
+        "Column should have explicit NULL"
+    );
 }
 
 #[test]
@@ -169,7 +174,12 @@ fn test_build_column_not_nullable() {
 
     assert!(table.is_some());
     let col = &table.unwrap().columns[0];
-    assert!(!col.is_nullable, "Column should not be nullable");
+    // Explicit NOT NULL - nullability is Some(false)
+    assert_eq!(
+        col.nullability,
+        Some(false),
+        "Column should be explicitly NOT NULL"
+    );
 }
 
 // ============================================================================
@@ -207,9 +217,10 @@ CREATE TABLE [dbo].[TableWithRowGuid] (
         rowguid_col.is_rowguidcol,
         "Column should be marked as ROWGUIDCOL"
     );
-    assert!(
-        !rowguid_col.is_nullable,
-        "ROWGUIDCOL column should be NOT NULL"
+    assert_eq!(
+        rowguid_col.nullability,
+        Some(false),
+        "ROWGUIDCOL column should be explicitly NOT NULL"
     );
 
     // Non-ROWGUIDCOL columns should not have the flag
@@ -316,7 +327,12 @@ CREATE TABLE [dbo].[TableWithSparse] (
     assert!(sparse_col.is_some(), "Should have OptionalData column");
     let sparse_col = sparse_col.unwrap();
     assert!(sparse_col.is_sparse, "Column should be marked as SPARSE");
-    assert!(sparse_col.is_nullable, "SPARSE column should be NULL");
+    // The SQL has implicit NULL (no explicit NULL keyword but SPARSE requires nullable)
+    // The parser doesn't see an explicit NULL keyword so nullability is None
+    assert!(
+        sparse_col.nullability.is_none() || sparse_col.nullability == Some(true),
+        "SPARSE column should be implicitly or explicitly NULL"
+    );
 
     // Non-SPARSE columns should not have the flag
     let id_col = table.columns.iter().find(|c| c.name == "Id");
@@ -364,13 +380,18 @@ CREATE TABLE [dbo].[WideTable] (
         "RequiredField should not be SPARSE"
     );
 
-    // Check sparse columns
+    // Check sparse columns - these have explicit NULL in the SQL
     for attr_name in &["Attribute1", "Attribute2", "Attribute3"] {
         let col = table.columns.iter().find(|c| &c.name == attr_name);
         assert!(col.is_some(), "Should have {} column", attr_name);
         let col = col.unwrap();
         assert!(col.is_sparse, "{} should be SPARSE", attr_name);
-        assert!(col.is_nullable, "{} should be NULL", attr_name);
+        assert_eq!(
+            col.nullability,
+            Some(true),
+            "{} should be explicitly NULL",
+            attr_name
+        );
     }
 }
 
@@ -482,9 +503,10 @@ CREATE TABLE [dbo].[Documents] (
         filestream_col.is_filestream,
         "Column should be marked as FILESTREAM"
     );
-    assert!(
-        filestream_col.is_nullable,
-        "FILESTREAM column should be NULL"
+    assert_eq!(
+        filestream_col.nullability,
+        Some(true),
+        "FILESTREAM column should be explicitly NULL"
     );
 
     // Non-FILESTREAM columns should not have the flag
@@ -525,9 +547,10 @@ CREATE TABLE [dbo].[RequiredFiles] (
         content_col.is_filestream,
         "Column should be marked as FILESTREAM"
     );
-    assert!(
-        !content_col.is_nullable,
-        "FILESTREAM column should be NOT NULL"
+    assert_eq!(
+        content_col.nullability,
+        Some(false),
+        "FILESTREAM column should be explicitly NOT NULL"
     );
 }
 

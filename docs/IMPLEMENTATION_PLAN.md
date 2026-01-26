@@ -28,8 +28,8 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | Layer | Passing | Rate |
 |-------|---------|------|
 | Layer 1 (Inventory) | 3/46 | 6.5% |
-| Layer 2 (Properties) | 15/46 | 32.6% |
-| Layer 3 (Relationships) | 27/46 | 58.7% |
+| Layer 2 (Properties) | 16/46 | 34.8% |
+| Layer 3 (Relationships) | 28/46 | 60.9% |
 | Layer 4 (Structure) | 6/46 | 13.0% |
 | Layer 5 (Metadata) | 1/46 | 2.2% |
 
@@ -56,6 +56,14 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 ### 9.2 Property Value Fixes
 
 **Goal:** Fix property mismatches that cause Layer 2 failures.
+
+- [x] **9.2.0 IsNullable property emission** ✓
+  - Files: `src/model/elements.rs`, `src/model/builder.rs`, `src/dacpac/model_xml.rs`, `src/parser/tsql_parser.rs`
+  - Changed `is_nullable: bool` to `nullability: Option<bool>` to track explicit vs implicit nullability
+  - DotNet only emits `IsNullable` for explicit NULL/NOT NULL, omits for implicit
+  - DotNet never emits `IsNullable` for `SqlTableTypeSimpleColumn`
+  - **Actual impact**: Layer 2: +1 (15→16), Relationships: +1 (27→28)
+  - Fixed fixtures: `table_types` now passes Layer 2
 
 - [ ] **9.2.1 Type specifier properties**
   - File: `src/dacpac/model_xml.rs`
@@ -145,12 +153,12 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | Section | Status | Completion |
 |---------|--------|------------|
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
-| 9.2 Property Value Fixes | PENDING | 0/4 |
+| 9.2 Property Value Fixes | IN PROGRESS | 1/5 |
 | 9.3 Relationship Completeness | PENDING | 0/3 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 2/16 tasks
+**Phase 9 Overall**: 3/17 tasks
 
 ### Expected Outcomes
 
@@ -179,6 +187,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 2/16 |
+| Phase 9 | **IN PROGRESS** 3/17 |
 
-**Total**: 41/55 tasks complete
+**Total**: 42/56 tasks complete
