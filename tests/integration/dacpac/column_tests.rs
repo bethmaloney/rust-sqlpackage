@@ -35,14 +35,13 @@ fn test_column_nullable_property() {
         "RequiredName should have IsNullable=False"
     );
 
-    // Check optional (NULL) column
+    // Check optional (NULL) column - DotNet omits IsNullable for nullable columns
     let optional_col =
         find_column_by_name(&doc, "OptionalName").expect("Should find OptionalName column");
     let optional_nullable = get_property_value(&optional_col, "IsNullable");
     assert_eq!(
-        optional_nullable,
-        Some("True".to_string()),
-        "OptionalName should have IsNullable=True"
+        optional_nullable, None,
+        "OptionalName should NOT have IsNullable property (DotNet omits for nullable columns)"
     );
 }
 

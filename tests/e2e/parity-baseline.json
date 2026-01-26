@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-26T06:19:23.990619280+00:00",
-  "commit": "5df6ca3",
+  "updated": "2026-01-26T07:03:24.643860277+00:00",
+  "commit": "bb62e45",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -30,7 +30,7 @@
     {
       "name": "collation",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": false
@@ -38,7 +38,7 @@
     {
       "name": "column_properties",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
@@ -46,7 +46,7 @@
     {
       "name": "composite_fk",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
       "metadata_pass": false
@@ -86,7 +86,7 @@
     {
       "name": "default_constraints_named",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
@@ -126,7 +126,7 @@
     {
       "name": "extended_properties",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
@@ -142,7 +142,7 @@
     {
       "name": "filtered_indexes",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": true,
       "metadata_pass": false
@@ -150,7 +150,7 @@
     {
       "name": "fk_actions",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
@@ -198,7 +198,7 @@
     {
       "name": "index_properties",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
@@ -206,7 +206,7 @@
     {
       "name": "indexes",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": false
@@ -214,7 +214,7 @@
     {
       "name": "inline_constraints",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
@@ -230,7 +230,7 @@
     {
       "name": "large_table",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
@@ -278,7 +278,7 @@
     {
       "name": "reserved_keywords",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
@@ -294,18 +294,18 @@
     {
       "name": "self_ref_fk",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
     },
     {
       "name": "simple_table",
-      "layer1_pass": true,
+      "layer1_pass": false,
       "layer2_pass": true,
       "relationship_pass": true,
-      "layer4_pass": true,
-      "metadata_pass": true
+      "layer4_pass": false,
+      "metadata_pass": false
     },
     {
       "name": "sqlcmd_includes",
@@ -318,7 +318,7 @@
     {
       "name": "sqlcmd_variables",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
@@ -334,7 +334,7 @@
     {
       "name": "unicode_identifiers",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false
@@ -350,7 +350,7 @@
     {
       "name": "varbinary_max",
       "layer1_pass": false,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": false

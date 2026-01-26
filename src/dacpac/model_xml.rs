@@ -506,14 +506,10 @@ fn write_column_with_type<W: Write>(
     elem.push_attribute(("Name", col_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    // Properties - only emit IsNullable if explicitly specified in SQL
-    // DotNet omits IsNullable for implicitly nullable columns (the default)
-    if let Some(is_nullable) = column.nullability {
-        write_property(
-            writer,
-            "IsNullable",
-            if is_nullable { "True" } else { "False" },
-        )?;
+    // Properties - only emit IsNullable="False" for NOT NULL columns
+    // DotNet never emits IsNullable="True" for nullable columns (explicit or implicit)
+    if matches!(column.nullability, Some(false)) {
+        write_property(writer, "IsNullable", "False")?;
     }
 
     if column.is_identity {
