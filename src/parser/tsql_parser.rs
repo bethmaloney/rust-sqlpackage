@@ -257,6 +257,23 @@ pub enum FallbackStatementType {
         schema: String,
         name: String,
     },
+    /// DML Trigger (CREATE TRIGGER ... ON table/view FOR/AFTER/INSTEAD OF INSERT/UPDATE/DELETE)
+    Trigger {
+        schema: String,
+        name: String,
+        /// Schema of the parent table/view
+        parent_schema: String,
+        /// Name of the parent table/view
+        parent_name: String,
+        /// True if trigger fires on INSERT
+        is_insert: bool,
+        /// True if trigger fires on UPDATE
+        is_update: bool,
+        /// True if trigger fires on DELETE
+        is_delete: bool,
+        /// Trigger type: 2 = AFTER/FOR, 3 = INSTEAD OF
+        trigger_type: u8,
+    },
     /// Extended property from sp_addextendedproperty
     ExtendedProperty {
         property: ExtractedExtendedProperty,
@@ -522,6 +539,13 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     if sql_upper.contains("SP_ADDEXTENDEDPROPERTY") {
         if let Some(property) = extract_extended_property_from_sql(sql) {
             return Some(FallbackStatementType::ExtendedProperty { property });
+        }
+    }
+
+    // Check for CREATE TRIGGER
+    if sql_upper.contains("CREATE TRIGGER") || sql_upper.contains("CREATE OR ALTER TRIGGER") {
+        if let Some(trigger) = extract_trigger_info(sql) {
+            return Some(trigger);
         }
     }
 
@@ -1065,6 +1089,85 @@ fn extract_table_type_column_default(col_def: &str) -> Option<String> {
                 val.to_string()
             }
         })
+}
+
+/// Extract trigger information from CREATE TRIGGER statement
+/// Parses trigger name, parent table/view, events (INSERT/UPDATE/DELETE), and type (AFTER/INSTEAD OF)
+fn extract_trigger_info(sql: &str) -> Option<FallbackStatementType> {
+    // Match patterns like:
+    // CREATE TRIGGER [dbo].[TriggerName] ON [dbo].[TableName] FOR INSERT, UPDATE
+    // CREATE TRIGGER [dbo].[TriggerName] ON [dbo].[ViewName] INSTEAD OF DELETE
+    // CREATE OR ALTER TRIGGER [dbo].[TriggerName] ON [dbo].[TableName] AFTER INSERT, UPDATE, DELETE
+
+    // First extract trigger name: CREATE [OR ALTER] TRIGGER [schema].[name]
+    let trigger_re = regex::Regex::new(
+        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?TRIGGER\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))"
+    ).ok()?;
+
+    let caps = trigger_re.captures(sql)?;
+    let schema = caps
+        .get(1)
+        .or_else(|| caps.get(2))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
+    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
+
+    // Extract parent table/view: ON [schema].[name]
+    // Must match ON followed by a schema-qualified identifier (possibly bracketed)
+    // The pattern is after the trigger name and before INSTEAD OF/AFTER/FOR
+    // Use a more specific pattern that requires brackets or a dot to avoid matching "on view" in comments
+    let parent_re = regex::Regex::new(
+        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?TRIGGER\s+(?:\[?[^\]]+\]?\.)?\[?[^\]]+\]?\s+ON\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))"
+    ).ok()?;
+
+    let parent_caps = parent_re.captures(sql)?;
+    let parent_schema = parent_caps
+        .get(1)
+        .or_else(|| parent_caps.get(2))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "dbo".to_string());
+    let parent_name = parent_caps
+        .get(3)
+        .or_else(|| parent_caps.get(4))?
+        .as_str()
+        .to_string();
+
+    // Determine trigger type and events
+    // Look for INSTEAD OF, AFTER, or FOR (FOR is equivalent to AFTER)
+    let sql_upper = sql.to_uppercase();
+
+    // Find the position after ON [table] to extract the trigger clause
+    // The pattern is: ... ON [table] (INSTEAD OF | AFTER | FOR) (INSERT|UPDATE|DELETE)[,...]
+    let trigger_type = if sql_upper.contains("INSTEAD OF") {
+        3u8 // INSTEAD OF
+    } else {
+        2u8 // AFTER or FOR (both are type 2)
+    };
+
+    // Extract events (INSERT, UPDATE, DELETE) from the trigger action clause
+    // Look for pattern after "INSTEAD OF" or "AFTER" or "FOR" and before "AS"
+    // The events are: INSERT, UPDATE, DELETE - separated by commas
+    let events_re = regex::Regex::new(
+        r"(?i)(?:INSTEAD\s+OF|AFTER|\bFOR\b)\s+((?:INSERT|UPDATE|DELETE)(?:\s*,\s*(?:INSERT|UPDATE|DELETE))*)"
+    ).ok()?;
+
+    let events_match = events_re.captures(sql)?;
+    let events_str = events_match.get(1)?.as_str().to_uppercase();
+
+    let is_insert = events_str.contains("INSERT");
+    let is_update = events_str.contains("UPDATE");
+    let is_delete = events_str.contains("DELETE");
+
+    Some(FallbackStatementType::Trigger {
+        schema,
+        name,
+        parent_schema,
+        parent_name,
+        is_insert,
+        is_update,
+        is_delete,
+        trigger_type,
+    })
 }
 
 /// Extract schema and name from CREATE PROCEDURE statement

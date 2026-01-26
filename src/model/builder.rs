@@ -18,7 +18,7 @@ use super::{
     ExtendedPropertyElement, FullTextCatalogElement, FullTextColumnElement, FullTextIndexElement,
     FunctionElement, FunctionType, IndexElement, ModelElement, ParameterElement, ProcedureElement,
     RawElement, SchemaElement, SequenceElement, TableElement, TableTypeColumnElement,
-    TableTypeConstraint, UserDefinedTypeElement, ViewElement,
+    TableTypeConstraint, TriggerElement, UserDefinedTypeElement, ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -236,9 +236,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     let sql_type = match object_type.to_uppercase().as_str() {
                         "TABLE" => Some("SqlTable"),
                         "VIEW" => Some("SqlView"),
-                        "TRIGGER" => Some("SqlDmlTrigger"),
                         // Skip other object types - they would cause deployment failures
                         // ALTER TABLE, INDEX, FULLTEXT INDEX, etc. are not supported as raw elements
+                        // Note: TRIGGER is now handled by FallbackStatementType::Trigger
                         _ => None,
                     };
                     if let Some(sql_type) = sql_type {
@@ -257,6 +257,29 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         let ext_prop = extended_property_from_extracted(property);
                         model.add_element(ModelElement::ExtendedProperty(ext_prop));
                     }
+                }
+                FallbackStatementType::Trigger {
+                    schema,
+                    name,
+                    parent_schema,
+                    parent_name,
+                    is_insert,
+                    is_update,
+                    is_delete,
+                    trigger_type,
+                } => {
+                    schemas.insert(schema.clone());
+                    model.add_element(ModelElement::Trigger(TriggerElement {
+                        schema: schema.clone(),
+                        name: name.clone(),
+                        definition: parsed.sql_text.clone(),
+                        parent_schema: parent_schema.clone(),
+                        parent_name: parent_name.clone(),
+                        is_insert_trigger: *is_insert,
+                        is_update_trigger: *is_update,
+                        is_delete_trigger: *is_delete,
+                        trigger_type: *trigger_type,
+                    }));
                 }
             }
             continue;
@@ -628,6 +651,7 @@ fn element_type_priority(element: &ModelElement) -> u32 {
         ModelElement::Sequence(_) => 14,
         ModelElement::UserDefinedType(_) => 15,
         ModelElement::ExtendedProperty(_) => 16,
+        ModelElement::Trigger(_) => 17,
         ModelElement::Raw(r) => match r.sql_type.as_str() {
             "SqlDmlTrigger" => 17,
             _ => 99, // Unknown raw types go last

@@ -15,6 +15,7 @@ pub enum ModelElement {
     Sequence(SequenceElement),
     UserDefinedType(UserDefinedTypeElement),
     ExtendedProperty(ExtendedPropertyElement),
+    Trigger(TriggerElement),
     /// Generic raw element for statements that couldn't be fully parsed
     Raw(RawElement),
 }
@@ -45,6 +46,7 @@ impl ModelElement {
             ModelElement::Sequence(_) => "SqlSequence",
             ModelElement::UserDefinedType(_) => "SqlTableType",
             ModelElement::ExtendedProperty(_) => "SqlExtendedProperty",
+            ModelElement::Trigger(_) => "SqlDmlTrigger",
             ModelElement::Raw(r) => match r.sql_type.as_str() {
                 "SqlTable" => "SqlTable",
                 "SqlView" => "SqlView",
@@ -80,6 +82,7 @@ impl ModelElement {
             ModelElement::Sequence(s) => format!("[{}].[{}]", s.schema, s.name),
             ModelElement::UserDefinedType(u) => format!("[{}].[{}]", u.schema, u.name),
             ModelElement::ExtendedProperty(e) => e.full_name(),
+            ModelElement::Trigger(t) => format!("[{}].[{}]", t.schema, t.name),
             ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),
         }
     }
@@ -355,6 +358,27 @@ pub enum TableTypeConstraint {
         is_unique: bool,
         is_clustered: bool,
     },
+}
+
+/// DML Trigger element
+#[derive(Debug, Clone)]
+pub struct TriggerElement {
+    pub schema: String,
+    pub name: String,
+    /// The raw SQL definition including CREATE TRIGGER
+    pub definition: String,
+    /// Schema of the parent table/view
+    pub parent_schema: String,
+    /// Name of the parent table/view
+    pub parent_name: String,
+    /// True if trigger fires on INSERT
+    pub is_insert_trigger: bool,
+    /// True if trigger fires on UPDATE
+    pub is_update_trigger: bool,
+    /// True if trigger fires on DELETE
+    pub is_delete_trigger: bool,
+    /// Trigger type: 2 = AFTER, 3 = INSTEAD OF
+    pub trigger_type: u8,
 }
 
 /// Generic raw element for statements that couldn't be fully parsed

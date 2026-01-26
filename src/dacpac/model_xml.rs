@@ -8,7 +8,7 @@ use crate::model::{
     ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
     ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement, FunctionElement,
     IndexElement, ModelElement, ProcedureElement, RawElement, SchemaElement, SequenceElement,
-    SortDirection, TableElement, TableTypeColumnElement, TableTypeConstraint,
+    SortDirection, TableElement, TableTypeColumnElement, TableTypeConstraint, TriggerElement,
     UserDefinedTypeElement, ViewElement,
 };
 use crate::project::SqlProject;
@@ -364,6 +364,7 @@ fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> an
         ModelElement::Sequence(s) => write_sequence(writer, s),
         ModelElement::UserDefinedType(u) => write_user_defined_type(writer, u),
         ModelElement::ExtendedProperty(e) => write_extended_property(writer, e),
+        ModelElement::Trigger(t) => write_trigger(writer, t),
         ModelElement::Raw(r) => write_raw(writer, r),
     }
 }
@@ -2872,6 +2873,103 @@ fn write_table_type_indexed_column_spec<W: Write>(
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     Ok(())
+}
+
+/// Write a DML trigger element to model.xml
+/// DotNet format:
+/// - Properties: IsInsertTrigger, IsUpdateTrigger, IsDeleteTrigger, SqlTriggerType, BodyScript, IsAnsiNullsOn
+/// - Relationships: Parent (the table/view), no Schema relationship
+fn write_trigger<W: Write>(writer: &mut Writer<W>, trigger: &TriggerElement) -> anyhow::Result<()> {
+    let full_name = format!("[{}].[{}]", trigger.schema, trigger.name);
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlDmlTrigger"));
+    elem.push_attribute(("Name", full_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Write properties in DotNet order:
+    // 1. IsInsertTrigger (only if true)
+    if trigger.is_insert_trigger {
+        write_property(writer, "IsInsertTrigger", "True")?;
+    }
+
+    // 2. IsUpdateTrigger (only if true)
+    if trigger.is_update_trigger {
+        write_property(writer, "IsUpdateTrigger", "True")?;
+    }
+
+    // 3. IsDeleteTrigger (only if true)
+    if trigger.is_delete_trigger {
+        write_property(writer, "IsDeleteTrigger", "True")?;
+    }
+
+    // 4. SqlTriggerType: 2 = AFTER/FOR, 3 = INSTEAD OF
+    write_property(writer, "SqlTriggerType", &trigger.trigger_type.to_string())?;
+
+    // 5. BodyScript - extract just the trigger body (after AS)
+    let body_script = extract_trigger_body(&trigger.definition);
+    write_script_property(writer, "BodyScript", &body_script)?;
+
+    // 6. IsAnsiNullsOn - always True for now (matches typical SQL Server defaults)
+    write_property(writer, "IsAnsiNullsOn", "True")?;
+
+    // Write Parent relationship (the table or view the trigger is on)
+    let parent_ref = format!("[{}].[{}]", trigger.parent_schema, trigger.parent_name);
+    write_relationship(writer, "Parent", &[&parent_ref])?;
+
+    // Note: DotNet does NOT emit a Schema relationship for triggers
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Extract the trigger body (everything after AS keyword) from the full trigger definition
+fn extract_trigger_body(definition: &str) -> String {
+    // Find the AS keyword that starts the trigger body
+    // The pattern is: CREATE TRIGGER ... ON ... (FOR|AFTER|INSTEAD OF) ... AS <body>
+    // We need to find AS that's after the trigger events (INSERT/UPDATE/DELETE)
+
+    let upper = definition.to_uppercase();
+
+    // Find position of trigger action keywords to ensure we find AS after them
+    let action_pos = upper
+        .find("INSTEAD OF")
+        .or_else(|| upper.find("AFTER"))
+        .or_else(|| upper.find(" FOR ")) // Use " FOR " to avoid matching substrings
+        .unwrap_or(0);
+
+    // Find AS after the trigger action
+    if let Some(as_pos) = upper[action_pos..].find("\nAS\n") {
+        let actual_pos = action_pos + as_pos + 4; // Skip past "\nAS\n"
+        return definition[actual_pos..].trim().to_string();
+    }
+
+    if let Some(as_pos) = upper[action_pos..].find("\nAS ") {
+        let actual_pos = action_pos + as_pos + 4; // Skip past "\nAS "
+        return definition[actual_pos..].trim().to_string();
+    }
+
+    if let Some(as_pos) = upper[action_pos..].find(" AS\n") {
+        let actual_pos = action_pos + as_pos + 4; // Skip past " AS\n"
+        return definition[actual_pos..].trim().to_string();
+    }
+
+    if let Some(as_pos) = upper[action_pos..].find("\rAS\r") {
+        let actual_pos = action_pos + as_pos + 4;
+        return definition[actual_pos..].trim().to_string();
+    }
+
+    // Try a more flexible pattern - AS followed by whitespace
+    let re = regex::Regex::new(r"(?i)\bAS\s+").ok();
+    if let Some(re) = re {
+        if let Some(m) = re.find(&definition[action_pos..]) {
+            let actual_pos = action_pos + m.end();
+            return definition[actual_pos..].trim().to_string();
+        }
+    }
+
+    // Fallback - return entire definition if we can't parse it
+    definition.to_string()
 }
 
 fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {

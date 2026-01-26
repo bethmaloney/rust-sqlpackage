@@ -192,9 +192,16 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - Tables with inline constraints emit their own annotation
   - **Actual impact**: Layer 1: +23 fixtures now passing (from 11/46 to 34/46, 23.9% → 73.9%), Layer 2: +2 (from 35/46 to 37/46, 76.1% → 80.4%)
 
-- [ ] **9.5.3 Trigger support verification**
-  - Verify SqlDmlTrigger properties match DotNet
-  - Expected impact: 1-2 fixtures
+- [x] **9.5.3 Trigger support verification** ✓
+  - Files modified: `src/model/elements.rs`, `src/model/builder.rs`, `src/parser/tsql_parser.rs`, `src/dacpac/model_xml.rs`
+  - Added TriggerElement struct with proper properties for trigger metadata (trigger type, events, parent table/view)
+  - Implemented dedicated trigger parsing in tsql_parser.rs with FallbackStatementType::Trigger variant
+  - Added write_trigger function that emits DotNet-compatible XML format:
+    - Properties: IsInsertTrigger, IsUpdateTrigger, IsDeleteTrigger, SqlTriggerType, BodyScript, IsAnsiNullsOn
+    - Parent relationship (table/view the trigger is on)
+    - No Schema relationship (DotNet doesn't emit this for triggers)
+  - **Actual impact**: Relationships layer improved from 30/46 (65.2%) to 31/46 (67.4%)
+  - **Note**: BodyDependencies relationship not implemented yet (requires complex body parsing)
 
 ---
 
@@ -206,9 +213,9 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | 9.2 Property Value Fixes | COMPLETE | 6/6 |
 | 9.3 Relationship Completeness | COMPLETE | 4/4 |
 | 9.4 Metadata File Alignment | COMPLETE | 4/4 |
-| 9.5 Edge Cases | IN PROGRESS | 2/3 |
+| 9.5 Edge Cases | COMPLETE | 3/3 |
 
-**Phase 9 Overall**: 18/19 tasks
+**Phase 9 Overall**: 19/19 tasks
 
 ### Expected Outcomes
 
@@ -237,6 +244,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 18/19 |
+| Phase 9 | **COMPLETE** ✓ 19/19 |
 
-**Total**: 57/58 tasks complete
+**Total**: 58/58 tasks complete
