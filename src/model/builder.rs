@@ -550,7 +550,73 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
         }
     }
 
+    // Sort elements by type (following DotNet order) then by name for deterministic output
+    sort_elements(&mut model.elements);
+
     Ok(model)
+}
+
+/// Get the sort priority for an element type (lower = earlier in output)
+/// This matches the DotNet DacFx element ordering:
+///   1. SqlSchema
+///   2. SqlTable
+///   3. SqlView
+///   4. SqlProcedure
+///   5. SqlScalarFunction / SqlInlineTableValuedFunction / SqlMultiStatementTableValuedFunction
+///   6. SqlIndex
+///   7. SqlFullTextIndex
+///   8. SqlFullTextCatalog
+///   9. SqlPrimaryKeyConstraint
+///   10. SqlForeignKeyConstraint
+///   11. SqlUniqueConstraint
+///   12. SqlCheckConstraint
+///   13. SqlDefaultConstraint
+///   14. SqlSequence
+///   15. SqlTableType
+///   16. SqlExtendedProperty
+///   17. SqlDmlTrigger (Raw elements)
+fn element_type_priority(element: &ModelElement) -> u32 {
+    match element {
+        ModelElement::Schema(_) => 1,
+        ModelElement::Table(_) => 2,
+        ModelElement::View(_) => 3,
+        ModelElement::Procedure(_) => 4,
+        ModelElement::Function(_) => 5,
+        ModelElement::Index(_) => 6,
+        ModelElement::FullTextIndex(_) => 7,
+        ModelElement::FullTextCatalog(_) => 8,
+        ModelElement::Constraint(c) => match c.constraint_type {
+            ConstraintType::PrimaryKey => 9,
+            ConstraintType::ForeignKey => 10,
+            ConstraintType::Unique => 11,
+            ConstraintType::Check => 12,
+            ConstraintType::Default => 13,
+        },
+        ModelElement::Sequence(_) => 14,
+        ModelElement::UserDefinedType(_) => 15,
+        ModelElement::ExtendedProperty(_) => 16,
+        ModelElement::Raw(r) => match r.sql_type.as_str() {
+            "SqlDmlTrigger" => 17,
+            _ => 99, // Unknown raw types go last
+        },
+    }
+}
+
+/// Sort elements by type priority then by name for deterministic output
+fn sort_elements(elements: &mut [ModelElement]) {
+    elements.sort_by(|a, b| {
+        let priority_a = element_type_priority(a);
+        let priority_b = element_type_priority(b);
+
+        // First compare by type priority
+        match priority_a.cmp(&priority_b) {
+            std::cmp::Ordering::Equal => {
+                // Same type, sort by full_name for deterministic ordering
+                a.full_name().cmp(&b.full_name())
+            }
+            other => other,
+        }
+    });
 }
 
 fn extract_schema_and_name(name: &ObjectName, default_schema: &str) -> (String, String) {

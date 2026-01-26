@@ -28,9 +28,9 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 | Layer | Passing | Rate |
 |-------|---------|------|
 | Layer 1 (Inventory) | 3/46 | 6.5% |
-| Layer 2 (Properties) | 14/46 | 30.4% |
+| Layer 2 (Properties) | 15/46 | 32.6% |
 | Layer 3 (Relationships) | 27/46 | 58.7% |
-| Layer 4 (Structure) | 3/46 | 6.5% |
+| Layer 4 (Structure) | 6/46 | 13.0% |
 | Layer 5 (Metadata) | 1/46 | 2.2% |
 
 ### 9.1 Deterministic Element Ordering
@@ -43,26 +43,15 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - Ensures consistent schema ordering across builds
   - Expected impact: 5-10 fixtures
 
-- [ ] **9.1.2 Sort elements by type then name**
-  - File: `src/model/builder.rs` (end of `build_model()`)
-  - Add sorting logic before returning model
-  - DotNet element type order:
-    1. SqlDatabaseOptions
-    2. SqlSchema
-    3. SqlTable (with nested columns)
-    4. SqlView
-    5. SqlProcedure
-    6. SqlScalarFunction / SqlTableValuedFunction
-    7. SqlIndex
-    8. SqlPrimaryKeyConstraint
-    9. SqlForeignKeyConstraint
-    10. SqlUniqueConstraint
-    11. SqlCheckConstraint
-    12. SqlDefaultConstraint
-    13. SqlSequence
-    14. SqlTableType
-    15. SqlExtendedProperty
-  - Expected impact: 15-20 fixtures across Layer 1 and Layer 4
+- [x] **9.1.2 Sort elements by type then name** ✓
+  - File: `src/model/builder.rs:553-620`
+  - Added `sort_elements()` and `element_type_priority()` functions
+  - Elements sorted by type priority, then alphabetically by full name
+  - **Actual impact**: Layer 2: +1 (14→15), Layer 4: +3 (3→6)
+  - **Finding**: DotNet ordering is more complex than expected:
+    - Named elements appear to be sorted alphabetically by full name
+    - Inline/unnamed constraints (no Name attribute) appear before named elements
+    - Further refinement may be needed in 9.5 for full match
 
 ### 9.2 Property Value Fixes
 
@@ -155,13 +144,13 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 
 | Section | Status | Completion |
 |---------|--------|------------|
-| 9.1 Deterministic Ordering | IN PROGRESS | 1/2 |
+| 9.1 Deterministic Ordering | COMPLETE | 2/2 |
 | 9.2 Property Value Fixes | PENDING | 0/4 |
 | 9.3 Relationship Completeness | PENDING | 0/3 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 1/16 tasks
+**Phase 9 Overall**: 2/16 tasks
 
 ### Expected Outcomes
 
@@ -190,6 +179,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 1/16 |
+| Phase 9 | **IN PROGRESS** 2/16 |
 
-**Total**: 40/55 tasks complete
+**Total**: 41/55 tasks complete
