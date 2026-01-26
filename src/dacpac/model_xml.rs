@@ -1256,6 +1256,50 @@ fn is_sql_keyword(word: &str) -> bool {
     )
 }
 
+/// Extract column references from a CHECK constraint expression.
+///
+/// CHECK expressions reference columns by their unqualified names (e.g., `[Price] >= 0`).
+/// This function extracts those column names and returns them as fully-qualified references
+/// in the format `[schema].[table].[column]`.
+///
+/// DotNet emits these as the `CheckExpressionDependencies` relationship.
+fn extract_check_expression_columns(
+    expression: &str,
+    table_schema: &str,
+    table_name: &str,
+) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut columns = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // Match bracketed identifiers: [ColumnName]
+    // These are column references in the CHECK expression
+    let column_regex = regex::Regex::new(r"\[([A-Za-z_][A-Za-z0-9_]*)\]").unwrap();
+
+    for cap in column_regex.captures_iter(expression) {
+        if let Some(col_match) = cap.get(1) {
+            let col_name = col_match.as_str();
+            let upper_name = col_name.to_uppercase();
+
+            // Skip SQL keywords
+            if is_sql_keyword(&upper_name) {
+                continue;
+            }
+
+            // Build fully-qualified column reference
+            let col_ref = format!("[{}].[{}].[{}]", table_schema, table_name, col_name);
+
+            // Only add each column once, but preserve order of first appearance
+            if !seen.contains(&col_ref) {
+                seen.insert(col_ref.clone());
+                columns.push(col_ref);
+            }
+        }
+    }
+
+    columns
+}
+
 /// Write BodyDependencies relationship for procedures and functions
 fn write_body_dependencies<W: Write>(
     writer: &mut Writer<W>,
@@ -1824,86 +1868,110 @@ fn write_constraint<W: Write>(
     // Reference to table
     let table_ref = format!("[{}].[{}]", constraint.table_schema, constraint.table_name);
 
-    // Write column relationships and DefiningTable based on constraint type
-    // DotNet ordering for foreign keys: Columns, DefiningTable, ForeignColumns, ForeignTable
-    // DotNet ordering for PK/Unique: DefiningTable, ColumnSpecifications
-    if !constraint.columns.is_empty() {
-        match constraint.constraint_type {
-            ConstraintType::PrimaryKey | ConstraintType::Unique => {
-                // PK/Unique: DefiningTable first, then ColumnSpecifications
-                write_relationship(writer, "DefiningTable", &[&table_ref])?;
-
-                // Primary keys and unique constraints use ColumnSpecifications with inline elements
-                let mut rel = BytesStart::new("Relationship");
-                rel.push_attribute(("Name", "ColumnSpecifications"));
-                writer.write_event(Event::Start(rel))?;
-
-                for col in &constraint.columns {
-                    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-                    let mut col_elem = BytesStart::new("Element");
-                    col_elem.push_attribute(("Type", "SqlIndexedColumnSpecification"));
-                    writer.write_event(Event::Start(col_elem))?;
-
-                    // Note: DacFx SqlIndexedColumnSpecification doesn't have a property for
-                    // descending sort order - columns default to ascending. The sort direction
-                    // is stored in the model for potential future use.
-
-                    // Reference to the actual column
-                    let col_ref = format!("{}.[{}]", table_ref, col.name);
-                    write_relationship(writer, "Column", &[&col_ref])?;
-
-                    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-                    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-                }
-
-                writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-            }
-            ConstraintType::ForeignKey => {
-                // Foreign keys: Columns, DefiningTable, ForeignColumns, ForeignTable (DotNet order)
-                let column_refs: Vec<String> = constraint
-                    .columns
-                    .iter()
-                    .map(|c| format!("{}.[{}]", table_ref, c.name))
-                    .collect();
-                let column_refs_str: Vec<&str> = column_refs.iter().map(|s| s.as_str()).collect();
-                write_relationship(writer, "Columns", &column_refs_str)?;
-
-                write_relationship(writer, "DefiningTable", &[&table_ref])?;
-
-                // Add ForeignColumns and ForeignTable relationships
-                if let Some(ref foreign_table) = constraint.referenced_table {
-                    // ForeignColumns comes before ForeignTable in DotNet
-                    if let Some(ref foreign_columns) = constraint.referenced_columns {
-                        if !foreign_columns.is_empty() {
-                            let foreign_col_refs: Vec<String> = foreign_columns
-                                .iter()
-                                .map(|c| format!("{}.[{}]", foreign_table, c))
-                                .collect();
-                            let foreign_col_refs_str: Vec<&str> =
-                                foreign_col_refs.iter().map(|s| s.as_str()).collect();
-                            write_relationship(writer, "ForeignColumns", &foreign_col_refs_str)?;
-                        }
-                    }
-                    write_relationship(writer, "ForeignTable", &[foreign_table])?;
-                }
-            }
-            _ => {
-                // Other constraint types: DefiningTable only
-                write_relationship(writer, "DefiningTable", &[&table_ref])?;
-            }
-        }
-    } else {
-        // No columns - still write DefiningTable for constraints that need it
-        write_relationship(writer, "DefiningTable", &[&table_ref])?;
-    }
-
-    // Check constraint expression - use CheckExpressionScript property with CDATA
+    // Handle CHECK constraints with special ordering:
+    // DotNet order for CHECK: CheckExpressionScript, CheckExpressionDependencies, DefiningTable
     if constraint.constraint_type == ConstraintType::Check {
+        // Write CheckExpressionScript property first
         if let Some(ref definition) = constraint.definition {
             write_script_property(writer, "CheckExpressionScript", definition)?;
+
+            // Extract and write CheckExpressionDependencies relationship
+            let col_refs = extract_check_expression_columns(
+                definition,
+                &constraint.table_schema,
+                &constraint.table_name,
+            );
+            if !col_refs.is_empty() {
+                let col_refs_str: Vec<&str> = col_refs.iter().map(|s| s.as_str()).collect();
+                write_relationship(writer, "CheckExpressionDependencies", &col_refs_str)?;
+            }
         }
-    } else if constraint.constraint_type == ConstraintType::Default {
+
+        // DefiningTable comes after CheckExpressionDependencies
+        write_relationship(writer, "DefiningTable", &[&table_ref])?;
+    } else {
+        // Write column relationships and DefiningTable based on constraint type
+        // DotNet ordering for foreign keys: Columns, DefiningTable, ForeignColumns, ForeignTable
+        // DotNet ordering for PK/Unique: DefiningTable, ColumnSpecifications
+        if !constraint.columns.is_empty() {
+            match constraint.constraint_type {
+                ConstraintType::PrimaryKey | ConstraintType::Unique => {
+                    // PK/Unique: DefiningTable first, then ColumnSpecifications
+                    write_relationship(writer, "DefiningTable", &[&table_ref])?;
+
+                    // Primary keys and unique constraints use ColumnSpecifications with inline elements
+                    let mut rel = BytesStart::new("Relationship");
+                    rel.push_attribute(("Name", "ColumnSpecifications"));
+                    writer.write_event(Event::Start(rel))?;
+
+                    for col in &constraint.columns {
+                        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+                        let mut col_elem = BytesStart::new("Element");
+                        col_elem.push_attribute(("Type", "SqlIndexedColumnSpecification"));
+                        writer.write_event(Event::Start(col_elem))?;
+
+                        // Note: DacFx SqlIndexedColumnSpecification doesn't have a property for
+                        // descending sort order - columns default to ascending. The sort direction
+                        // is stored in the model for potential future use.
+
+                        // Reference to the actual column
+                        let col_ref = format!("{}.[{}]", table_ref, col.name);
+                        write_relationship(writer, "Column", &[&col_ref])?;
+
+                        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+                        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+                    }
+
+                    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+                }
+                ConstraintType::ForeignKey => {
+                    // Foreign keys: Columns, DefiningTable, ForeignColumns, ForeignTable (DotNet order)
+                    let column_refs: Vec<String> = constraint
+                        .columns
+                        .iter()
+                        .map(|c| format!("{}.[{}]", table_ref, c.name))
+                        .collect();
+                    let column_refs_str: Vec<&str> =
+                        column_refs.iter().map(|s| s.as_str()).collect();
+                    write_relationship(writer, "Columns", &column_refs_str)?;
+
+                    write_relationship(writer, "DefiningTable", &[&table_ref])?;
+
+                    // Add ForeignColumns and ForeignTable relationships
+                    if let Some(ref foreign_table) = constraint.referenced_table {
+                        // ForeignColumns comes before ForeignTable in DotNet
+                        if let Some(ref foreign_columns) = constraint.referenced_columns {
+                            if !foreign_columns.is_empty() {
+                                let foreign_col_refs: Vec<String> = foreign_columns
+                                    .iter()
+                                    .map(|c| format!("{}.[{}]", foreign_table, c))
+                                    .collect();
+                                let foreign_col_refs_str: Vec<&str> =
+                                    foreign_col_refs.iter().map(|s| s.as_str()).collect();
+                                write_relationship(
+                                    writer,
+                                    "ForeignColumns",
+                                    &foreign_col_refs_str,
+                                )?;
+                            }
+                        }
+                        write_relationship(writer, "ForeignTable", &[foreign_table])?;
+                    }
+                }
+                _ => {
+                    // Other constraint types: DefiningTable only
+                    write_relationship(writer, "DefiningTable", &[&table_ref])?;
+                }
+            }
+        } else {
+            // No columns - still write DefiningTable for constraints that need it
+            write_relationship(writer, "DefiningTable", &[&table_ref])?;
+        }
+    }
+
+    // Default constraint expression - handled separately since it has different structure
+    if constraint.constraint_type == ConstraintType::Default {
         // Default constraint expression
         if let Some(ref definition) = constraint.definition {
             write_script_property(writer, "DefaultExpressionScript", definition)?;

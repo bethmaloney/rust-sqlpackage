@@ -29,7 +29,7 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 11/46 | 23.9% | |
 | Layer 2 (Properties) | 35/46 | 76.1% | |
-| Layer 3 (Relationships) | 28/46 | 60.9% | Improved from 26/46 due to FK ordering fix |
+| Layer 3 (Relationships) | 30/46 | 65.2% | Improved from 28/46 due to CheckExpressionDependencies |
 | Layer 4 (Structure) | 5/46 | 10.9% | |
 | Layer 5 (Metadata) | 0/46 | 0.0% | |
 
@@ -126,11 +126,13 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
   - Note: Different from documented expected order - DotNet actually outputs: Columns → DefiningTable → ForeignColumns → ForeignTable
   - **Actual impact**: Relationships layer improved from 26/46 (56.5%) to 28/46 (60.9%)
 
-- [ ] **9.3.4 CheckExpressionDependencies relationship**
+- [x] **9.3.4 CheckExpressionDependencies relationship** ✓
   - File: `src/dacpac/model_xml.rs`
-  - DotNet emits CheckExpressionDependencies relationship for CHECK constraints referencing the columns used in the expression
-  - This is now detected due to correct constraint naming in 9.2.4
-  - Expected impact: 2 fixtures (all_constraints, constraints)
+  - Added `extract_check_expression_columns()` function that extracts column references from CHECK constraint expressions
+  - Modified `write_constraint()` to emit CheckExpressionDependencies relationship with fully-qualified column references before DefiningTable
+  - Column references are formatted as `[schema].[table].[column]`
+  - Order matches DotNet: CheckExpressionScript property, CheckExpressionDependencies relationship, DefiningTable relationship
+  - **Actual impact**: Relationships layer improved from 28/46 (60.9%) to 30/46 (65.2%)
 
 ### 9.4 Metadata File Alignment
 
@@ -180,11 +182,11 @@ Fix the remaining parity issues to achieve near-100% pass rates across all compa
 |---------|--------|------------|
 | 9.1 Deterministic Ordering | COMPLETE | 2/2 |
 | 9.2 Property Value Fixes | COMPLETE | 6/6 |
-| 9.3 Relationship Completeness | IN PROGRESS | 3/4 |
+| 9.3 Relationship Completeness | COMPLETE | 4/4 |
 | 9.4 Metadata File Alignment | PENDING | 0/4 |
 | 9.5 Edge Cases | PENDING | 0/3 |
 
-**Phase 9 Overall**: 11/19 tasks
+**Phase 9 Overall**: 12/19 tasks
 
 ### Expected Outcomes
 
@@ -213,6 +215,6 @@ cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Che
 | Phase | Status |
 |-------|--------|
 | Phases 1-8 | **COMPLETE** ✓ 39/39 |
-| Phase 9 | **IN PROGRESS** 11/19 |
+| Phase 9 | **IN PROGRESS** 12/19 |
 
-**Total**: 50/58 tasks complete
+**Total**: 51/58 tasks complete

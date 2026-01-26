@@ -146,6 +146,16 @@ fn test_check_constraint_with_definition() {
         );
     }
 
+    // Verify check constraints have CheckExpressionDependencies relationship
+    // DotNet emits this relationship referencing the columns used in the CHECK expression
+    for ck in &ck_constraints {
+        assert!(
+            has_relationship(ck, "CheckExpressionDependencies"),
+            "SqlCheckConstraint '{}' should have CheckExpressionDependencies relationship",
+            ck.attribute("Name").unwrap_or("unnamed")
+        );
+    }
+
     // Verify named constraints exist
     let has_age_check = ck_constraints.iter().any(|ck| {
         ck.attribute("Name")
