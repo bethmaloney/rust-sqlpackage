@@ -39,10 +39,12 @@ pub fn compare_with_sqlpackage(source_dacpac: &Path, target_dacpac: &Path) -> La
     }
 
     // Generate deploy report: what changes would be needed to go from target to source?
+    // Note: /TargetDatabaseName is required for /Action:Script even when comparing dacpacs
     let output = Command::new("sqlpackage")
         .arg("/Action:Script")
         .arg(format!("/SourceFile:{}", source_dacpac.display()))
         .arg(format!("/TargetFile:{}", target_dacpac.display()))
+        .arg("/TargetDatabaseName:ParityTestDb")
         .arg("/OutputPath:/dev/stdout")
         .arg("/p:IncludeTransactionalScripts=false")
         .arg("/p:CommentOutSetVarDeclarations=true")

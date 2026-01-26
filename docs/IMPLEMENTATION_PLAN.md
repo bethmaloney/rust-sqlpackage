@@ -34,9 +34,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Phase 10: Fix Remaining Test Failures
 
-Two tests are currently failing:
-- `test_layered_dacpac_comparison` - Element inventory, property, and SqlPackage issues
-- `test_layer3_sqlpackage_comparison` - SqlPackage configuration issue
+Tests with remaining issues:
+- `test_layered_dacpac_comparison` - Element inventory issues (extended properties, function types, default constraints)
+- `test_layer3_sqlpackage_comparison` - ~~SqlPackage configuration issue~~ (FIXED: added /TargetDatabaseName parameter)
 
 ### 10.1 Extended Property Key Format
 
@@ -64,18 +64,11 @@ Two tests are currently failing:
   - Parse the function body to detect which pattern is used
   - Expected impact: Fix COUNT MISMATCH for SqlInlineTableValuedFunction/SqlMultiStatementTableValuedFunction
 
-### 10.3 View IsAnsiNullsOn Property
+### ~~10.3 View IsAnsiNullsOn Property~~ (INVALID - removed)
 
-**Goal:** Emit `IsAnsiNullsOn` property for views.
+**Status:** REMOVED - Original analysis was incorrect.
 
-**Issue:** Views are missing the `IsAnsiNullsOn` property (Rust: `None`, DotNet: `Some("True")`).
-
-- [ ] **10.3.1 Add IsAnsiNullsOn to all views**
-  - Files: `src/model/elements.rs`, `src/dacpac/model_xml.rs`
-  - Currently `IsAnsiNullsOn` is only emitted for views with options (schema-bound, etc.)
-  - DotNet emits `IsAnsiNullsOn="True"` for all views
-  - Change to always emit this property for views
-  - Expected impact: Fix 3 property mismatches in Layer 2
+**Finding:** The current implementation is correct. DotNet only emits `IsAnsiNullsOn` for views with options (SCHEMABINDING, CHECK OPTION, or VIEW_METADATA). Simple views without any options do NOT get this property. The `views` fixture confirmed this - DotNet's dacpac for `[dbo].[ActiveItems]` (a simple view) does not include `IsAnsiNullsOn`, while `view_options` fixture views with SCHEMABINDING do include it.
 
 ### 10.4 Extra Default Constraints
 
@@ -90,17 +83,16 @@ Two tests are currently failing:
   - Likely cause: Inline defaults without explicit constraint names may be handled differently
   - Expected impact: Fix 5 EXTRA items in Layer 1
 
-### 10.5 SqlPackage Test Configuration
+### 10.5 SqlPackage Test Configuration ✓
 
 **Goal:** Fix Layer 3 SqlPackage tests to provide required parameters.
 
 **Issue:** `test_layer3_sqlpackage_comparison` fails with "Operation Script requires a target database name".
 
-- [ ] **10.5.1 Add target database parameter to SqlPackage tests**
-  - File: `tests/e2e/dotnet_comparison_tests.rs` or `tests/e2e/parity/layer3_sqlpackage.rs`
-  - SqlPackage DeployReport action requires `/TargetDatabaseName:` parameter
-  - Add a dummy database name for comparison purposes
-  - Expected impact: Fix both failing tests' Layer 3 errors
+- [x] **10.5.1 Add target database parameter to SqlPackage tests**
+  - File: `tests/e2e/parity/layer3_sqlpackage.rs`
+  - Added `/TargetDatabaseName:ParityTestDb` to SqlPackage command
+  - Layer 3 now properly runs and reports schema differences (instead of configuration error)
 
 ---
 
@@ -110,11 +102,11 @@ Two tests are currently failing:
 |---------|--------|------------|
 | 10.1 Extended Property Key Format | PENDING | 0/1 |
 | 10.2 Function Type Classification | PENDING | 0/1 |
-| 10.3 View IsAnsiNullsOn Property | PENDING | 0/1 |
+| 10.3 View IsAnsiNullsOn Property | ~~REMOVED~~ | N/A |
 | 10.4 Extra Default Constraints | PENDING | 0/1 |
-| 10.5 SqlPackage Test Configuration | PENDING | 0/1 |
+| 10.5 SqlPackage Test Configuration | COMPLETE | 1/1 |
 
-**Phase 10 Overall**: 0/5 tasks
+**Phase 10 Overall**: 1/4 tasks (task 10.3 removed - was invalid)
 
 ---
 
@@ -135,9 +127,9 @@ cargo test --test e2e_tests test_layered_dacpac_comparison -- --nocapture  # Run
 | Phase | Status |
 |-------|--------|
 | Phases 1-9 | **COMPLETE** ✓ 58/58 |
-| Phase 10 | **IN PROGRESS** 0/5 |
+| Phase 10 | **IN PROGRESS** 1/4 |
 
-**Total**: 58/63 tasks complete
+**Total**: 59/62 tasks complete (task 10.3 removed - was invalid)
 
 ---
 

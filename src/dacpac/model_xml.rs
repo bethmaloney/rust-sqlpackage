@@ -668,6 +668,7 @@ fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::R
     }
 
     // 5. IsAnsiNullsOn - only emit for views with options (DotNet behavior)
+    // DotNet only emits this for views with SCHEMABINDING, CHECK OPTION, or VIEW_METADATA
     if view.is_schema_bound || view.is_with_check_option || view.is_metadata_reported {
         write_property(writer, "IsAnsiNullsOn", "True")?;
     }
@@ -3041,6 +3042,7 @@ fn write_raw_view<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow:
     }
 
     // 5. IsAnsiNullsOn - only emit for views with options (DotNet behavior)
+    // DotNet only emits this for views with SCHEMABINDING, CHECK OPTION, or VIEW_METADATA
     if is_schema_bound || is_with_check_option || is_metadata_reported {
         write_property(writer, "IsAnsiNullsOn", "True")?;
     }
