@@ -273,6 +273,84 @@ CREATE TABLE [dbo].[TableWithPersistedComputed] (
     }
 }
 
+#[test]
+fn test_debug_computed_columns_with_string_literal() {
+    use rust_sqlpackage::parser::FallbackStatementType;
+
+    // Use the exact same content as the fixture file
+    let sql = r#"-- Table with PERSISTED computed columns
+CREATE TABLE [dbo].[Employees] (
+    [Id] INT NOT NULL,
+    [FirstName] NVARCHAR(50) NOT NULL,
+    [LastName] NVARCHAR(50) NOT NULL,
+    [BirthDate] DATE NOT NULL,
+    [HireDate] DATE NOT NULL,
+    [Salary] DECIMAL(18,2) NOT NULL,
+    [BonusPercent] DECIMAL(5,2) NOT NULL DEFAULT 0,
+
+    -- Persisted computed columns (stored physically)
+    [FullName] AS ([FirstName] + N' ' + [LastName]) PERSISTED,
+    [YearsEmployed] AS (DATEDIFF(YEAR, [HireDate], GETDATE())) PERSISTED,
+    [TotalCompensation] AS ([Salary] * (1 + [BonusPercent] / 100)) PERSISTED,
+
+    CONSTRAINT [PK_Employees] PRIMARY KEY ([Id])
+);
+GO
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    match result {
+        Ok(statements) => {
+            println!("Parsed {} statements", statements.len());
+            for stmt in &statements {
+                println!(
+                    "Statement type: {:?}",
+                    stmt.statement.as_ref().map(std::mem::discriminant)
+                );
+                println!("Fallback type: {:?}", stmt.fallback_type);
+
+                // Check fallback table parsing
+                if let Some(FallbackStatementType::Table {
+                    schema,
+                    name,
+                    columns,
+                    constraints,
+                    is_node: _,
+                    is_edge: _,
+                }) = &stmt.fallback_type
+                {
+                    println!("Fallback Table: [{schema}].[{name}]");
+                    println!("Columns ({}):", columns.len());
+                    for col in columns {
+                        println!(
+                            "  - {} (type: {}, computed: {:?}, persisted: {})",
+                            col.name, col.data_type, col.computed_expression, col.is_persisted
+                        );
+                    }
+                    println!("Constraints: {}", constraints.len());
+
+                    // Verify FullName is present
+                    let fullname = columns.iter().find(|c| c.name == "FullName");
+                    assert!(fullname.is_some(), "FullName column should be parsed!");
+                    let fullname = fullname.unwrap();
+                    assert!(
+                        fullname.computed_expression.is_some(),
+                        "FullName should have computed expression"
+                    );
+                    assert!(fullname.is_persisted, "FullName should be persisted");
+                    println!("FullName expression: {:?}", fullname.computed_expression);
+                }
+            }
+            assert_eq!(statements.len(), 1);
+        }
+        Err(e) => {
+            println!("Parse error: {:?}", e);
+            panic!("Should parse successfully");
+        }
+    }
+}
+
 // ============================================================================
 // Temporal Table (System-Versioned) Tests
 // ============================================================================

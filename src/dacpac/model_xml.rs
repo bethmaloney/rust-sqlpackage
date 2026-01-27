@@ -492,19 +492,67 @@ fn write_computed_column<W: Write>(
     writer.write_event(Event::Start(elem))?;
 
     // SqlComputedColumn does NOT support IsNullable property (unlike SqlSimpleColumn)
-    // Only IsPersisted and ExpressionScript are valid properties
+    // DotNet property order: ExpressionScript, IsPersisted (if true)
+
+    // Write expression script first (DotNet order)
+    if let Some(ref expr) = column.computed_expression {
+        write_script_property(writer, "ExpressionScript", expr)?;
+    }
 
     if column.is_persisted {
         write_property(writer, "IsPersisted", "True")?;
     }
 
-    // Write expression script
+    // Write ExpressionDependencies relationship for column references in the expression
     if let Some(ref expr) = column.computed_expression {
-        write_script_property(writer, "ExpressionScript", expr)?;
+        // Parse schema and table name from qualified table_name like "[dbo].[Employees]"
+        if let Some((schema, tbl)) = parse_qualified_table_name(table_name) {
+            let deps = extract_computed_expression_columns(expr, &schema, &tbl);
+            if !deps.is_empty() {
+                write_expression_dependencies(writer, &deps)?;
+            }
+        }
     }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    Ok(())
+}
+
+/// Parse a qualified table name like "[dbo].[Employees]" into schema and table components.
+/// Returns (schema, table) without brackets.
+fn parse_qualified_table_name(qualified_name: &str) -> Option<(String, String)> {
+    // Match pattern: [schema].[table]
+    let re = regex::Regex::new(r"^\[([^\]]+)\]\.\[([^\]]+)\]$").ok()?;
+    let caps = re.captures(qualified_name)?;
+    Some((caps[1].to_string(), caps[2].to_string()))
+}
+
+/// Write ExpressionDependencies relationship for computed columns
+fn write_expression_dependencies<W: Write>(
+    writer: &mut Writer<W>,
+    dependencies: &[String],
+) -> anyhow::Result<()> {
+    if dependencies.is_empty() {
+        return Ok(());
+    }
+
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "ExpressionDependencies"));
+    writer.write_event(Event::Start(rel))?;
+
+    for dep in dependencies {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let mut refs = BytesStart::new("References");
+        refs.push_attribute(("Name", dep.as_str()));
+        writer.write_event(Event::Empty(refs))?;
+
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
     Ok(())
 }
 
@@ -1758,12 +1806,42 @@ fn extract_check_expression_columns(
     table_schema: &str,
     table_name: &str,
 ) -> Vec<String> {
+    extract_expression_column_references(expression, table_schema, table_name)
+}
+
+/// Extract column references from a computed column expression.
+///
+/// Computed column expressions reference columns by their unqualified names
+/// (e.g., `[Quantity] * [UnitPrice]`). This function extracts those column names
+/// and returns them as fully-qualified references in the format `[schema].[table].[column]`.
+///
+/// DotNet emits these as the `ExpressionDependencies` relationship.
+fn extract_computed_expression_columns(
+    expression: &str,
+    table_schema: &str,
+    table_name: &str,
+) -> Vec<String> {
+    extract_expression_column_references(expression, table_schema, table_name)
+}
+
+/// Extract column references from an expression.
+///
+/// Expressions reference columns by their unqualified names (e.g., `[ColumnName]`).
+/// This function extracts those column names and returns them as fully-qualified references
+/// in the format `[schema].[table].[column]`.
+///
+/// Used by both CHECK constraints and computed columns.
+fn extract_expression_column_references(
+    expression: &str,
+    table_schema: &str,
+    table_name: &str,
+) -> Vec<String> {
     use std::collections::HashSet;
     let mut columns = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
     // Match bracketed identifiers: [ColumnName]
-    // These are column references in the CHECK expression
+    // These are column references in the expression
     let column_regex = regex::Regex::new(r"\[([A-Za-z_][A-Za-z0-9_]*)\]").unwrap();
 
     for cap in column_regex.captures_iter(expression) {

@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-27T06:52:41.455802022+00:00",
-  "commit": "6921885",
+  "updated": "2026-01-27T07:22:58.622607280+00:00",
+  "commit": "f352951",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -47,7 +47,7 @@
       "name": "composite_fk",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": true
     },
@@ -55,7 +55,7 @@
       "name": "computed_columns",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": true
     },

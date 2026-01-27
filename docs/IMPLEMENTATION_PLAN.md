@@ -103,8 +103,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Issue:** `SqlComputedColumn` missing `ExpressionDependencies` relationship.
 - Example: `[dbo].[Employees].[YearsEmployed]`, `[dbo].[Employees].[TotalCompensation]`
 
-- [ ] **11.3.2.1** Parse computed column expressions to extract column references
-- [ ] **11.3.2.2** Emit `ExpressionDependencies` relationship with referenced columns
+- [x] **11.3.2.1** Parse computed column expressions to extract column references
+- [x] **11.3.2.2** Emit `ExpressionDependencies` relationship with referenced columns
+
+**Additional fixes included:**
+- Added `strip_leading_sql_comments()` function to remove SQL block and line comments from column definitions
+- This fix also resolved `composite_fk` fixture relationships that were failing due to comments in column definitions
 
 #### 11.3.3 Procedure/Function BodyDependencies Incomplete
 **Fixtures:** `procedure_options`, `element_types`, `e2e_comprehensive`, `e2e_simple`
@@ -224,12 +228,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |---------|-------------|-------|
 | 11.1 | Layer 1: Element Inventory | 8/8 |
 | 11.2 | Layer 2: Properties | 2/2 ✓ |
-| 11.3 | Relationships | 2/16 |
+| 11.3 | Relationships | 4/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 12/43 tasks
+**Phase 11 Total**: 14/43 tasks
 
 ---
 
@@ -253,9 +257,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 12/43 |
+| Phase 11 | **IN PROGRESS** 14/43 |
 
-**Total**: 75/106 tasks complete
+**Total**: 77/106 tasks complete
 
 ---
 

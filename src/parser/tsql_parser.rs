@@ -2003,6 +2003,25 @@ fn extract_table_structure(sql: &str) -> Option<FallbackStatementType> {
     })
 }
 
+/// Strip leading SQL comments from a string.
+/// Handles single-line comments (-- style) at the start of the string.
+fn strip_leading_sql_comments(s: &str) -> &str {
+    let mut result = s.trim_start();
+
+    // Keep stripping comments until we find actual content
+    while result.starts_with("--") {
+        // Find the end of the comment line
+        if let Some(newline_pos) = result.find('\n') {
+            result = result[newline_pos + 1..].trim_start();
+        } else {
+            // Comment goes to end of string, nothing left
+            return "";
+        }
+    }
+
+    result
+}
+
 /// Extract content between balanced parentheses (returns content without the outer parens)
 fn extract_balanced_parens(sql: &str) -> Option<String> {
     if !sql.starts_with('(') {
@@ -2109,6 +2128,14 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     // Column pattern: [Name] TYPE [IDENTITY] [CONSTRAINT name DEFAULT (value)] [NOT NULL|NULL]
     // OR computed column: [Name] AS (expression) [PERSISTED] [NOT NULL]
     // The order can vary, so we need to be flexible
+
+    // Strip leading SQL comments (-- style) before parsing
+    // This handles cases where comments appear between column definitions
+    let col_def = strip_leading_sql_comments(col_def);
+    let col_def = col_def.trim();
+    if col_def.is_empty() {
+        return None;
+    }
 
     // First check if this is a computed column: [Name] AS (expression)
     let computed_re = Regex::new(r"(?i)^\[?(\w+)\]?\s+AS\s+\(").ok()?;
