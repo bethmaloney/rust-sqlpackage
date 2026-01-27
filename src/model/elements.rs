@@ -92,6 +92,8 @@ impl ModelElement {
 #[derive(Debug, Clone)]
 pub struct SchemaElement {
     pub name: String,
+    /// The authorization owner (from AUTHORIZATION clause), if specified
+    pub authorization: Option<String>,
 }
 
 /// Table element

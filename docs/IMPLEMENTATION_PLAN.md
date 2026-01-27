@@ -17,12 +17,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 40/46 | 87.0% | 6 failing |
+| Layer 1 (Inventory) | 41/46 | 89.1% | 5 failing |
 | Layer 2 (Properties) | 39/46 | 84.8% | 7 failing |
 | Relationships | 31/46 | 67.4% | 15 failing |
 | Layer 4 (Ordering) | 7/46 | 15.2% | 39 failing |
 | Metadata | 44/46 | 95.7% | 2 ERROR fixtures |
-| **Full Parity** | **5/46** | **10.9%** | collation, empty_project, indexes, procedure_parameters, views |
+| **Full Parity** | **6/46** | **13.0%** | collation, empty_project, indexes, only_schemas, procedure_parameters, views |
 
 ---
 
@@ -63,8 +63,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Rust: `SqlSchema.[HR] AUTHORIZATION [dbo]`
 - DotNet: `SqlSchema.[HR]`
 
-- [ ] **11.1.4.1** Remove AUTHORIZATION clause from schema element names
-- [ ] **11.1.4.2** Emit Authorizer as a relationship instead (see 11.3.1)
+- [x] **11.1.4.1** Remove AUTHORIZATION clause from schema element names
+- [x] **11.1.4.2** Emit Authorizer as a relationship instead (see 11.3.1)
 
 ---
 
@@ -84,8 +84,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Fixtures:** `element_types` and others with custom schemas
 **Issue:** `SqlSchema.[Sales] - Authorizer` relationship not emitted.
 
-- [ ] **11.3.1.1** Parse schema authorization from `CREATE SCHEMA [name] AUTHORIZATION [owner]`
-- [ ] **11.3.1.2** Emit `Authorizer` relationship pointing to the owner
+- [x] **11.3.1.1** Parse schema authorization from `CREATE SCHEMA [name] AUTHORIZATION [owner]`
+- [x] **11.3.1.2** Emit `Authorizer` relationship pointing to the owner
 
 #### 11.3.2 Computed Column ExpressionDependencies
 **Fixtures:** `computed_columns`
@@ -211,14 +211,14 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Section | Description | Tasks |
 |---------|-------------|-------|
-| 11.1 | Layer 1: Element Inventory | 0/8 |
+| 11.1 | Layer 1: Element Inventory | 2/8 |
 | 11.2 | Layer 2: Properties | 0/2 |
-| 11.3 | Relationships | 0/16 |
+| 11.3 | Relationships | 2/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 0/43 tasks
+**Phase 11 Total**: 4/43 tasks
 
 ---
 
@@ -242,9 +242,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 0/43 |
+| Phase 11 | **IN PROGRESS** 4/43 |
 
-**Total**: 63/106 tasks complete
+**Total**: 67/106 tasks complete
 
 ---
 

@@ -3,7 +3,9 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
-use sqlparser::ast::{ColumnDef, ColumnOption, DataType, ObjectName, Statement, TableConstraint};
+use sqlparser::ast::{
+    ColumnDef, ColumnOption, DataType, ObjectName, SchemaName, Statement, TableConstraint,
+};
 
 use crate::parser::{
     ExtractedExtendedProperty, ExtractedFullTextColumn, ExtractedFunctionParameter,
@@ -544,14 +546,45 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
             }
 
             Statement::CreateSchema { schema_name, .. } => {
-                // Normalize schema name (remove brackets if present)
-                let name = schema_name.to_string();
-                let normalized = name
+                // Extract schema name and authorization from SchemaName enum
+                let (name_obj, authorization) = match schema_name {
+                    SchemaName::Simple(name) => (Some(name), None),
+                    SchemaName::UnnamedAuthorization(auth) => {
+                        // Schema created with just AUTHORIZATION, use auth as name
+                        (None, Some(auth.value.clone()))
+                    }
+                    SchemaName::NamedAuthorization(name, auth) => {
+                        (Some(name), Some(auth.value.clone()))
+                    }
+                };
+
+                // Get the schema name string (use first part if ObjectName)
+                let schema_name_str = match name_obj {
+                    Some(obj_name) => {
+                        // ObjectName is a Vec<Ident>, get the first element
+                        obj_name
+                            .0
+                            .first()
+                            .map(|ident| ident.value.clone())
+                            .unwrap_or_default()
+                    }
+                    None => {
+                        // If no name specified, use the authorization as the schema name
+                        authorization.clone().unwrap_or_default()
+                    }
+                };
+
+                // Normalize schema name (remove any remaining brackets)
+                let normalized = schema_name_str
                     .trim_start_matches('[')
                     .trim_end_matches(']')
                     .to_string();
+
                 schemas.insert(normalized.clone());
-                model.add_element(ModelElement::Schema(SchemaElement { name: normalized }));
+                model.add_element(ModelElement::Schema(SchemaElement {
+                    name: normalized,
+                    authorization,
+                }));
             }
 
             // Handle EXEC statements (for sp_addextendedproperty)
@@ -590,7 +623,10 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
             .iter()
             .any(|e| matches!(e, ModelElement::Schema(s) if s.name == schema))
         {
-            model.add_element(ModelElement::Schema(SchemaElement { name: schema }));
+            model.add_element(ModelElement::Schema(SchemaElement {
+                name: schema,
+                authorization: None,
+            }));
         }
     }
 

@@ -379,7 +379,46 @@ fn write_schema<W: Write>(writer: &mut Writer<W>, schema: &SchemaElement) -> any
     let mut elem = BytesStart::new("Element");
     elem.push_attribute(("Type", "SqlSchema"));
     elem.push_attribute(("Name", format!("[{}]", schema.name).as_str()));
-    writer.write_event(Event::Empty(elem))?;
+
+    // If no authorization, use empty element; otherwise write with relationship
+    if schema.authorization.is_none() {
+        writer.write_event(Event::Empty(elem))?;
+    } else {
+        writer.write_event(Event::Start(elem))?;
+
+        // Write Authorizer relationship
+        if let Some(ref auth) = schema.authorization {
+            write_authorizer_relationship(writer, auth)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    }
+    Ok(())
+}
+
+/// Write an Authorizer relationship for schema authorization
+fn write_authorizer_relationship<W: Write>(
+    writer: &mut Writer<W>,
+    owner: &str,
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "Authorizer"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let owner_ref = format!("[{}]", owner);
+    let mut refs = BytesStart::new("References");
+    // Built-in principals (like dbo) use ExternalSource="BuiltIns"
+    if is_builtin_schema(owner) {
+        refs.push_attribute(("ExternalSource", "BuiltIns"));
+    }
+    refs.push_attribute(("Name", owner_ref.as_str()));
+    writer.write_event(Event::Empty(refs))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }
 
