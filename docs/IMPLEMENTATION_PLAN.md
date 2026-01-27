@@ -220,21 +220,76 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ---
 
-### 11.6 Final Verification: 100% Parity
+### 11.6 Ignored Tests
 
-#### 11.6.1 Complete Verification Checklist
+#### 11.6.1 Layer 3 SqlPackage Comparison Tests
+**Tests:** `test_layered_dacpac_comparison`, `test_layer3_sqlpackage_comparison`
+**File:** `tests/e2e/dotnet_comparison_tests.rs`
+**Issue:** These tests use SqlPackage DeployReport to compare Rust and DotNet dacpacs, detecting schema differences. They fail because relationships and element ordering are not yet at full parity.
+
+- [ ] **11.6.1.1** Complete relationship parity (Section 11.3) - prerequisite
+- [ ] **11.6.1.2** Complete element ordering parity (Section 11.4) - prerequisite
+- [ ] **11.6.1.3** Remove `#[ignore]` from `test_layered_dacpac_comparison` and verify it passes
+- [ ] **11.6.1.4** Remove `#[ignore]` from `test_layer3_sqlpackage_comparison` and verify it passes
+
+#### 11.6.2 SQLCMD Include Tests
+**Test:** `test_build_with_sqlcmd_includes`
+**File:** `tests/integration/build_tests.rs`
+**Issue:** Predeploy script does not contain expected include markers after SQLCMD `:r` processing.
+
+- [ ] **11.6.2.1** Investigate SQLCMD include marker handling in predeploy scripts
+- [ ] **11.6.2.2** Fix include marker preservation or generation
+- [ ] **11.6.2.3** Remove `#[ignore]` from `test_build_with_sqlcmd_includes` and verify it passes
+
+#### 11.6.3 Default Constraint Tests
+**Tests:** `test_build_with_named_default_constraints`, `test_build_with_inline_constraints`
+**File:** `tests/integration/dacpac_compatibility_tests.rs`
+**Issue:** Named default constraints (e.g., `DF_Entity_Version`) and inline default constraints (e.g., Balance column) not emitted in model.
+
+- [ ] **11.6.3.1** Investigate named default constraint emission (fixture: `default_constraints_named`)
+- [ ] **11.6.3.2** Investigate inline default constraint emission (fixture: `inline_constraints`)
+- [ ] **11.6.3.3** Fix default constraint handling in model builder
+- [ ] **11.6.3.4** Remove `#[ignore]` from `test_build_with_named_default_constraints` and verify it passes
+- [ ] **11.6.3.5** Remove `#[ignore]` from `test_build_with_inline_constraints` and verify it passes
+
+#### 11.6.4 Inline Check Constraint Tests
+**Test:** `test_build_with_inline_check_constraints`
+**File:** `tests/integration/dacpac_compatibility_tests.rs`
+**Issue:** Inline check constraints not properly emitted in model.
+
+- [ ] **11.6.4.1** Investigate inline check constraint handling (fixture: `inline_constraints`)
+- [ ] **11.6.4.2** Fix inline check constraint emission
+- [ ] **11.6.4.3** Remove `#[ignore]` from `test_build_with_inline_check_constraints` and verify it passes
+
+#### 11.6.5 Table-Valued Function Classification Tests
+**Tests:** `test_parse_table_valued_function`, `test_parse_natively_compiled_inline_tvf`, `test_build_table_valued_function_element`, `test_build_tvf_with_execute_as`, `test_model_element_type_name_table_valued_function`
+**Files:** `tests/unit/parser/function_tests.rs`, `tests/unit/model/routine_tests.rs`, `tests/unit/model/execute_as_tests.rs`, `tests/unit/model/element_tests.rs`
+**Issue:** TVF type classification changed - tests expect `TableValued` but code returns `InlineTableValued`. The tests need to be updated to match the new correct classification behavior (inline TVFs with `RETURNS TABLE AS RETURN (...)` are `InlineTableValued`).
+
+- [ ] **11.6.5.1** Review TVF classification logic and confirm correct behavior
+- [ ] **11.6.5.2** Update `test_parse_table_valued_function` to expect correct type and remove ignore
+- [ ] **11.6.5.3** Update `test_parse_natively_compiled_inline_tvf` to expect correct type and remove ignore
+- [ ] **11.6.5.4** Update `test_build_table_valued_function_element` to expect correct type and remove ignore
+- [ ] **11.6.5.5** Update `test_build_tvf_with_execute_as` to expect correct type and remove ignore
+- [ ] **11.6.5.6** Update `test_model_element_type_name_table_valued_function` to expect correct type and remove ignore
+
+---
+
+### 11.7 Final Verification: 100% Parity
+
+#### 11.7.1 Complete Verification Checklist
 **Goal:** Verify all tests pass, no clippy warnings, and full parity achieved.
 
-- [ ] **11.6.1.1** Run `just test` - all unit and integration tests pass
-- [ ] **11.6.1.2** Run `cargo clippy` - no warnings
-- [ ] **11.6.1.3** Run parity regression check - all 46 fixtures at full parity
-- [ ] **11.6.1.4** Verify Layer 1 (inventory) at 100%
-- [ ] **11.6.1.5** Verify Layer 2 (properties) at 100%
-- [ ] **11.6.1.6** Verify Relationships at 100%
-- [ ] **11.6.1.7** Verify Layer 4 (ordering) at 100%
-- [ ] **11.6.1.8** Verify Metadata at 100%
-- [ ] **11.6.1.9** Document any intentional deviations from DotNet behavior
-- [ ] **11.6.1.10** Update baseline and confirm no regressions
+- [ ] **11.7.1.1** Run `just test` - all unit and integration tests pass
+- [ ] **11.7.1.2** Run `cargo clippy` - no warnings
+- [ ] **11.7.1.3** Run parity regression check - all 46 fixtures at full parity
+- [ ] **11.7.1.4** Verify Layer 1 (inventory) at 100%
+- [ ] **11.7.1.5** Verify Layer 2 (properties) at 100%
+- [ ] **11.7.1.6** Verify Relationships at 100%
+- [ ] **11.7.1.7** Verify Layer 4 (ordering) at 100%
+- [ ] **11.7.1.8** Verify Metadata at 100%
+- [ ] **11.7.1.9** Document any intentional deviations from DotNet behavior
+- [ ] **11.7.1.10** Update baseline and confirm no regressions
 
 ---
 
@@ -247,9 +302,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | 11.3 | Relationships | 9/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
-| 11.6 | Final Verification | 0/10 |
+| 11.6 | Ignored Tests | 0/21 |
+| 11.7 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 19/43 tasks
+**Phase 11 Total**: 19/64 tasks
 
 ---
 
@@ -273,9 +329,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 19/43 |
+| Phase 11 | **IN PROGRESS** 19/64 |
 
-**Total**: 82/106 tasks complete
+**Total**: 82/127 tasks complete
 
 ---
 
