@@ -17,12 +17,14 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 43/46 | 93.5% | 3 failing |
+| Layer 1 (Inventory) | 44/46 | 95.7% | 2 failing |
 | Layer 2 (Properties) | 39/46 | 84.8% | 7 failing |
-| Relationships | 31/46 | 67.4% | 15 failing |
+| Relationships | 32/46 | 69.6% | 14 failing |
 | Layer 4 (Ordering) | 7/46 | 15.2% | 39 failing |
 | Metadata | 44/46 | 95.7% | 2 ERROR fixtures |
 | **Full Parity** | **6/46** | **13.0%** | collation, empty_project, indexes, only_schemas, procedure_parameters, views |
+
+**Note:** `fulltext_index` now passes Layer 1, Layer 2, Relationships, and Metadata.
 
 ---
 
@@ -54,8 +56,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Rust: `SqlFullTextIndex.[dbo].[Documents].[FullTextIndex]`
 - DotNet: `SqlFullTextIndex.[dbo].[Documents]`
 
-- [ ] **11.1.3.1** Fix fulltext index element naming to use table name only
-- [ ] **11.1.3.2** Ensure PK constraint `[dbo].[PK_Documents]` is emitted
+- [x] **11.1.3.1** Fix fulltext index element naming to use table name only
+- [x] **11.1.3.2** Ensure PK constraint `[dbo].[PK_Documents]` is emitted
+
+**Additional fixes included:**
+- Fixed FullTextCatalog Authorizer relationship (now emits relationship to `[dbo]`)
+- Fixed column-level PK/UNIQUE constraints with explicit CONSTRAINT name (they were incorrectly treated as anonymous inline constraints)
 
 #### 11.1.4 Schema Authorization in Element Name
 **Fixtures:** `only_schemas`
@@ -211,14 +217,14 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Section | Description | Tasks |
 |---------|-------------|-------|
-| 11.1 | Layer 1: Element Inventory | 6/8 |
+| 11.1 | Layer 1: Element Inventory | 8/8 |
 | 11.2 | Layer 2: Properties | 0/2 |
 | 11.3 | Relationships | 2/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 8/43 tasks
+**Phase 11 Total**: 10/43 tasks
 
 ---
 
@@ -242,9 +248,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 8/43 |
+| Phase 11 | **IN PROGRESS** 10/43 |
 
-**Total**: 71/106 tasks complete
+**Total**: 73/106 tasks complete
 
 ---
 

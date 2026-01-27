@@ -72,8 +72,8 @@ impl ModelElement {
                 format!("[{}].[{}].[{}]", i.table_schema, i.table_name, i.name)
             }
             ModelElement::FullTextIndex(f) => {
-                // Full-text index name format: [schema].[table].[FullTextIndex]
-                format!("[{}].[{}].[FullTextIndex]", f.table_schema, f.table_name)
+                // Full-text index name format: [schema].[table] (same as table name)
+                format!("[{}].[{}]", f.table_schema, f.table_name)
             }
             ModelElement::FullTextCatalog(c) => {
                 format!("[{}]", c.name)
@@ -232,6 +232,8 @@ pub struct FullTextIndexElement {
     pub catalog: Option<String>,
     /// Change tracking mode (AUTO, MANUAL, OFF)
     pub change_tracking: Option<String>,
+    /// Disambiguator for elements sharing the same name (e.g., table)
+    pub disambiguator: Option<u32>,
 }
 
 /// Full-text catalog element

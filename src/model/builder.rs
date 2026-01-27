@@ -108,6 +108,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         key_index: key_index.clone(),
                         catalog: catalog.clone(),
                         change_tracking: change_tracking.clone(),
+                        disambiguator: None, // Set during post-processing
                     }));
                 }
                 FallbackStatementType::FullTextCatalog { name, is_default } => {
@@ -360,15 +361,23 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }
 
                 // Extract inline column constraints (PRIMARY KEY, UNIQUE on columns)
-                // These are always inline (no CONSTRAINT keyword) since they're defined on the column
+                // These can be truly inline (anonymous) or named with CONSTRAINT keyword
                 for col in &create_table.columns {
                     for option in &col.options {
                         if let ColumnOption::Unique { is_primary, .. } = &option.option {
-                            let constraint_name = if *is_primary {
-                                format!("PK_{}", name)
-                            } else {
-                                format!("UQ_{}_{}", name, col.name.value)
-                            };
+                            // Check if constraint has an explicit name via CONSTRAINT keyword
+                            let has_explicit_name = option.name.is_some();
+                            let constraint_name = option
+                                .name
+                                .as_ref()
+                                .map(|n| n.value.clone())
+                                .unwrap_or_else(|| {
+                                    if *is_primary {
+                                        format!("PK_{}", name)
+                                    } else {
+                                        format!("UQ_{}_{}", name, col.name.value)
+                                    }
+                                });
 
                             let constraint_type = if *is_primary {
                                 ConstraintType::PrimaryKey
@@ -386,7 +395,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline: true, // Inline since defined on column without CONSTRAINT keyword
+                                is_inline: !has_explicit_name, // Only inline if no CONSTRAINT keyword
                                 inline_constraint_disambiguator: None,
                             }));
                         }
@@ -835,6 +844,16 @@ fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
                     column.attached_annotations = annotations.clone();
                 }
             }
+        }
+    }
+
+    // Fifth pass: Assign disambiguators to fulltext indexes
+    // Fulltext indexes share the same name as their table, so they need disambiguators
+    for element in elements.iter_mut() {
+        if let ModelElement::FullTextIndex(fulltext) = element {
+            let disambiguator = next_disambiguator;
+            next_disambiguator += 1;
+            fulltext.disambiguator = Some(disambiguator);
         }
     }
 }

@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-27T02:43:54.757894905+00:00",
-  "commit": "470c27b",
+  "updated": "2026-01-27T03:14:42.160353477+00:00",
+  "commit": "6c9853e",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -157,9 +157,9 @@
     },
     {
       "name": "fulltext_index",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": true
     },

@@ -2218,39 +2218,37 @@ fn write_fulltext_index<W: Write>(
     writer: &mut Writer<W>,
     fulltext: &FullTextIndexElement,
 ) -> anyhow::Result<()> {
-    // Full-text index name format: [schema].[table].[FullTextIndex]
-    let full_name = format!(
-        "[{}].[{}].[FullTextIndex]",
-        fulltext.table_schema, fulltext.table_name
-    );
+    // Full-text index name format: [schema].[table] (same as table name)
+    let full_name = format!("[{}].[{}]", fulltext.table_schema, fulltext.table_name);
 
     let mut elem = BytesStart::new("Element");
     elem.push_attribute(("Type", "SqlFullTextIndex"));
     elem.push_attribute(("Name", full_name.as_str()));
+    // Disambiguator needed since fulltext index shares name with table
+    if let Some(disambiguator) = fulltext.disambiguator {
+        elem.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
+    }
     writer.write_event(Event::Start(elem))?;
-
-    // Reference to table (IndexedObject)
-    let table_ref = format!("[{}].[{}]", fulltext.table_schema, fulltext.table_name);
-    write_relationship(writer, "IndexedObject", &[&table_ref])?;
-
-    // Reference to the unique key index (UniqueIndex)
-    // The key index is typically on the same table
-    let key_index_ref = format!(
-        "[{}].[{}].[{}]",
-        fulltext.table_schema, fulltext.table_name, fulltext.key_index
-    );
-    write_relationship(writer, "UniqueIndex", &[&key_index_ref])?;
 
     // Reference to full-text catalog if specified
     if let Some(catalog) = &fulltext.catalog {
         let catalog_ref = format!("[{}]", catalog);
-        write_relationship(writer, "FullTextCatalog", &[&catalog_ref])?;
+        write_relationship(writer, "Catalog", &[&catalog_ref])?;
     }
 
-    // Write ColumnSpecifications for full-text columns
+    // Write Columns for full-text columns
+    let table_ref = format!("[{}].[{}]", fulltext.table_schema, fulltext.table_name);
     if !fulltext.columns.is_empty() {
         write_fulltext_column_specifications(writer, fulltext, &table_ref)?;
     }
+
+    // Reference to table (IndexedObject)
+    write_relationship(writer, "IndexedObject", &[&table_ref])?;
+
+    // Reference to the unique key index (KeyName)
+    // Key reference format: [schema].[constraint_name]
+    let key_index_ref = format!("[{}].[{}]", fulltext.table_schema, fulltext.key_index);
+    write_relationship(writer, "KeyName", &[&key_index_ref])?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -2262,20 +2260,15 @@ fn write_fulltext_column_specifications<W: Write>(
     table_ref: &str,
 ) -> anyhow::Result<()> {
     let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "ColumnSpecifications"));
+    rel.push_attribute(("Name", "Columns"));
     writer.write_event(Event::Start(rel))?;
 
-    for (i, col) in fulltext.columns.iter().enumerate() {
+    for col in fulltext.columns.iter() {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-        let spec_name = format!(
-            "[{}].[{}].[FullTextIndex].[{}]",
-            fulltext.table_schema, fulltext.table_name, i
-        );
-
+        // DotNet uses anonymous elements (no Name attribute) for column specifiers
         let mut elem = BytesStart::new("Element");
         elem.push_attribute(("Type", "SqlFullTextIndexColumnSpecifier"));
-        elem.push_attribute(("Name", spec_name.as_str()));
         writer.write_event(Event::Start(elem))?;
 
         // Add LanguageId property if specified
@@ -2310,6 +2303,9 @@ fn write_fulltext_catalog<W: Write>(
     if catalog.is_default {
         write_property(writer, "IsDefault", "True")?;
     }
+
+    // Fulltext catalogs have an Authorizer relationship (defaults to dbo)
+    write_authorizer_relationship(writer, "dbo")?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
