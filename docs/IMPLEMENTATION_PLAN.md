@@ -18,11 +18,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/46 | 95.7% | 2 failing |
-| Layer 2 (Properties) | 39/46 | 84.8% | 7 failing |
+| Layer 2 (Properties) | 44/46 | 95.7% | ✓ Fixed with FillFactor support |
 | Relationships | 32/46 | 69.6% | 14 failing |
-| Layer 4 (Ordering) | 7/46 | 15.2% | 39 failing |
+| Layer 4 (Ordering) | 8/46 | 17.4% | 38 failing |
 | Metadata | 44/46 | 95.7% | 2 ERROR fixtures |
-| **Full Parity** | **6/46** | **13.0%** | collation, empty_project, indexes, only_schemas, procedure_parameters, views |
+| **Full Parity** | **7/46** | **15.2%** | collation, empty_project, indexes, only_schemas, procedure_parameters, scalar_types, views |
 
 **Note:** `fulltext_index` now passes Layer 1, Layer 2, Relationships, and Metadata.
 
@@ -76,11 +76,16 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ### 11.2 Layer 2: Property Failures
 
-#### 11.2.1 Property Mismatches in Comprehensive Fixtures
-**Fixtures:** `e2e_comprehensive` (3), `e2e_simple` (1), `element_types` (4), `index_options` (3), `scalar_types` (3)
+#### 11.2.1 Property Mismatches - RESOLVED ✓
+**Fixtures:** `e2e_comprehensive`, `e2e_simple`, `element_types`, `index_options`
+**Status:** All now passing after implementing `FillFactor` property for indexes.
 
-- [ ] **11.2.1.1** Run detailed property comparison to identify specific mismatches
-- [ ] **11.2.1.2** Fix identified property emission issues
+- [x] **11.2.1.1** Run detailed property comparison to identify specific mismatches
+  - Found: `index_options` fixture had 3 `FillFactor` property mismatches for SqlIndex elements
+- [x] **11.2.1.2** Fix identified property emission issues
+  - Added `fill_factor: Option<u8>` to `IndexElement` struct
+  - Parse `FILLFACTOR` from `WITH` clause in both sqlparser and fallback parser
+  - Emit `FillFactor` property in model_xml.rs for indexes
 
 ---
 
@@ -218,13 +223,13 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Section | Description | Tasks |
 |---------|-------------|-------|
 | 11.1 | Layer 1: Element Inventory | 8/8 |
-| 11.2 | Layer 2: Properties | 0/2 |
+| 11.2 | Layer 2: Properties | 2/2 ✓ |
 | 11.3 | Relationships | 2/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 10/43 tasks
+**Phase 11 Total**: 12/43 tasks
 
 ---
 
@@ -248,9 +253,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 10/43 |
+| Phase 11 | **IN PROGRESS** 12/43 |
 
-**Total**: 73/106 tasks complete
+**Total**: 75/106 tasks complete
 
 ---
 

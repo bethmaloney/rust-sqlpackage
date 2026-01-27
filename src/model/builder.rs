@@ -4,7 +4,8 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use sqlparser::ast::{
-    ColumnDef, ColumnOption, DataType, ObjectName, SchemaName, Statement, TableConstraint,
+    BinaryOperator, ColumnDef, ColumnOption, DataType, Expr, ObjectName, SchemaName, Statement,
+    TableConstraint,
 };
 
 use crate::parser::{
@@ -80,6 +81,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     include_columns,
                     is_unique,
                     is_clustered,
+                    fill_factor,
                 } => {
                     model.add_element(ModelElement::Index(IndexElement {
                         name: name.clone(),
@@ -89,6 +91,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         include_columns: include_columns.clone(),
                         is_unique: *is_unique,
                         is_clustered: *is_clustered,
+                        fill_factor: *fill_factor,
                     }));
                 }
                 FallbackStatementType::FullTextIndex {
@@ -543,6 +546,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     .map(|c| c.value.clone())
                     .collect();
 
+                // Extract index options from WITH clause
+                let fill_factor = extract_fill_factor(&create_index.with);
+
                 model.add_element(ModelElement::Index(IndexElement {
                     name: index_name,
                     table_schema,
@@ -551,6 +557,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     include_columns,
                     is_unique: create_index.unique,
                     is_clustered: false, // sqlparser doesn't expose this directly
+                    fill_factor,
                 }));
             }
 
@@ -1441,6 +1448,30 @@ fn is_natively_compiled(definition: &str) -> bool {
     // Look for WITH NATIVE_COMPILATION in the definition
     // It can appear as "WITH NATIVE_COMPILATION" or "WITH NATIVE_COMPILATION, SCHEMABINDING" etc.
     upper.contains("NATIVE_COMPILATION")
+}
+
+/// Extract FILLFACTOR from index WITH clause options
+fn extract_fill_factor(with_options: &[Expr]) -> Option<u8> {
+    for expr in with_options {
+        if let Expr::BinaryOp { left, op, right } = expr {
+            if *op == BinaryOperator::Eq {
+                // Check if the left side is FILLFACTOR identifier
+                if let Expr::Identifier(ident) = left.as_ref() {
+                    if ident.value.to_uppercase() == "FILLFACTOR" {
+                        // Extract the numeric value from the right side
+                        if let Expr::Value(value) = right.as_ref() {
+                            if let sqlparser::ast::Value::Number(n, _) = value {
+                                if let Ok(val) = n.parse::<u8>() {
+                                    return Some(val);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Convert an extracted extended property to a model ExtendedPropertyElement

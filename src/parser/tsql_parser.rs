@@ -212,6 +212,8 @@ pub enum FallbackStatementType {
         include_columns: Vec<String>,
         is_unique: bool,
         is_clustered: bool,
+        /// Fill factor percentage (0-100)
+        fill_factor: Option<u8>,
     },
     /// Full-text index (CREATE FULLTEXT INDEX ON table ...)
     FullTextIndex {
@@ -1913,6 +1915,9 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     // Extract INCLUDE columns if present
     let include_columns = extract_include_columns(sql);
 
+    // Extract FILLFACTOR from WITH clause if present
+    let fill_factor = extract_index_fill_factor(sql);
+
     Some(FallbackStatementType::Index {
         name,
         table_schema,
@@ -1921,6 +1926,7 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
         include_columns,
         is_unique,
         is_clustered,
+        fill_factor,
     })
 }
 
@@ -1950,6 +1956,16 @@ fn extract_include_columns(sql: &str) -> Vec<String> {
         .and_then(|caps| caps.get(1))
         .map(|m| parse_column_list(m.as_str()))
         .unwrap_or_default()
+}
+
+/// Extract FILLFACTOR value from index WITH clause
+fn extract_index_fill_factor(sql: &str) -> Option<u8> {
+    // Match FILLFACTOR = <number> in WITH clause
+    let re = regex::Regex::new(r"(?i)FILLFACTOR\s*=\s*(\d+)").ok()?;
+
+    re.captures(sql)
+        .and_then(|caps| caps.get(1))
+        .and_then(|m| m.as_str().parse::<u8>().ok())
 }
 
 /// Extract full table structure from CREATE TABLE statement

@@ -208,6 +208,8 @@ pub struct IndexElement {
     pub include_columns: Vec<String>,
     pub is_unique: bool,
     pub is_clustered: bool,
+    /// Fill factor percentage (0-100), controls page fill density
+    pub fill_factor: Option<u8>,
 }
 
 /// A column in a full-text index with optional language specification

@@ -2156,6 +2156,10 @@ fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow
         write_property(writer, "IsClustered", "True")?;
     }
 
+    if let Some(fill_factor) = index.fill_factor {
+        write_property(writer, "FillFactor", &fill_factor.to_string())?;
+    }
+
     // Reference to table
     let table_ref = format!("[{}].[{}]", index.table_schema, index.table_name);
     write_relationship(writer, "IndexedObject", &[&table_ref])?;
