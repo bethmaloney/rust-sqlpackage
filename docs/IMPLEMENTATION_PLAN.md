@@ -6,17 +6,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| Phase 1 | Fix Known High-Priority Issues (ampersand truncation, constraints, etc.) | ✓ 9/9 |
-| Phase 2 | Expand Property Comparison (strict mode, all properties) | ✓ 4/4 |
-| Phase 3 | Add Relationship Comparison (references, entries) | ✓ 4/4 |
-| Phase 4 | Add XML Structure Comparison (element ordering) | ✓ 4/4 |
-| Phase 5 | Add Metadata Files Comparison (Content_Types, DacMetadata, Origin, scripts) | ✓ 5/5 |
-| Phase 6 | Per-Feature Parity Tests (all 46 fixtures) | ✓ 5/5 |
-| Phase 7 | Canonical XML Comparison (byte-level matching) | ✓ 4/4 |
-| Phase 8 | Test Infrastructure (modular parity layers, CI metrics, regression detection) | ✓ 4/4 |
-| Phase 9 | Achieve 100% Parity (ordering, properties, relationships, metadata, edge cases) | ✓ 19/19 |
+| Phase 1-9 | Core implementation (properties, relationships, XML structure, metadata) | 58/58 |
+| Phase 10 | Fix extended properties, function classification, constraint naming, SqlPackage config | 5/5 |
 
-**Phases 1-9 Complete**: 58/58 tasks
+**Total Completed**: 63/63 tasks
 
 ---
 
@@ -24,105 +17,189 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 39/46 | 84.8% | default_constraints_named, views now pass |
-| Layer 2 (Properties) | 37/46 | 80.4% | ampersand_encoding, extended_properties, instead_of_triggers improved |
-| Layer 3 (Relationships) | 30/46 | 65.2% | Various reference count/ordering differences |
-| Layer 4 (Structure) | 6/46 | 13.0% | |
-| Layer 5 (Metadata) | 44/46 | 95.7% | 2 are ERROR (DotNet build failures) |
+| Layer 1 (Inventory) | 40/46 | 87.0% | 6 failing |
+| Layer 2 (Properties) | 39/46 | 84.8% | 7 failing |
+| Relationships | 31/46 | 67.4% | 15 failing |
+| Layer 4 (Ordering) | 7/46 | 15.2% | 39 failing |
+| Metadata | 44/46 | 95.7% | 2 ERROR fixtures |
+| **Full Parity** | **5/46** | **10.9%** | collation, empty_project, indexes, procedure_parameters, views |
 
 ---
 
-## Phase 10: Fix Remaining Test Failures (COMPLETE)
+## Phase 11: Fix Remaining Parity Failures
 
-Note: View relationship issues in Layer 3 tests were due to non-view-related parity differences (schema authorization, indexes, sequences, etc.), not view relationship emission. The view relationship implementation was verified to be correct - see 10.6 resolution.
+### 11.1 Layer 1: Element Inventory Failures
 
-### 10.1 Extended Property Key Format
+#### 11.1.1 WITH NOCHECK Constraints Not Captured
+**Fixtures:** `constraint_nocheck`
+**Issue:** Foreign key and check constraints created `WITH NOCHECK` are not being captured.
+- Missing: `SqlCheckConstraint` (2), `SqlForeignKeyConstraint` (2)
+- Example: `[dbo].[CK_ChildNoCheck_Value]`, `[dbo].[FK_ChildNoCheck_Parent]`
 
-**Goal:** Fix extended property element naming to include parent type prefix.
+- [ ] **11.1.1.1** Parse `WITH NOCHECK` syntax in ALTER TABLE statements
+- [ ] **11.1.1.2** Emit constraints with `IsNotForReplication` or appropriate property
 
-**Issue:** Rust emits `[schema].[table].[MS_Description]` but DotNet emits `[SqlTableBase].[schema].[table].[MS_Description]` (includes parent element type like `SqlColumn`, `SqlTableBase`).
+#### 11.1.2 Scalar Type Misclassification
+**Fixtures:** `scalar_types`
+**Issue:** `CREATE TYPE ... FROM` scalar types classified as `SqlTableType` instead of `SqlUserDefinedDataType`.
+- Rust emits `SqlTableType` for: `[dbo].[Currency]`, `[dbo].[EmailAddress]`, `[dbo].[PhoneNumber]`, `[dbo].[SSN]`
+- DotNet emits `SqlUserDefinedDataType` for these
 
-- [x] **10.1.1 Add parent type to extended property keys**
-  - File: `src/dacpac/model_xml.rs`
-  - Extended properties on tables need `[SqlTableBase]` prefix
-  - Extended properties on columns need `[SqlColumn]` prefix
-  - Format: `[ParentType].[schema].[object].[property_name]` or `[ParentType].[schema].[table].[column].[property_name]`
-  - Expected impact: Fix 7 MISSING and 7 EXTRA items in Layer 1
+- [ ] **11.1.2.1** Distinguish scalar UDT (`CREATE TYPE x FROM basetype`) from table types (`CREATE TYPE x AS TABLE`)
+- [ ] **11.1.2.2** Emit `SqlUserDefinedDataType` for scalar types with correct properties
 
-### 10.2 Function Type Classification
+#### 11.1.3 Fulltext Index Naming
+**Fixtures:** `fulltext_index`
+**Issue:** Fulltext index element name includes `.FullTextIndex` suffix but DotNet uses table name only. Also missing PK constraint.
+- Rust: `SqlFullTextIndex.[dbo].[Documents].[FullTextIndex]`
+- DotNet: `SqlFullTextIndex.[dbo].[Documents]`
 
-**Goal:** Correctly classify inline table-valued functions vs multi-statement TVFs.
+- [ ] **11.1.3.1** Fix fulltext index element naming to use table name only
+- [ ] **11.1.3.2** Ensure PK constraint `[dbo].[PK_Documents]` is emitted
 
-**Issue:** `GetProductsInPriceRange` is classified as `SqlMultiStatementTableValuedFunction` but DotNet identifies it as `SqlInlineTableValuedFunction`.
+#### 11.1.4 Schema Authorization in Element Name
+**Fixtures:** `only_schemas`
+**Issue:** Schema element names include `AUTHORIZATION [owner]` but DotNet doesn't.
+- Rust: `SqlSchema.[HR] AUTHORIZATION [dbo]`
+- DotNet: `SqlSchema.[HR]`
 
-- [x] **10.2.1 Distinguish inline vs multi-statement TVFs**
-  - Files: `src/parser/tsql_parser.rs`, `src/model/builder.rs`
-  - Inline TVF: Single `RETURN SELECT ...` statement, no `BEGIN/END` block
-  - Multi-statement TVF: Declares a table variable, has `BEGIN/END` block with `INSERT` statements
-  - Parse the function body to detect which pattern is used
-  - Expected impact: Fix COUNT MISMATCH for SqlInlineTableValuedFunction/SqlMultiStatementTableValuedFunction
-
-### ~~10.3 View IsAnsiNullsOn Property~~ (RESOLVED)
-
-**Status:** RESOLVED - Updated implementation to emit `IsAnsiNullsOn` for all views.
-
-**Finding:** After updating reference dacpacs with current .NET SDK (and DefaultSchema project setting), DotNet now emits `IsAnsiNullsOn="True"` for ALL views, not just those with options. The Rust implementation has been updated to match this behavior (in `src/dacpac/model_xml.rs`).
-
-### 10.4 Default Constraint Naming Fix ✓
-
-**Goal:** Fix incorrect default constraint naming for inline constraints.
-
-**Issue:** Rust was incorrectly treating inline default constraints with syntax `CONSTRAINT [name] NOT NULL DEFAULT` as named DEFAULT constraints, when in SQL Server this syntax names the NOT NULL constraint, not the DEFAULT.
-
-**Root Cause:** In SQL Server:
-- `CONSTRAINT [name] NOT NULL DEFAULT (value)` - The constraint keyword names the NOT NULL constraint; the DEFAULT is unnamed
-- `NOT NULL CONSTRAINT [name] DEFAULT (value)` - The constraint keyword names the DEFAULT constraint
-
-- [x] **10.4.1 Fix inline constraint name handling**
-  - File: `src/model/builder.rs` - Removed `pending_constraint_name` mechanism that incorrectly passed NOT NULL constraint names to DEFAULT constraints
-  - File: `src/parser/tsql_parser.rs` - Updated regex patterns to correctly distinguish named vs unnamed DEFAULT constraints
-  - File: `tests/fixtures/e2e_comprehensive/Tables/Settings.sql` - Fixed to use correct syntax for named DEFAULT constraints (`NOT NULL CONSTRAINT [name] DEFAULT`)
-  - Impact: Layer 1 default_constraints_named now passes
-
-### 10.5 SqlPackage Test Configuration ✓
-
-**Goal:** Fix Layer 3 SqlPackage tests to provide required parameters.
-
-**Issue:** `test_layer3_sqlpackage_comparison` fails with "Operation Script requires a target database name".
-
-- [x] **10.5.1 Add target database parameter to SqlPackage tests**
-  - File: `tests/e2e/parity/layer3_sqlpackage.rs`
-  - Added `/TargetDatabaseName:ParityTestDb` to SqlPackage command
-  - Layer 3 now properly runs and reports schema differences (instead of configuration error)
-
-### ~~10.6 View Relationship Parity~~ (RESOLVED - No Change Needed)
-
-**Status:** RESOLVED - Investigation revealed the original implementation was correct.
-
-**Findings:** Upon examining the actual DotNet reference dacpacs:
-- **Simple views** (without SCHEMABINDING or WITH CHECK OPTION): DotNet does NOT emit Columns/QueryDependencies relationships
-- **Schema-bound or WITH CHECK OPTION views**: DotNet DOES emit Columns/QueryDependencies relationships
-
-The Rust implementation already matches this behavior correctly. The original understanding in this section was based on incorrect assumptions about DotNet's behavior. The `views` fixture test passes with 0 errors on all parity layers, confirming the implementation is correct.
-
-- [x] **10.6.1 Verified view relationships match DotNet behavior** (no code change needed)
-
-**Note:** The `IsAnsiNullsOn` view property is now emitted for ALL views (not just those with options) - this matches current DotNet SDK behavior.
+- [ ] **11.1.4.1** Remove AUTHORIZATION clause from schema element names
+- [ ] **11.1.4.2** Emit Authorizer as a relationship instead (see 11.3.1)
 
 ---
 
-### Phase 10 Progress
+### 11.2 Layer 2: Property Failures
 
-| Section | Status | Completion |
-|---------|--------|------------|
-| 10.1 Extended Property Key Format | COMPLETE | 1/1 |
-| 10.2 Function Type Classification | COMPLETE | 1/1 |
-| 10.3 View IsAnsiNullsOn Property | ~~REMOVED~~ | N/A |
-| 10.4 Default Constraint Naming Fix | COMPLETE | 1/1 |
-| 10.5 SqlPackage Test Configuration | COMPLETE | 1/1 |
-| 10.6 View Relationship Parity | ~~RESOLVED~~ | N/A (was incorrect assumption) |
+#### 11.2.1 Property Mismatches in Comprehensive Fixtures
+**Fixtures:** `e2e_comprehensive` (3), `e2e_simple` (1), `element_types` (4), `index_options` (3), `scalar_types` (3)
 
-**Phase 10 Overall**: 5/5 tasks complete (10.3 and 10.6 resolved - were invalid assumptions)
+- [ ] **11.2.1.1** Run detailed property comparison to identify specific mismatches
+- [ ] **11.2.1.2** Fix identified property emission issues
+
+---
+
+### 11.3 Relationship Failures
+
+#### 11.3.1 Schema Authorizer Relationship
+**Fixtures:** `element_types` and others with custom schemas
+**Issue:** `SqlSchema.[Sales] - Authorizer` relationship not emitted.
+
+- [ ] **11.3.1.1** Parse schema authorization from `CREATE SCHEMA [name] AUTHORIZATION [owner]`
+- [ ] **11.3.1.2** Emit `Authorizer` relationship pointing to the owner
+
+#### 11.3.2 Computed Column ExpressionDependencies
+**Fixtures:** `computed_columns`
+**Issue:** `SqlComputedColumn` missing `ExpressionDependencies` relationship.
+- Example: `[dbo].[Employees].[YearsEmployed]`, `[dbo].[Employees].[TotalCompensation]`
+
+- [ ] **11.3.2.1** Parse computed column expressions to extract column references
+- [ ] **11.3.2.2** Emit `ExpressionDependencies` relationship with referenced columns
+
+#### 11.3.3 Procedure/Function BodyDependencies Incomplete
+**Fixtures:** `procedure_options`, `element_types`, `e2e_comprehensive`, `e2e_simple`
+**Issue:** Procedure/function `BodyDependencies` missing table and column references.
+- Rust captures parameter references but misses `[dbo].[Users]`, `[dbo].[Users].[Id]`, etc.
+
+- [ ] **11.3.3.1** Parse procedure/function body to extract table references
+- [ ] **11.3.3.2** Parse procedure/function body to extract column references
+- [ ] **11.3.3.3** Add table/column references to `BodyDependencies` relationship
+
+#### 11.3.4 Trigger BodyDependencies
+**Fixtures:** `instead_of_triggers`
+**Issue:** `SqlDmlTrigger` missing `BodyDependencies` relationship.
+- Missing for: `[dbo].[TR_ProductsView_Delete]`, `[dbo].[TR_ProductsView_Insert]`, `[dbo].[TR_ProductsView_Update]`
+
+- [ ] **11.3.4.1** Parse trigger body to extract table/column references
+- [ ] **11.3.4.2** Emit `BodyDependencies` relationship for triggers
+
+#### 11.3.5 View Columns/QueryDependencies for SCHEMABINDING Views
+**Fixtures:** `instead_of_triggers`, `view_options`
+**Issue:** Views with `SCHEMABINDING` or `WITH CHECK OPTION` should emit `Columns` and `QueryDependencies`.
+- Missing for: `[dbo].[ProductsView]`, `[dbo].[ProductSummary]`
+
+- [ ] **11.3.5.1** Detect SCHEMABINDING and WITH CHECK OPTION view options
+- [ ] **11.3.5.2** Emit `Columns` relationship for bound views
+- [ ] **11.3.5.3** Emit complete `QueryDependencies` with all referenced columns
+
+#### 11.3.6 Table Type Index Relationships
+**Fixtures:** `table_types`
+**Issue:** `SqlTableTypeIndex` using wrong relationship name.
+- Rust emits: `Columns`
+- DotNet emits: `ColumnSpecifications`
+
+- [ ] **11.3.6.1** Change `SqlTableTypeIndex` to emit `ColumnSpecifications` instead of `Columns`
+
+#### 11.3.7 Table Type Constraints Relationship
+**Fixtures:** `table_types`
+**Issue:** `SqlTableType` missing `Constraints` relationship, has extra `PrimaryKey`/`CheckConstraints`.
+- DotNet uses generic `Constraints` relationship for all constraint types
+
+- [ ] **11.3.7.1** Emit `Constraints` relationship instead of `PrimaryKey`/`CheckConstraints`
+
+#### 11.3.8 Sequence TypeSpecifier
+**Fixtures:** `element_types`
+**Issue:** `SqlSequence.[dbo].[OrderSequence]` missing `TypeSpecifier` relationship.
+
+- [ ] **11.3.8.1** Emit `TypeSpecifier` relationship for sequences
+
+#### 11.3.9 Inline TVF Columns and BodyDependencies
+**Fixtures:** `element_types`
+**Issue:** `SqlInlineTableValuedFunction` missing `Columns` and `BodyDependencies`.
+- Missing for: `[dbo].[GetActiveUsers]`
+
+- [ ] **11.3.9.1** Emit `Columns` relationship for inline TVFs
+- [ ] **11.3.9.2** Emit `BodyDependencies` relationship for inline TVFs
+
+#### 11.3.10 Multi-statement TVF Columns
+**Fixtures:** `element_types`
+**Issue:** `SqlMultiStatementTableValuedFunction` missing `Columns` relationship.
+- Missing for: `[dbo].[GetUsersByName]`
+
+- [ ] **11.3.10.1** Emit `Columns` relationship for multi-statement TVFs
+
+---
+
+### 11.4 Layer 4: Element Ordering
+
+#### 11.4.1 Fix XML Element Ordering
+**Fixtures:** 39 fixtures fail Layer 4
+**Issue:** XML elements not in same order as DotNet output.
+
+- [ ] **11.4.1.1** Analyze DotNet element ordering algorithm
+- [ ] **11.4.1.2** Implement matching sort order for model elements
+- [ ] **11.4.1.3** Verify ordering matches for all fixtures
+
+---
+
+### 11.5 Error Fixtures
+
+#### 11.5.1 External Reference Fixture
+**Fixtures:** `external_reference`
+**Status:** ERROR - DotNet build likely fails due to missing referenced dacpac
+
+- [ ] **11.5.1.1** Investigate external_reference DotNet build failure
+- [ ] **11.5.1.2** Fix or mark as expected failure
+
+#### 11.5.2 Unresolved Reference Fixture
+**Fixtures:** `unresolved_reference`
+**Status:** ERROR - DotNet build likely fails due to unresolved references
+
+- [ ] **11.5.2.1** Investigate unresolved_reference DotNet build failure
+- [ ] **11.5.2.2** Fix or mark as expected failure
+
+---
+
+### Phase 11 Progress
+
+| Section | Description | Tasks |
+|---------|-------------|-------|
+| 11.1 | Layer 1: Element Inventory | 0/8 |
+| 11.2 | Layer 2: Properties | 0/2 |
+| 11.3 | Relationships | 0/16 |
+| 11.4 | Layer 4: Ordering | 0/3 |
+| 11.5 | Error Fixtures | 0/4 |
+
+**Phase 11 Total**: 0/33 tasks
 
 ---
 
@@ -132,8 +209,11 @@ The Rust implementation already matches this behavior correctly. The original un
 just test                                    # Run all tests
 cargo test --test e2e_tests test_parity_regression_check  # Check regressions
 PARITY_UPDATE_BASELINE=1 cargo test --test e2e_tests test_parity_regression_check -- --nocapture  # Update baseline
-cargo test --test e2e_tests test_parity_metrics_collection -- --nocapture  # Check metrics
-cargo test --test e2e_tests test_layered_dacpac_comparison -- --nocapture  # Run failing test with output
+
+# Test specific fixture
+SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tests test_layer1 -- --nocapture
+SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tests test_layer2 -- --nocapture
+SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tests test_relationship -- --nocapture
 ```
 
 ---
@@ -142,50 +222,33 @@ cargo test --test e2e_tests test_layered_dacpac_comparison -- --nocapture  # Run
 
 | Phase | Status |
 |-------|--------|
-| Phases 1-9 | **COMPLETE** ✓ 58/58 |
-| Phase 10 | **COMPLETE** ✓ 5/5 |
+| Phases 1-10 | **COMPLETE** 63/63 |
+| Phase 11 | **IN PROGRESS** 0/33 |
 
-**Total**: 63/63 tasks complete (tasks 10.3 and 10.6 were invalid assumptions - resolved through investigation)
+**Total**: 63/96 tasks complete
 
 ---
 
-## Archived: Phase 9 Details
-
 <details>
-<summary>Click to expand Phase 9 completed tasks</summary>
+<summary>Archived: Phases 1-10 Details</summary>
 
-### 9.1 Deterministic Element Ordering (2/2) ✓
+### Phase 1-9 Summary (58 tasks)
+- Phase 1: Fix Known High-Priority Issues (ampersand truncation, constraints, etc.)
+- Phase 2: Expand Property Comparison (strict mode, all properties)
+- Phase 3: Add Relationship Comparison (references, entries)
+- Phase 4: Add XML Structure Comparison (element ordering)
+- Phase 5: Add Metadata Files Comparison (Content_Types, DacMetadata, Origin, scripts)
+- Phase 6: Per-Feature Parity Tests (all 46 fixtures)
+- Phase 7: Canonical XML Comparison (byte-level matching)
+- Phase 8: Test Infrastructure (modular parity layers, CI metrics, regression detection)
+- Phase 9: Achieve 100% Parity (ordering, properties, relationships, metadata, edge cases)
 
-- [x] **9.1.1 Replace HashSet with BTreeSet for schemas**
-- [x] **9.1.2 Sort elements by type then name**
-
-### 9.2 Property Value Fixes (6/6) ✓
-
-- [x] **9.2.0 IsNullable property emission**
-- [x] **9.2.1 Type specifier properties**
-- [x] **9.2.2 Script content normalization**
-- [x] **9.2.3 Boolean property consistency**
-- [x] **9.2.4 Constraint expression properties**
-- [x] **9.2.5 IsNullable emission fix**
-
-### 9.3 Relationship Completeness (4/4) ✓
-
-- [x] **9.3.1 Procedure/function dependencies**
-- [x] **9.3.2 Parameter relationships**
-- [x] **9.3.3 Foreign key relationship ordering**
-- [x] **9.3.4 CheckExpressionDependencies relationship**
-
-### 9.4 Metadata File Alignment (4/4) ✓
-
-- [x] **9.4.1 Origin.xml adjustments**
-- [x] **9.4.2 Update comparison tolerance**
-- [x] **9.4.3 DacMetadata.xml alignment**
-- [x] **9.4.4 [Content_Types].xml fixes**
-
-### 9.5 Edge Cases and Polishing (3/3) ✓
-
-- [x] **9.5.1 View columns**
-- [x] **9.5.2 Inline constraint annotation disambiguator**
-- [x] **9.5.3 Trigger support verification**
+### Phase 10 Summary (5 tasks)
+- 10.1 Extended Property Key Format - Add parent type prefix
+- 10.2 Function Type Classification - Distinguish inline vs multi-statement TVFs
+- 10.3 View IsAnsiNullsOn Property - RESOLVED (was incorrect assumption)
+- 10.4 Default Constraint Naming Fix - Fix inline constraint name handling
+- 10.5 SqlPackage Test Configuration - Add TargetDatabaseName parameter
+- 10.6 View Relationship Parity - RESOLVED (implementation was correct)
 
 </details>
