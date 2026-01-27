@@ -115,9 +115,15 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Issue:** Procedure/function `BodyDependencies` missing table and column references.
 - Rust captures parameter references but misses `[dbo].[Users]`, `[dbo].[Users].[Id]`, etc.
 
-- [ ] **11.3.3.1** Parse procedure/function body to extract table references
-- [ ] **11.3.3.2** Parse procedure/function body to extract column references
-- [ ] **11.3.3.3** Add table/column references to `BodyDependencies` relationship
+- [x] **11.3.3.1** Parse procedure/function body to extract table references
+- [x] **11.3.3.2** Parse procedure/function body to extract column references
+- [x] **11.3.3.3** Add table/column references to `BodyDependencies` relationship
+
+**Implementation notes:**
+- Fixed handling of unbracketed table/column references (e.g., dbo.Users instead of [dbo].[Users])
+- Fixed body extraction for procedures with EXECUTE AS clause
+- Fixed reference ordering to emit table before columns
+- Added SQL type keywords to filter (INT, VARCHAR, etc.) to prevent false positives
 
 #### 11.3.4 Trigger BodyDependencies
 **Fixtures:** `instead_of_triggers`
@@ -228,12 +234,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |---------|-------------|-------|
 | 11.1 | Layer 1: Element Inventory | 8/8 |
 | 11.2 | Layer 2: Properties | 2/2 ✓ |
-| 11.3 | Relationships | 4/16 |
+| 11.3 | Relationships | 7/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 14/43 tasks
+**Phase 11 Total**: 17/43 tasks
 
 ---
 
@@ -257,9 +263,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 14/43 |
+| Phase 11 | **IN PROGRESS** 17/43 |
 
-**Total**: 77/106 tasks complete
+**Total**: 80/106 tasks complete
 
 ---
 

@@ -1564,12 +1564,14 @@ fn extract_body_dependencies(
         }
     }
 
-    // First pass: collect all table references [schema].[table]
-    // We need to know tables before we can resolve unqualified column names
-    let table_ref_regex = regex::Regex::new(r"\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]").unwrap();
+    // First pass: collect all table references - both bracketed and unbracketed
+    // Patterns: [schema].[table] or schema.table
+    // But don't add them to deps yet - we'll process everything in order of appearance
     let mut table_refs: Vec<String> = Vec::new();
 
-    for cap in table_ref_regex.captures_iter(body) {
+    // Match bracketed table refs: [schema].[table]
+    let bracketed_table_regex = regex::Regex::new(r"\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]").unwrap();
+    for cap in bracketed_table_regex.captures_iter(body) {
         let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         if !schema.starts_with('@') && !name.starts_with('@') {
@@ -1580,64 +1582,41 @@ fn extract_body_dependencies(
         }
     }
 
-    // Output table references first
-    for table_ref in &table_refs {
-        if !seen.contains(table_ref) {
-            seen.insert(table_ref.clone());
-            deps.push(BodyDependency::ObjectRef(table_ref.clone()));
+    // Match unbracketed table refs: schema.table (identifier.identifier not preceded by @)
+    // This must be a word boundary followed by identifier.identifier
+    let unbracketed_table_regex =
+        regex::Regex::new(r"(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)")
+            .unwrap();
+    for cap in unbracketed_table_regex.captures_iter(body) {
+        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        // Skip if schema is a keyword (like FROM.something)
+        if is_sql_keyword(&schema.to_uppercase()) {
+            continue;
+        }
+        let table_ref = format!("[{}].[{}]", schema, name);
+        if !table_refs.contains(&table_ref) {
+            table_refs.push(table_ref);
         }
     }
 
-    // Second pass: scan body sequentially for all references
-    // Match: [ident], [a].[b].[c] (3-part), @param
-    // Process them in order of appearance to match DotNet ordering
+    // Second pass: scan body sequentially for all references in order of appearance
+    // This complex regex matches (in order of priority):
+    // 1. @param - parameter references
+    // 2. [a].[b].[c] - three-part bracketed reference
+    // 3. [a].[b] - two-part bracketed reference
+    // 4. [ident] - single bracketed identifier
+    // 5. schema.table - unbracketed two-part reference
+    // 6. ident - unbracketed identifier (column name)
     let token_regex = regex::Regex::new(
-        r"(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([A-Za-z_][A-Za-z0-9_]*)\])|(@([A-Za-z_]\w*))",
+        r"(@([A-Za-z_]\w*))|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([A-Za-z_][A-Za-z0-9_]*)\])|(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)|(?:^|[^@\w\.\]])([A-Za-z_][A-Za-z0-9_]*)",
     )
     .unwrap();
 
     for cap in token_regex.captures_iter(body) {
         if cap.get(1).is_some() {
-            // Three-part reference: [schema].[table].[column]
-            let schema = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-            let table = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-            let column = cap.get(4).map(|m| m.as_str()).unwrap_or("");
-
-            if !schema.starts_with('@') && !table.starts_with('@') {
-                let col_ref = format!("[{}].[{}].[{}]", schema, table, column);
-                if !seen.contains(&col_ref) {
-                    seen.insert(col_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(col_ref));
-                }
-            }
-        } else if cap.get(5).is_some() {
-            // Single bracket: [ident] - could be unqualified column or table/schema
-            let ident = cap.get(6).map(|m| m.as_str()).unwrap_or("");
-            let upper_ident = ident.to_uppercase();
-
-            // Skip SQL keywords
-            if is_sql_keyword(&upper_ident) {
-                continue;
-            }
-
-            // Skip if this is part of a table reference
-            let is_table_or_schema = table_refs.iter().any(|t| {
-                t.ends_with(&format!("].[{}]", ident)) || t.starts_with(&format!("[{}].", ident))
-            });
-
-            // If not a table/schema, treat as unqualified column -> resolve against first table
-            if !is_table_or_schema {
-                if let Some(first_table) = table_refs.first() {
-                    let col_ref = format!("{}.[{}]", first_table, ident);
-                    if !seen.contains(&col_ref) {
-                        seen.insert(col_ref.clone());
-                        deps.push(BodyDependency::ObjectRef(col_ref));
-                    }
-                }
-            }
-        } else if cap.get(7).is_some() {
             // Parameter reference: @param
-            let param_name = cap.get(8).map(|m| m.as_str()).unwrap_or("");
+            let param_name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
 
             // Check if this is a declared parameter (not a local variable)
             if params.iter().any(|p| {
@@ -1648,6 +1627,122 @@ fn extract_body_dependencies(
                 if !seen.contains(&param_ref) {
                     seen.insert(param_ref.clone());
                     deps.push(BodyDependency::ObjectRef(param_ref));
+                }
+            }
+        } else if cap.get(3).is_some() {
+            // Three-part bracketed reference: [schema].[table].[column]
+            let schema = cap.get(4).map(|m| m.as_str()).unwrap_or("");
+            let table = cap.get(5).map(|m| m.as_str()).unwrap_or("");
+            let column = cap.get(6).map(|m| m.as_str()).unwrap_or("");
+
+            if !schema.starts_with('@') && !table.starts_with('@') {
+                // First emit the table reference if not seen
+                let table_ref = format!("[{}].[{}]", schema, table);
+                if !seen.contains(&table_ref) {
+                    seen.insert(table_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(table_ref));
+                }
+
+                // Then emit the column reference
+                let col_ref = format!("[{}].[{}].[{}]", schema, table, column);
+                if !seen.contains(&col_ref) {
+                    seen.insert(col_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(col_ref));
+                }
+            }
+        } else if cap.get(7).is_some() {
+            // Two-part bracketed reference: [schema].[table]
+            let schema = cap.get(8).map(|m| m.as_str()).unwrap_or("");
+            let name = cap.get(9).map(|m| m.as_str()).unwrap_or("");
+
+            if !schema.starts_with('@') && !name.starts_with('@') {
+                let table_ref = format!("[{}].[{}]", schema, name);
+                if !seen.contains(&table_ref) {
+                    seen.insert(table_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(table_ref));
+                }
+            }
+        } else if cap.get(10).is_some() {
+            // Single bracketed identifier: [ident]
+            let ident = cap.get(11).map(|m| m.as_str()).unwrap_or("");
+            let upper_ident = ident.to_uppercase();
+
+            // Skip SQL keywords (but allow column names that happen to match type names)
+            if is_sql_keyword_not_column(&upper_ident) {
+                continue;
+            }
+
+            // Skip if this is part of a table reference (schema or table name)
+            let is_table_or_schema = table_refs.iter().any(|t| {
+                t.ends_with(&format!("].[{}]", ident)) || t.starts_with(&format!("[{}].", ident))
+            });
+
+            // If not a table/schema, treat as unqualified column -> resolve against first table
+            if !is_table_or_schema {
+                if let Some(first_table) = table_refs.first() {
+                    // First emit the table reference if not seen (DotNet orders table before columns)
+                    if !seen.contains(first_table) {
+                        seen.insert(first_table.clone());
+                        deps.push(BodyDependency::ObjectRef(first_table.clone()));
+                    }
+
+                    // Then emit the column reference
+                    let col_ref = format!("{}.[{}]", first_table, ident);
+                    if !seen.contains(&col_ref) {
+                        seen.insert(col_ref.clone());
+                        deps.push(BodyDependency::ObjectRef(col_ref));
+                    }
+                }
+            }
+        } else if cap.get(12).is_some() {
+            // Unbracketed two-part reference: schema.table
+            let schema = cap.get(12).map(|m| m.as_str()).unwrap_or("");
+            let name = cap.get(13).map(|m| m.as_str()).unwrap_or("");
+
+            // Skip if schema is a keyword
+            if is_sql_keyword(&schema.to_uppercase()) {
+                continue;
+            }
+
+            let table_ref = format!("[{}].[{}]", schema, name);
+            if !seen.contains(&table_ref) {
+                seen.insert(table_ref.clone());
+                deps.push(BodyDependency::ObjectRef(table_ref));
+            }
+        } else if cap.get(14).is_some() {
+            // Unbracketed single identifier: might be a column name
+            let ident = cap.get(14).map(|m| m.as_str()).unwrap_or("");
+            let upper_ident = ident.to_uppercase();
+
+            // Skip SQL keywords
+            if is_sql_keyword_not_column(&upper_ident) {
+                continue;
+            }
+
+            // Skip if this is part of a table reference (schema or table name)
+            let is_table_or_schema = table_refs.iter().any(|t| {
+                // Check case-insensitive match for unbracketed identifiers
+                let t_lower = t.to_lowercase();
+                let ident_lower = ident.to_lowercase();
+                t_lower.ends_with(&format!("].[{}]", ident_lower))
+                    || t_lower.starts_with(&format!("[{}].", ident_lower))
+            });
+
+            // If not a table/schema, treat as unqualified column -> resolve against first table
+            if !is_table_or_schema {
+                if let Some(first_table) = table_refs.first() {
+                    // First emit the table reference if not seen (DotNet orders table before columns)
+                    if !seen.contains(first_table) {
+                        seen.insert(first_table.clone());
+                        deps.push(BodyDependency::ObjectRef(first_table.clone()));
+                    }
+
+                    // Then emit the column reference
+                    let col_ref = format!("{}.[{}]", first_table, ident);
+                    if !seen.contains(&col_ref) {
+                        seen.insert(col_ref.clone());
+                        deps.push(BodyDependency::ObjectRef(col_ref));
+                    }
                 }
             }
         }
@@ -1794,6 +1889,145 @@ fn is_sql_keyword(word: &str) -> bool {
     )
 }
 
+/// Check if a word is a SQL keyword that should be filtered from column detection in procedure bodies.
+/// This is a more permissive filter than `is_sql_keyword` - it allows words that are commonly
+/// used as column names (like TIMESTAMP, ACTION, ID, etc.) even though they're also SQL keywords/types.
+fn is_sql_keyword_not_column(word: &str) -> bool {
+    matches!(
+        word,
+        "SELECT"
+            | "FROM"
+            | "WHERE"
+            | "AND"
+            | "OR"
+            | "NOT"
+            | "NULL"
+            | "IS"
+            | "IN"
+            | "AS"
+            | "ON"
+            | "JOIN"
+            | "LEFT"
+            | "RIGHT"
+            | "INNER"
+            | "OUTER"
+            | "CROSS"
+            | "FULL"
+            | "INSERT"
+            | "INTO"
+            | "VALUES"
+            | "UPDATE"
+            | "SET"
+            | "DELETE"
+            | "CREATE"
+            | "ALTER"
+            | "DROP"
+            | "TABLE"
+            | "VIEW"
+            | "INDEX"
+            | "PROCEDURE"
+            | "FUNCTION"
+            | "TRIGGER"
+            | "BEGIN"
+            | "END"
+            | "IF"
+            | "ELSE"
+            | "WHILE"
+            | "RETURN"
+            | "DECLARE"
+            | "PRIMARY"
+            | "KEY"
+            | "FOREIGN"
+            | "REFERENCES"
+            | "UNIQUE"
+            | "CHECK"
+            | "DEFAULT"
+            | "CONSTRAINT"
+            | "IDENTITY"
+            | "NOCOUNT"
+            | "COUNT"
+            | "SUM"
+            | "AVG"
+            | "MIN"
+            | "MAX"
+            | "ISNULL"
+            | "COALESCE"
+            | "CAST"
+            | "CONVERT"
+            | "CASE"
+            | "WHEN"
+            | "THEN"
+            | "EXEC"
+            | "EXECUTE"
+            | "GO"
+            | "USE"
+            | "DATABASE"
+            | "SCHEMA"
+            | "GRANT"
+            | "REVOKE"
+            | "DENY"
+            | "ORDER"
+            | "BY"
+            | "GROUP"
+            | "HAVING"
+            | "DISTINCT"
+            | "TOP"
+            | "OFFSET"
+            | "FETCH"
+            | "NEXT"
+            | "ROWS"
+            | "ONLY"
+            | "UNION"
+            | "ALL"
+            | "EXCEPT"
+            | "INTERSECT"
+            | "EXISTS"
+            | "ANY"
+            | "SOME"
+            | "LIKE"
+            | "BETWEEN"
+            | "ASC"
+            | "DESC"
+            | "CLUSTERED"
+            | "NONCLUSTERED"
+            | "OUTPUT"
+            | "SCOPE_IDENTITY"
+            // Core data types that are rarely used as column names
+            | "INT"
+            | "INTEGER"
+            | "VARCHAR"
+            | "NVARCHAR"
+            | "CHAR"
+            | "NCHAR"
+            | "BIT"
+            | "TINYINT"
+            | "SMALLINT"
+            | "BIGINT"
+            | "DECIMAL"
+            | "NUMERIC"
+            | "FLOAT"
+            | "REAL"
+            | "MONEY"
+            | "SMALLMONEY"
+            | "DATETIME"
+            | "DATETIME2"
+            | "SMALLDATETIME"
+            | "DATETIMEOFFSET"
+            | "UNIQUEIDENTIFIER"
+            | "BINARY"
+            | "VARBINARY"
+            | "XML"
+            | "SQL_VARIANT"
+            | "ROWVERSION"
+            | "GEOGRAPHY"
+            | "GEOMETRY"
+            | "HIERARCHYID"
+            | "NTEXT"
+    )
+    // Intentionally excludes: TIMESTAMP, ACTION, ID, TEXT, IMAGE, DATE, TIME, etc.
+    // as these are commonly used as column names
+}
+
 /// Extract column references from a CHECK constraint expression.
 ///
 /// CHECK expressions reference columns by their unqualified names (e.g., `[Price] >= 0`).
@@ -1908,8 +2142,10 @@ fn write_body_dependencies<W: Write>(
 
 /// Extract just the body after AS from a procedure definition
 fn extract_procedure_body_only(definition: &str) -> String {
-    // Find the AS keyword that separates header from body
-    let as_pos = find_standalone_as(definition);
+    // Find the standalone AS keyword that separates header from body
+    // This AS must be followed by whitespace/newline and then BEGIN or a statement
+    // We look for AS that's at the end of a line (followed by newline) or followed by BEGIN
+    let as_pos = find_body_separator_as(definition);
     if let Some(pos) = as_pos {
         let after_as = &definition[pos..];
         // Skip "AS" and any following whitespace
@@ -1920,6 +2156,68 @@ fn extract_procedure_body_only(definition: &str) -> String {
         }
     }
     definition.to_string()
+}
+
+/// Find the AS keyword that separates procedure header from body
+/// This is the AS that's:
+/// 1. At the end of a line (AS\n or AS\r\n) followed by BEGIN or other body content
+/// 2. Or followed directly by BEGIN (AS BEGIN)
+/// We avoid matching "AS alias" patterns in SELECT statements
+fn find_body_separator_as(s: &str) -> Option<usize> {
+    let upper = s.to_uppercase();
+    let chars: Vec<char> = upper.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        // Look for AS preceded by whitespace/newline
+        if i + 2 <= chars.len() && chars[i] == 'A' && chars[i + 1] == 'S' {
+            let prev_ok = i == 0 || chars[i - 1].is_whitespace();
+            if !prev_ok {
+                i += 1;
+                continue;
+            }
+
+            // Check what comes after AS
+            if i + 2 < chars.len() {
+                let after_as = &upper[i + 2..];
+                let after_as_trimmed = after_as.trim_start();
+
+                // AS must be followed by:
+                // 1. Newline only (AS at end of line, body on next line)
+                // 2. BEGIN (AS BEGIN or AS\nBEGIN)
+                // 3. RETURN (for functions: AS RETURN ...)
+                // 4. SET, SELECT, IF, WHILE, etc. (direct statement after AS)
+
+                // Check if followed by newline then BEGIN/body
+                if chars[i + 2] == '\n' || chars[i + 2] == '\r' {
+                    // AS is at end of line - this is likely the body separator
+                    return Some(i);
+                }
+
+                // Check if followed by whitespace then BEGIN/RETURN/statement keyword
+                if after_as_trimmed.starts_with("BEGIN")
+                    || after_as_trimmed.starts_with("RETURN")
+                    || after_as_trimmed.starts_with("SET")
+                    || after_as_trimmed.starts_with("SELECT")
+                    || after_as_trimmed.starts_with("IF")
+                    || after_as_trimmed.starts_with("WHILE")
+                    || after_as_trimmed.starts_with("DECLARE")
+                    || after_as_trimmed.starts_with("WITH")
+                    || after_as_trimmed.starts_with("INSERT")
+                    || after_as_trimmed.starts_with("UPDATE")
+                    || after_as_trimmed.starts_with("DELETE")
+                    || after_as_trimmed.starts_with("EXEC")
+                {
+                    return Some(i);
+                }
+            } else if i + 2 == chars.len() {
+                // AS is at the very end - return it
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Write the data type relationship for a parameter with inline type specifier
