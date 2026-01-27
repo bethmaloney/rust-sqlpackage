@@ -19,7 +19,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/46 | 95.7% | 2 failing |
 | Layer 2 (Properties) | 44/46 | 95.7% | ✓ Fixed with FillFactor support |
-| Relationships | 32/46 | 69.6% | 14 failing |
+| Relationships | 35/46 | 76.1% | 11 failing |
 | Layer 4 (Ordering) | 8/46 | 17.4% | 38 failing |
 | Metadata | 44/46 | 95.7% | 2 ERROR fixtures |
 | **Full Parity** | **7/46** | **15.2%** | collation, empty_project, indexes, only_schemas, procedure_parameters, scalar_types, views |
@@ -130,8 +130,18 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Issue:** `SqlDmlTrigger` missing `BodyDependencies` relationship.
 - Missing for: `[dbo].[TR_ProductsView_Delete]`, `[dbo].[TR_ProductsView_Insert]`, `[dbo].[TR_ProductsView_Update]`
 
-- [ ] **11.3.4.1** Parse trigger body to extract table/column references
-- [ ] **11.3.4.2** Emit `BodyDependencies` relationship for triggers
+- [x] **11.3.4.1** Parse trigger body to extract table/column references
+- [x] **11.3.4.2** Emit `BodyDependencies` relationship for triggers
+
+**Implementation notes:**
+- Added `extract_trigger_body_dependencies()` function in model_xml.rs
+- Handles INSERT INTO statements with column references
+- Handles SELECT ... FROM inserted/deleted (columns resolve to parent table/view)
+- Handles INSERT ... SELECT ... FROM inserted/deleted with JOIN
+- Handles UPDATE ... FROM ... JOIN inserted/deleted with ON clause
+- Table aliases are tracked and resolved correctly
+- `instead_of_triggers` fixture now passes Layer 1, Layer 2, and most of Relationships
+- Remaining 2 trigger-related relationship mismatches are due to complex ordering/deduplication differences that are difficult to match exactly
 
 #### 11.3.5 View Columns/QueryDependencies for SCHEMABINDING Views
 **Fixtures:** `instead_of_triggers`, `view_options`
@@ -234,12 +244,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |---------|-------------|-------|
 | 11.1 | Layer 1: Element Inventory | 8/8 |
 | 11.2 | Layer 2: Properties | 2/2 ✓ |
-| 11.3 | Relationships | 7/16 |
+| 11.3 | Relationships | 9/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 17/43 tasks
+**Phase 11 Total**: 19/43 tasks
 
 ---
 
@@ -263,9 +273,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 17/43 |
+| Phase 11 | **IN PROGRESS** 19/43 |
 
-**Total**: 80/106 tasks complete
+**Total**: 82/106 tasks complete
 
 ---
 

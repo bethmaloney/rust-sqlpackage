@@ -3432,7 +3432,7 @@ fn write_table_type_indexed_column_spec<W: Write>(
 /// Write a DML trigger element to model.xml
 /// DotNet format:
 /// - Properties: IsInsertTrigger, IsUpdateTrigger, IsDeleteTrigger, SqlTriggerType, BodyScript, IsAnsiNullsOn
-/// - Relationships: Parent (the table/view), no Schema relationship
+/// - Relationships: BodyDependencies, Parent (the table/view), no Schema relationship
 fn write_trigger<W: Write>(writer: &mut Writer<W>, trigger: &TriggerElement) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", trigger.schema, trigger.name);
 
@@ -3467,8 +3467,12 @@ fn write_trigger<W: Write>(writer: &mut Writer<W>, trigger: &TriggerElement) -> 
     // 6. IsAnsiNullsOn - always True for now (matches typical SQL Server defaults)
     write_property(writer, "IsAnsiNullsOn", "True")?;
 
-    // Write Parent relationship (the table or view the trigger is on)
+    // Write BodyDependencies relationship (before Parent)
     let parent_ref = format!("[{}].[{}]", trigger.parent_schema, trigger.parent_name);
+    let body_deps = extract_trigger_body_dependencies(&body_script, &parent_ref);
+    write_body_dependencies(writer, &body_deps)?;
+
+    // Write Parent relationship (the table or view the trigger is on)
     write_relationship(writer, "Parent", &[&parent_ref])?;
 
     // Note: DotNet does NOT emit a Schema relationship for triggers
@@ -3524,6 +3528,207 @@ fn extract_trigger_body(definition: &str) -> String {
 
     // Fallback - return entire definition if we can't parse it
     definition.to_string()
+}
+
+/// Extract body dependencies from a trigger body
+/// This handles the special "inserted" and "deleted" magic tables by resolving
+/// column references from them to the parent table/view.
+///
+/// The dependencies are extracted in order of appearance and include:
+/// - Table references like [dbo].[Products]
+/// - Column references like [dbo].[Products].[Id]
+/// - Columns from INSERT column lists
+/// - Columns from SELECT/UPDATE referencing inserted/deleted resolved to parent
+fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDependency> {
+    use std::collections::HashSet;
+    let mut deps = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // Track table aliases: maps alias (lowercase) -> table reference
+    // For triggers, "inserted" and "deleted" map to the parent table/view
+    let mut table_aliases: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    table_aliases.insert("inserted".to_string(), parent_ref.to_string());
+    table_aliases.insert("deleted".to_string(), parent_ref.to_string());
+
+    // First pass: find all table aliases
+    // Pattern: FROM [schema].[table] alias or JOIN [schema].[table] alias
+    let alias_regex =
+        regex::Regex::new(r"(?i)(?:FROM|JOIN)\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+([A-Za-z_]\w*)")
+            .unwrap();
+    for cap in alias_regex.captures_iter(body) {
+        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let alias = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+        let table_ref = format!("[{}].[{}]", schema, table);
+        table_aliases.insert(alias.to_lowercase(), table_ref);
+    }
+
+    // Pattern: standalone [column] (unqualified)
+    let single_bracket_regex = regex::Regex::new(r"\[([^\]]+)\]").unwrap();
+
+    // Process INSERT statements with SELECT FROM inserted/deleted (without JOIN)
+    // Pattern: INSERT INTO [schema].[table] ([cols]) SELECT ... FROM inserted|deleted;
+    // The negative lookahead (?!\s+\w+\s+(?:INNER\s+)?JOIN) ensures we don't match JOIN cases
+    let insert_select_regex = regex::Regex::new(
+        r"(?is)INSERT\s+INTO\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*SELECT\s+(.+?)\s+FROM\s+(inserted|deleted)\s*;",
+    )
+    .unwrap();
+
+    for cap in insert_select_regex.captures_iter(body) {
+        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let col_list = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+        let select_cols = cap.get(4).map(|m| m.as_str()).unwrap_or("");
+
+        let table_ref = format!("[{}].[{}]", schema, table);
+
+        // Emit table reference first
+        if !seen.contains(&table_ref) {
+            seen.insert(table_ref.clone());
+            deps.push(BodyDependency::ObjectRef(table_ref.clone()));
+        }
+
+        // Emit each column reference from the INSERT column list
+        for col_match in single_bracket_regex.captures_iter(col_list) {
+            let col = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
+            let col_ref = format!("{}.[{}]", table_ref, col);
+            if !seen.contains(&col_ref) {
+                seen.insert(col_ref.clone());
+                deps.push(BodyDependency::ObjectRef(col_ref));
+            }
+        }
+
+        // Emit column references from SELECT clause - these come from inserted/deleted (parent)
+        for col_match in single_bracket_regex.captures_iter(select_cols) {
+            let col = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
+            // These columns come from inserted/deleted, resolve to parent
+            let col_ref = format!("{}.[{}]", parent_ref, col);
+            // Deduplicate - DotNet doesn't emit the same column twice from inserted/deleted
+            if !seen.contains(&col_ref) {
+                seen.insert(col_ref.clone());
+                deps.push(BodyDependency::ObjectRef(col_ref));
+            }
+        }
+    }
+
+    // Process INSERT statements with SELECT FROM inserted/deleted with JOIN
+    // Pattern: INSERT INTO [schema].[table] ([cols]) SELECT expr FROM inserted alias JOIN deleted alias ON ...;
+    let insert_select_join_regex = regex::Regex::new(
+        r"(?is)INSERT\s+INTO\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*SELECT\s+(.+?)\s+FROM\s+(inserted|deleted)\s+(\w+)\s+(?:INNER\s+)?JOIN\s+(inserted|deleted)\s+(\w+)\s+ON\s+(.+?);",
+    )
+    .unwrap();
+
+    for cap in insert_select_join_regex.captures_iter(body) {
+        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let col_list = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+        let select_expr = cap.get(4).map(|m| m.as_str()).unwrap_or("");
+        let alias1 = cap.get(6).map(|m| m.as_str()).unwrap_or("");
+        let alias2 = cap.get(8).map(|m| m.as_str()).unwrap_or("");
+        let _on_clause = cap.get(9).map(|m| m.as_str()).unwrap_or("");
+
+        let table_ref = format!("[{}].[{}]", schema, table);
+
+        // Skip if already processed by the simpler insert_select pattern
+        if seen.contains(&table_ref) {
+            continue;
+        }
+
+        // Emit table reference first
+        seen.insert(table_ref.clone());
+        deps.push(BodyDependency::ObjectRef(table_ref.clone()));
+
+        // Emit each column reference from the INSERT column list
+        for col_match in single_bracket_regex.captures_iter(col_list) {
+            let col = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
+            let col_ref = format!("{}.[{}]", table_ref, col);
+            if !seen.contains(&col_ref) {
+                seen.insert(col_ref.clone());
+                deps.push(BodyDependency::ObjectRef(col_ref));
+            }
+        }
+
+        // Add aliases for the JOIN tables (both map to parent)
+        table_aliases.insert(alias1.to_lowercase(), parent_ref.to_string());
+        table_aliases.insert(alias2.to_lowercase(), parent_ref.to_string());
+
+        let alias_col_regex = regex::Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap();
+
+        // Emit column references - SELECT clause columns
+        // DotNet deduplicates but allows duplicates for different aliases referring to same column
+        for col_match in alias_col_regex.captures_iter(select_expr) {
+            let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
+            let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
+            let alias_lower = alias.to_lowercase();
+
+            // Resolve alias to table reference
+            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                let col_ref = format!("{}.[{}]", resolved_table, col);
+                // Emit each reference (duplicates from different aliases are allowed)
+                deps.push(BodyDependency::ObjectRef(col_ref));
+            }
+        }
+    }
+
+    // Process UPDATE with alias pattern: UPDATE alias SET ... FROM [schema].[table] alias JOIN inserted/deleted ON ...
+    let update_alias_regex = regex::Regex::new(
+        r"(?is)UPDATE\s+(\w+)\s+SET\s+(.+?)\s+FROM\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+(\w+)\s+(?:INNER\s+)?JOIN\s+(inserted|deleted)\s+(\w+)\s+ON\s+(.+?)(?:;|$)",
+    )
+    .unwrap();
+
+    for cap in update_alias_regex.captures_iter(body) {
+        let update_alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let set_clause = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let schema = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+        let table = cap.get(4).map(|m| m.as_str()).unwrap_or("");
+        let table_alias = cap.get(5).map(|m| m.as_str()).unwrap_or("");
+        let magic_alias = cap.get(7).map(|m| m.as_str()).unwrap_or("");
+        let on_clause = cap.get(8).map(|m| m.as_str()).unwrap_or("");
+
+        let table_ref = format!("[{}].[{}]", schema, table);
+
+        // Add aliases
+        table_aliases.insert(update_alias.to_lowercase(), table_ref.clone());
+        table_aliases.insert(table_alias.to_lowercase(), table_ref.clone());
+        table_aliases.insert(magic_alias.to_lowercase(), parent_ref.to_string());
+
+        // Emit table reference first
+        if !seen.contains(&table_ref) {
+            seen.insert(table_ref.clone());
+            deps.push(BodyDependency::ObjectRef(table_ref.clone()));
+        }
+
+        let alias_col_regex = regex::Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap();
+
+        // Process ON clause FIRST - extract alias.[col] patterns (these can be duplicated)
+        for col_match in alias_col_regex.captures_iter(on_clause) {
+            let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
+            let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
+            let alias_lower = alias.to_lowercase();
+
+            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                let col_ref = format!("{}.[{}]", resolved_table, col);
+                // DotNet allows duplicates for columns in ON clause
+                deps.push(BodyDependency::ObjectRef(col_ref));
+            }
+        }
+
+        // Process SET clause - extract alias.[col] = patterns
+        for col_match in alias_col_regex.captures_iter(set_clause) {
+            let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
+            let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
+            let alias_lower = alias.to_lowercase();
+
+            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                let col_ref = format!("{}.[{}]", resolved_table, col);
+                // DotNet allows duplicates for SET clause columns too
+                deps.push(BodyDependency::ObjectRef(col_ref));
+            }
+        }
+    }
+
+    deps
 }
 
 fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {
