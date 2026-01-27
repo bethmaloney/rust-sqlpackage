@@ -240,6 +240,21 @@ pub enum FallbackStatementType {
         columns: Vec<ExtractedTableTypeColumn>,
         constraints: Vec<ExtractedTableTypeConstraint>,
     },
+    /// Scalar type (alias type) - CREATE TYPE x FROM basetype
+    ScalarType {
+        schema: String,
+        name: String,
+        /// The base type (e.g., VARCHAR, DECIMAL, NVARCHAR)
+        base_type: String,
+        /// Whether this type allows NULL values (false if NOT NULL specified)
+        is_nullable: bool,
+        /// Length for string types
+        length: Option<i32>,
+        /// Precision for decimal types
+        precision: Option<u8>,
+        /// Scale for decimal types
+        scale: Option<u8>,
+    },
     /// Fallback for CREATE TABLE statements with T-SQL syntax not supported by sqlparser
     Table {
         schema: String,
@@ -516,16 +531,35 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         }
     }
 
-    // Check for CREATE TYPE (user-defined table types)
+    // Check for CREATE TYPE (user-defined types)
+    // Scalar types use: CREATE TYPE x FROM basetype
+    // Table types use: CREATE TYPE x AS TABLE
     if sql_upper.contains("CREATE TYPE") {
         if let Some((schema, name)) = extract_type_name(sql) {
-            let (columns, constraints) = extract_table_type_structure(sql);
-            return Some(FallbackStatementType::UserDefinedType {
-                schema,
-                name,
-                columns,
-                constraints,
-            });
+            // Check if this is a scalar type (FROM basetype) or table type (AS TABLE)
+            if sql_upper.contains(" FROM ") && !sql_upper.contains(" AS TABLE") {
+                // Scalar type - CREATE TYPE [dbo].[TypeName] FROM basetype [NULL|NOT NULL]
+                if let Some(scalar_info) = extract_scalar_type_info(sql) {
+                    return Some(FallbackStatementType::ScalarType {
+                        schema,
+                        name,
+                        base_type: scalar_info.base_type,
+                        is_nullable: scalar_info.is_nullable,
+                        length: scalar_info.length,
+                        precision: scalar_info.precision,
+                        scale: scalar_info.scale,
+                    });
+                }
+            } else {
+                // Table type - CREATE TYPE x AS TABLE (...)
+                let (columns, constraints) = extract_table_type_structure(sql);
+                return Some(FallbackStatementType::UserDefinedType {
+                    schema,
+                    name,
+                    columns,
+                    constraints,
+                });
+            }
         }
     }
 
@@ -915,6 +949,71 @@ fn extract_type_name(sql: &str) -> Option<(String, String)> {
     let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
+}
+
+/// Information extracted from a scalar type definition
+#[derive(Debug)]
+struct ScalarTypeInfo {
+    base_type: String,
+    is_nullable: bool,
+    length: Option<i32>,
+    precision: Option<u8>,
+    scale: Option<u8>,
+}
+
+/// Extract scalar type information from CREATE TYPE ... FROM basetype
+/// e.g., CREATE TYPE [dbo].[PhoneNumber] FROM VARCHAR(20) NOT NULL
+fn extract_scalar_type_info(sql: &str) -> Option<ScalarTypeInfo> {
+    let sql_upper = sql.to_uppercase();
+
+    // Find the FROM keyword position
+    let from_idx = sql_upper.find(" FROM ")?;
+    let after_from = &sql[from_idx + 6..]; // Skip " FROM "
+
+    // Parse the base type and modifiers
+    // Pattern: basetype[(length|precision,scale)] [NULL|NOT NULL]
+    // Examples: VARCHAR(20), DECIMAL(18,4), CHAR(11), NVARCHAR(255)
+    let trimmed = after_from.trim();
+
+    // Check for NOT NULL or NULL at the end
+    let is_nullable = if sql_upper.contains(" NOT NULL") {
+        false
+    } else {
+        true // NULL is the default for scalar types
+    };
+
+    // Extract the base type and optional size specification
+    // Match: WORD optionally followed by (number) or (number,number)
+    let type_re = regex::Regex::new(r"(?i)^(\w+)(?:\s*\(\s*(\d+)(?:\s*,\s*(\d+))?\s*\))?").ok()?;
+
+    let caps = type_re.captures(trimmed)?;
+    let base_type = caps.get(1)?.as_str().to_lowercase();
+
+    // Get length/precision/scale based on type
+    let (length, precision, scale) = if let Some(first_num) = caps.get(2) {
+        let first: i32 = first_num.as_str().parse().ok()?;
+        if let Some(second_num) = caps.get(3) {
+            // Two numbers: precision and scale (e.g., DECIMAL(18,4))
+            let second: u8 = second_num.as_str().parse().ok()?;
+            (None, Some(first as u8), Some(second))
+        } else {
+            // One number: could be length or precision depending on type
+            match base_type.as_str() {
+                "decimal" | "numeric" => (None, Some(first as u8), Some(0)),
+                _ => (Some(first), None, None),
+            }
+        }
+    } else {
+        (None, None, None)
+    };
+
+    Some(ScalarTypeInfo {
+        base_type,
+        is_nullable,
+        length,
+        precision,
+        scale,
+    })
 }
 
 /// Extract columns and constraints from a table type definition

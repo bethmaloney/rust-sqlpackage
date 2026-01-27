@@ -7,9 +7,9 @@ use std::io::Write;
 use crate::model::{
     ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
     ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement, FunctionElement,
-    IndexElement, ModelElement, ProcedureElement, RawElement, SchemaElement, SequenceElement,
-    SortDirection, TableElement, TableTypeColumnElement, TableTypeConstraint, TriggerElement,
-    UserDefinedTypeElement, ViewElement,
+    IndexElement, ModelElement, ProcedureElement, RawElement, ScalarTypeElement, SchemaElement,
+    SequenceElement, SortDirection, TableElement, TableTypeColumnElement, TableTypeConstraint,
+    TriggerElement, UserDefinedTypeElement, ViewElement,
 };
 use crate::project::SqlProject;
 
@@ -363,6 +363,7 @@ fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> an
         ModelElement::Constraint(c) => write_constraint(writer, c),
         ModelElement::Sequence(s) => write_sequence(writer, s),
         ModelElement::UserDefinedType(u) => write_user_defined_type(writer, u),
+        ModelElement::ScalarType(s) => write_scalar_type(writer, s),
         ModelElement::ExtendedProperty(e) => write_extended_property(writer, e),
         ModelElement::Trigger(t) => write_trigger(writer, t),
         ModelElement::Raw(r) => write_raw(writer, r),
@@ -2615,6 +2616,62 @@ fn write_sequence<W: Write>(writer: &mut Writer<W>, seq: &SequenceElement) -> an
 
     // Relationship to schema
     write_schema_relationship(writer, &seq.schema)?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write SqlUserDefinedDataType element for scalar types (alias types)
+/// e.g., CREATE TYPE [dbo].[PhoneNumber] FROM VARCHAR(20) NOT NULL
+fn write_scalar_type<W: Write>(
+    writer: &mut Writer<W>,
+    scalar: &ScalarTypeElement,
+) -> anyhow::Result<()> {
+    let full_name = format!("[{}].[{}]", scalar.schema, scalar.name);
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlUserDefinedDataType"));
+    elem.push_attribute(("Name", full_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Properties - IsNullable only if explicitly false (NOT NULL)
+    if !scalar.is_nullable {
+        write_property(writer, "IsNullable", "False")?;
+    }
+
+    // Scale (appears before Precision in DotNet output for decimal types)
+    if let Some(scale) = scalar.scale {
+        write_property(writer, "Scale", &scale.to_string())?;
+    }
+
+    // Precision for decimal types
+    if let Some(precision) = scalar.precision {
+        write_property(writer, "Precision", &precision.to_string())?;
+    }
+
+    // Length for string types
+    if let Some(length) = scalar.length {
+        write_property(writer, "Length", &length.to_string())?;
+    }
+
+    // Relationship to schema
+    write_schema_relationship(writer, &scalar.schema)?;
+
+    // Relationship to base type (Type relationship points to built-in type)
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "Type"));
+    writer.write_event(Event::Start(rel))?;
+
+    let entry = BytesStart::new("Entry");
+    writer.write_event(Event::Start(entry.clone()))?;
+
+    let mut refs = BytesStart::new("References");
+    refs.push_attribute(("ExternalSource", "BuiltIns"));
+    refs.push_attribute(("Name", format!("[{}]", scalar.base_type).as_str()));
+    writer.write_event(Event::Empty(refs))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())

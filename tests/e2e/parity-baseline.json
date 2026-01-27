@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-27T01:59:26.283998737+00:00",
-  "commit": "ae72cb6",
+  "updated": "2026-01-27T02:16:55.843004610+00:00",
+  "commit": "c6a3bd1",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -285,7 +285,7 @@
     },
     {
       "name": "scalar_types",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": false,
       "relationship_pass": true,
       "layer4_pass": false,

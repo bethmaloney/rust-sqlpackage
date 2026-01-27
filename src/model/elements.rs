@@ -14,6 +14,8 @@ pub enum ModelElement {
     Constraint(ConstraintElement),
     Sequence(SequenceElement),
     UserDefinedType(UserDefinedTypeElement),
+    /// User-defined scalar data type (alias type) - CREATE TYPE x FROM basetype
+    ScalarType(ScalarTypeElement),
     ExtendedProperty(ExtendedPropertyElement),
     Trigger(TriggerElement),
     /// Generic raw element for statements that couldn't be fully parsed
@@ -45,6 +47,7 @@ impl ModelElement {
             },
             ModelElement::Sequence(_) => "SqlSequence",
             ModelElement::UserDefinedType(_) => "SqlTableType",
+            ModelElement::ScalarType(_) => "SqlUserDefinedDataType",
             ModelElement::ExtendedProperty(_) => "SqlExtendedProperty",
             ModelElement::Trigger(_) => "SqlDmlTrigger",
             ModelElement::Raw(r) => match r.sql_type.as_str() {
@@ -81,6 +84,7 @@ impl ModelElement {
             }
             ModelElement::Sequence(s) => format!("[{}].[{}]", s.schema, s.name),
             ModelElement::UserDefinedType(u) => format!("[{}].[{}]", u.schema, u.name),
+            ModelElement::ScalarType(s) => format!("[{}].[{}]", s.schema, s.name),
             ModelElement::ExtendedProperty(e) => e.full_name(),
             ModelElement::Trigger(t) => format!("[{}].[{}]", t.schema, t.name),
             ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),
@@ -324,6 +328,24 @@ pub struct UserDefinedTypeElement {
     pub columns: Vec<TableTypeColumnElement>,
     /// Constraints for table types (PRIMARY KEY, UNIQUE, CHECK, INDEX)
     pub constraints: Vec<TableTypeConstraint>,
+}
+
+/// Scalar type element (alias type) - CREATE TYPE x FROM basetype
+/// e.g., CREATE TYPE [dbo].[PhoneNumber] FROM VARCHAR(20) NOT NULL
+#[derive(Debug, Clone)]
+pub struct ScalarTypeElement {
+    pub schema: String,
+    pub name: String,
+    /// The base type (e.g., VARCHAR, DECIMAL, NVARCHAR)
+    pub base_type: String,
+    /// Whether this type allows NULL values (false if NOT NULL specified)
+    pub is_nullable: bool,
+    /// Length for string types (VARCHAR, NVARCHAR, CHAR, etc.)
+    pub length: Option<i32>,
+    /// Precision for decimal types
+    pub precision: Option<u8>,
+    /// Scale for decimal types
+    pub scale: Option<u8>,
 }
 
 /// Column element for table types

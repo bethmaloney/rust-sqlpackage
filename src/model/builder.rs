@@ -19,8 +19,9 @@ use super::{
     ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
     ExtendedPropertyElement, FullTextCatalogElement, FullTextColumnElement, FullTextIndexElement,
     FunctionElement, FunctionType, IndexElement, ModelElement, ParameterElement, ProcedureElement,
-    RawElement, SchemaElement, SequenceElement, TableElement, TableTypeColumnElement,
-    TableTypeConstraint, TriggerElement, UserDefinedTypeElement, ViewElement,
+    RawElement, ScalarTypeElement, SchemaElement, SequenceElement, TableElement,
+    TableTypeColumnElement, TableTypeConstraint, TriggerElement, UserDefinedTypeElement,
+    ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -144,6 +145,26 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         definition: parsed.sql_text.clone(),
                         columns: column_elements,
                         constraints: constraint_elements,
+                    }));
+                }
+                FallbackStatementType::ScalarType {
+                    schema,
+                    name,
+                    base_type,
+                    is_nullable,
+                    length,
+                    precision,
+                    scale,
+                } => {
+                    schemas.insert(schema.clone());
+                    model.add_element(ModelElement::ScalarType(ScalarTypeElement {
+                        schema: schema.clone(),
+                        name: name.clone(),
+                        base_type: base_type.clone(),
+                        is_nullable: *is_nullable,
+                        length: *length,
+                        precision: *precision,
+                        scale: *scale,
                     }));
                 }
                 FallbackStatementType::Table {
@@ -678,6 +699,7 @@ fn element_type_priority(element: &ModelElement) -> u32 {
         },
         ModelElement::Sequence(_) => 14,
         ModelElement::UserDefinedType(_) => 15,
+        ModelElement::ScalarType(_) => 15, // Same priority as table types
         ModelElement::ExtendedProperty(_) => 16,
         ModelElement::Trigger(_) => 17,
         ModelElement::Raw(r) => match r.sql_type.as_str() {
