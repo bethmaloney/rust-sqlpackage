@@ -251,6 +251,18 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         }
                     }
                 }
+                FallbackStatementType::AlterTableAddConstraint {
+                    table_schema,
+                    table_name,
+                    constraint,
+                } => {
+                    // Add constraint from ALTER TABLE ... ADD CONSTRAINT statement
+                    if let Some(constraint_element) =
+                        constraint_from_extracted(constraint, table_schema, table_name)
+                    {
+                        model.add_element(ModelElement::Constraint(constraint_element));
+                    }
+                }
                 FallbackStatementType::RawStatement {
                     object_type,
                     schema,

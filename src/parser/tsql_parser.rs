@@ -293,6 +293,12 @@ pub enum FallbackStatementType {
     ExtendedProperty {
         property: ExtractedExtendedProperty,
     },
+    /// Constraint added via ALTER TABLE ... ADD CONSTRAINT
+    AlterTableAddConstraint {
+        table_schema: String,
+        table_name: String,
+        constraint: ExtractedTableConstraint,
+    },
 }
 
 /// Function type detected from SQL
@@ -589,6 +595,13 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         return Some(fallback);
     }
 
+    // Check for ALTER TABLE ... ADD CONSTRAINT
+    if sql_upper.contains("ALTER TABLE") && sql_upper.contains("ADD CONSTRAINT") {
+        if let Some(fallback) = extract_alter_table_add_constraint(sql) {
+            return Some(fallback);
+        }
+    }
+
     // Generic fallback for ALTER TABLE statements that can't be parsed
     if sql_upper.contains("ALTER TABLE") {
         if let Some((schema, name)) = extract_alter_table_name(sql) {
@@ -812,6 +825,197 @@ fn extract_alter_table_name(sql: &str) -> Option<(String, String)> {
     let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
+}
+
+/// Extract ALTER TABLE ... ADD CONSTRAINT statement
+/// Handles both WITH CHECK and WITH NOCHECK variants:
+/// ```sql
+/// ALTER TABLE [dbo].[Table] WITH NOCHECK
+/// ADD CONSTRAINT [FK_Name] FOREIGN KEY ([Col]) REFERENCES [Other]([Id]);
+///
+/// ALTER TABLE [dbo].[Table] WITH CHECK
+/// ADD CONSTRAINT [CK_Name] CHECK ([Col] > 0);
+/// ```
+fn extract_alter_table_add_constraint(sql: &str) -> Option<FallbackStatementType> {
+    let sql_upper = sql.to_uppercase();
+
+    // Extract table schema and name
+    let (table_schema, table_name) = extract_alter_table_name(sql)?;
+
+    // Extract constraint name
+    // Pattern: ADD CONSTRAINT [name] or ADD CONSTRAINT name
+    let constraint_name_re =
+        regex::Regex::new(r"(?i)ADD\s+CONSTRAINT\s+(?:\[([^\]]+)\]|(\w+))").ok()?;
+    let caps = constraint_name_re.captures(sql)?;
+    let constraint_name = caps.get(1).or_else(|| caps.get(2))?.as_str().to_string();
+
+    // Determine constraint type and extract details
+    if sql_upper.contains("FOREIGN KEY") {
+        // Parse FOREIGN KEY constraint
+        // Pattern: FOREIGN KEY ([col1], [col2]) REFERENCES [schema].[table]([col1], [col2])
+        let fk_re = regex::Regex::new(
+            r"(?i)FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))\s*\(([^)]+)\)"
+        ).ok()?;
+
+        let fk_caps = fk_re.captures(sql)?;
+
+        // Extract FK columns
+        let columns_str = fk_caps.get(1)?.as_str();
+        let columns: Vec<String> = columns_str
+            .split(',')
+            .map(|c| {
+                c.trim()
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_string()
+            })
+            .collect();
+
+        // Extract referenced table (schema.name)
+        let ref_schema = fk_caps
+            .get(2)
+            .or_else(|| fk_caps.get(3))
+            .map(|m| m.as_str())
+            .unwrap_or("dbo");
+        let ref_table = fk_caps.get(4).or_else(|| fk_caps.get(5))?.as_str();
+        let referenced_table = format!("[{}].[{}]", ref_schema, ref_table);
+
+        // Extract referenced columns
+        let ref_columns_str = fk_caps.get(6)?.as_str();
+        let referenced_columns: Vec<String> = ref_columns_str
+            .split(',')
+            .map(|c| {
+                c.trim()
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_string()
+            })
+            .collect();
+
+        return Some(FallbackStatementType::AlterTableAddConstraint {
+            table_schema,
+            table_name,
+            constraint: ExtractedTableConstraint::ForeignKey {
+                name: constraint_name,
+                columns,
+                referenced_table,
+                referenced_columns,
+            },
+        });
+    } else if sql_upper.contains("CHECK") && !sql_upper.contains("WITH CHECK")
+        || sql_upper.contains("CHECK (")
+        || sql_upper.contains("CHECK(")
+    {
+        // Parse CHECK constraint
+        // Pattern: CHECK ([expression])
+        // Need to handle nested parentheses in the expression
+        let check_pos = sql_upper.find("CHECK")?;
+        // Find the CHECK keyword that's not part of WITH CHECK
+        let actual_check_pos = sql[check_pos..].find('(').map(|p| check_pos + p)?;
+
+        // Extract the expression inside the parentheses (handling nesting)
+        let expr_start = actual_check_pos + 1;
+        let mut depth = 1;
+        let mut expr_end = expr_start;
+
+        for (i, c) in sql[expr_start..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        expr_end = expr_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let expression = sql[expr_start..expr_end].trim().to_string();
+
+        return Some(FallbackStatementType::AlterTableAddConstraint {
+            table_schema,
+            table_name,
+            constraint: ExtractedTableConstraint::Check {
+                name: constraint_name,
+                expression,
+            },
+        });
+    } else if sql_upper.contains("PRIMARY KEY") {
+        // Parse PRIMARY KEY constraint
+        let pk_re =
+            regex::Regex::new(r"(?i)PRIMARY\s+KEY\s*(?:CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)")
+                .ok()?;
+
+        let pk_caps = pk_re.captures(sql)?;
+        let columns_str = pk_caps.get(1)?.as_str();
+
+        let columns: Vec<ExtractedConstraintColumn> = columns_str
+            .split(',')
+            .map(|c| {
+                let col = c.trim();
+                let descending = col.to_uppercase().contains(" DESC");
+                let name = col
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or(col)
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_string();
+                ExtractedConstraintColumn { name, descending }
+            })
+            .collect();
+
+        let is_clustered = !sql_upper.contains("NONCLUSTERED");
+
+        return Some(FallbackStatementType::AlterTableAddConstraint {
+            table_schema,
+            table_name,
+            constraint: ExtractedTableConstraint::PrimaryKey {
+                name: constraint_name,
+                columns,
+                is_clustered,
+            },
+        });
+    } else if sql_upper.contains("UNIQUE") {
+        // Parse UNIQUE constraint
+        let unique_re =
+            regex::Regex::new(r"(?i)UNIQUE\s*(?:CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)").ok()?;
+
+        let unique_caps = unique_re.captures(sql)?;
+        let columns_str = unique_caps.get(1)?.as_str();
+
+        let columns: Vec<ExtractedConstraintColumn> = columns_str
+            .split(',')
+            .map(|c| {
+                let col = c.trim();
+                let descending = col.to_uppercase().contains(" DESC");
+                let name = col
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or(col)
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .to_string();
+                ExtractedConstraintColumn { name, descending }
+            })
+            .collect();
+
+        let is_clustered = sql_upper.contains("CLUSTERED") && !sql_upper.contains("NONCLUSTERED");
+
+        return Some(FallbackStatementType::AlterTableAddConstraint {
+            table_schema,
+            table_name,
+            constraint: ExtractedTableConstraint::Unique {
+                name: constraint_name,
+                columns,
+                is_clustered,
+            },
+        });
+    }
+
+    None
 }
 
 /// Extract extended property from sp_addextendedproperty call

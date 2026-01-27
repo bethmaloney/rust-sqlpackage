@@ -17,7 +17,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 42/46 | 91.3% | 4 failing |
+| Layer 1 (Inventory) | 43/46 | 93.5% | 3 failing |
 | Layer 2 (Properties) | 39/46 | 84.8% | 7 failing |
 | Relationships | 31/46 | 67.4% | 15 failing |
 | Layer 4 (Ordering) | 7/46 | 15.2% | 39 failing |
@@ -36,8 +36,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Missing: `SqlCheckConstraint` (2), `SqlForeignKeyConstraint` (2)
 - Example: `[dbo].[CK_ChildNoCheck_Value]`, `[dbo].[FK_ChildNoCheck_Parent]`
 
-- [ ] **11.1.1.1** Parse `WITH NOCHECK` syntax in ALTER TABLE statements
-- [ ] **11.1.1.2** Emit constraints with `IsNotForReplication` or appropriate property
+- [x] **11.1.1.1** Parse `WITH NOCHECK` syntax in ALTER TABLE statements
+- [x] **11.1.1.2** Emit constraints with `IsNotForReplication` or appropriate property
 
 #### 11.1.2 Scalar Type Misclassification
 **Fixtures:** `scalar_types`
@@ -211,14 +211,14 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Section | Description | Tasks |
 |---------|-------------|-------|
-| 11.1 | Layer 1: Element Inventory | 4/8 |
+| 11.1 | Layer 1: Element Inventory | 6/8 |
 | 11.2 | Layer 2: Properties | 0/2 |
 | 11.3 | Relationships | 2/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 6/43 tasks
+**Phase 11 Total**: 8/43 tasks
 
 ---
 
@@ -242,9 +242,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 6/43 |
+| Phase 11 | **IN PROGRESS** 8/43 |
 
-**Total**: 69/106 tasks complete
+**Total**: 71/106 tasks complete
 
 ---
 
