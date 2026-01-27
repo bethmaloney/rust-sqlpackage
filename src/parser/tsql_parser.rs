@@ -233,6 +233,24 @@ pub enum FallbackStatementType {
     Sequence {
         schema: String,
         name: String,
+        /// Data type (e.g., "INT", "BIGINT")
+        data_type: Option<String>,
+        /// START WITH value
+        start_value: Option<i64>,
+        /// INCREMENT BY value
+        increment_value: Option<i64>,
+        /// MINVALUE value (None means NO MINVALUE)
+        min_value: Option<i64>,
+        /// MAXVALUE value (None means NO MAXVALUE)
+        max_value: Option<i64>,
+        /// CYCLE / NO CYCLE
+        is_cycling: bool,
+        /// Explicit NO MINVALUE
+        has_no_min_value: bool,
+        /// Explicit NO MAXVALUE
+        has_no_max_value: bool,
+        /// CACHE size (None means default cache)
+        cache_size: Option<i64>,
     },
     UserDefinedType {
         schema: String,
@@ -524,16 +542,40 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for CREATE SEQUENCE (T-SQL multiline syntax not fully supported by sqlparser)
     if sql_upper.contains("CREATE SEQUENCE") {
-        if let Some((schema, name)) = extract_sequence_name(sql) {
-            return Some(FallbackStatementType::Sequence { schema, name });
+        if let Some(seq_info) = extract_sequence_info(sql) {
+            return Some(FallbackStatementType::Sequence {
+                schema: seq_info.schema,
+                name: seq_info.name,
+                data_type: seq_info.data_type,
+                start_value: seq_info.start_value,
+                increment_value: seq_info.increment_value,
+                min_value: seq_info.min_value,
+                max_value: seq_info.max_value,
+                is_cycling: seq_info.is_cycling,
+                has_no_min_value: seq_info.has_no_min_value,
+                has_no_max_value: seq_info.has_no_max_value,
+                cache_size: seq_info.cache_size,
+            });
         }
     }
 
     // Check for ALTER SEQUENCE
     // Note: sqlparser doesn't support ALTER SEQUENCE, so we use fallback
     if sql_upper.contains("ALTER SEQUENCE") {
-        if let Some((schema, name)) = extract_alter_sequence_name(sql) {
-            return Some(FallbackStatementType::Sequence { schema, name });
+        if let Some(seq_info) = extract_alter_sequence_info(sql) {
+            return Some(FallbackStatementType::Sequence {
+                schema: seq_info.schema,
+                name: seq_info.name,
+                data_type: seq_info.data_type,
+                start_value: seq_info.start_value,
+                increment_value: seq_info.increment_value,
+                min_value: seq_info.min_value,
+                max_value: seq_info.max_value,
+                is_cycling: seq_info.is_cycling,
+                has_no_min_value: seq_info.has_no_min_value,
+                has_no_max_value: seq_info.has_no_max_value,
+                cache_size: seq_info.cache_size,
+            });
         }
     }
 
@@ -1107,28 +1149,106 @@ fn extract_generic_object_name(sql: &str, object_type: &str) -> Option<(String, 
     Some((schema, name))
 }
 
-/// Extract schema and name from CREATE SEQUENCE statement
-fn extract_sequence_name(sql: &str) -> Option<(String, String)> {
-    // Match patterns like:
-    // CREATE SEQUENCE [dbo].[SeqName]
-    // CREATE SEQUENCE dbo.SeqName
-    // Use [^\]]+ for bracketed identifiers to capture special characters like &
-    let re = regex::Regex::new(
+/// Information extracted from a sequence definition
+#[derive(Debug)]
+struct SequenceInfo {
+    schema: String,
+    name: String,
+    data_type: Option<String>,
+    start_value: Option<i64>,
+    increment_value: Option<i64>,
+    min_value: Option<i64>,
+    max_value: Option<i64>,
+    is_cycling: bool,
+    has_no_min_value: bool,
+    has_no_max_value: bool,
+    cache_size: Option<i64>,
+}
+
+/// Extract complete sequence information from CREATE SEQUENCE statement
+fn extract_sequence_info(sql: &str) -> Option<SequenceInfo> {
+    // First extract schema and name
+    let name_re = regex::Regex::new(
         r"(?i)CREATE\s+SEQUENCE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
     )
     .ok()?;
 
-    let caps = re.captures(sql)?;
-    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
+    let caps = name_re.captures(sql)?;
     let schema = caps
         .get(1)
         .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
     let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
-    Some((schema, name))
+    let sql_upper = sql.to_uppercase();
+
+    // Extract AS <data_type>
+    let data_type = regex::Regex::new(r"(?i)\bAS\s+(\w+)")
+        .ok()
+        .and_then(|re| re.captures(sql))
+        .map(|caps| caps.get(1).unwrap().as_str().to_uppercase());
+
+    // Extract START WITH <value>
+    let start_value = regex::Regex::new(r"(?i)\bSTART\s+WITH\s+(-?\d+)")
+        .ok()
+        .and_then(|re| re.captures(sql))
+        .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok());
+
+    // Extract INCREMENT BY <value>
+    let increment_value = regex::Regex::new(r"(?i)\bINCREMENT\s+BY\s+(-?\d+)")
+        .ok()
+        .and_then(|re| re.captures(sql))
+        .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok());
+
+    // Extract MINVALUE <value> or NO MINVALUE
+    let has_no_min_value = sql_upper.contains("NO MINVALUE");
+    let min_value = if has_no_min_value {
+        None
+    } else {
+        regex::Regex::new(r"(?i)\bMINVALUE\s+(-?\d+)")
+            .ok()
+            .and_then(|re| re.captures(sql))
+            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
+    };
+
+    // Extract MAXVALUE <value> or NO MAXVALUE
+    let has_no_max_value = sql_upper.contains("NO MAXVALUE");
+    let max_value = if has_no_max_value {
+        None
+    } else {
+        regex::Regex::new(r"(?i)\bMAXVALUE\s+(-?\d+)")
+            .ok()
+            .and_then(|re| re.captures(sql))
+            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
+    };
+
+    // Extract CYCLE or NO CYCLE (default is NO CYCLE)
+    let is_cycling = sql_upper.contains("CYCLE") && !sql_upper.contains("NO CYCLE");
+
+    // Extract CACHE <size> or NO CACHE
+    let cache_size = if sql_upper.contains("NO CACHE") {
+        Some(0) // NO CACHE means cache size of 0
+    } else {
+        regex::Regex::new(r"(?i)\bCACHE\s+(\d+)")
+            .ok()
+            .and_then(|re| re.captures(sql))
+            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
+    };
+
+    Some(SequenceInfo {
+        schema,
+        name,
+        data_type,
+        start_value,
+        increment_value,
+        min_value,
+        max_value,
+        is_cycling,
+        has_no_min_value,
+        has_no_max_value,
+        cache_size,
+    })
 }
 
 /// Extract schema and name from CREATE TYPE statement
@@ -1547,28 +1667,84 @@ fn extract_alter_function_name(sql: &str) -> Option<(String, String)> {
     Some((schema, name))
 }
 
-/// Extract schema and name from ALTER SEQUENCE statement
-fn extract_alter_sequence_name(sql: &str) -> Option<(String, String)> {
-    // Match patterns like:
-    // ALTER SEQUENCE [dbo].[SeqName]
-    // ALTER SEQUENCE dbo.SeqName
-    // Use [^\]]+ for bracketed identifiers to capture special characters like &
-    let re = regex::Regex::new(
+/// Extract complete sequence information from ALTER SEQUENCE statement
+fn extract_alter_sequence_info(sql: &str) -> Option<SequenceInfo> {
+    // First extract schema and name
+    let name_re = regex::Regex::new(
         r"(?i)ALTER\s+SEQUENCE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
     )
     .ok()?;
 
-    let caps = re.captures(sql)?;
-    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
+    let caps = name_re.captures(sql)?;
     let schema = caps
         .get(1)
         .or_else(|| caps.get(2))
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
-    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
     let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
-    Some((schema, name))
+    let sql_upper = sql.to_uppercase();
+
+    // Extract RESTART WITH <value> (ALTER uses RESTART instead of START)
+    let start_value = regex::Regex::new(r"(?i)\bRESTART\s+WITH\s+(-?\d+)")
+        .ok()
+        .and_then(|re| re.captures(sql))
+        .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok());
+
+    // Extract INCREMENT BY <value>
+    let increment_value = regex::Regex::new(r"(?i)\bINCREMENT\s+BY\s+(-?\d+)")
+        .ok()
+        .and_then(|re| re.captures(sql))
+        .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok());
+
+    // Extract MINVALUE <value> or NO MINVALUE
+    let has_no_min_value = sql_upper.contains("NO MINVALUE");
+    let min_value = if has_no_min_value {
+        None
+    } else {
+        regex::Regex::new(r"(?i)\bMINVALUE\s+(-?\d+)")
+            .ok()
+            .and_then(|re| re.captures(sql))
+            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
+    };
+
+    // Extract MAXVALUE <value> or NO MAXVALUE
+    let has_no_max_value = sql_upper.contains("NO MAXVALUE");
+    let max_value = if has_no_max_value {
+        None
+    } else {
+        regex::Regex::new(r"(?i)\bMAXVALUE\s+(-?\d+)")
+            .ok()
+            .and_then(|re| re.captures(sql))
+            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
+    };
+
+    // Extract CYCLE or NO CYCLE (default is NO CYCLE)
+    let is_cycling = sql_upper.contains("CYCLE") && !sql_upper.contains("NO CYCLE");
+
+    // Extract CACHE <size> or NO CACHE
+    let cache_size = if sql_upper.contains("NO CACHE") {
+        Some(0)
+    } else {
+        regex::Regex::new(r"(?i)\bCACHE\s+(\d+)")
+            .ok()
+            .and_then(|re| re.captures(sql))
+            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
+    };
+
+    Some(SequenceInfo {
+        schema,
+        name,
+        data_type: None, // ALTER SEQUENCE doesn't change the data type
+        start_value,
+        increment_value,
+        min_value,
+        max_value,
+        is_cycling,
+        has_no_min_value,
+        has_no_max_value,
+        cache_size,
+    })
 }
 
 /// Extract schema and name from CREATE FUNCTION statement

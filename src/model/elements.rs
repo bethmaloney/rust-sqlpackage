@@ -318,6 +318,24 @@ pub struct SequenceElement {
     pub schema: String,
     pub name: String,
     pub definition: String,
+    /// Data type (e.g., "INT", "BIGINT")
+    pub data_type: Option<String>,
+    /// START WITH value
+    pub start_value: Option<i64>,
+    /// INCREMENT BY value
+    pub increment_value: Option<i64>,
+    /// MINVALUE value (None means NO MINVALUE)
+    pub min_value: Option<i64>,
+    /// MAXVALUE value (None means NO MAXVALUE)
+    pub max_value: Option<i64>,
+    /// CYCLE / NO CYCLE
+    pub is_cycling: bool,
+    /// Explicit NO MINVALUE
+    pub has_no_min_value: bool,
+    /// Explicit NO MAXVALUE
+    pub has_no_max_value: bool,
+    /// CACHE size (None means default cache)
+    pub cache_size: Option<i64>,
 }
 
 /// User-defined type element (table types, etc.)

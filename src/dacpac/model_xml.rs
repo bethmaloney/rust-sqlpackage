@@ -2602,6 +2602,46 @@ fn write_schema_relationship<W: Write>(writer: &mut Writer<W>, schema: &str) -> 
     Ok(())
 }
 
+/// Write TypeSpecifier relationship for sequences referencing a built-in type
+/// Format: <Relationship Name="TypeSpecifier"><Entry><Element Type="SqlTypeSpecifier">
+///           <Relationship Name="Type"><Entry><References ExternalSource="BuiltIns" Name="[int]"/></Entry></Relationship>
+///         </Element></Entry></Relationship>
+fn write_type_specifier_builtin<W: Write>(
+    writer: &mut Writer<W>,
+    type_name: &str,
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "TypeSpecifier"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTypeSpecifier"));
+    writer.write_event(Event::Start(elem))?;
+
+    // Nested Type relationship referencing the built-in type
+    let mut inner_rel = BytesStart::new("Relationship");
+    inner_rel.push_attribute(("Name", "Type"));
+    writer.write_event(Event::Start(inner_rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut refs = BytesStart::new("References");
+    refs.push_attribute(("ExternalSource", "BuiltIns"));
+    refs.push_attribute(("Name", type_name));
+    writer.write_event(Event::Empty(refs))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    Ok(())
+}
+
 fn write_sequence<W: Write>(writer: &mut Writer<W>, seq: &SequenceElement) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", seq.schema, seq.name);
 
@@ -2610,8 +2650,51 @@ fn write_sequence<W: Write>(writer: &mut Writer<W>, seq: &SequenceElement) -> an
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
+    // Properties in DotNet order: IsCycling, HasNoMaxValue, HasNoMinValue, MinValue, MaxValue, Increment, StartValue
+    if seq.is_cycling {
+        write_property(writer, "IsCycling", "True")?;
+    }
+
+    // HasNoMaxValue and HasNoMinValue
+    let has_no_max = seq.has_no_max_value || seq.max_value.is_none();
+    let has_no_min = seq.has_no_min_value || seq.min_value.is_none();
+    write_property(
+        writer,
+        "HasNoMaxValue",
+        if has_no_max { "True" } else { "False" },
+    )?;
+    write_property(
+        writer,
+        "HasNoMinValue",
+        if has_no_min { "True" } else { "False" },
+    )?;
+
+    // MinValue and MaxValue
+    if let Some(min) = seq.min_value {
+        write_property(writer, "MinValue", &min.to_string())?;
+    }
+    if let Some(max) = seq.max_value {
+        write_property(writer, "MaxValue", &max.to_string())?;
+    }
+
+    // Increment
+    if let Some(inc) = seq.increment_value {
+        write_property(writer, "Increment", &inc.to_string())?;
+    }
+
+    // StartValue
+    if let Some(start) = seq.start_value {
+        write_property(writer, "StartValue", &start.to_string())?;
+    }
+
     // Relationship to schema
     write_schema_relationship(writer, &seq.schema)?;
+
+    // TypeSpecifier relationship for data type
+    if let Some(ref data_type) = seq.data_type {
+        let type_name = format!("[{}]", data_type.to_lowercase());
+        write_type_specifier_builtin(writer, &type_name)?;
+    }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())

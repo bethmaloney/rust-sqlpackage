@@ -117,12 +117,33 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         is_default: *is_default,
                     }));
                 }
-                FallbackStatementType::Sequence { schema, name } => {
+                FallbackStatementType::Sequence {
+                    schema,
+                    name,
+                    data_type,
+                    start_value,
+                    increment_value,
+                    min_value,
+                    max_value,
+                    is_cycling,
+                    has_no_min_value,
+                    has_no_max_value,
+                    cache_size,
+                } => {
                     schemas.insert(schema.clone());
                     model.add_element(ModelElement::Sequence(SequenceElement {
                         schema: schema.clone(),
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
+                        data_type: data_type.clone(),
+                        start_value: *start_value,
+                        increment_value: *increment_value,
+                        min_value: *min_value,
+                        max_value: *max_value,
+                        is_cycling: *is_cycling,
+                        has_no_min_value: *has_no_min_value,
+                        has_no_max_value: *has_no_max_value,
+                        cache_size: *cache_size,
                     }));
                 }
                 FallbackStatementType::UserDefinedType {
