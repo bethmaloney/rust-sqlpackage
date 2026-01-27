@@ -2,6 +2,7 @@
 
 use quick_xml::events::{BytesCData, BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
+use std::collections::HashSet;
 use std::io::Write;
 
 use crate::model::{
@@ -69,9 +70,23 @@ pub fn generate_model_xml<W: Write>(
     // Write SqlDatabaseOptions element first
     write_database_options(&mut xml_writer, project)?;
 
+    // Collect views that have triggers attached (used to determine if we emit Columns/QueryDependencies)
+    // DotNet emits these relationships for views with SCHEMABINDING, WITH CHECK OPTION, or INSTEAD OF triggers
+    let views_with_triggers: HashSet<String> = model
+        .elements
+        .iter()
+        .filter_map(|e| {
+            if let ModelElement::Trigger(t) = e {
+                Some(format!("[{}].[{}]", t.parent_schema, t.parent_name))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Write each element
     for element in &model.elements {
-        write_element(&mut xml_writer, element)?;
+        write_element(&mut xml_writer, element, &views_with_triggers)?;
     }
 
     // Close Model
@@ -350,11 +365,15 @@ fn write_database_options<W: Write>(
     Ok(())
 }
 
-fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> anyhow::Result<()> {
+fn write_element<W: Write>(
+    writer: &mut Writer<W>,
+    element: &ModelElement,
+    views_with_triggers: &HashSet<String>,
+) -> anyhow::Result<()> {
     match element {
         ModelElement::Schema(s) => write_schema(writer, s),
         ModelElement::Table(t) => write_table(writer, t),
-        ModelElement::View(v) => write_view(writer, v),
+        ModelElement::View(v) => write_view(writer, v, views_with_triggers),
         ModelElement::Procedure(p) => write_procedure(writer, p),
         ModelElement::Function(f) => write_function(writer, f),
         ModelElement::Index(i) => write_index(writer, i),
@@ -366,7 +385,7 @@ fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> an
         ModelElement::ScalarType(s) => write_scalar_type(writer, s),
         ModelElement::ExtendedProperty(e) => write_extended_property(writer, e),
         ModelElement::Trigger(t) => write_trigger(writer, t),
-        ModelElement::Raw(r) => write_raw(writer, r),
+        ModelElement::Raw(r) => write_raw(writer, r, views_with_triggers),
     }
 }
 
@@ -727,7 +746,11 @@ fn sql_type_to_reference(data_type: &str) -> String {
     .to_string()
 }
 
-fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::Result<()> {
+fn write_view<W: Write>(
+    writer: &mut Writer<W>,
+    view: &ViewElement,
+    views_with_triggers: &HashSet<String>,
+) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", view.schema, view.name);
 
     let mut elem = BytesStart::new("Element");
@@ -759,9 +782,13 @@ fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::R
     // Modern .NET DacFx emits this property for all views
     write_property(writer, "IsAnsiNullsOn", "True")?;
 
-    // Only emit Columns and QueryDependencies for schema-bound or with-check-option views
-    // DotNet only analyzes dependencies for these types of views
-    if view.is_schema_bound || view.is_with_check_option {
+    // Emit Columns and QueryDependencies for views that have:
+    // - SCHEMABINDING option
+    // - WITH CHECK OPTION
+    // - INSTEAD OF triggers attached
+    // DotNet analyzes dependencies for these types of views
+    let has_triggers = views_with_triggers.contains(&full_name);
+    if view.is_schema_bound || view.is_with_check_option || has_triggers {
         // Extract view columns and dependencies from the query
         let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &view.schema);
 
@@ -3731,10 +3758,14 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
     deps
 }
 
-fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {
+fn write_raw<W: Write>(
+    writer: &mut Writer<W>,
+    raw: &RawElement,
+    views_with_triggers: &HashSet<String>,
+) -> anyhow::Result<()> {
     // Handle SqlView specially to get full property/relationship support
     if raw.sql_type == "SqlView" {
-        return write_raw_view(writer, raw);
+        return write_raw_view(writer, raw, views_with_triggers);
     }
 
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
@@ -3756,7 +3787,11 @@ fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Resu
 
 /// Write a view from a RawElement (for views parsed via fallback)
 /// Mirrors the write_view function but works with raw definition text
-fn write_raw_view<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {
+fn write_raw_view<W: Write>(
+    writer: &mut Writer<W>,
+    raw: &RawElement,
+    views_with_triggers: &HashSet<String>,
+) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
 
     let mut elem = BytesStart::new("Element");
@@ -3803,8 +3838,12 @@ fn write_raw_view<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow:
     // Modern .NET DacFx emits this property for all views
     write_property(writer, "IsAnsiNullsOn", "True")?;
 
-    // Only emit Columns and QueryDependencies for schema-bound or with-check-option views
-    if is_schema_bound || is_with_check_option {
+    // Emit Columns and QueryDependencies for views that have:
+    // - SCHEMABINDING option
+    // - WITH CHECK OPTION
+    // - INSTEAD OF triggers attached
+    let has_triggers = views_with_triggers.contains(&full_name);
+    if is_schema_bound || is_with_check_option || has_triggers {
         // Extract view columns and dependencies from the query
         let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &raw.schema);
 
