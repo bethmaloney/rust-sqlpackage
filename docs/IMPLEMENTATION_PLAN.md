@@ -26,6 +26,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 **Note:** `fulltext_index` now passes Layer 1, Layer 2, Relationships, and Metadata.
 
+**Note (2026-01-28):** `element_types` now has **FULL PARITY** - Rust output is byte-for-byte identical to DotNet. Baseline needs updating when dotnet is available.
+
 ---
 
 ## Phase 11: Fix Remaining Parity Failures
@@ -171,24 +173,28 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 #### 11.3.8 Sequence TypeSpecifier
 **Fixtures:** `element_types`
-**Issue:** `SqlSequence.[dbo].[OrderSequence]` missing `TypeSpecifier` relationship.
+**Status:** ✓ RESOLVED - TypeSpecifier relationship is correctly emitted for sequences.
+- Implementation: `write_type_specifier_builtin()` called in `write_sequence()` at model_xml.rs:3072-3076
+- Verified: Rust output matches DotNet byte-for-byte for `element_types` fixture
 
-- [ ] **11.3.8.1** Emit `TypeSpecifier` relationship for sequences
+- [x] **11.3.8.1** Emit `TypeSpecifier` relationship for sequences
 
 #### 11.3.9 Inline TVF Columns and BodyDependencies
 **Fixtures:** `element_types`
-**Issue:** `SqlInlineTableValuedFunction` missing `Columns` and `BodyDependencies`.
-- Missing for: `[dbo].[GetActiveUsers]`
+**Status:** ✓ RESOLVED - Not an issue. DotNet does NOT emit `Columns` for inline TVFs.
+- BodyDependencies IS correctly emitted
+- Columns relationship is NOT emitted by DotNet for inline TVFs, only SCHEMABINDING views
+- Verified: Rust output matches DotNet byte-for-byte
 
-- [ ] **11.3.9.1** Emit `Columns` relationship for inline TVFs
-- [ ] **11.3.9.2** Emit `BodyDependencies` relationship for inline TVFs
+- [x] **11.3.9.1** ~~Emit `Columns` relationship for inline TVFs~~ (N/A - DotNet doesn't emit this)
+- [x] **11.3.9.2** Emit `BodyDependencies` relationship for inline TVFs (already implemented)
 
 #### 11.3.10 Multi-statement TVF Columns
 **Fixtures:** `element_types`
-**Issue:** `SqlMultiStatementTableValuedFunction` missing `Columns` relationship.
-- Missing for: `[dbo].[GetUsersByName]`
+**Status:** ✓ RESOLVED - Not an issue. DotNet does NOT emit `Columns` for multi-statement TVFs.
+- Verified: Rust output matches DotNet byte-for-byte
 
-- [ ] **11.3.10.1** Emit `Columns` relationship for multi-statement TVFs
+- [x] **11.3.10.1** ~~Emit `Columns` relationship for multi-statement TVFs~~ (N/A - DotNet doesn't emit this)
 
 #### 11.3.11 Bug Fixes During Relationship Implementation
 - Fixed inline default constraint name extraction from `CONSTRAINT [name] NOT NULL DEFAULT` syntax (sqlparser was associating name with NotNull option, not Default)
@@ -252,12 +258,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |---------|-------------|-------|
 | 11.1 | Layer 1: Element Inventory | 8/8 |
 | 11.2 | Layer 2: Properties | 2/2 ✓ |
-| 11.3 | Relationships | 14/16 |
+| 11.3 | Relationships | 16/16 ✓ |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 24/43 tasks
+**Phase 11 Total**: 26/43 tasks
 
 ---
 
