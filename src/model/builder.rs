@@ -751,6 +751,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
         }
     }
 
+    // Resolve UDT nullability for columns
+    // Columns that use a user-defined scalar type and don't have explicit NULL/NOT NULL
+    // inherit the nullability from the UDT definition (matching DotNet behavior)
+    resolve_udt_nullability(&mut model.elements);
+
     // Sort elements by type (following DotNet order) then by name for deterministic output
     sort_elements(&mut model.elements);
 
@@ -824,6 +829,67 @@ fn sort_elements(elements: &mut [ModelElement]) {
             other => other,
         }
     });
+}
+
+/// Resolve UDT nullability for columns.
+///
+/// When a column uses a user-defined scalar type (UDT) created with `CREATE TYPE ... FROM`,
+/// and the column doesn't have an explicit NULL/NOT NULL constraint, it inherits the
+/// nullability from the UDT definition. This matches DotNet DacFx behavior.
+///
+/// For example:
+///   CREATE TYPE [dbo].[PhoneNumber] FROM VARCHAR(20) NOT NULL;
+///   CREATE TABLE [dbo].[T] ([Phone] [dbo].[PhoneNumber]);  -- Phone inherits NOT NULL
+fn resolve_udt_nullability(elements: &mut [ModelElement]) {
+    use std::collections::HashMap;
+
+    // Build a map of UDT names to their nullability
+    // Store multiple name formats to handle different reference styles
+    let mut udt_nullability: HashMap<String, bool> = HashMap::new();
+
+    for element in elements.iter() {
+        if let ModelElement::ScalarType(scalar_type) = element {
+            // UDT can be referenced in various formats:
+            // - [schema].[name]
+            // - schema.name
+            // - [schema].name
+            // - schema.[name]
+            let schema = &scalar_type.schema;
+            let name = &scalar_type.name;
+            let is_nullable = scalar_type.is_nullable;
+
+            // Store all possible reference formats
+            // Format: [schema].[name]
+            udt_nullability.insert(format!("[{}].[{}]", schema, name), is_nullable);
+            // Format: schema.name
+            udt_nullability.insert(format!("{}.{}", schema, name), is_nullable);
+            // Format: [schema].name
+            udt_nullability.insert(format!("[{}].{}", schema, name), is_nullable);
+            // Format: schema.[name]
+            udt_nullability.insert(format!("{}.[{}]", schema, name), is_nullable);
+        }
+    }
+
+    // If no UDTs, nothing to resolve
+    if udt_nullability.is_empty() {
+        return;
+    }
+
+    // Update columns that use UDTs and don't have explicit nullability
+    for element in elements.iter_mut() {
+        if let ModelElement::Table(table) = element {
+            for column in &mut table.columns {
+                // Only update if column doesn't have explicit nullability
+                if column.nullability.is_none() {
+                    // Check if the column's data type matches a UDT
+                    if let Some(&is_nullable) = udt_nullability.get(&column.data_type) {
+                        // Inherit nullability from UDT
+                        column.nullability = Some(is_nullable);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Assign disambiguator values to inline constraints and build linkages to columns/tables.

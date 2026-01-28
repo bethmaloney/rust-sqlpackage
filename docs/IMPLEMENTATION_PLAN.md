@@ -288,7 +288,11 @@ Column-level constraints are now correctly emitted without Name attributes (inli
 
 #### Additional Tasks
 
-- [ ] **11.7.8** `scalar_types` fixture: Layer 2 now has 3 property mismatches
+- [x] **11.7.8** `scalar_types` fixture: Layer 2 now has 3 property mismatches
+  - Fixed by adding `resolve_udt_nullability()` function in builder.rs
+  - This function builds a map of UDT names to their nullability from ScalarType elements
+  - Then iterates through all table columns and propagates nullability when the column uses a UDT and doesn't have explicit NULL/NOT NULL
+  - This matches DotNet DacFx behavior where columns inherit nullability from their UDT type definition
 - [ ] **11.7.9** `procedure_parameters` fixture: Relationship and Layer 4 regressions
 - [ ] **11.7.10** `views` fixture: Layer 1, Relationships, and Layer 4 regressions
 
@@ -326,9 +330,9 @@ Column-level constraints are now correctly emitted without Name attributes (inli
 | 11.4 | Layer 4: Ordering | 0/3 | Ready to investigate (DotNet available) |
 | 11.5 | Error Fixtures | 0/4 | Ready to investigate (DotNet available) |
 | 11.6 | Final Verification | 3/10 | In Progress |
-| 11.7 | Inline Constraint Handling | 7/11 | In Progress |
+| 11.7 | Inline Constraint Handling | 8/11 | In Progress |
 
-**Phase 11 Total**: 37/55 tasks
+**Phase 11 Total**: 38/55 tasks
 
 > **Status (2026-01-28):** Layer 1 improved from 87.0% to 95.7% after fixing inline constraint Name attribute emission (11.7.11).
 
@@ -354,9 +358,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 37/55 |
+| Phase 11 | **IN PROGRESS** 38/55 |
 
-**Total**: 100/118 tasks complete
+**Total**: 101/118 tasks complete
 
 ---
 
