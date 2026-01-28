@@ -275,6 +275,26 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ---
 
+### 11.7 Known Issues (Requires DotNet)
+
+#### Background
+Commit ce430cf introduced changes to DEFAULT constraint handling in `builder.rs` that broke parity tests. The changes affected how `CONSTRAINT [name] NOT NULL DEFAULT` vs `NOT NULL CONSTRAINT [name] DEFAULT` patterns are handled.
+
+**Key findings:**
+- The original assumption in ce430cf was that "CONSTRAINT [name] NOT NULL DEFAULT" names the DEFAULT constraint, but DotNet behavior is unclear without runtime verification
+- The fallback parser (`tsql_parser.rs`) regex patterns for extracting default constraint names need review
+- Tests pass when DotNet is not available (108/110 tests pass), but parity regression check fails
+- Resolution requires DotNet to verify actual DacFx behavior for different constraint naming patterns
+
+#### Items to Investigate When DotNet is Available
+
+- [ ] **11.7.1** Verify DotNet behavior for `CONSTRAINT [name] NOT NULL DEFAULT value` pattern
+- [ ] **11.7.2** Verify DotNet behavior for `NOT NULL CONSTRAINT [name] DEFAULT value` pattern
+- [ ] **11.7.3** Fix fallback parser regex patterns to match verified DotNet behavior
+- [ ] **11.7.4** Update parity baseline after fixes are verified
+
+---
+
 ### Phase 11 Progress
 
 | Section | Description | Tasks | Status |
@@ -285,13 +305,15 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | 11.4 | Layer 4: Ordering | 0/3 | **Blocked - Requires DotNet** |
 | 11.5 | Error Fixtures | 0/4 | **Blocked - Requires DotNet** |
 | 11.6 | Final Verification | 3/10 | **Partially Blocked - Requires DotNet** |
+| 11.7 | Known Issues | 0/4 | **Blocked - Requires DotNet** |
 
-**Phase 11 Total**: 30/44 tasks (14 remaining tasks blocked on DotNet availability)
+**Phase 11 Total**: 30/48 tasks (18 remaining tasks blocked on DotNet availability)
 
-> **Note:** All completable work without DotNet has been finished. The 14 remaining tasks require DotNet to:
+> **Note:** All completable work without DotNet has been finished. The 18 remaining tasks require DotNet to:
 > - Generate reference outputs for Layer 4 ordering comparison (11.4)
 > - Investigate DotNet build failures for error fixtures (11.5)
 > - Update stale baselines and verify full parity (11.6.1.3-11.6.1.8, 11.6.1.10)
+> - Verify DEFAULT constraint naming behavior and fix regex patterns (11.7)
 
 ---
 
@@ -315,9 +337,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 30/44 |
+| Phase 11 | **IN PROGRESS** 30/48 |
 
-**Total**: 93/107 tasks complete
+**Total**: 93/111 tasks complete
 
 ---
 
