@@ -253,7 +253,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - [ ] **11.6.1.6** Verify Relationships at 100%
 - [ ] **11.6.1.7** Verify Layer 4 (ordering) at 100%
 - [ ] **11.6.1.8** Verify Metadata at 100%
-- [ ] **11.6.1.9** Document any intentional deviations from DotNet behavior
+- [x] **11.6.1.9** Document any intentional deviations from DotNet behavior
 - [ ] **11.6.1.10** Update baseline and confirm no regressions
 
 ---
@@ -267,9 +267,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | 11.3 | Relationships | 16/16 ✓ |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
-| 11.6 | Final Verification | 2/10 |
+| 11.6 | Final Verification | 3/10 |
 
-**Phase 11 Total**: 28/43 tasks
+**Phase 11 Total**: 29/43 tasks
 
 ---
 

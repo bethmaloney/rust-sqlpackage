@@ -151,24 +151,58 @@ GitHub Actions runs two jobs on every push and PR:
 
 Both jobs must pass for CI to go green. The parity-tests job depends on build-and-test, so basic issues are caught quickly before the slower parity tests run.
 
-## Known Issues
+## Intentional Deviations from DotNet DacFx
 
-The following issues are documented and tracked. They will cause parity tests to fail until fixed:
+rust-sqlpackage aims for byte-for-byte compatibility with DotNet DacFx output. However, some differences are **intentional and acceptable**:
 
-### High Priority
-1. **Ampersand truncation** - Procedure names containing `&` are truncated
-2. **Named inline default constraints** - `CONSTRAINT [DF_Name] DEFAULT` not extracted
-3. **Inline CHECK constraints** - Not captured as separate constraint elements
+### Metadata Differences (Expected)
 
-### Medium Priority
-4. **SqlDatabaseOptions** - Database-level settings missing
-5. **Header section** - AnsiNulls, QuotedIdentifier, CompatibilityMode missing
-6. **SqlInlineConstraintAnnotation** - Links columns to inline constraints
+These fields differ by design and are excluded from parity comparison:
 
-### Lower Priority
-7. **SqlExtendedProperty** - Column/table descriptions
-8. **SqlTableType columns** - User-defined table type column structure
-9. **SqlCmdVariables** - SQLCMD variable definitions
+| Field | rust-sqlpackage | DotNet DacFx | Reason |
+|-------|-----------------|--------------|--------|
+| ProductName | `rust-sqlpackage` | `Microsoft.Data.Tools.Schema.Sql` | Different tool |
+| ProductVersion | `0.1.0` | SDK version (e.g., `161.9149.0`) | Different versioning |
+| Timestamps | Current build time | Current build time | Always differ |
+| Checksums | Computed at build | Computed at build | File-dependent |
+
+### Matched Behaviors (Explicit Implementation)
+
+These behaviors were carefully studied and matched to DotNet:
+
+1. **Script Content Normalization**
+   - Both normalize CRLF to LF in script content
+   - Location: `normalize_script_content()` in model_xml.rs
+
+2. **IsNullable Property Emission**
+   - Only emit `IsNullable="False"` for NOT NULL columns
+   - Never emit `IsNullable="True"` (nullable is the default)
+   - Never emit IsNullable for `SqlTableTypeSimpleColumn`
+
+3. **IsClustered Property Emission**
+   - Primary Key: Only emit when NONCLUSTERED (default is CLUSTERED)
+   - Unique: Only emit when CLUSTERED (default is NONCLUSTERED)
+
+4. **IsAnsiNullsOn for Views**
+   - Always emit `IsAnsiNullsOn="True"` for all views
+   - Modern DotNet DacFx emits this property for all views
+
+5. **ExternalSource="BuiltIns" Attribute**
+   - Used for references to built-in schemas (dbo, sys, etc.)
+   - Used for references to built-in data types (int, varchar, etc.)
+   - Matches DotNet schema format requirements
+
+6. **No Schema Relationship for Triggers**
+   - DotNet does not emit a Schema relationship for triggers
+   - rust-sqlpackage follows this pattern
+
+### Testing Tolerances
+
+The parity testing framework accepts minor differences that don't affect functionality:
+
+- **MIME Types**: DotNet may use "text/xml" or "application/xml" depending on version
+- **Whitespace**: Minor formatting differences in non-semantic positions
+- **Element Ordering**: Some ordering variations (tracked in Layer 4 tests)
 
 ## Debugging Test Failures
 
