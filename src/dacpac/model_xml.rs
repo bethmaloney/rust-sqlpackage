@@ -3162,9 +3162,18 @@ fn write_user_defined_type<W: Write>(
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     }
 
-    // Write constraints (PRIMARY KEY, UNIQUE, CHECK, INDEX)
-    for (idx, constraint) in udt.constraints.iter().enumerate() {
-        write_table_type_constraint(writer, constraint, &full_name, idx, &udt.columns)?;
+    // Write constraints (PRIMARY KEY, UNIQUE, CHECK, INDEX) under a unified Constraints relationship
+    // DotNet uses a single "Constraints" relationship containing all constraint types
+    if !udt.constraints.is_empty() {
+        let mut rel = BytesStart::new("Relationship");
+        rel.push_attribute(("Name", "Constraints"));
+        writer.write_event(Event::Start(rel))?;
+
+        for (idx, constraint) in udt.constraints.iter().enumerate() {
+            write_table_type_constraint(writer, constraint, &full_name, idx, &udt.columns)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -3214,7 +3223,7 @@ fn write_table_type_constraint<W: Write>(
     Ok(())
 }
 
-/// Write SqlTableTypePrimaryKeyConstraint element
+/// Write SqlTableTypePrimaryKeyConstraint element (Entry + Element only, no outer Relationship)
 fn write_table_type_pk_constraint<W: Write>(
     writer: &mut Writer<W>,
     type_name: &str,
@@ -3222,11 +3231,7 @@ fn write_table_type_pk_constraint<W: Write>(
     is_clustered: bool,
     all_columns: &[TableTypeColumnElement],
 ) -> anyhow::Result<()> {
-    // Relationship for PrimaryKey
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "PrimaryKey"));
-    writer.write_event(Event::Start(rel))?;
-
+    // Entry for this constraint (parent Constraints relationship is written by caller)
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let mut elem = BytesStart::new("Element");
@@ -3260,11 +3265,10 @@ fn write_table_type_pk_constraint<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }
 
-/// Write SqlTableTypeUniqueConstraint element
+/// Write SqlTableTypeUniqueConstraint element (Entry + Element only, no outer Relationship)
 fn write_table_type_unique_constraint<W: Write>(
     writer: &mut Writer<W>,
     type_name: &str,
@@ -3273,11 +3277,7 @@ fn write_table_type_unique_constraint<W: Write>(
     _idx: usize,
     all_columns: &[TableTypeColumnElement],
 ) -> anyhow::Result<()> {
-    // Relationship for UniqueConstraints
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "UniqueConstraints"));
-    writer.write_event(Event::Start(rel))?;
-
+    // Entry for this constraint (parent Constraints relationship is written by caller)
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let mut elem = BytesStart::new("Element");
@@ -3311,22 +3311,17 @@ fn write_table_type_unique_constraint<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }
 
-/// Write SqlTableTypeCheckConstraint element
+/// Write SqlTableTypeCheckConstraint element (Entry + Element only, no outer Relationship)
 fn write_table_type_check_constraint<W: Write>(
     writer: &mut Writer<W>,
     type_name: &str,
     expression: &str,
     idx: usize,
 ) -> anyhow::Result<()> {
-    // Relationship for CheckConstraints
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "CheckConstraints"));
-    writer.write_event(Event::Start(rel))?;
-
+    // Entry for this constraint (parent Constraints relationship is written by caller)
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     // Generate a disambiguator for unnamed check constraints
@@ -3342,11 +3337,10 @@ fn write_table_type_check_constraint<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }
 
-/// Write table type index element
+/// Write table type index element (Entry + Element only, no outer Relationship)
 fn write_table_type_index<W: Write>(
     writer: &mut Writer<W>,
     type_name: &str,
@@ -3355,11 +3349,7 @@ fn write_table_type_index<W: Write>(
     is_unique: bool,
     is_clustered: bool,
 ) -> anyhow::Result<()> {
-    // Relationship for Indexes
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Indexes"));
-    writer.write_event(Event::Start(rel))?;
-
+    // Entry for this constraint (parent Constraints relationship is written by caller)
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let idx_name = format!("{}.[{}]", type_name, name);
@@ -3392,7 +3382,6 @@ fn write_table_type_index<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }
 

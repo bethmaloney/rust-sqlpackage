@@ -167,7 +167,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Issue:** `SqlTableType` missing `Constraints` relationship, has extra `PrimaryKey`/`CheckConstraints`.
 - DotNet uses generic `Constraints` relationship for all constraint types
 
-- [ ] **11.3.7.1** Emit `Constraints` relationship instead of `PrimaryKey`/`CheckConstraints`
+- [x] **11.3.7.1** Emit `Constraints` relationship instead of `PrimaryKey`/`CheckConstraints`
 
 #### 11.3.8 Sequence TypeSpecifier
 **Fixtures:** `element_types`
@@ -252,12 +252,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |---------|-------------|-------|
 | 11.1 | Layer 1: Element Inventory | 8/8 |
 | 11.2 | Layer 2: Properties | 2/2 ✓ |
-| 11.3 | Relationships | 13/16 |
+| 11.3 | Relationships | 14/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 23/43 tasks
+**Phase 11 Total**: 24/43 tasks
 
 ---
 
@@ -281,9 +281,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 23/43 |
+| Phase 11 | **IN PROGRESS** 24/43 |
 
-**Total**: 86/106 tasks complete
+**Total**: 87/106 tasks complete
 
 ---
 
