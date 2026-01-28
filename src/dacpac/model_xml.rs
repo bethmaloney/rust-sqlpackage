@@ -3376,19 +3376,15 @@ fn write_table_type_index<W: Write>(
         write_property(writer, "IsClustered", "True")?;
     }
 
-    // Columns relationship
+    // ColumnSpecifications relationship (DotNet uses ColumnSpecifications, not Columns)
     if !idx_columns.is_empty() {
         let mut col_rel = BytesStart::new("Relationship");
-        col_rel.push_attribute(("Name", "Columns"));
+        col_rel.push_attribute(("Name", "ColumnSpecifications"));
         writer.write_event(Event::Start(col_rel))?;
 
         for col_name in idx_columns {
-            writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-            let col_ref = format!("{}.[{}]", type_name, col_name);
-            let mut refs = BytesStart::new("References");
-            refs.push_attribute(("Name", col_ref.as_str()));
-            writer.write_event(Event::Empty(refs))?;
-            writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+            // Default to ascending (is_descending = false) since Vec<String> doesn't track sort direction
+            write_table_type_indexed_column_spec(writer, type_name, col_name, false, &[])?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;

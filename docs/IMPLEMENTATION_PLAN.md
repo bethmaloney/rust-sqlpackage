@@ -160,7 +160,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Rust emits: `Columns`
 - DotNet emits: `ColumnSpecifications`
 
-- [ ] **11.3.6.1** Change `SqlTableTypeIndex` to emit `ColumnSpecifications` instead of `Columns`
+- [x] **11.3.6.1** Change `SqlTableTypeIndex` to emit `ColumnSpecifications` instead of `Columns`
 
 #### 11.3.7 Table Type Constraints Relationship
 **Fixtures:** `table_types`
@@ -252,12 +252,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |---------|-------------|-------|
 | 11.1 | Layer 1: Element Inventory | 8/8 |
 | 11.2 | Layer 2: Properties | 2/2 ✓ |
-| 11.3 | Relationships | 12/16 |
+| 11.3 | Relationships | 13/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 22/43 tasks
+**Phase 11 Total**: 23/43 tasks
 
 ---
 
@@ -281,9 +281,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 22/43 |
+| Phase 11 | **IN PROGRESS** 23/43 |
 
-**Total**: 85/106 tasks complete
+**Total**: 86/106 tasks complete
 
 ---
 
