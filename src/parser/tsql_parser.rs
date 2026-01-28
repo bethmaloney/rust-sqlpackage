@@ -214,6 +214,8 @@ pub enum FallbackStatementType {
         is_clustered: bool,
         /// Fill factor percentage (0-100)
         fill_factor: Option<u8>,
+        /// Filter predicate for filtered indexes (WHERE clause condition)
+        filter_predicate: Option<String>,
     },
     /// Full-text index (CREATE FULLTEXT INDEX ON table ...)
     FullTextIndex {
@@ -1918,6 +1920,9 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     // Extract FILLFACTOR from WITH clause if present
     let fill_factor = extract_index_fill_factor(sql);
 
+    // Extract filter predicate from WHERE clause if present
+    let filter_predicate = extract_index_filter_predicate(sql);
+
     Some(FallbackStatementType::Index {
         name,
         table_schema,
@@ -1927,6 +1932,7 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
         is_unique,
         is_clustered,
         fill_factor,
+        filter_predicate,
     })
 }
 
@@ -1966,6 +1972,22 @@ fn extract_index_fill_factor(sql: &str) -> Option<u8> {
     re.captures(sql)
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse::<u8>().ok())
+}
+
+/// Extract filter predicate from filtered index WHERE clause
+fn extract_index_filter_predicate(sql: &str) -> Option<String> {
+    // Match WHERE clause in filtered index
+    // WHERE clause comes after column specification and before WITH/; or end
+    // Pattern: WHERE <predicate> [WITH (...)] [;]
+    let re = regex::Regex::new(r"(?is)\)\s*WHERE\s+(.+?)(?:\s+WITH\s*\(|;|\s*$)").ok()?;
+
+    re.captures(sql).and_then(|caps| {
+        caps.get(1).map(|m| {
+            let predicate = m.as_str().trim();
+            // Remove trailing semicolon if present
+            predicate.trim_end_matches(';').trim().to_string()
+        })
+    })
 }
 
 /// Extract full table structure from CREATE TABLE statement

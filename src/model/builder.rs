@@ -82,6 +82,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_unique,
                     is_clustered,
                     fill_factor,
+                    filter_predicate,
                 } => {
                     model.add_element(ModelElement::Index(IndexElement {
                         name: name.clone(),
@@ -92,6 +93,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         is_unique: *is_unique,
                         is_clustered: *is_clustered,
                         fill_factor: *fill_factor,
+                        filter_predicate: filter_predicate.clone(),
                     }));
                 }
                 FallbackStatementType::FullTextIndex {
@@ -580,6 +582,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 // Extract index options from WITH clause
                 let fill_factor = extract_fill_factor(&create_index.with);
 
+                // Extract filter predicate from raw SQL (sqlparser doesn't expose it directly)
+                let filter_predicate = extract_filter_predicate_from_sql(&parsed.sql_text);
+
                 model.add_element(ModelElement::Index(IndexElement {
                     name: index_name,
                     table_schema,
@@ -589,6 +594,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_unique: create_index.unique,
                     is_clustered: false, // sqlparser doesn't expose this directly
                     fill_factor,
+                    filter_predicate,
                 }));
             }
 
@@ -1501,6 +1507,22 @@ fn extract_fill_factor(with_options: &[Expr]) -> Option<u8> {
         }
     }
     None
+}
+
+/// Extract filter predicate from filtered index WHERE clause
+fn extract_filter_predicate_from_sql(sql: &str) -> Option<String> {
+    // Match WHERE clause in filtered index
+    // WHERE clause comes after column specification and before WITH/; or end
+    // Pattern: ) WHERE <predicate> [WITH (...)] [;]
+    let re = regex::Regex::new(r"(?is)\)\s*WHERE\s+(.+?)(?:\s+WITH\s*\(|;|\s*$)").ok()?;
+
+    re.captures(sql).and_then(|caps| {
+        caps.get(1).map(|m| {
+            let predicate = m.as_str().trim();
+            // Remove trailing semicolon if present
+            predicate.trim_end_matches(';').trim().to_string()
+        })
+    })
 }
 
 /// Convert an extracted extended property to a model ExtendedPropertyElement

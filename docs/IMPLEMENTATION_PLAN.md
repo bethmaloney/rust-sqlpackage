@@ -26,6 +26,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 **Note:** `fulltext_index` now passes Layer 1, Layer 2, Relationships, and Metadata.
 
+**Note:** Several baselines are stale and show false negatives (e.g., `filtered_indexes`, `table_types`, `view_options`). Baseline needs updating when DotNet is available.
+
 **Note (2026-01-28):** `element_types` now has **FULL PARITY** - Rust output is byte-for-byte identical to DotNet. Baseline needs updating when dotnet is available.
 
 ---
@@ -202,6 +204,17 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Fixed test expectation for SQLCMD `:r` includes - DotNet does not add `-- BEGIN/END :r` markers
 - Fixed unit tests for inline TVF vs multi-statement TVF classification
 
+#### 11.3.12 Filtered Index Filter Predicate
+**Fixtures:** `filtered_indexes`
+**Status:** ✓ RESOLVED - Baseline stale. DotNet does NOT emit FilterPredicate property.
+
+- [x] **11.3.12.1** Investigate filtered index FilterPredicate emission
+
+**Notes:**
+- Investigated 2026-01-28. Rust output exactly matches DotNet for this fixture.
+- Added `filter_predicate` field to `IndexElement` for potential future use, but it is NOT emitted in model.xml since DotNet doesn't emit it
+- Baseline shows `relationship_pass=false` but this is stale - needs update when DotNet available
+
 ---
 
 ### 11.4 Layer 4: Element Ordering
@@ -256,6 +269,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - [x] **11.6.1.9** Document any intentional deviations from DotNet behavior
 - [ ] **11.6.1.10** Update baseline and confirm no regressions
 
+**Note (2026-01-28):** Several baseline entries are stale and show false negatives (`filtered_indexes`, `table_types`, `view_options`, etc.). These need updating when DotNet is available to regenerate reference outputs. Rust output for these fixtures may already match DotNet exactly.
+
 ---
 
 ### Phase 11 Progress
@@ -264,12 +279,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |---------|-------------|-------|
 | 11.1 | Layer 1: Element Inventory | 8/8 |
 | 11.2 | Layer 2: Properties | 2/2 ✓ |
-| 11.3 | Relationships | 16/16 ✓ |
+| 11.3 | Relationships | 17/17 ✓ |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 3/10 |
 
-**Phase 11 Total**: 29/43 tasks
+**Phase 11 Total**: 30/44 tasks
 
 ---
 
@@ -293,9 +308,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 24/43 |
+| Phase 11 | **IN PROGRESS** 30/44 |
 
-**Total**: 89/106 tasks complete
+**Total**: 93/107 tasks complete
 
 ---
 

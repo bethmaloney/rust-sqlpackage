@@ -210,6 +210,8 @@ pub struct IndexElement {
     pub is_clustered: bool,
     /// Fill factor percentage (0-100), controls page fill density
     pub fill_factor: Option<u8>,
+    /// Filter predicate for filtered indexes (WHERE clause condition)
+    pub filter_predicate: Option<String>,
 }
 
 /// A column in a full-text index with optional language specification
