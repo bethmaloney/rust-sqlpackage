@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-28T21:51:14.517629195+00:00",
-  "commit": "e0f3548",
+  "updated": "2026-01-28T22:30:07.795097059+00:00",
+  "commit": "150fe0c",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -271,8 +271,8 @@
       "name": "procedure_parameters",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
-      "layer4_pass": false,
+      "relationship_pass": true,
+      "layer4_pass": true,
       "metadata_pass": true
     },
     {
@@ -286,7 +286,7 @@
     {
       "name": "scalar_types",
       "layer1_pass": true,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": true
@@ -367,7 +367,7 @@
       "name": "views",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": true
     }

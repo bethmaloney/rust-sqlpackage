@@ -759,21 +759,18 @@ fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::R
     // Modern .NET DacFx emits this property for all views
     write_property(writer, "IsAnsiNullsOn", "True")?;
 
-    // Only emit Columns and QueryDependencies for schema-bound or with-check-option views
-    // DotNet only analyzes dependencies for these types of views
-    if view.is_schema_bound || view.is_with_check_option {
-        // Extract view columns and dependencies from the query
-        let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &view.schema);
+    // Extract view columns and dependencies from the query
+    // DotNet emits Columns and QueryDependencies for ALL views
+    let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &view.schema);
 
-        // 6. Write Columns relationship with SqlComputedColumn elements
-        if !columns.is_empty() {
-            write_view_columns(writer, &full_name, &columns)?;
-        }
+    // 6. Write Columns relationship with SqlComputedColumn elements
+    if !columns.is_empty() {
+        write_view_columns(writer, &full_name, &columns)?;
+    }
 
-        // 7. Write QueryDependencies relationship
-        if !query_deps.is_empty() {
-            write_query_dependencies(writer, &query_deps)?;
-        }
+    // 7. Write QueryDependencies relationship
+    if !query_deps.is_empty() {
+        write_query_dependencies(writer, &query_deps)?;
     }
 
     // 8. Schema relationship
@@ -1138,6 +1135,23 @@ fn extract_all_column_references(
         {
             if !refs.contains(&resolved) {
                 refs.push(resolved);
+            }
+        }
+    }
+
+    // Also find bare bracketed column names (e.g., [IsActive] in WHERE clause)
+    // that aren't part of a dotted reference
+    let bare_col_pattern = regex::Regex::new(r"(?:^|[^.\w])\[(\w+)\](?:[^.\w]|$)").unwrap();
+    for cap in bare_col_pattern.captures_iter(query) {
+        if let Some(col_match) = cap.get(1) {
+            let col_name = col_match.as_str();
+            // Resolve using first table alias (for single-table queries)
+            if let Some(resolved) =
+                resolve_column_reference(col_name, table_aliases, default_schema)
+            {
+                if !refs.contains(&resolved) {
+                    refs.push(resolved);
+                }
             }
         }
     }

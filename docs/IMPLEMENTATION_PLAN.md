@@ -18,11 +18,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/46 | 95.7% | 2 fixtures failing |
-| Layer 2 (Properties) | 43/46 | 93.5% | 3 failing |
-| Relationships | 33/46 | 71.7% | 13 failing |
+| Layer 2 (Properties) | 44/46 | 95.7% | 2 failing (ERROR fixtures) |
+| Relationships | 35/46 | 76.1% | 11 failing |
 | Layer 4 (Ordering) | 7/46 | 15.2% | 39 failing |
 | Metadata | 44/46 | 95.7% | 2 ERROR fixtures |
-| **Full Parity** | **4/46** | **8.7%** | collation, empty_project, indexes, only_schemas |
+| **Full Parity** | **6/46** | **13.0%** | collation, empty_project, indexes, only_schemas, procedure_parameters, simple_table |
 
 **Note:** DotNet 8.0.417 is now available in the development environment. All blocked items can now be investigated.
 
@@ -145,16 +145,20 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - `instead_of_triggers` fixture now passes Layer 1, Layer 2, and most of Relationships
 - Remaining 2 trigger-related relationship mismatches are due to complex ordering/deduplication differences that are difficult to match exactly
 
-#### 11.3.5 View Columns/QueryDependencies for SCHEMABINDING Views
-**Fixtures:** `instead_of_triggers`, `view_options`
-**Issue:** Views with `SCHEMABINDING` or `WITH CHECK OPTION` should emit `Columns` and `QueryDependencies`.
-- Missing for: `[dbo].[ProductsView]`, `[dbo].[ProductSummary]`
+#### 11.3.5 View Columns/QueryDependencies for ALL Views - RESOLVED
+**Fixtures:** `views`, `instead_of_triggers`, `view_options`
+**Issue:** DotNet emits `Columns` and `QueryDependencies` for ALL views, not just SCHEMABINDING/WITH CHECK OPTION views.
 
 - [x] **11.3.5.1** Detect SCHEMABINDING and WITH CHECK OPTION view options
-- [x] **11.3.5.2** Emit `Columns` relationship for bound views
+- [x] **11.3.5.2** Emit `Columns` relationship for ALL views
 - [x] **11.3.5.3** Emit complete `QueryDependencies` with all referenced columns
+- [x] **11.3.5.4** Handle bare bracketed column names in WHERE clause (e.g., `[IsActive]` without table prefix)
 
-**Note:** Fully implemented in `src/dacpac/model_xml.rs` lines 762-777. The `view_options` baseline shows `relationship_pass=false` but this is stale and needs baseline update when DotNet is available.
+**Fix (2026-01-28):**
+- Removed the condition that limited Columns/QueryDependencies emission to only schema-bound or WITH CHECK OPTION views
+- Added regex pattern `(?:^|[^.\w])\[(\w+)\](?:[^.\w]|$)` in `extract_all_column_references()` to capture bare bracketed column names
+- This ensures columns referenced in WHERE clauses without table prefixes are included in QueryDependencies
+- `views` fixture now passes relationships (was missing `Columns` and `QueryDependencies` relationships)
 
 #### 11.3.6 Table Type Index Relationships
 **Fixtures:** `table_types`
@@ -284,7 +288,7 @@ Column-level constraints are now correctly emitted without Name attributes (inli
 - [x] **11.7.4** Verify `default_constraints_named` fixture behavior
 - [x] **11.7.5** Verify `inline_constraints` fixture behavior
 - [x] **11.7.6** Update builder.rs constraint handling to match DotNet behavior
-- [ ] **11.7.7** Update parity baseline after fixes are verified
+- [x] **11.7.7** Update parity baseline after fixes are verified
 
 #### Additional Tasks
 
@@ -293,8 +297,11 @@ Column-level constraints are now correctly emitted without Name attributes (inli
   - This function builds a map of UDT names to their nullability from ScalarType elements
   - Then iterates through all table columns and propagates nullability when the column uses a UDT and doesn't have explicit NULL/NOT NULL
   - This matches DotNet DacFx behavior where columns inherit nullability from their UDT type definition
-- [ ] **11.7.9** `procedure_parameters` fixture: Relationship and Layer 4 regressions
-- [ ] **11.7.10** `views` fixture: Layer 1, Relationships, and Layer 4 regressions
+- [x] **11.7.9** `procedure_parameters` fixture: Relationship and Layer 4 - RESOLVED
+  - Baseline was stale; fixture now passes all layers including full parity
+- [x] **11.7.10** `views` fixture: Relationships - RESOLVED
+  - Fixed by emitting Columns and QueryDependencies for ALL views (see 11.3.5)
+  - Layer 4 (ordering) still fails but relationships now pass
 
 #### 11.7.11 Inline Constraint Name Attribute Emission - RESOLVED
 
@@ -326,15 +333,15 @@ Column-level constraints are now correctly emitted without Name attributes (inli
 |---------|-------------|-------|--------|
 | 11.1 | Layer 1: Element Inventory | 8/8 | Complete |
 | 11.2 | Layer 2: Properties | 2/2 | Complete |
-| 11.3 | Relationships | 17/17 | Complete |
+| 11.3 | Relationships | 18/18 | Complete |
 | 11.4 | Layer 4: Ordering | 0/3 | Ready to investigate (DotNet available) |
 | 11.5 | Error Fixtures | 0/4 | Ready to investigate (DotNet available) |
 | 11.6 | Final Verification | 3/10 | In Progress |
-| 11.7 | Inline Constraint Handling | 8/11 | In Progress |
+| 11.7 | Inline Constraint Handling | 11/11 | Complete |
 
-**Phase 11 Total**: 38/55 tasks
+**Phase 11 Total**: 42/56 tasks
 
-> **Status (2026-01-28):** Layer 1 improved from 87.0% to 95.7% after fixing inline constraint Name attribute emission (11.7.11).
+> **Status (2026-01-28):** Relationships improved from 71.7% to 76.1% after fixing view Columns/QueryDependencies emission for all views. Full parity improved from 8.7% to 13.0%.
 
 ---
 
