@@ -2214,13 +2214,24 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     };
 
     // Extract inline DEFAULT constraint
-    // Pattern: [NOT NULL] CONSTRAINT [name] DEFAULT (value) or just DEFAULT (value)
-    // IMPORTANT: In SQL Server, "CONSTRAINT [name] NOT NULL DEFAULT" names the NOT NULL constraint,
-    // NOT the DEFAULT constraint. The DEFAULT constraint name must come AFTER NOT NULL.
-    // Valid: "NOT NULL CONSTRAINT [name] DEFAULT (value)" - names the default
-    // Invalid: "CONSTRAINT [name] NOT NULL DEFAULT (value)" - the name is for NOT NULL, not default
+    // Pattern: CONSTRAINT [name] [NOT NULL] DEFAULT (value) or just DEFAULT (value)
+    // In SQL Server, CONSTRAINT [name] before a DEFAULT names the DEFAULT constraint.
+    // NOT NULL is a column property (not a nameable constraint), so CONSTRAINT [name] NOT NULL DEFAULT
+    // names the DEFAULT constraint, not the NOT NULL property.
     let default_constraint_name;
     let default_value;
+
+    // Try named constraint with NOT NULL between CONSTRAINT name and DEFAULT:
+    // Pattern: CONSTRAINT [name] NOT NULL DEFAULT ((value)) or CONSTRAINT [name] NULL DEFAULT ((value))
+    let named_default_with_nullability_paren_re = Regex::new(
+        r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+(?:NOT\s+)?NULL\s+DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))",
+    )
+    .ok()?;
+
+    // Try named constraint with NOT NULL between CONSTRAINT name and DEFAULT with function call:
+    // Pattern: CONSTRAINT [name] NOT NULL DEFAULT GETDATE()
+    let named_default_with_nullability_func_re =
+        Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+(?:NOT\s+)?NULL\s+DEFAULT\s+(\w+\(\))").ok()?;
 
     // Try named constraint after NOT NULL with parenthesized value: NOT NULL CONSTRAINT [name] DEFAULT ((value))
     let named_default_after_notnull_paren_re = Regex::new(
@@ -2232,8 +2243,7 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     let named_default_after_notnull_func_re =
         Regex::new(r"(?i)NOT\s+NULL\s+CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\w+\(\))").ok()?;
 
-    // Try named constraint directly before DEFAULT (no NOT NULL in between): CONSTRAINT [name] DEFAULT ((value))
-    // This handles cases like "INT CONSTRAINT [name] DEFAULT (0)" where there's no nullability specified
+    // Try named constraint directly before DEFAULT (no nullability): CONSTRAINT [name] DEFAULT ((value))
     let named_default_direct_paren_re =
         Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))")
             .ok()?;
@@ -2242,58 +2252,48 @@ fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
     let named_default_direct_func_re =
         Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\w+\(\))").ok()?;
 
-    // First check for "NOT NULL CONSTRAINT [name] DEFAULT" pattern (constraint name AFTER NOT NULL)
-    // This is the correct way to name a DEFAULT constraint when nullability is specified
-    if let Some(caps) = named_default_after_notnull_paren_re.captures(col_def) {
+    // Try named constraint with NOT NULL and bare number: CONSTRAINT [name] NOT NULL DEFAULT 0.00
+    let named_default_with_nullability_number_re =
+        Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+(?:NOT\s+)?NULL\s+DEFAULT\s+(-?\d+(?:\.\d+)?)")
+            .ok()?;
+
+    // Try named constraint directly before DEFAULT with bare number: CONSTRAINT [name] DEFAULT 0
+    let named_default_direct_number_re =
+        Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(-?\d+(?:\.\d+)?)").ok()?;
+
+    // Check patterns in order of specificity
+    if let Some(caps) = named_default_with_nullability_paren_re.captures(col_def) {
+        // CONSTRAINT [name] NOT NULL DEFAULT ((value))
+        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
+        default_value = caps.get(2).map(|m| m.as_str().to_string());
+    } else if let Some(caps) = named_default_with_nullability_func_re.captures(col_def) {
+        // CONSTRAINT [name] NOT NULL DEFAULT GETDATE()
+        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
+        default_value = caps.get(2).map(|m| m.as_str().to_string());
+    } else if let Some(caps) = named_default_after_notnull_paren_re.captures(col_def) {
+        // NOT NULL CONSTRAINT [name] DEFAULT ((value))
         default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
         default_value = caps.get(2).map(|m| m.as_str().to_string());
     } else if let Some(caps) = named_default_after_notnull_func_re.captures(col_def) {
+        // NOT NULL CONSTRAINT [name] DEFAULT GETDATE()
         default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
         default_value = caps.get(2).map(|m| m.as_str().to_string());
     } else if let Some(caps) = named_default_direct_paren_re.captures(col_def) {
-        // Check for "CONSTRAINT [name] DEFAULT" - but only if NOT followed by NOT NULL before DEFAULT
-        // This handles cases without nullability specified, but we need to make sure
-        // it doesn't match "CONSTRAINT [name] NOT NULL DEFAULT" which names the NOT NULL constraint
-        // Check if there's "NOT NULL" between CONSTRAINT and the match position
-        // by looking at what comes before "DEFAULT" in the column definition
-        let before_default = col_def
-            .to_uppercase()
-            .find("DEFAULT")
-            .map(|pos| &col_def[..pos])
-            .unwrap_or("");
-        // If "CONSTRAINT [name] NOT NULL" appears before DEFAULT, the name is for NOT NULL, not DEFAULT
-        let has_notnull_after_constraint = Regex::new(r"(?i)CONSTRAINT\s+\[?\w+\]?\s+NOT\s+NULL")
-            .ok()
-            .and_then(|re| re.find(before_default))
-            .is_some();
-
-        if has_notnull_after_constraint {
-            // The CONSTRAINT name is for NOT NULL, not DEFAULT - treat as unnamed default
-            default_constraint_name = None;
-            default_value = caps.get(2).map(|m| m.as_str().to_string());
-        } else {
-            default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-            default_value = caps.get(2).map(|m| m.as_str().to_string());
-        }
+        // CONSTRAINT [name] DEFAULT ((value))
+        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
+        default_value = caps.get(2).map(|m| m.as_str().to_string());
     } else if let Some(caps) = named_default_direct_func_re.captures(col_def) {
-        // Same check for function call variant
-        let before_default = col_def
-            .to_uppercase()
-            .find("DEFAULT")
-            .map(|pos| &col_def[..pos])
-            .unwrap_or("");
-        let has_notnull_after_constraint = Regex::new(r"(?i)CONSTRAINT\s+\[?\w+\]?\s+NOT\s+NULL")
-            .ok()
-            .and_then(|re| re.find(before_default))
-            .is_some();
-
-        if has_notnull_after_constraint {
-            default_constraint_name = None;
-            default_value = caps.get(2).map(|m| m.as_str().to_string());
-        } else {
-            default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-            default_value = caps.get(2).map(|m| m.as_str().to_string());
-        }
+        // CONSTRAINT [name] DEFAULT GETDATE()
+        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
+        default_value = caps.get(2).map(|m| m.as_str().to_string());
+    } else if let Some(caps) = named_default_with_nullability_number_re.captures(col_def) {
+        // CONSTRAINT [name] NOT NULL DEFAULT 0.00
+        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
+        default_value = caps.get(2).map(|m| m.as_str().to_string());
+    } else if let Some(caps) = named_default_direct_number_re.captures(col_def) {
+        // CONSTRAINT [name] DEFAULT 0
+        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
+        default_value = caps.get(2).map(|m| m.as_str().to_string());
     } else {
         // Try unnamed default with parenthesized value: DEFAULT ((value))
         let unnamed_default_paren_re =

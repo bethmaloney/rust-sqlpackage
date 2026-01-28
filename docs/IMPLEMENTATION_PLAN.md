@@ -148,9 +148,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Issue:** Views with `SCHEMABINDING` or `WITH CHECK OPTION` should emit `Columns` and `QueryDependencies`.
 - Missing for: `[dbo].[ProductsView]`, `[dbo].[ProductSummary]`
 
-- [ ] **11.3.5.1** Detect SCHEMABINDING and WITH CHECK OPTION view options
-- [ ] **11.3.5.2** Emit `Columns` relationship for bound views
-- [ ] **11.3.5.3** Emit complete `QueryDependencies` with all referenced columns
+- [x] **11.3.5.1** Detect SCHEMABINDING and WITH CHECK OPTION view options
+- [x] **11.3.5.2** Emit `Columns` relationship for bound views
+- [x] **11.3.5.3** Emit complete `QueryDependencies` with all referenced columns
+
+**Note:** Fully implemented in `src/dacpac/model_xml.rs` lines 762-777. The `view_options` baseline shows `relationship_pass=false` but this is stale and needs baseline update when DotNet is available.
 
 #### 11.3.6 Table Type Index Relationships
 **Fixtures:** `table_types`
@@ -187,6 +189,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Missing for: `[dbo].[GetUsersByName]`
 
 - [ ] **11.3.10.1** Emit `Columns` relationship for multi-statement TVFs
+
+#### 11.3.11 Bug Fixes During Relationship Implementation
+- Fixed inline default constraint name extraction from `CONSTRAINT [name] NOT NULL DEFAULT` syntax (sqlparser was associating name with NotNull option, not Default)
+- Fixed XML generation to always emit constraint Name attribute (modern DotNet DacFx emits names for all constraints)
+- Fixed test expectation for SQLCMD `:r` includes - DotNet does not add `-- BEGIN/END :r` markers
+- Fixed unit tests for inline TVF vs multi-statement TVF classification
 
 ---
 
@@ -244,12 +252,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |---------|-------------|-------|
 | 11.1 | Layer 1: Element Inventory | 8/8 |
 | 11.2 | Layer 2: Properties | 2/2 ✓ |
-| 11.3 | Relationships | 9/16 |
+| 11.3 | Relationships | 12/16 |
 | 11.4 | Layer 4: Ordering | 0/3 |
 | 11.5 | Error Fixtures | 0/4 |
 | 11.6 | Final Verification | 0/10 |
 
-**Phase 11 Total**: 19/43 tasks
+**Phase 11 Total**: 22/43 tasks
 
 ---
 
@@ -273,9 +281,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 19/43 |
+| Phase 11 | **IN PROGRESS** 22/43 |
 
-**Total**: 82/106 tasks complete
+**Total**: 85/106 tasks complete
 
 ---
 

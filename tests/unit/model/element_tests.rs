@@ -332,7 +332,8 @@ END
 }
 
 #[test]
-fn test_model_element_type_name_table_valued_function() {
+fn test_model_element_type_name_inline_table_valued_function() {
+    // This is an inline TVF (RETURNS TABLE with single RETURN SELECT)
     let sql = r#"
 CREATE FUNCTION [dbo].[TVF]()
 RETURNS TABLE
@@ -347,10 +348,8 @@ RETURN (SELECT 1 AS [Val])
         .find(|e| matches!(e, rust_sqlpackage::model::ModelElement::Function(_)));
 
     assert!(func.is_some());
-    assert_eq!(
-        func.unwrap().type_name(),
-        "SqlMultiStatementTableValuedFunction"
-    );
+    // RETURNS TABLE syntax = inline TVF
+    assert_eq!(func.unwrap().type_name(), "SqlInlineTableValuedFunction");
 }
 
 #[test]

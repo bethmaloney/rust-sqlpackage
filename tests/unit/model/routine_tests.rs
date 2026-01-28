@@ -305,7 +305,8 @@ END
 }
 
 #[test]
-fn test_build_table_valued_function_element() {
+fn test_build_inline_table_valued_function_element() {
+    // This is an inline TVF (RETURNS TABLE with single RETURN SELECT)
     let sql = r#"
 CREATE FUNCTION [dbo].[GetUserOrders]
 (
@@ -331,10 +332,11 @@ RETURN
     assert!(func.is_some(), "Model should contain a function");
     let func = func.unwrap();
     assert_eq!(func.name, "GetUserOrders");
+    // RETURNS TABLE syntax = inline TVF
     assert_eq!(
         func.function_type,
-        rust_sqlpackage::model::FunctionType::TableValued,
-        "Should be table-valued function"
+        rust_sqlpackage::model::FunctionType::InlineTableValued,
+        "Should be inline table-valued function"
     );
 }
 

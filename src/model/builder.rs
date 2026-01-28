@@ -427,19 +427,50 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }
 
                 // Extract inline default constraints from column definitions
-                // IMPORTANT: In SQL Server, "CONSTRAINT [name] NOT NULL DEFAULT" names the NOT NULL
-                // constraint, NOT the DEFAULT constraint. Only "NOT NULL CONSTRAINT [name] DEFAULT"
-                // names the default. Since sqlparser associates the name with NOT NULL in the first
-                // case, we should NOT use that name for the DEFAULT - it makes the default unnamed.
+                // In SQL Server, CONSTRAINT [name] applies to the DEFAULT that follows it,
+                // regardless of whether NOT NULL appears between them. NOT NULL is a column
+                // property, not a nameable constraint. The syntax "CONSTRAINT [name] NOT NULL DEFAULT"
+                // names the DEFAULT constraint, not the NOT NULL property.
+                //
+                // sqlparser may associate the constraint name with the NotNull option or with
+                // the Default option depending on the exact syntax. We need to find the constraint
+                // name that precedes the DEFAULT in the option list.
                 for col in &create_table.columns {
-                    for option in &col.options {
+                    // Find any constraint name in the column options that should apply to DEFAULT
+                    let mut pending_constraint_name: Option<String> = None;
+                    let mut default_option_index: Option<usize> = None;
+
+                    // First pass: find the DEFAULT option and any preceding constraint name
+                    for (i, option) in col.options.iter().enumerate() {
+                        // Track any constraint name we encounter
+                        if option.name.is_some() {
+                            pending_constraint_name = option.name.as_ref().map(|n| n.value.clone());
+                        }
+                        // If this is a DEFAULT option, record its index
+                        if matches!(option.option, ColumnOption::Default(_)) {
+                            default_option_index = Some(i);
+                            break; // Stop at the DEFAULT - we want the preceding constraint name
+                        }
+                    }
+
+                    // Second pass: extract DEFAULT with the correct constraint name
+                    for (i, option) in col.options.iter().enumerate() {
                         if let ColumnOption::Default(expr) = &option.option {
-                            // Only use a name if explicitly on the DEFAULT option itself
-                            let has_explicit_name = option.name.is_some();
-                            let constraint_name = option
-                                .name
-                                .as_ref()
-                                .map(|n| n.value.clone())
+                            // Use the constraint name if:
+                            // 1. It's directly on the DEFAULT option, OR
+                            // 2. We found a constraint name before the DEFAULT option
+                            let explicit_name =
+                                option.name.as_ref().map(|n| n.value.clone()).or_else(|| {
+                                    // Check if there was a preceding constraint name and this is the DEFAULT
+                                    if default_option_index == Some(i) {
+                                        pending_constraint_name.clone()
+                                    } else {
+                                        None
+                                    }
+                                });
+
+                            let has_explicit_name = explicit_name.is_some();
+                            let constraint_name = explicit_name
                                 .unwrap_or_else(|| format!("DF_{}_{}", name, col.name.value));
 
                             model.add_element(ModelElement::Constraint(ConstraintElement {
