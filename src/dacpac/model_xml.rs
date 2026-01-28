@@ -401,19 +401,13 @@ fn write_schema<W: Write>(writer: &mut Writer<W>, schema: &SchemaElement) -> any
     elem.push_attribute(("Type", "SqlSchema"));
     elem.push_attribute(("Name", format!("[{}]", schema.name).as_str()));
 
-    // If no authorization, use empty element; otherwise write with relationship
-    if schema.authorization.is_none() {
-        writer.write_event(Event::Empty(elem))?;
-    } else {
-        writer.write_event(Event::Start(elem))?;
+    writer.write_event(Event::Start(elem))?;
 
-        // Write Authorizer relationship
-        if let Some(ref auth) = schema.authorization {
-            write_authorizer_relationship(writer, auth)?;
-        }
+    // Write Authorizer relationship - DotNet always emits this, defaulting to dbo
+    let auth = schema.authorization.as_deref().unwrap_or("dbo");
+    write_authorizer_relationship(writer, auth)?;
 
-        writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    }
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
 }
 

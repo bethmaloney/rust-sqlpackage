@@ -217,6 +217,17 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Added `filter_predicate` field to `IndexElement` for potential future use, but it is NOT emitted in model.xml since DotNet doesn't emit it
 - Baseline shows `relationship_pass=false` but this is stale - needs update when DotNet available
 
+#### 11.3.13 Schema Default Authorizer
+**Fixtures:** `e2e_simple`, `e2e_comprehensive`, `element_types`
+**Status:** ✓ RESOLVED - Default Authorizer now emitted for all schemas.
+
+- [x] **11.3.13.1** Emit default Authorizer relationship (dbo) for schemas without explicit AUTHORIZATION
+
+**Implementation Notes:**
+- DotNet always emits an Authorizer relationship for schemas, defaulting to `[dbo]` when no explicit AUTHORIZATION clause is specified
+- Modified `write_schema()` in model_xml.rs to always write the Authorizer relationship
+- Fixed 4 relationship mismatches across 3 fixtures (e2e_simple: 1, e2e_comprehensive: 2, element_types: 1)
+
 ---
 
 ### 11.4 Layer 4: Element Ordering
@@ -340,13 +351,13 @@ Column-level constraints are now correctly emitted without Name attributes (inli
 |---------|-------------|-------|--------|
 | 11.1 | Layer 1: Element Inventory | 8/8 | Complete |
 | 11.2 | Layer 2: Properties | 2/2 | Complete |
-| 11.3 | Relationships | 18/18 | Complete |
+| 11.3 | Relationships | 19/19 | Complete |
 | 11.4 | Layer 4: Ordering | 2/3 | In Progress (4 fixtures still fail) |
 | 11.5 | Error Fixtures | 0/4 | Ready to investigate (DotNet available) |
 | 11.6 | Final Verification | 3/10 | In Progress |
 | 11.7 | Inline Constraint Handling | 11/11 | Complete |
 
-**Phase 11 Total**: 44/56 tasks
+**Phase 11 Total**: 45/57 tasks
 
 > **Status (2026-01-28):** Layer 4 ordering improved from 15.2% (7/46) to 91.3% (42/46) after implementing DotNet's (Name, Type) sort algorithm. Full parity improved to 69.6% (32/46).
 
@@ -372,9 +383,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 44/56 |
+| Phase 11 | **IN PROGRESS** 45/57 |
 
-**Total**: 107/119 tasks complete
+**Total**: 108/120 tasks complete
 
 ---
 
