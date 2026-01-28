@@ -230,6 +230,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     }
 
                     // Add inline default constraints from column definitions
+                    // DotNet DacFx treats ALL column-level constraints as inline
                     for col in columns {
                         if let Some(default_value) = &col.default_value {
                             // Use explicit constraint name if provided, otherwise generate one
@@ -237,7 +238,6 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 .default_constraint_name
                                 .clone()
                                 .unwrap_or_else(|| format!("DF_{}_{}", name, col.name));
-                            let is_inline = col.default_constraint_name.is_none();
                             model.add_element(ModelElement::Constraint(ConstraintElement {
                                 name: constraint_name,
                                 table_schema: schema.clone(),
@@ -248,16 +248,16 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline,
+                                is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
                             }));
                         }
                     }
 
                     // Add inline CHECK constraints from column definitions
+                    // DotNet DacFx treats ALL column-level constraints as inline
                     for col in columns {
                         if let Some(check_expr) = &col.check_expression {
-                            let is_inline = col.check_constraint_name.is_none();
                             let constraint_name = col
                                 .check_constraint_name
                                 .clone()
@@ -272,7 +272,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline,
+                                is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
                             }));
                         }
@@ -387,12 +387,12 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }
 
                 // Extract inline column constraints (PRIMARY KEY, UNIQUE on columns)
-                // These can be truly inline (anonymous) or named with CONSTRAINT keyword
+                // DotNet DacFx treats ALL column-level constraints as inline, regardless
+                // of whether they have explicit CONSTRAINT names. Only table-level constraints
+                // (at end of CREATE TABLE or via ALTER TABLE) are treated as named.
                 for col in &create_table.columns {
                     for option in &col.options {
                         if let ColumnOption::Unique { is_primary, .. } = &option.option {
-                            // Check if constraint has an explicit name via CONSTRAINT keyword
-                            let has_explicit_name = option.name.is_some();
                             let constraint_name = option
                                 .name
                                 .as_ref()
@@ -421,7 +421,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline: !has_explicit_name, // Only inline if no CONSTRAINT keyword
+                                is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
                             }));
                         }
@@ -429,6 +429,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }
 
                 // Extract inline default constraints from column definitions
+                // DotNet DacFx treats ALL column-level constraints as inline, regardless
+                // of whether they have explicit CONSTRAINT names.
+                //
                 // In SQL Server, CONSTRAINT [name] applies to the DEFAULT that follows it,
                 // regardless of whether NOT NULL appears between them. NOT NULL is a column
                 // property, not a nameable constraint. The syntax "CONSTRAINT [name] NOT NULL DEFAULT"
@@ -471,7 +474,6 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                     }
                                 });
 
-                            let has_explicit_name = explicit_name.is_some();
                             let constraint_name = explicit_name
                                 .unwrap_or_else(|| format!("DF_{}_{}", name, col.name.value));
 
@@ -485,7 +487,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline: !has_explicit_name,
+                                is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
                             }));
                         }
@@ -493,10 +495,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }
 
                 // Extract inline CHECK constraints from column definitions
+                // DotNet DacFx treats ALL column-level constraints as inline, regardless
+                // of whether they have explicit CONSTRAINT names.
                 for col in &create_table.columns {
                     for option in &col.options {
                         if let ColumnOption::Check(expr) = &option.option {
-                            let is_inline = option.name.is_none();
                             let constraint_name = option
                                 .name
                                 .as_ref()
@@ -512,7 +515,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline,
+                                is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
                             }));
                         }

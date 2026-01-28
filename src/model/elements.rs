@@ -308,8 +308,11 @@ pub struct ConstraintElement {
     pub referenced_columns: Option<Vec<String>>,
     /// Whether this constraint is clustered (for PK/unique)
     pub is_clustered: Option<bool>,
-    /// Whether this is an inline constraint (defined on column without CONSTRAINT keyword)
-    /// Inline constraints have no Name attribute in XML and get SqlInlineConstraintAnnotation
+    /// Whether this is an inline constraint (defined within a column definition).
+    /// DotNet DacFx treats ALL column-level constraints as inline, regardless of whether
+    /// they have explicit CONSTRAINT names. Only table-level constraints (at end of
+    /// CREATE TABLE or via ALTER TABLE) are treated as non-inline.
+    /// Inline constraints have no Name attribute in XML and get SqlInlineConstraintAnnotation.
     pub is_inline: bool,
     /// Disambiguator for SqlInlineConstraintAnnotation (inline constraints only)
     /// Also used for AttachedAnnotation on named constraints that reference a table's disambiguator

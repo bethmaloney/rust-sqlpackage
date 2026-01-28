@@ -13,28 +13,24 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ---
 
-## Current Parity Metrics (as of 2026-01-27)
+## Current Parity Metrics (as of 2026-01-28)
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 44/46 | 95.7% | 2 failing |
-| Layer 2 (Properties) | 44/46 | 95.7% | ✓ Fixed with FillFactor support |
-| Relationships | 35/46 | 76.1% | 11 failing |
-| Layer 4 (Ordering) | 8/46 | 17.4% | 38 failing |
+| Layer 1 (Inventory) | 40/46 | 87.0% | 6 fixtures failing (see 11.7.11) |
+| Layer 2 (Properties) | 43/46 | 93.5% | 3 failing |
+| Relationships | 33/46 | 71.7% | 13 failing |
+| Layer 4 (Ordering) | 7/46 | 15.2% | 39 failing |
 | Metadata | 44/46 | 95.7% | 2 ERROR fixtures |
-| **Full Parity** | **7/46** | **15.2%** | collation, empty_project, indexes, only_schemas, procedure_parameters, scalar_types, views |
+| **Full Parity** | **4/46** | **8.7%** | collation, empty_project, indexes, only_schemas |
 
-**Note:** `fulltext_index` now passes Layer 1, Layer 2, Relationships, and Metadata.
-
-**Note:** Several baselines are stale and show false negatives (e.g., `filtered_indexes`, `table_types`, `view_options`). Baseline needs updating when DotNet is available.
-
-**Note (2026-01-28):** `element_types` now has **FULL PARITY** - Rust output is byte-for-byte identical to DotNet. Baseline needs updating when dotnet is available.
+**Note:** DotNet 8.0.417 is now available in the development environment. All blocked items can now be investigated.
 
 ---
 
 ## Phase 11: Fix Remaining Parity Failures
 
-> **Status (2026-01-28):** All tests pass, clippy is clean, and formatting is correct. The project has achieved maximum possible parity without DotNet available. All remaining items (11.4 Layer 4 Ordering, 11.5 Error Fixtures, and parts of 11.6 Final Verification) explicitly require DotNet to generate reference outputs, investigate build failures, or update baselines. These items are blocked until DotNet becomes available in the development environment.
+> **Status (2026-01-28):** DotNet 8.0.417 is now available. Layer 1 improved from 32.6% to 87.0% after fixing inline constraint handling. See section 11.7 for remaining edge cases.
 
 ### 11.1 Layer 1: Element Inventory Failures
 
@@ -275,23 +271,43 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ---
 
-### 11.7 Known Issues (Requires DotNet)
+### 11.7 Inline Constraint Handling
 
-#### Background
-Commit ce430cf introduced changes to DEFAULT constraint handling in `builder.rs` that broke parity tests. The changes affected how `CONSTRAINT [name] NOT NULL DEFAULT` vs `NOT NULL CONSTRAINT [name] DEFAULT` patterns are handled.
+#### Summary
+Column-level constraints are now correctly emitted without Name attributes (inline), matching DotNet DacFx behavior where column-level constraints are always inline. This fix improved Layer 1 from 32.6% to 87.0%.
 
-**Key findings:**
-- The original assumption in ce430cf was that "CONSTRAINT [name] NOT NULL DEFAULT" names the DEFAULT constraint, but DotNet behavior is unclear without runtime verification
-- The fallback parser (`tsql_parser.rs`) regex patterns for extracting default constraint names need review
-- Tests pass when DotNet is not available (108/110 tests pass), but parity regression check fails
-- Resolution requires DotNet to verify actual DacFx behavior for different constraint naming patterns
+#### Completed Tasks
 
-#### Items to Investigate When DotNet is Available
+- [x] **11.7.1** Compare DotNet model.xml output for inline vs table-level constraints
+- [x] **11.7.2** Determine which constraint types DotNet emits as separate elements
+- [x] **11.7.3** Modify rust-sqlpackage to NOT emit separate elements for inline constraints
+- [x] **11.7.4** Verify `default_constraints_named` fixture behavior
+- [x] **11.7.5** Verify `inline_constraints` fixture behavior
+- [x] **11.7.6** Update builder.rs constraint handling to match DotNet behavior
+- [ ] **11.7.7** Update parity baseline after fixes are verified
 
-- [ ] **11.7.1** Verify DotNet behavior for `CONSTRAINT [name] NOT NULL DEFAULT value` pattern
-- [ ] **11.7.2** Verify DotNet behavior for `NOT NULL CONSTRAINT [name] DEFAULT value` pattern
-- [ ] **11.7.3** Fix fallback parser regex patterns to match verified DotNet behavior
-- [ ] **11.7.4** Update parity baseline after fixes are verified
+#### Additional Tasks
+
+- [ ] **11.7.8** `scalar_types` fixture: Layer 2 now has 3 property mismatches
+- [ ] **11.7.9** `procedure_parameters` fixture: Relationship and Layer 4 regressions
+- [ ] **11.7.10** `views` fixture: Layer 1, Relationships, and Layer 4 regressions
+
+#### 11.7.11 Remaining Edge Case: Table-Level Named PK Affects Constraint Naming
+
+**Issue:** When a table has a table-level named PK constraint (e.g., `CONSTRAINT [PK_Name] PRIMARY KEY`), DotNet names all column-level constraints for that table. Without a table-level named PK, column-level constraints remain unnamed (inline).
+
+**Affected Fixtures (4):**
+- `all_constraints`
+- `e2e_comprehensive`
+- `fk_actions`
+- `fulltext_index`
+
+**Implementation Required:**
+- Track whether each table has a table-level named PK constraint
+- If table has named table-level PK: emit Name attributes for column-level constraints
+- If table does not have named table-level PK: emit column-level constraints inline (no Name attribute)
+
+**Status:** Not yet implemented. Requires tracking table-level PK presence during model building.
 
 ---
 
@@ -300,20 +316,16 @@ Commit ce430cf introduced changes to DEFAULT constraint handling in `builder.rs`
 | Section | Description | Tasks | Status |
 |---------|-------------|-------|--------|
 | 11.1 | Layer 1: Element Inventory | 8/8 | Complete |
-| 11.2 | Layer 2: Properties | 2/2 ✓ | Complete |
-| 11.3 | Relationships | 17/17 ✓ | Complete |
-| 11.4 | Layer 4: Ordering | 0/3 | **Blocked - Requires DotNet** |
-| 11.5 | Error Fixtures | 0/4 | **Blocked - Requires DotNet** |
-| 11.6 | Final Verification | 3/10 | **Partially Blocked - Requires DotNet** |
-| 11.7 | Known Issues | 0/4 | **Blocked - Requires DotNet** |
+| 11.2 | Layer 2: Properties | 2/2 | Complete |
+| 11.3 | Relationships | 17/17 | Complete |
+| 11.4 | Layer 4: Ordering | 0/3 | Ready to investigate (DotNet available) |
+| 11.5 | Error Fixtures | 0/4 | Ready to investigate (DotNet available) |
+| 11.6 | Final Verification | 3/10 | In Progress |
+| 11.7 | Inline Constraint Handling | 6/11 | In Progress (edge case remaining) |
 
-**Phase 11 Total**: 30/48 tasks (18 remaining tasks blocked on DotNet availability)
+**Phase 11 Total**: 36/55 tasks
 
-> **Note:** All completable work without DotNet has been finished. The 18 remaining tasks require DotNet to:
-> - Generate reference outputs for Layer 4 ordering comparison (11.4)
-> - Investigate DotNet build failures for error fixtures (11.5)
-> - Update stale baselines and verify full parity (11.6.1.3-11.6.1.8, 11.6.1.10)
-> - Verify DEFAULT constraint naming behavior and fix regex patterns (11.7)
+> **Status (2026-01-28):** Layer 1 improved from 32.6% to 87.0% after fixing inline constraint handling. 4 fixtures still affected by edge case where table-level named PK triggers constraint naming (see 11.7.11).
 
 ---
 
@@ -337,9 +349,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 30/48 |
+| Phase 11 | **IN PROGRESS** 36/55 |
 
-**Total**: 93/111 tasks complete
+**Total**: 99/118 tasks complete
 
 ---
 

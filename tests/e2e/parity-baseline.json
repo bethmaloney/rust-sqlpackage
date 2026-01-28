@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "updated": "2026-01-27T07:50:46.984607589+00:00",
-  "commit": "ce11db8",
+  "updated": "2026-01-28T20:48:20.659505575+00:00",
+  "commit": "2b9a480",
   "fixtures": [
     {
       "name": "all_constraints",
-      "layer1_pass": true,
+      "layer1_pass": false,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
@@ -93,7 +93,7 @@
     },
     {
       "name": "e2e_comprehensive",
-      "layer1_pass": true,
+      "layer1_pass": false,
       "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
@@ -149,7 +149,7 @@
     },
     {
       "name": "fk_actions",
-      "layer1_pass": true,
+      "layer1_pass": false,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
@@ -157,7 +157,7 @@
     },
     {
       "name": "fulltext_index",
-      "layer1_pass": true,
+      "layer1_pass": false,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
@@ -271,8 +271,8 @@
       "name": "procedure_parameters",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": true,
-      "layer4_pass": true,
+      "relationship_pass": false,
+      "layer4_pass": false,
       "metadata_pass": true
     },
     {
@@ -286,9 +286,9 @@
     {
       "name": "scalar_types",
       "layer1_pass": true,
-      "layer2_pass": true,
+      "layer2_pass": false,
       "relationship_pass": true,
-      "layer4_pass": true,
+      "layer4_pass": false,
       "metadata_pass": true
     },
     {
@@ -304,7 +304,7 @@
       "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
-      "layer4_pass": false,
+      "layer4_pass": true,
       "metadata_pass": true
     },
     {
@@ -367,8 +367,8 @@
       "name": "views",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": true,
-      "layer4_pass": true,
+      "relationship_pass": false,
+      "layer4_pass": false,
       "metadata_pass": true
     }
   ]

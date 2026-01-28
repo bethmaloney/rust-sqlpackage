@@ -2710,9 +2710,11 @@ fn write_constraint<W: Write>(
 
     let mut elem = BytesStart::new("Element");
     elem.push_attribute(("Type", type_name));
-    // Always emit Name attribute - modern DotNet DacFx converts inline constraints
-    // to named constraint elements with auto-generated names like DF_TableName_ColumnName
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Only emit Name attribute for named constraints (with explicit CONSTRAINT keyword).
+    // Inline constraints (anonymous) do not have a Name attribute in DotNet DacFx output.
+    if !constraint.is_inline {
+        elem.push_attribute(("Name", full_name.as_str()));
+    }
     writer.write_event(Event::Start(elem))?;
 
     // Write IsClustered property for primary keys and unique constraints

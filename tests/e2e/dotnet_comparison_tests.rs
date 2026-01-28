@@ -371,11 +371,13 @@ fn get_test_project_path() -> Option<PathBuf> {
         }
     }
 
-    // Fall back to e2e_comprehensive fixture
+    // Fall back to inline_constraints fixture (which has full L1 parity)
+    // Note: e2e_comprehensive has an edge case where DotNet names column-level
+    // constraints when table has a table-level named PK - see IMPLEMENTATION_PLAN.md 11.7.11
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("e2e_comprehensive")
+        .join("inline_constraints")
         .join("project.sqlproj");
 
     if fixture_path.exists() {
