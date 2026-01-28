@@ -34,6 +34,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Phase 11: Fix Remaining Parity Failures
 
+> **Status (2026-01-28):** All tests pass, clippy is clean, and formatting is correct. The project has achieved maximum possible parity without DotNet available. All remaining items (11.4 Layer 4 Ordering, 11.5 Error Fixtures, and parts of 11.6 Final Verification) explicitly require DotNet to generate reference outputs, investigate build failures, or update baselines. These items are blocked until DotNet becomes available in the development environment.
+
 ### 11.1 Layer 1: Element Inventory Failures
 
 #### 11.1.1 WITH NOCHECK Constraints Not Captured
@@ -275,16 +277,21 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ### Phase 11 Progress
 
-| Section | Description | Tasks |
-|---------|-------------|-------|
-| 11.1 | Layer 1: Element Inventory | 8/8 |
-| 11.2 | Layer 2: Properties | 2/2 ✓ |
-| 11.3 | Relationships | 17/17 ✓ |
-| 11.4 | Layer 4: Ordering | 0/3 |
-| 11.5 | Error Fixtures | 0/4 |
-| 11.6 | Final Verification | 3/10 |
+| Section | Description | Tasks | Status |
+|---------|-------------|-------|--------|
+| 11.1 | Layer 1: Element Inventory | 8/8 | Complete |
+| 11.2 | Layer 2: Properties | 2/2 ✓ | Complete |
+| 11.3 | Relationships | 17/17 ✓ | Complete |
+| 11.4 | Layer 4: Ordering | 0/3 | **Blocked - Requires DotNet** |
+| 11.5 | Error Fixtures | 0/4 | **Blocked - Requires DotNet** |
+| 11.6 | Final Verification | 3/10 | **Partially Blocked - Requires DotNet** |
 
-**Phase 11 Total**: 30/44 tasks
+**Phase 11 Total**: 30/44 tasks (14 remaining tasks blocked on DotNet availability)
+
+> **Note:** All completable work without DotNet has been finished. The 14 remaining tasks require DotNet to:
+> - Generate reference outputs for Layer 4 ordering comparison (11.4)
+> - Investigate DotNet build failures for error fixtures (11.5)
+> - Update stale baselines and verify full parity (11.6.1.3-11.6.1.8, 11.6.1.10)
 
 ---
 
