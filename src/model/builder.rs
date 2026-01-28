@@ -766,65 +766,27 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
     Ok(model)
 }
 
-/// Get the sort priority for an element type (lower = earlier in output)
-/// This matches the DotNet DacFx element ordering:
-///   1. SqlSchema
-///   2. SqlTable
-///   3. SqlView
-///   4. SqlProcedure
-///   5. SqlScalarFunction / SqlInlineTableValuedFunction / SqlMultiStatementTableValuedFunction
-///   6. SqlIndex
-///   7. SqlFullTextIndex
-///   8. SqlFullTextCatalog
-///   9. SqlPrimaryKeyConstraint
-///   10. SqlForeignKeyConstraint
-///   11. SqlUniqueConstraint
-///   12. SqlCheckConstraint
-///   13. SqlDefaultConstraint
-///   14. SqlSequence
-///   15. SqlTableType
-///   16. SqlExtendedProperty
-///   17. SqlDmlTrigger (Raw elements)
-fn element_type_priority(element: &ModelElement) -> u32 {
-    match element {
-        ModelElement::Schema(_) => 1,
-        ModelElement::Table(_) => 2,
-        ModelElement::View(_) => 3,
-        ModelElement::Procedure(_) => 4,
-        ModelElement::Function(_) => 5,
-        ModelElement::Index(_) => 6,
-        ModelElement::FullTextIndex(_) => 7,
-        ModelElement::FullTextCatalog(_) => 8,
-        ModelElement::Constraint(c) => match c.constraint_type {
-            ConstraintType::PrimaryKey => 9,
-            ConstraintType::ForeignKey => 10,
-            ConstraintType::Unique => 11,
-            ConstraintType::Check => 12,
-            ConstraintType::Default => 13,
-        },
-        ModelElement::Sequence(_) => 14,
-        ModelElement::UserDefinedType(_) => 15,
-        ModelElement::ScalarType(_) => 15, // Same priority as table types
-        ModelElement::ExtendedProperty(_) => 16,
-        ModelElement::Trigger(_) => 17,
-        ModelElement::Raw(r) => match r.sql_type.as_str() {
-            "SqlDmlTrigger" => 17,
-            _ => 99, // Unknown raw types go last
-        },
-    }
-}
-
-/// Sort elements by type priority then by name for deterministic output
+/// Sort elements by (Name, Type) to match DotNet DacFx ordering.
+///
+/// DotNet sorts elements alphabetically (case-insensitive) by:
+/// 1. Name attribute value (empty string for elements without Name attribute)
+/// 2. Type attribute value (e.g., "SqlCheckConstraint", "SqlTable")
+///
+/// This means elements without Name attribute (inline constraints) sort before
+/// elements with Name, and within the same Name prefix, elements are sorted by Type.
 fn sort_elements(elements: &mut [ModelElement]) {
     elements.sort_by(|a, b| {
-        let priority_a = element_type_priority(a);
-        let priority_b = element_type_priority(b);
+        // Get Name attribute value (empty string if not emitted in XML)
+        let name_a = a.xml_name_attr().to_lowercase();
+        let name_b = b.xml_name_attr().to_lowercase();
 
-        // First compare by type priority
-        match priority_a.cmp(&priority_b) {
+        // Primary sort: by Name attribute (empty sorts first, case-insensitive)
+        match name_a.cmp(&name_b) {
             std::cmp::Ordering::Equal => {
-                // Same type, sort by full_name for deterministic ordering
-                a.full_name().cmp(&b.full_name())
+                // Same name, sort by Type attribute alphabetically (case-insensitive)
+                a.type_name()
+                    .to_lowercase()
+                    .cmp(&b.type_name().to_lowercase())
             }
             other => other,
         }

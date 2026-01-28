@@ -66,12 +66,32 @@ pub fn generate_model_xml<W: Write>(
     // Model element
     xml_writer.write_event(Event::Start(BytesStart::new("Model")))?;
 
-    // Write SqlDatabaseOptions element first
-    write_database_options(&mut xml_writer, project)?;
+    // Write elements in DotNet sort order: (Name, Type) where empty Name sorts first.
+    // SqlDatabaseOptions has sort key ("", "sqldatabaseoptions") and must be interleaved
+    // at the correct position among the other elements.
+    // Comparison is case-insensitive to match DotNet's sorting behavior.
+    let db_options_sort_key = ("".to_string(), "sqldatabaseoptions".to_string());
+    let mut db_options_written = false;
 
-    // Write each element
     for element in &model.elements {
+        // Check if SqlDatabaseOptions should be written before this element
+        if !db_options_written {
+            let elem_sort_key = (
+                element.xml_name_attr().to_lowercase(),
+                element.type_name().to_lowercase(),
+            );
+            if db_options_sort_key <= elem_sort_key {
+                write_database_options(&mut xml_writer, project)?;
+                db_options_written = true;
+            }
+        }
         write_element(&mut xml_writer, element)?;
+    }
+
+    // Write SqlDatabaseOptions at the end if not yet written (happens when all elements
+    // have empty Name and Type < "SqlDatabaseOptions", which is rare)
+    if !db_options_written {
+        write_database_options(&mut xml_writer, project)?;
     }
 
     // Close Model

@@ -90,6 +90,24 @@ impl ModelElement {
             ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),
         }
     }
+
+    /// Get the Name attribute value as it appears in XML.
+    /// Returns empty string for elements without Name attribute (SqlDatabaseOptions, inline constraints).
+    /// DotNet sorts elements by (Name, Type) where empty names sort first.
+    pub fn xml_name_attr(&self) -> String {
+        match self {
+            // Constraints: emit_name determines if Name attribute is present
+            ModelElement::Constraint(c) => {
+                if c.emit_name {
+                    format!("[{}].[{}]", c.table_schema, c.name)
+                } else {
+                    String::new() // No Name attribute for inline constraints without emit_name
+                }
+            }
+            // All other elements always have Name attribute (or none like SqlDatabaseOptions)
+            _ => self.full_name(),
+        }
+    }
 }
 
 /// Schema element
