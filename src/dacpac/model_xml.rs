@@ -2162,6 +2162,7 @@ fn extract_procedure_body_only(definition: &str) -> String {
 /// This is the AS that's:
 /// 1. At the end of a line (AS\n or AS\r\n) followed by BEGIN or other body content
 /// 2. Or followed directly by BEGIN (AS BEGIN)
+///
 /// We avoid matching "AS alias" patterns in SELECT statements
 fn find_body_separator_as(s: &str) -> Option<usize> {
     let upper = s.to_uppercase();
@@ -3551,6 +3552,9 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
     // Pattern: standalone [column] (unqualified)
     let single_bracket_regex = regex::Regex::new(r"\[([^\]]+)\]").unwrap();
 
+    // Pattern: alias.[column] references (for resolving aliases)
+    let alias_col_regex = regex::Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap();
+
     // Process INSERT statements with SELECT FROM inserted/deleted (without JOIN)
     // Pattern: INSERT INTO [schema].[table] ([cols]) SELECT ... FROM inserted|deleted;
     // The negative lookahead (?!\s+\w+\s+(?:INNER\s+)?JOIN) ensures we don't match JOIN cases
@@ -3637,8 +3641,6 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         table_aliases.insert(alias1.to_lowercase(), parent_ref.to_string());
         table_aliases.insert(alias2.to_lowercase(), parent_ref.to_string());
 
-        let alias_col_regex = regex::Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap();
-
         // Emit column references - SELECT clause columns
         // DotNet deduplicates but allows duplicates for different aliases referring to same column
         for col_match in alias_col_regex.captures_iter(select_expr) {
@@ -3682,8 +3684,6 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
             seen.insert(table_ref.clone());
             deps.push(BodyDependency::ObjectRef(table_ref.clone()));
         }
-
-        let alias_col_regex = regex::Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap();
 
         // Process ON clause FIRST - extract alias.[col] patterns (these can be duplicated)
         for col_match in alias_col_regex.captures_iter(on_clause) {

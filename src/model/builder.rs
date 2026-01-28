@@ -1490,11 +1490,9 @@ fn extract_fill_factor(with_options: &[Expr]) -> Option<u8> {
                 if let Expr::Identifier(ident) = left.as_ref() {
                     if ident.value.to_uppercase() == "FILLFACTOR" {
                         // Extract the numeric value from the right side
-                        if let Expr::Value(value) = right.as_ref() {
-                            if let sqlparser::ast::Value::Number(n, _) = value {
-                                if let Ok(val) = n.parse::<u8>() {
-                                    return Some(val);
-                                }
+                        if let Expr::Value(sqlparser::ast::Value::Number(n, _)) = right.as_ref() {
+                            if let Ok(val) = n.parse::<u8>() {
+                                return Some(val);
                             }
                         }
                     }

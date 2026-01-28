@@ -88,6 +88,21 @@ fn sqlpackage_available() -> bool {
     get_sqlpackage_path().is_some()
 }
 
+/// Check if SQL Server is available by attempting a quick connection
+fn sql_server_available() -> bool {
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let addr = format!("{}:{}", SQL_CONFIG.host, SQL_CONFIG.port);
+    TcpStream::connect_timeout(
+        &addr
+            .parse()
+            .unwrap_or_else(|_| "127.0.0.1:1433".parse().unwrap()),
+        Duration::from_secs(2),
+    )
+    .is_ok()
+}
+
 /// Create a tiberius client config
 fn create_config(database: Option<&str>) -> Config {
     let mut config = Config::new();
@@ -395,6 +410,14 @@ fn test_e2e_build_comprehensive_dacpac() {
 #[tokio::test]
 #[ignore = "Requires SQL Server (configure via .env or environment variables)"]
 async fn test_e2e_sql_server_connectivity() {
+    if !sql_server_available() {
+        eprintln!(
+            "Skipping: SQL Server not available at {}:{}",
+            SQL_CONFIG.host, SQL_CONFIG.port
+        );
+        return;
+    }
+
     // Test basic connectivity to SQL Server
     let mut client = connect(None).await.expect("Should connect to SQL Server");
 
