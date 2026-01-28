@@ -17,7 +17,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 40/46 | 87.0% | 6 fixtures failing (see 11.7.11) |
+| Layer 1 (Inventory) | 44/46 | 95.7% | 2 fixtures failing |
 | Layer 2 (Properties) | 43/46 | 93.5% | 3 failing |
 | Relationships | 33/46 | 71.7% | 13 failing |
 | Layer 4 (Ordering) | 7/46 | 15.2% | 39 failing |
@@ -292,22 +292,27 @@ Column-level constraints are now correctly emitted without Name attributes (inli
 - [ ] **11.7.9** `procedure_parameters` fixture: Relationship and Layer 4 regressions
 - [ ] **11.7.10** `views` fixture: Layer 1, Relationships, and Layer 4 regressions
 
-#### 11.7.11 Remaining Edge Case: Table-Level Named PK Affects Constraint Naming
+#### 11.7.11 Inline Constraint Name Attribute Emission - RESOLVED
 
-**Issue:** When a table has a table-level named PK constraint (e.g., `CONSTRAINT [PK_Name] PRIMARY KEY`), DotNet names all column-level constraints for that table. Without a table-level named PK, column-level constraints remain unnamed (inline).
+**Issue:** DotNet emits the Name attribute for inline constraints based on the position of the CONSTRAINT keyword in the column definition, not the presence of a table-level PK.
 
-**Affected Fixtures (4):**
-- `all_constraints`
-- `e2e_comprehensive`
-- `fk_actions`
-- `fulltext_index`
+**Actual Behavior Found:**
+- Syntax `NOT NULL CONSTRAINT [name] DEFAULT` → Name attribute emitted
+- Syntax `CONSTRAINT [name] NOT NULL DEFAULT` → Name attribute NOT emitted
+- The CONSTRAINT keyword must appear directly on the DEFAULT option for Name to be emitted
 
-**Implementation Required:**
-- Track whether each table has a table-level named PK constraint
-- If table has named table-level PK: emit Name attributes for column-level constraints
-- If table does not have named table-level PK: emit column-level constraints inline (no Name attribute)
+**Affected Fixtures (all now pass Layer 1):**
+- `all_constraints` ✓
+- `e2e_comprehensive` ✓
+- `fk_actions` ✓
+- `fulltext_index` ✓
 
-**Status:** Not yet implemented. Requires tracking table-level PK presence during model building.
+**Implementation Notes:**
+- Added `emit_name: bool` field to `ConstraintElement` to control Name attribute emission
+- For sqlparser path: emit Name only when CONSTRAINT keyword is directly on DEFAULT option
+- For fallback parser path: always `emit_name=false` since syntax position isn't tracked
+
+- [x] **11.7.11** Implement inline constraint Name attribute emission based on CONSTRAINT keyword position
 
 ---
 
@@ -321,11 +326,11 @@ Column-level constraints are now correctly emitted without Name attributes (inli
 | 11.4 | Layer 4: Ordering | 0/3 | Ready to investigate (DotNet available) |
 | 11.5 | Error Fixtures | 0/4 | Ready to investigate (DotNet available) |
 | 11.6 | Final Verification | 3/10 | In Progress |
-| 11.7 | Inline Constraint Handling | 6/11 | In Progress (edge case remaining) |
+| 11.7 | Inline Constraint Handling | 7/11 | In Progress |
 
-**Phase 11 Total**: 36/55 tasks
+**Phase 11 Total**: 37/55 tasks
 
-> **Status (2026-01-28):** Layer 1 improved from 32.6% to 87.0% after fixing inline constraint handling. 4 fixtures still affected by edge case where table-level named PK triggers constraint naming (see 11.7.11).
+> **Status (2026-01-28):** Layer 1 improved from 87.0% to 95.7% after fixing inline constraint Name attribute emission (11.7.11).
 
 ---
 
@@ -349,9 +354,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 36/55 |
+| Phase 11 | **IN PROGRESS** 37/55 |
 
-**Total**: 99/118 tasks complete
+**Total**: 100/118 tasks complete
 
 ---
 

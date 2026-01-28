@@ -2710,9 +2710,11 @@ fn write_constraint<W: Write>(
 
     let mut elem = BytesStart::new("Element");
     elem.push_attribute(("Type", type_name));
-    // Only emit Name attribute for named constraints (with explicit CONSTRAINT keyword).
-    // Inline constraints (anonymous) do not have a Name attribute in DotNet DacFx output.
-    if !constraint.is_inline {
+    // Emit Name attribute based on emit_name flag:
+    // - True for table-level constraints (always named)
+    // - True for inline constraints when table has a named table-level PK
+    // - False for inline constraints when table has no named table-level PK
+    if constraint.emit_name {
         elem.push_attribute(("Name", full_name.as_str()));
     }
     writer.write_event(Event::Start(elem))?;

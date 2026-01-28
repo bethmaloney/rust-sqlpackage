@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "updated": "2026-01-28T20:48:20.659505575+00:00",
-  "commit": "2b9a480",
+  "updated": "2026-01-28T21:51:14.517629195+00:00",
+  "commit": "e0f3548",
   "fixtures": [
     {
       "name": "all_constraints",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
@@ -93,7 +93,7 @@
     },
     {
       "name": "e2e_comprehensive",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": false,
@@ -149,7 +149,7 @@
     },
     {
       "name": "fk_actions",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
@@ -157,7 +157,7 @@
     },
     {
       "name": "fulltext_index",
-      "layer1_pass": false,
+      "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,

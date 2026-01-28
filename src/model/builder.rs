@@ -230,10 +230,12 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     }
 
                     // Add inline default constraints from column definitions
-                    // DotNet DacFx treats ALL column-level constraints as inline
+                    // DotNet emits Name attribute based on CONSTRAINT keyword position:
+                    // - "NOT NULL CONSTRAINT [name] DEFAULT" → Name emitted
+                    // - "CONSTRAINT [name] NOT NULL DEFAULT" → Name NOT emitted
+                    // Since fallback parser doesn't capture position, we default to NOT emitting
                     for col in columns {
                         if let Some(default_value) = &col.default_value {
-                            // Use explicit constraint name if provided, otherwise generate one
                             let constraint_name = col
                                 .default_constraint_name
                                 .clone()
@@ -250,12 +252,13 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                emit_name: false, // Fallback parser doesn't track CONSTRAINT position
                             }));
                         }
                     }
 
                     // Add inline CHECK constraints from column definitions
-                    // DotNet DacFx treats ALL column-level constraints as inline
+                    // Same position-based logic as DEFAULT constraints
                     for col in columns {
                         if let Some(check_expr) = &col.check_expression {
                             let constraint_name = col
@@ -274,6 +277,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                emit_name: false, // Fallback parser doesn't track CONSTRAINT position
                             }));
                         }
                     }
@@ -387,23 +391,20 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }
 
                 // Extract inline column constraints (PRIMARY KEY, UNIQUE on columns)
-                // DotNet DacFx treats ALL column-level constraints as inline, regardless
-                // of whether they have explicit CONSTRAINT names. Only table-level constraints
-                // (at end of CREATE TABLE or via ALTER TABLE) are treated as named.
+                // Extract inline column constraints (PRIMARY KEY, UNIQUE on columns)
+                // DotNet emits Name attribute only if constraint has explicit CONSTRAINT [name]
                 for col in &create_table.columns {
                     for option in &col.options {
                         if let ColumnOption::Unique { is_primary, .. } = &option.option {
-                            let constraint_name = option
-                                .name
-                                .as_ref()
-                                .map(|n| n.value.clone())
-                                .unwrap_or_else(|| {
-                                    if *is_primary {
-                                        format!("PK_{}", name)
-                                    } else {
-                                        format!("UQ_{}_{}", name, col.name.value)
-                                    }
-                                });
+                            let explicit_name = option.name.as_ref().map(|n| n.value.clone());
+                            let has_explicit_name = explicit_name.is_some();
+                            let constraint_name = explicit_name.unwrap_or_else(|| {
+                                if *is_primary {
+                                    format!("PK_{}", name)
+                                } else {
+                                    format!("UQ_{}_{}", name, col.name.value)
+                                }
+                            });
 
                             let constraint_type = if *is_primary {
                                 ConstraintType::PrimaryKey
@@ -423,6 +424,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
                             }));
                         }
                     }
@@ -464,16 +466,24 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                             // Use the constraint name if:
                             // 1. It's directly on the DEFAULT option, OR
                             // 2. We found a constraint name before the DEFAULT option
-                            let explicit_name =
-                                option.name.as_ref().map(|n| n.value.clone()).or_else(|| {
-                                    // Check if there was a preceding constraint name and this is the DEFAULT
-                                    if default_option_index == Some(i) {
-                                        pending_constraint_name.clone()
-                                    } else {
-                                        None
-                                    }
-                                });
+                            //
+                            // DotNet only emits Name attribute when CONSTRAINT keyword is directly
+                            // on the DEFAULT option (NOT NULL CONSTRAINT [name] DEFAULT syntax),
+                            // not when CONSTRAINT keyword precedes NOT NULL (CONSTRAINT [name] NOT NULL DEFAULT syntax)
+                            let name_directly_on_default =
+                                option.name.as_ref().map(|n| n.value.clone());
+                            let explicit_name = name_directly_on_default.clone().or_else(|| {
+                                // Check if there was a preceding constraint name and this is the DEFAULT
+                                if default_option_index == Some(i) {
+                                    pending_constraint_name.clone()
+                                } else {
+                                    None
+                                }
+                            });
 
+                            // Emit Name attribute ONLY if CONSTRAINT keyword is directly on the DEFAULT option
+                            // (i.e., "NOT NULL CONSTRAINT [name] DEFAULT" syntax, not "CONSTRAINT [name] NOT NULL DEFAULT")
+                            let has_explicit_name = name_directly_on_default.is_some();
                             let constraint_name = explicit_name
                                 .unwrap_or_else(|| format!("DF_{}_{}", name, col.name.value));
 
@@ -489,21 +499,20 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
                             }));
                         }
                     }
                 }
 
                 // Extract inline CHECK constraints from column definitions
-                // DotNet DacFx treats ALL column-level constraints as inline, regardless
-                // of whether they have explicit CONSTRAINT names.
+                // DotNet emits Name attribute only if constraint has explicit CONSTRAINT [name]
                 for col in &create_table.columns {
                     for option in &col.options {
                         if let ColumnOption::Check(expr) = &option.option {
-                            let constraint_name = option
-                                .name
-                                .as_ref()
-                                .map(|n| n.value.clone())
+                            let explicit_name = option.name.as_ref().map(|n| n.value.clone());
+                            let has_explicit_name = explicit_name.is_some();
+                            let constraint_name = explicit_name
                                 .unwrap_or_else(|| format!("CK_{}_{}", name, col.name.value));
                             model.add_element(ModelElement::Constraint(ConstraintElement {
                                 name: constraint_name,
@@ -517,6 +526,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
                             }));
                         }
                     }
@@ -537,6 +547,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         is_clustered: None,
                         is_inline: false, // Named constraint (uses CONSTRAINT keyword)
                         inline_constraint_disambiguator: None,
+                        emit_name: true, // Table-level constraints always emit Name
                     }));
                 }
             }
@@ -1227,6 +1238,7 @@ fn constraint_from_extracted(
             is_clustered: Some(*is_clustered),
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
+            emit_name: true, // Table-level constraints always emit Name
         }),
         ExtractedTableConstraint::ForeignKey {
             name,
@@ -1248,6 +1260,7 @@ fn constraint_from_extracted(
             is_clustered: None,
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
+            emit_name: true, // Table-level constraints always emit Name
         }),
         ExtractedTableConstraint::Unique {
             name,
@@ -1268,6 +1281,7 @@ fn constraint_from_extracted(
             is_clustered: Some(*is_clustered),
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
+            emit_name: true, // Table-level constraints always emit Name
         }),
         ExtractedTableConstraint::Check { name, expression } => Some(ConstraintElement {
             name: name.clone(),
@@ -1281,6 +1295,7 @@ fn constraint_from_extracted(
             is_clustered: None,
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
+            emit_name: true, // Table-level constraints always emit Name
         }),
     }
 }
@@ -1393,6 +1408,7 @@ fn constraint_from_table_constraint(
                 is_clustered,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
+                emit_name: true, // Table-level constraints always emit Name
             })
         }
         TableConstraint::ForeignKey {
@@ -1429,6 +1445,7 @@ fn constraint_from_table_constraint(
                 is_clustered: None,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
+                emit_name: true, // Table-level constraints always emit Name
             })
         }
         TableConstraint::Unique { name, columns, .. } => {
@@ -1456,6 +1473,7 @@ fn constraint_from_table_constraint(
                 is_clustered,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
+                emit_name: true, // Table-level constraints always emit Name
             })
         }
         TableConstraint::Check { name, expr } => {
@@ -1476,6 +1494,7 @@ fn constraint_from_table_constraint(
                 is_clustered: None,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
+                emit_name: true, // Table-level constraints always emit Name
             })
         }
         _ => None,

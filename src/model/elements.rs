@@ -317,6 +317,11 @@ pub struct ConstraintElement {
     /// Disambiguator for SqlInlineConstraintAnnotation (inline constraints only)
     /// Also used for AttachedAnnotation on named constraints that reference a table's disambiguator
     pub inline_constraint_disambiguator: Option<u32>,
+    /// Whether to emit the Name attribute in XML.
+    /// - True for all table-level (non-inline) constraints
+    /// - True for inline constraints with explicit CONSTRAINT [name] in SQL
+    /// - False for inline constraints without explicit CONSTRAINT name
+    pub emit_name: bool,
 }
 
 /// Sequence element
