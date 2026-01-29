@@ -19,10 +19,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Relationships | 39/44 | 88.6% | 5 fixtures with relationship differences |
+| Relationships | 40/44 | 90.9% | 4 fixtures with relationship differences |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **39/44** | **88.6%** | 39 fixtures pass all layers |
+| **Full Parity** | **40/44** | **90.9%** | 40 fixtures pass all layers |
 
 **Note:** Error fixtures (`external_reference`, `unresolved_reference`) are now excluded from parity testing since DotNet cannot build them. These test Rust's ability to handle edge cases.
 
@@ -91,13 +91,13 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 - [x] **11.6.1.9** Document any intentional deviations from DotNet behavior
 - [x] **11.6.1.10** Update baseline and confirm no regressions
 
-**Note (2026-01-29):** Baseline updated. Error fixtures excluded from parity testing. Remaining 6 fixtures have relationship differences (not Layer 1-4 or metadata issues). See section 11.8 for details.
+**Note (2026-01-29):** Baseline updated. Error fixtures excluded from parity testing. Remaining 4 fixtures have relationship differences (not Layer 1-4 or metadata issues). See section 11.8 for details.
 
 ---
 
 ### 11.8 Remaining Relationship Differences
 
-The following 5 fixtures have relationship differences that are either intentional design decisions or would require significant changes to the dependency tracking model.
+The following 4 fixtures have relationship differences that are either intentional design decisions or would require significant changes to the dependency tracking model.
 
 #### 11.8.1 ampersand_encoding
 **Issue:** SELECT * handling
@@ -124,14 +124,11 @@ The following 5 fixtures have relationship differences that are either intention
 - **Impact:** Intentional difference - Rust deduplication is a design decision
 
 #### 11.8.5 table_types
-**Status:** MOSTLY RESOLVED - Only 6 relationship differences remain (down from 8)
+**Status:** FULLY RESOLVED
 - **Resolved:** Table type indexes now emit in separate "Indexes" relationship (not "Constraints")
 - **Resolved:** SqlTableTypeDefaultConstraint now generated for columns with DEFAULT values
-- **Remaining (6 differences):** All procedure-related
-  - **BodyDependencies:** Missing for procedures using table-valued parameters
-  - **Parameters:** Missing relationship for table type parameters
-  - **DynamicObjects:** Missing for procedures that use dynamic SQL
-- **Impact:** Minor - affects only procedure/TVP integration, table types themselves are correct
+- **Resolved:** All procedure/TVP relationships now match DotNet
+- **Impact:** None - full parity achieved for this fixture
 
 #### 11.8.6 view_options
 **Issue:** Duplicate refs in GROUP BY clauses
@@ -170,7 +167,7 @@ These differences would require significant changes to the dependency tracking m
 - [x] **11.9.1.5** Added type-level AttachedAnnotation linking to indexes
   - Table types now include attached annotations for their indexes
 
-**Impact:** Reduced table_types relationship differences from 8 to 6 (only procedure-related differences remain)
+**Impact:** Full parity achieved for table_types fixture (0 differences)
 
 ---
 
@@ -185,12 +182,12 @@ These differences would require significant changes to the dependency tracking m
 | 11.5 | Error Fixtures | 4/4 | Complete (excluded from parity testing) |
 | 11.6 | Final Verification | 10/10 | Complete |
 | 11.7 | Inline Constraint Handling | 11/11 | Complete |
-| 11.8 | Remaining Relationship Differences | N/A | Documented (5 fixtures) |
+| 11.8 | Remaining Relationship Differences | N/A | Documented (4 fixtures) |
 | 11.9 | Table Type Fixes | 5/5 | Complete |
 
 **Phase 11 Total**: 62/62 tasks complete
 
-> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 88.6% (39/44). Error fixtures resolved by excluding from parity testing. Remaining 5 relationship differences documented in section 11.8 - some are intentional design decisions (deduplication). Table type index/default fixes completed in section 11.9.
+> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 90.9% (40/44). Error fixtures resolved by excluding from parity testing. Remaining 4 relationship differences documented in section 11.8 - some are intentional design decisions (deduplication). Table type fixes fully completed (100% parity) in section 11.9.
 
 ---
 
