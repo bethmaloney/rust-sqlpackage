@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-29T09:26:30.725351999+00:00",
-  "commit": "42b105d",
+  "updated": "2026-01-29T11:55:21.211396613+00:00",
+  "commit": "3c7a006",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -215,7 +215,7 @@
       "name": "instead_of_triggers",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
     },
@@ -343,7 +343,7 @@
       "name": "view_options",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
     },

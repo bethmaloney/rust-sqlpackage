@@ -8,9 +8,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|-------------|--------|
 | Phase 1-9 | Core implementation (properties, relationships, XML structure, metadata) | 58/58 |
 | Phase 10 | Fix extended properties, function classification, constraint naming, SqlPackage config | 5/5 |
-| Phase 12 | Achieve 100% relationship parity (fix 4 remaining fixtures) | 0/6 |
+| Phase 12 | Achieve 100% relationship parity (fix 2 remaining fixtures) | 1/6 |
 
-**Total Completed**: 63/69 tasks
+**Total Completed**: 67/69 tasks
 
 ---
 
@@ -20,10 +20,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Relationships | 40/44 | 90.9% | 4 fixtures pending (see Phase 12) |
+| Relationships | 42/44 | 95.5% | 2 fixtures pending (see Phase 12) |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **40/44** | **90.9%** | Phase 12 targets 100% |
+| **Full Parity** | **42/44** | **95.5%** | Phase 12 targets 100% |
 
 **Note:** Error fixtures (`external_reference`, `unresolved_reference`) are now excluded from parity testing since DotNet cannot build them. These test Rust's ability to handle edge cases.
 
@@ -80,7 +80,7 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 **Tests:** `test_layered_dacpac_comparison`, `test_layer3_sqlpackage_comparison`
 **File:** `tests/e2e/dotnet_comparison_tests.rs`
 **Status:** DEFERRED - Tests remain ignored because they require 100% relationship parity
-**Issue:** These tests use SqlPackage DeployReport to compare Rust and DotNet dacpacs. They fail due to 4 fixtures with relationship differences.
+**Issue:** These tests use SqlPackage DeployReport to compare Rust and DotNet dacpacs. They fail due to 2 fixtures with relationship differences.
 
 - [ ] **11.6.1.1** (Blocked by Phase 12) Remove `#[ignore]` and verify - requires completing Phase 12
 
@@ -117,25 +117,23 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 - [x] **11.6.1.3** Run parity regression check - 44 fixtures tested (2 excluded)
 - [x] **11.6.1.4** Verify Layer 1 (inventory) at 100%
 - [x] **11.6.1.5** Verify Layer 2 (properties) at 100%
-- [x] **11.6.1.6** Verify Relationships at 90.9% (40/44) - see section 11.8 for remaining differences
+- [x] **11.6.1.6** Verify Relationships at 95.5% (42/44) - see section 11.8 for remaining differences
 - [x] **11.6.1.7** Verify Layer 4 (ordering) at 100%
 - [x] **11.6.1.8** Verify Metadata at 100%
 - [x] **11.6.1.9** Document any intentional deviations from DotNet behavior
 - [x] **11.6.1.10** Update baseline and confirm no regressions
 
-**Note (2026-01-29):** Baseline updated. Error fixtures excluded from parity testing. Remaining 4 fixtures have relationship differences (not Layer 1-4 or metadata issues). See section 11.8 for details.
+**Note (2026-01-29):** Baseline updated. Error fixtures excluded from parity testing. Remaining 2 fixtures have relationship differences (not Layer 1-4 or metadata issues). See section 11.8 for details.
 
 ---
 
 ### 11.8 Remaining Relationship Differences
 
-The following 4 fixtures have relationship differences. See **Phase 12** for tasks to fix these and achieve 100% parity.
+The following 2 fixtures have relationship differences. See **Phase 12** for tasks to fix these and achieve 100% parity.
 
 | Fixture | Errors | Issue | Phase 12 Task |
 |---------|--------|-------|---------------|
 | `ampersand_encoding` | 1 missing relationship (SELECT * expansion needed) | SELECT * emits `[*]` reference | 12.1 |
-| `instead_of_triggers` | 2 | Duplicate refs deduplicated | 12.2 |
-| `view_options` | 2 | Duplicate refs deduplicated | 12.2 |
 | `e2e_comprehensive` | 8 | Type refs + TVF columns | 12.3, 12.4 |
 
 ---
@@ -165,12 +163,12 @@ The following 4 fixtures have relationship differences. See **Phase 12** for tas
 | 11.5 | Error Fixtures | 4/4 | Complete (excluded from parity testing) |
 | 11.6 | Ignored Tests | 7/8 | Complete (Layer 3 tests remain ignored) |
 | 11.7 | Final Verification | 10/10 | Complete |
-| 11.8 | Remaining Relationship Differences | N/A | 4 fixtures with intentional differences |
+| 11.8 | Remaining Relationship Differences | N/A | 2 fixtures with intentional differences |
 | 11.9 | Table Type Fixes | 5/5 | Complete |
 
 **Phase 11 Total**: 69/70 tasks complete (Layer 3 tests blocked on Phase 12)
 
-> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 90.9% (40/44). See **Phase 12** for tasks to fix remaining 4 fixtures.
+> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 95.5% (42/44). See **Phase 12** for tasks to fix remaining 2 fixtures.
 
 ---
 
@@ -195,19 +193,19 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
 | Phase 11 | **COMPLETE** 69/70 |
-| Phase 12 | **IN PROGRESS** 0/6 |
+| Phase 12 | **IN PROGRESS** 1/6 |
 
-**Total**: 132/139 tasks complete
+**Total**: 136/139 tasks complete
 
 **Remaining work:**
-- Phase 12: Fix 4 fixtures with relationship differences to achieve 100% parity
+- Phase 12: Fix 2 fixtures with relationship differences to achieve 100% parity
 - Layer 3 SqlPackage comparison tests (blocked on Phase 12 completion)
 
 ---
 
 ## Phase 12: Achieve 100% Relationship Parity
 
-> **Goal:** Fix the remaining 4 fixtures with relationship differences to achieve exact 1-1 matching with DotNet DacFx.
+> **Goal:** Fix the remaining 2 fixtures with relationship differences to achieve exact 1-1 matching with DotNet DacFx.
 >
 > **Estimated Effort:** 5-8 hours total
 
@@ -318,10 +316,14 @@ query_deps.push(table_ref.clone());
 ```
 
 **Tasks:**
-- [ ] **12.2.1** Remove `HashSet` deduplication in `extract_trigger_body_dependencies()`
-- [ ] **12.2.2** Remove `.contains()` guards in `extract_view_columns_and_deps()` (lines 874, 882, 890, 899)
-- [ ] **12.2.3** Run `test_parity_instead_of_triggers` and verify 0 errors
-- [ ] **12.2.4** Run `test_parity_view_options` and verify 0 errors
+- [x] **12.2.1** Remove `HashSet` deduplication in `extract_trigger_body_dependencies()`
+- [x] **12.2.2** Remove `.contains()` guards in `extract_view_columns_and_deps()` (lines 874, 882, 890, 899)
+- [x] **12.2.3** Run `test_parity_instead_of_triggers` and verify 0 errors
+- [x] **12.2.4** Run `test_parity_view_options` and verify 0 errors
+
+**Solution Implemented (2026-01-29):**
+- **Triggers:** Process INSERT...JOIN ON clause refs first, then SELECT (skip duplicates by exact alias.column match)
+- **Views:** Added `extract_group_by_columns()` function, allow max 2 occurrences per column ref to handle GROUP BY duplicates
 
 ---
 
@@ -433,12 +435,12 @@ For inline TVFs, parse the SELECT columns from the RETURN statement and emit a C
 | Task | Description | Status |
 |------|-------------|--------|
 | 12.1 | SELECT * column reference fix | Partial (skip `[*]` done; SELECT * expansion needed) |
-| 12.2 | Remove reference deduplication | Pending |
+| 12.2 | Remove reference deduplication | Complete |
 | 12.3 | Computed column type references | Pending |
 | 12.4 | Inline TVF Columns relationship | Pending |
 | 12.5 | Final verification | Pending |
 
-**Phase 12 Total**: 0/6 sections complete
+**Phase 12 Total**: 1/6 sections complete
 
 ---
 

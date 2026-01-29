@@ -870,10 +870,11 @@ fn extract_view_columns_and_deps(
     }
 
     // Build QueryDependencies in DotNet order:
-    // 1. Tables (in order of appearance)
-    // 2. JOIN ON columns (FK/PK columns from JOIN conditions)
-    // 3. SELECT list columns
-    // 4. Other columns (WHERE, GROUP BY, etc.)
+    // 1. Tables (in order of appearance) - unique
+    // 2. JOIN ON columns - unique
+    // 3. SELECT list columns - allow duplicates of JOIN ON columns (but unique within SELECT)
+    // 4. WHERE/other columns - unique against all previous
+    // 5. GROUP BY columns - allow duplicates of SELECT columns (unique within GROUP BY)
 
     // 1. Add all referenced tables (unique)
     for (_alias, table_ref) in &table_aliases {
@@ -882,27 +883,48 @@ fn extract_view_columns_and_deps(
         }
     }
 
-    // 2. Add JOIN ON condition columns (these come before SELECT columns in DotNet)
+    // 2. Add JOIN ON condition columns (unique)
     let join_on_cols = extract_join_on_columns(query, &table_aliases, default_schema);
-    for col_ref in join_on_cols {
-        if !query_deps.contains(&col_ref) {
-            query_deps.push(col_ref);
+    for col_ref in &join_on_cols {
+        if !query_deps.contains(col_ref) {
+            query_deps.push(col_ref.clone());
         }
     }
 
+    // Track SELECT columns separately for dedup within SELECT phase
+    let mut select_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     // 3. Add column references from the SELECT columns
+    // DotNet allows duplicates of JOIN ON columns (unique within SELECT)
     for col in &columns {
         if let Some(ref source_ref) = col.source_ref {
-            if !query_deps.contains(source_ref) {
+            // Unique within SELECT phase only
+            if !select_seen.contains(source_ref) {
+                select_seen.insert(source_ref.clone());
                 query_deps.push(source_ref.clone());
             }
         }
     }
 
-    // 4. Add remaining column references from the query (WHERE, HAVING, GROUP BY, etc.)
+    // 4. Add remaining column references from the query (WHERE, HAVING, etc.)
+    // These are unique against all previous (JOIN ON + SELECT)
     let all_column_refs = extract_all_column_references(query, &table_aliases, default_schema);
-    for col_ref in all_column_refs {
-        if !query_deps.contains(&col_ref) {
+    for col_ref in &all_column_refs {
+        if !query_deps.contains(col_ref) {
+            query_deps.push(col_ref.clone());
+        }
+    }
+
+    // 5. Add GROUP BY columns - allow one duplicate (max 2 total occurrences per column)
+    let group_by_cols = extract_group_by_columns(query, &table_aliases, default_schema);
+    let mut group_by_added: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for col_ref in group_by_cols {
+        // Count how many times this column already appears
+        let existing_count = query_deps.iter().filter(|r| *r == &col_ref).count();
+        // DotNet allows max 2 occurrences (e.g., JOIN ON + SELECT, or SELECT + GROUP BY)
+        // Skip if already at 2 or if already added in GROUP BY phase
+        if existing_count < 2 && !group_by_added.contains(&col_ref) {
+            group_by_added.insert(col_ref.clone());
             query_deps.push(col_ref);
         }
     }
@@ -1205,6 +1227,47 @@ fn extract_join_on_columns(
                 if !refs.contains(&resolved) {
                     refs.push(resolved);
                 }
+            }
+        }
+    }
+
+    refs
+}
+
+/// Extract column references from GROUP BY clause
+fn extract_group_by_columns(
+    query: &str,
+    table_aliases: &[(String, String)],
+    default_schema: &str,
+) -> Vec<String> {
+    let mut refs = Vec::new();
+
+    // Find GROUP BY clause
+    let group_by_pattern = regex::Regex::new(r"(?i)\bGROUP\s+BY\s+").unwrap();
+    let terminator_pattern = regex::Regex::new(r"(?i)\b(?:HAVING|ORDER|UNION|;|$)").unwrap();
+    let col_pattern = regex::Regex::new(r"(\[?\w+\]?)\.(\[?\w+\]?)(?:\.(\[?\w+\]?))?").unwrap();
+
+    if let Some(group_match) = group_by_pattern.find(query) {
+        let start = group_match.end();
+        let remaining = &query[start..];
+
+        // Find where GROUP BY clause ends
+        let end = terminator_pattern
+            .find(remaining)
+            .map(|m| m.start())
+            .unwrap_or(remaining.len());
+
+        let clause_text = &remaining[..end];
+
+        // Extract column references from the GROUP BY clause
+        for col_cap in col_pattern.captures_iter(clause_text) {
+            let full_match = col_cap.get(0).map(|m| m.as_str()).unwrap_or("");
+
+            if let Some(resolved) =
+                resolve_column_reference(full_match, table_aliases, default_schema)
+            {
+                // No dedup within GROUP BY - preserve order
+                refs.push(resolved);
             }
         }
     }
@@ -4029,7 +4092,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         let select_expr = cap.get(4).map(|m| m.as_str()).unwrap_or("");
         let alias1 = cap.get(6).map(|m| m.as_str()).unwrap_or("");
         let alias2 = cap.get(8).map(|m| m.as_str()).unwrap_or("");
-        let _on_clause = cap.get(9).map(|m| m.as_str()).unwrap_or("");
+        let on_clause = cap.get(9).map(|m| m.as_str()).unwrap_or("");
 
         let table_ref = format!("[{}].[{}]", schema, table);
 
@@ -4042,31 +4105,50 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         seen.insert(table_ref.clone());
         deps.push(BodyDependency::ObjectRef(table_ref.clone()));
 
-        // Emit each column reference from the INSERT column list
+        // Emit each column reference from the INSERT column list (no dedup - DotNet preserves order)
         for col_match in single_bracket_regex.captures_iter(col_list) {
             let col = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
             let col_ref = format!("{}.[{}]", table_ref, col);
-            if !seen.contains(&col_ref) {
-                seen.insert(col_ref.clone());
-                deps.push(BodyDependency::ObjectRef(col_ref));
-            }
+            deps.push(BodyDependency::ObjectRef(col_ref));
         }
 
         // Add aliases for the JOIN tables (both map to parent)
         table_aliases.insert(alias1.to_lowercase(), parent_ref.to_string());
         table_aliases.insert(alias2.to_lowercase(), parent_ref.to_string());
 
-        // Emit column references - SELECT clause columns
-        // DotNet deduplicates but allows duplicates for different aliases referring to same column
-        for col_match in alias_col_regex.captures_iter(select_expr) {
+        // DotNet processes ON clause first, then SELECT columns (skipping duplicates)
+        // Track what's been emitted to skip duplicates from SELECT
+        let mut emitted: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+
+        // 1. Emit column references from ON clause first (no dedup within ON)
+        for col_match in alias_col_regex.captures_iter(on_clause) {
             let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
             let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
             let alias_lower = alias.to_lowercase();
 
+            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                let col_ref = format!("{}.[{}]", resolved_table, col);
+                emitted.insert((alias_lower.clone(), col.to_lowercase()));
+                deps.push(BodyDependency::ObjectRef(col_ref));
+            }
+        }
+
+        // 2. Emit column references from SELECT clause (skip if already in ON clause with same alias)
+        for col_match in alias_col_regex.captures_iter(select_expr) {
+            let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
+            let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
+            let alias_lower = alias.to_lowercase();
+            let key = (alias_lower.clone(), col.to_lowercase());
+
+            // Skip if this exact alias.column was already emitted from ON clause
+            if emitted.contains(&key) {
+                continue;
+            }
+
             // Resolve alias to table reference
             if let Some(resolved_table) = table_aliases.get(&alias_lower) {
                 let col_ref = format!("{}.[{}]", resolved_table, col);
-                // Emit each reference (duplicates from different aliases are allowed)
                 deps.push(BodyDependency::ObjectRef(col_ref));
             }
         }
