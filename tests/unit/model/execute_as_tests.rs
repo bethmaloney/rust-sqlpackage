@@ -198,6 +198,7 @@ END
 #[test]
 #[ignore = "TVF type classification changed - tests expect TableValued but code returns InlineTableValued - see IMPLEMENTATION_PLAN.md Phase 11.6"]
 fn test_build_tvf_with_execute_as() {
+    // This is an inline TVF (RETURNS TABLE with single RETURN SELECT)
     let sql = r#"
 CREATE FUNCTION [dbo].[GetSecureData]
 (
@@ -224,9 +225,10 @@ RETURN
     assert!(func.is_some(), "Model should contain a function");
     let func = func.unwrap();
     assert_eq!(func.name, "GetSecureData");
+    // RETURNS TABLE syntax = inline TVF
     assert_eq!(
         func.function_type,
-        rust_sqlpackage::model::FunctionType::TableValued
+        rust_sqlpackage::model::FunctionType::InlineTableValued
     );
     assert!(
         func.definition.contains("EXECUTE AS 'data_reader'"),

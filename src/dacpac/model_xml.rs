@@ -2,15 +2,14 @@
 
 use quick_xml::events::{BytesCData, BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
-use std::collections::HashSet;
 use std::io::Write;
 
 use crate::model::{
-    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
-    ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement, FunctionElement,
-    IndexElement, ModelElement, ProcedureElement, RawElement, ScalarTypeElement, SchemaElement,
-    SequenceElement, SortDirection, TableElement, TableTypeColumnElement, TableTypeConstraint,
-    TriggerElement, UserDefinedTypeElement, ViewElement,
+    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType,
+    DatabaseModel, ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement,
+    FunctionElement, IndexElement, ModelElement, ProcedureElement, RawElement, ScalarTypeElement,
+    SchemaElement, SequenceElement, SortDirection, TableElement, TableTypeColumnElement,
+    TableTypeConstraint, TriggerElement, UserDefinedTypeElement, ViewElement,
 };
 use crate::project::SqlProject;
 
@@ -67,26 +66,32 @@ pub fn generate_model_xml<W: Write>(
     // Model element
     xml_writer.write_event(Event::Start(BytesStart::new("Model")))?;
 
-    // Write SqlDatabaseOptions element first
-    write_database_options(&mut xml_writer, project)?;
+    // Write elements in DotNet sort order: (Name, Type) where empty Name sorts first.
+    // SqlDatabaseOptions has sort key ("", "sqldatabaseoptions") and must be interleaved
+    // at the correct position among the other elements.
+    // Comparison is case-insensitive to match DotNet's sorting behavior.
+    let db_options_sort_key = ("".to_string(), "sqldatabaseoptions".to_string());
+    let mut db_options_written = false;
 
-    // Collect views that have triggers attached (used to determine if we emit Columns/QueryDependencies)
-    // DotNet emits these relationships for views with SCHEMABINDING, WITH CHECK OPTION, or INSTEAD OF triggers
-    let views_with_triggers: HashSet<String> = model
-        .elements
-        .iter()
-        .filter_map(|e| {
-            if let ModelElement::Trigger(t) = e {
-                Some(format!("[{}].[{}]", t.parent_schema, t.parent_name))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Write each element
     for element in &model.elements {
-        write_element(&mut xml_writer, element, &views_with_triggers)?;
+        // Check if SqlDatabaseOptions should be written before this element
+        if !db_options_written {
+            let elem_sort_key = (
+                element.xml_name_attr().to_lowercase(),
+                element.type_name().to_lowercase(),
+            );
+            if db_options_sort_key <= elem_sort_key {
+                write_database_options(&mut xml_writer, project)?;
+                db_options_written = true;
+            }
+        }
+        write_element(&mut xml_writer, element)?;
+    }
+
+    // Write SqlDatabaseOptions at the end if not yet written (happens when all elements
+    // have empty Name and Type < "SqlDatabaseOptions", which is rare)
+    if !db_options_written {
+        write_database_options(&mut xml_writer, project)?;
     }
 
     // Close Model
@@ -365,15 +370,11 @@ fn write_database_options<W: Write>(
     Ok(())
 }
 
-fn write_element<W: Write>(
-    writer: &mut Writer<W>,
-    element: &ModelElement,
-    views_with_triggers: &HashSet<String>,
-) -> anyhow::Result<()> {
+fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> anyhow::Result<()> {
     match element {
         ModelElement::Schema(s) => write_schema(writer, s),
         ModelElement::Table(t) => write_table(writer, t),
-        ModelElement::View(v) => write_view(writer, v, views_with_triggers),
+        ModelElement::View(v) => write_view(writer, v),
         ModelElement::Procedure(p) => write_procedure(writer, p),
         ModelElement::Function(f) => write_function(writer, f),
         ModelElement::Index(i) => write_index(writer, i),
@@ -385,7 +386,7 @@ fn write_element<W: Write>(
         ModelElement::ScalarType(s) => write_scalar_type(writer, s),
         ModelElement::ExtendedProperty(e) => write_extended_property(writer, e),
         ModelElement::Trigger(t) => write_trigger(writer, t),
-        ModelElement::Raw(r) => write_raw(writer, r, views_with_triggers),
+        ModelElement::Raw(r) => write_raw(writer, r),
     }
 }
 
@@ -400,19 +401,13 @@ fn write_schema<W: Write>(writer: &mut Writer<W>, schema: &SchemaElement) -> any
     elem.push_attribute(("Type", "SqlSchema"));
     elem.push_attribute(("Name", format!("[{}]", schema.name).as_str()));
 
-    // If no authorization, use empty element; otherwise write with relationship
-    if schema.authorization.is_none() {
-        writer.write_event(Event::Empty(elem))?;
-    } else {
-        writer.write_event(Event::Start(elem))?;
+    writer.write_event(Event::Start(elem))?;
 
-        // Write Authorizer relationship
-        if let Some(ref auth) = schema.authorization {
-            write_authorizer_relationship(writer, auth)?;
-        }
+    // Write Authorizer relationship - DotNet always emits this, defaulting to dbo
+    let auth = schema.authorization.as_deref().unwrap_or("dbo");
+    write_authorizer_relationship(writer, auth)?;
 
-        writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    }
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
 }
 
@@ -577,10 +572,11 @@ fn write_expression_dependencies<W: Write>(
 
 /// Write a table type column (uses SqlTableTypeSimpleColumn for user-defined table types)
 /// Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn, so we don't either
-fn write_table_type_column<W: Write>(
+fn write_table_type_column_with_annotation<W: Write>(
     writer: &mut Writer<W>,
     column: &TableTypeColumnElement,
     type_name: &str,
+    disambiguator: Option<u32>,
 ) -> anyhow::Result<()> {
     let col_name = format!("{}.[{}]", type_name, column.name);
 
@@ -602,6 +598,14 @@ fn write_table_type_column<W: Write>(
         column.precision,
         column.scale,
     )?;
+
+    // SqlInlineConstraintAnnotation for columns with default values
+    if let Some(disam) = disambiguator {
+        let mut annotation = BytesStart::new("Annotation");
+        annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
+        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        writer.write_event(Event::Empty(annotation))?;
+    }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -746,11 +750,7 @@ fn sql_type_to_reference(data_type: &str) -> String {
     .to_string()
 }
 
-fn write_view<W: Write>(
-    writer: &mut Writer<W>,
-    view: &ViewElement,
-    views_with_triggers: &HashSet<String>,
-) -> anyhow::Result<()> {
+fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", view.schema, view.name);
 
     let mut elem = BytesStart::new("Element");
@@ -782,25 +782,18 @@ fn write_view<W: Write>(
     // Modern .NET DacFx emits this property for all views
     write_property(writer, "IsAnsiNullsOn", "True")?;
 
-    // Emit Columns and QueryDependencies for views that have:
-    // - SCHEMABINDING option
-    // - WITH CHECK OPTION
-    // - INSTEAD OF triggers attached
-    // DotNet analyzes dependencies for these types of views
-    let has_triggers = views_with_triggers.contains(&full_name);
-    if view.is_schema_bound || view.is_with_check_option || has_triggers {
-        // Extract view columns and dependencies from the query
-        let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &view.schema);
+    // Extract view columns and dependencies from the query
+    // DotNet emits Columns and QueryDependencies for ALL views
+    let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &view.schema);
 
-        // 6. Write Columns relationship with SqlComputedColumn elements
-        if !columns.is_empty() {
-            write_view_columns(writer, &full_name, &columns)?;
-        }
+    // 6. Write Columns relationship with SqlComputedColumn elements
+    if !columns.is_empty() {
+        write_view_columns(writer, &full_name, &columns)?;
+    }
 
-        // 7. Write QueryDependencies relationship
-        if !query_deps.is_empty() {
-            write_query_dependencies(writer, &query_deps)?;
-        }
+    // 7. Write QueryDependencies relationship
+    if !query_deps.is_empty() {
+        write_query_dependencies(writer, &query_deps)?;
     }
 
     // 8. Schema relationship
@@ -870,15 +863,28 @@ fn extract_view_columns_and_deps(
         });
     }
 
-    // Build QueryDependencies: tables first, then columns
-    // Add all referenced tables (unique)
+    // Build QueryDependencies in DotNet order:
+    // 1. Tables (in order of appearance)
+    // 2. JOIN ON columns (FK/PK columns from JOIN conditions)
+    // 3. SELECT list columns
+    // 4. Other columns (WHERE, GROUP BY, etc.)
+
+    // 1. Add all referenced tables (unique)
     for (_alias, table_ref) in &table_aliases {
         if !query_deps.contains(table_ref) {
             query_deps.push(table_ref.clone());
         }
     }
 
-    // Add column references from the SELECT columns (the ones we already parsed)
+    // 2. Add JOIN ON condition columns (these come before SELECT columns in DotNet)
+    let join_on_cols = extract_join_on_columns(query, &table_aliases, default_schema);
+    for col_ref in join_on_cols {
+        if !query_deps.contains(&col_ref) {
+            query_deps.push(col_ref);
+        }
+    }
+
+    // 3. Add column references from the SELECT columns
     for col in &columns {
         if let Some(ref source_ref) = col.source_ref {
             if !query_deps.contains(source_ref) {
@@ -887,7 +893,7 @@ fn extract_view_columns_and_deps(
         }
     }
 
-    // Add all column references from the rest of the query (WHERE, ON, GROUP BY, etc.)
+    // 4. Add remaining column references from the query (WHERE, HAVING, GROUP BY, etc.)
     let all_column_refs = extract_all_column_references(query, &table_aliases, default_schema);
     for col_ref in all_column_refs {
         if !query_deps.contains(&col_ref) {
@@ -1140,6 +1146,53 @@ fn resolve_column_reference(
     }
 }
 
+/// Extract column references from JOIN ON clauses
+/// These need to come before SELECT columns in QueryDependencies to match DotNet ordering
+fn extract_join_on_columns(
+    query: &str,
+    table_aliases: &[(String, String)],
+    default_schema: &str,
+) -> Vec<String> {
+    let mut refs = Vec::new();
+
+    // Find all ON clauses by matching "ON" followed by condition
+    // We use a simpler approach: find each ON keyword and extract until we hit a terminating keyword
+    let on_keyword_pattern = regex::Regex::new(r"(?i)\bON\s+").unwrap();
+    let terminator_pattern = regex::Regex::new(
+        r"(?i)\b(?:WHERE|GROUP|ORDER|HAVING|UNION|INNER|LEFT|RIGHT|OUTER|CROSS|JOIN)\b|;",
+    )
+    .unwrap();
+    let col_pattern = regex::Regex::new(r"(\[?\w+\]?)\.(\[?\w+\]?)(?:\.(\[?\w+\]?))?").unwrap();
+
+    for on_match in on_keyword_pattern.find_iter(query) {
+        let start = on_match.end();
+        let remaining = &query[start..];
+
+        // Find where this ON clause ends
+        let end = terminator_pattern
+            .find(remaining)
+            .map(|m| m.start())
+            .unwrap_or(remaining.len());
+
+        let clause_text = &remaining[..end];
+
+        // Extract column references from the ON clause
+        for col_cap in col_pattern.captures_iter(clause_text) {
+            let full_match = col_cap.get(0).map(|m| m.as_str()).unwrap_or("");
+
+            if let Some(resolved) =
+                resolve_column_reference(full_match, table_aliases, default_schema)
+            {
+                if !refs.contains(&resolved) {
+                    refs.push(resolved);
+                }
+            }
+        }
+    }
+
+    refs
+}
+
 /// Extract all column references from the entire query (SELECT, WHERE, ON, GROUP BY, etc.)
 fn extract_all_column_references(
     query: &str,
@@ -1165,6 +1218,23 @@ fn extract_all_column_references(
         {
             if !refs.contains(&resolved) {
                 refs.push(resolved);
+            }
+        }
+    }
+
+    // Also find bare bracketed column names (e.g., [IsActive] in WHERE clause)
+    // that aren't part of a dotted reference
+    let bare_col_pattern = regex::Regex::new(r"(?:^|[^.\w])\[(\w+)\](?:[^.\w]|$)").unwrap();
+    for cap in bare_col_pattern.captures_iter(query) {
+        if let Some(col_match) = cap.get(1) {
+            let col_name = col_match.as_str();
+            // Resolve using first table alias (for single-table queries)
+            if let Some(resolved) =
+                resolve_column_reference(col_name, table_aliases, default_schema)
+            {
+                if !refs.contains(&resolved) {
+                    refs.push(resolved);
+                }
             }
         }
     }
@@ -2070,6 +2140,47 @@ fn extract_check_expression_columns(
     extract_expression_column_references(expression, table_schema, table_name)
 }
 
+/// Extract column references from a filtered index predicate.
+///
+/// Filter predicates reference columns by their unqualified names
+/// (e.g., `[DeletedAt] IS NULL` or `[Status] = N'Pending' AND [IsActive] = 1`).
+/// This function extracts those column names and returns them as fully-qualified references.
+///
+/// DotNet emits these as the `BodyDependencies` relationship for filtered indexes.
+fn extract_filter_predicate_columns(predicate: &str, table_ref: &str) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut columns = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // Match bracketed identifiers: [ColumnName]
+    // These are column references in the predicate
+    let column_regex = regex::Regex::new(r"\[([A-Za-z_][A-Za-z0-9_]*)\]").unwrap();
+
+    for cap in column_regex.captures_iter(predicate) {
+        if let Some(col_match) = cap.get(1) {
+            let col_name = col_match.as_str();
+            let upper_name = col_name.to_uppercase();
+
+            // Skip SQL keywords
+            if is_sql_keyword(&upper_name) {
+                continue;
+            }
+
+            // Build fully-qualified column reference using provided table_ref
+            // table_ref is in format "[schema].[table]"
+            let col_ref = format!("{}.[{}]", table_ref, col_name);
+
+            // Only add each column once, but preserve order of first appearance
+            if !seen.contains(&col_ref) {
+                seen.insert(col_ref.clone());
+                columns.push(col_ref);
+            }
+        }
+    }
+
+    columns
+}
+
 /// Extract column references from a computed column expression.
 ///
 /// Computed column expressions reference columns by their unqualified names
@@ -2189,6 +2300,7 @@ fn extract_procedure_body_only(definition: &str) -> String {
 /// This is the AS that's:
 /// 1. At the end of a line (AS\n or AS\r\n) followed by BEGIN or other body content
 /// 2. Or followed directly by BEGIN (AS BEGIN)
+///
 /// We avoid matching "AS alias" patterns in SELECT statements
 fn find_body_separator_as(s: &str) -> Option<usize> {
     let upper = s.to_uppercase();
@@ -2563,13 +2675,36 @@ fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow
         write_property(writer, "FillFactor", &fill_factor.to_string())?;
     }
 
+    // Write FilterPredicate property for filtered indexes (before relationships)
+    // DotNet emits this as a CDATA script property
+    if let Some(ref filter_predicate) = index.filter_predicate {
+        write_script_property(writer, "FilterPredicate", filter_predicate)?;
+    }
+
     // Reference to table
     let table_ref = format!("[{}].[{}]", index.table_schema, index.table_name);
-    write_relationship(writer, "IndexedObject", &[&table_ref])?;
+
+    // Write BodyDependencies for filtered indexes (column references from filter predicate)
+    // DotNet emits this before ColumnSpecifications
+    if let Some(ref filter_predicate) = index.filter_predicate {
+        let body_deps = extract_filter_predicate_columns(filter_predicate, &table_ref);
+        if !body_deps.is_empty() {
+            let body_deps: Vec<BodyDependency> = body_deps
+                .into_iter()
+                .map(BodyDependency::ObjectRef)
+                .collect();
+            write_body_dependencies(writer, &body_deps)?;
+        }
+    }
 
     // Write ColumnSpecifications for key columns
     if !index.columns.is_empty() {
         write_index_column_specifications(writer, index, &table_ref)?;
+    }
+
+    // Write DataCompressionOptions relationship if index has compression
+    if let Some(ref compression) = index.data_compression {
+        write_data_compression_options(writer, compression)?;
     }
 
     // Write IncludedColumns relationship if present
@@ -2582,6 +2717,9 @@ fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow
         let include_refs: Vec<&str> = include_refs.iter().map(|s| s.as_str()).collect();
         write_relationship(writer, "IncludedColumns", &include_refs)?;
     }
+
+    // IndexedObject relationship comes after ColumnSpecifications and IncludedColumns
+    write_relationship(writer, "IndexedObject", &[&table_ref])?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
@@ -2617,6 +2755,37 @@ fn write_index_column_specifications<W: Write>(
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     }
 
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write DataCompressionOptions relationship for indexes with data compression
+fn write_data_compression_options<W: Write>(
+    writer: &mut Writer<W>,
+    compression: &DataCompressionType,
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "DataCompressionOptions"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlDataCompressionOption"));
+    writer.write_event(Event::Start(elem))?;
+
+    // Write CompressionLevel property
+    write_property(
+        writer,
+        "CompressionLevel",
+        &compression.compression_level().to_string(),
+    )?;
+
+    // Write PartitionNumber property (always 1 for single-partition indexes)
+    write_property(writer, "PartitionNumber", "1")?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }
@@ -2736,8 +2905,11 @@ fn write_constraint<W: Write>(
 
     let mut elem = BytesStart::new("Element");
     elem.push_attribute(("Type", type_name));
-    // Inline constraints have no Name attribute - only named constraints do
-    if !constraint.is_inline {
+    // Emit Name attribute based on emit_name flag:
+    // - True for table-level constraints (always named)
+    // - True for inline constraints when table has a named table-level PK
+    // - False for inline constraints when table has no named table-level PK
+    if constraint.emit_name {
         elem.push_attribute(("Name", full_name.as_str()));
     }
     writer.write_event(Event::Start(elem))?;
@@ -3174,6 +3346,37 @@ fn write_user_defined_type<W: Write>(
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
+    // Calculate disambiguators:
+    // - Start at 5 for first default constraint annotation
+    // - Increment for each default constraint and index
+    let mut disambiguator = 5;
+
+    // Build map of column name to disambiguator for columns with defaults
+    let mut column_disambiguators: std::collections::HashMap<&str, u32> =
+        std::collections::HashMap::new();
+    for col in &udt.columns {
+        if col.default_value.is_some() {
+            column_disambiguators.insert(&col.name, disambiguator);
+            disambiguator += 1;
+        }
+    }
+
+    // Track index disambiguators
+    let mut index_disambiguators: Vec<u32> = Vec::new();
+    for constraint in &udt.constraints {
+        if matches!(constraint, TableTypeConstraint::Index { .. }) {
+            index_disambiguators.push(disambiguator);
+            disambiguator += 1;
+        }
+    }
+
+    // Track the highest disambiguator used for the type-level AttachedAnnotation
+    let type_disambiguator = if !index_disambiguators.is_empty() {
+        Some(*index_disambiguators.last().unwrap())
+    } else {
+        None
+    };
+
     // Relationship to schema
     write_schema_relationship(writer, &udt.schema)?;
 
@@ -3184,15 +3387,95 @@ fn write_user_defined_type<W: Write>(
         writer.write_event(Event::Start(rel))?;
 
         for col in &udt.columns {
-            write_table_type_column(writer, col, &full_name)?;
+            let col_disambiguator = column_disambiguators.get(col.name.as_str()).copied();
+            write_table_type_column_with_annotation(writer, col, &full_name, col_disambiguator)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     }
 
-    // Write constraints (PRIMARY KEY, UNIQUE, CHECK, INDEX)
-    for (idx, constraint) in udt.constraints.iter().enumerate() {
-        write_table_type_constraint(writer, constraint, &full_name, idx, &udt.columns)?;
+    // Separate constraints from indexes
+    let non_index_constraints: Vec<_> = udt
+        .constraints
+        .iter()
+        .filter(|c| !matches!(c, TableTypeConstraint::Index { .. }))
+        .collect();
+    let index_constraints: Vec<_> = udt
+        .constraints
+        .iter()
+        .filter_map(|c| match c {
+            TableTypeConstraint::Index {
+                name,
+                columns,
+                is_unique,
+                is_clustered,
+            } => Some((name, columns, *is_unique, *is_clustered)),
+            _ => None,
+        })
+        .collect();
+
+    // Collect columns with defaults for default constraint emission
+    let columns_with_defaults: Vec<_> = udt
+        .columns
+        .iter()
+        .filter(|c| c.default_value.is_some())
+        .collect();
+
+    // Write Constraints relationship (non-index constraints + default constraints)
+    if !non_index_constraints.is_empty() || !columns_with_defaults.is_empty() {
+        let mut rel = BytesStart::new("Relationship");
+        rel.push_attribute(("Name", "Constraints"));
+        writer.write_event(Event::Start(rel))?;
+
+        // Write default constraints first (DotNet order)
+        for col in &columns_with_defaults {
+            if let Some(default_value) = &col.default_value {
+                let col_disambiguator = column_disambiguators.get(col.name.as_str()).copied();
+                write_table_type_default_constraint(
+                    writer,
+                    &full_name,
+                    &col.name,
+                    default_value,
+                    col_disambiguator,
+                )?;
+            }
+        }
+
+        // Write other constraints (PK, UNIQUE, CHECK)
+        for (idx, constraint) in non_index_constraints.iter().enumerate() {
+            write_table_type_constraint(writer, constraint, &full_name, idx, &udt.columns)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // Write Indexes relationship separately
+    if !index_constraints.is_empty() {
+        let mut rel = BytesStart::new("Relationship");
+        rel.push_attribute(("Name", "Indexes"));
+        writer.write_event(Event::Start(rel))?;
+
+        for (i, (name, columns, is_unique, is_clustered)) in index_constraints.iter().enumerate() {
+            let idx_disambiguator = index_disambiguators.get(i).copied();
+            write_table_type_index_with_annotation(
+                writer,
+                &full_name,
+                name,
+                columns,
+                *is_unique,
+                *is_clustered,
+                idx_disambiguator,
+            )?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // Type-level AttachedAnnotation (if we have indexes)
+    if let Some(disam) = type_disambiguator {
+        let mut annotation = BytesStart::new("AttachedAnnotation");
+        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        writer.write_event(Event::Empty(annotation))?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -3242,7 +3525,7 @@ fn write_table_type_constraint<W: Write>(
     Ok(())
 }
 
-/// Write SqlTableTypePrimaryKeyConstraint element
+/// Write SqlTableTypePrimaryKeyConstraint element (Entry + Element only, no outer Relationship)
 fn write_table_type_pk_constraint<W: Write>(
     writer: &mut Writer<W>,
     type_name: &str,
@@ -3250,11 +3533,7 @@ fn write_table_type_pk_constraint<W: Write>(
     is_clustered: bool,
     all_columns: &[TableTypeColumnElement],
 ) -> anyhow::Result<()> {
-    // Relationship for PrimaryKey
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "PrimaryKey"));
-    writer.write_event(Event::Start(rel))?;
-
+    // Entry for this constraint (parent Constraints relationship is written by caller)
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let mut elem = BytesStart::new("Element");
@@ -3288,11 +3567,10 @@ fn write_table_type_pk_constraint<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }
 
-/// Write SqlTableTypeUniqueConstraint element
+/// Write SqlTableTypeUniqueConstraint element (Entry + Element only, no outer Relationship)
 fn write_table_type_unique_constraint<W: Write>(
     writer: &mut Writer<W>,
     type_name: &str,
@@ -3301,11 +3579,7 @@ fn write_table_type_unique_constraint<W: Write>(
     _idx: usize,
     all_columns: &[TableTypeColumnElement],
 ) -> anyhow::Result<()> {
-    // Relationship for UniqueConstraints
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "UniqueConstraints"));
-    writer.write_event(Event::Start(rel))?;
-
+    // Entry for this constraint (parent Constraints relationship is written by caller)
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let mut elem = BytesStart::new("Element");
@@ -3339,22 +3613,17 @@ fn write_table_type_unique_constraint<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }
 
-/// Write SqlTableTypeCheckConstraint element
+/// Write SqlTableTypeCheckConstraint element (Entry + Element only, no outer Relationship)
 fn write_table_type_check_constraint<W: Write>(
     writer: &mut Writer<W>,
     type_name: &str,
     expression: &str,
     idx: usize,
 ) -> anyhow::Result<()> {
-    // Relationship for CheckConstraints
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "CheckConstraints"));
-    writer.write_event(Event::Start(rel))?;
-
+    // Entry for this constraint (parent Constraints relationship is written by caller)
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     // Generate a disambiguator for unnamed check constraints
@@ -3370,11 +3639,53 @@ fn write_table_type_check_constraint<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }
 
-/// Write table type index element
+/// Write SqlTableTypeDefaultConstraint element for columns with DEFAULT values
+fn write_table_type_default_constraint<W: Write>(
+    writer: &mut Writer<W>,
+    type_name: &str,
+    column_name: &str,
+    default_value: &str,
+    disambiguator: Option<u32>,
+) -> anyhow::Result<()> {
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTableTypeDefaultConstraint"));
+    writer.write_event(Event::Start(elem))?;
+
+    // DefaultExpressionScript property
+    write_script_property(writer, "DefaultExpressionScript", default_value)?;
+
+    // ForColumn relationship
+    let col_ref = format!("{}.[{}]", type_name, column_name);
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "ForColumn"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+    let mut refs = BytesStart::new("References");
+    refs.push_attribute(("Name", col_ref.as_str()));
+    writer.write_event(Event::Empty(refs))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    // AttachedAnnotation linking to the column's SqlInlineConstraintAnnotation
+    if let Some(disam) = disambiguator {
+        let mut annotation = BytesStart::new("AttachedAnnotation");
+        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        writer.write_event(Event::Empty(annotation))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    Ok(())
+}
+
+/// Write table type index element (Entry + Element only, no outer Relationship)
 fn write_table_type_index<W: Write>(
     writer: &mut Writer<W>,
     type_name: &str,
@@ -3383,11 +3694,7 @@ fn write_table_type_index<W: Write>(
     is_unique: bool,
     is_clustered: bool,
 ) -> anyhow::Result<()> {
-    // Relationship for Indexes
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Indexes"));
-    writer.write_event(Event::Start(rel))?;
-
+    // Entry for this constraint (parent Constraints relationship is written by caller)
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let idx_name = format!("{}.[{}]", type_name, name);
@@ -3404,19 +3711,15 @@ fn write_table_type_index<W: Write>(
         write_property(writer, "IsClustered", "True")?;
     }
 
-    // Columns relationship
+    // ColumnSpecifications relationship (DotNet uses ColumnSpecifications, not Columns)
     if !idx_columns.is_empty() {
         let mut col_rel = BytesStart::new("Relationship");
-        col_rel.push_attribute(("Name", "Columns"));
+        col_rel.push_attribute(("Name", "ColumnSpecifications"));
         writer.write_event(Event::Start(col_rel))?;
 
         for col_name in idx_columns {
-            writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-            let col_ref = format!("{}.[{}]", type_name, col_name);
-            let mut refs = BytesStart::new("References");
-            refs.push_attribute(("Name", col_ref.as_str()));
-            writer.write_event(Event::Empty(refs))?;
-            writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+            // Default to ascending (is_descending = false) since Vec<String> doesn't track sort direction
+            write_table_type_indexed_column_spec(writer, type_name, col_name, false, &[])?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
@@ -3424,7 +3727,58 @@ fn write_table_type_index<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write table type index element with SqlInlineIndexAnnotation for Indexes relationship
+fn write_table_type_index_with_annotation<W: Write>(
+    writer: &mut Writer<W>,
+    type_name: &str,
+    name: &str,
+    idx_columns: &[String],
+    is_unique: bool,
+    is_clustered: bool,
+    disambiguator: Option<u32>,
+) -> anyhow::Result<()> {
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let idx_name = format!("{}.[{}]", type_name, name);
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTableTypeIndex"));
+    elem.push_attribute(("Name", idx_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Properties
+    if is_unique {
+        write_property(writer, "IsUnique", "True")?;
+    }
+    if is_clustered {
+        write_property(writer, "IsClustered", "True")?;
+    }
+
+    // ColumnSpecifications relationship
+    if !idx_columns.is_empty() {
+        let mut col_rel = BytesStart::new("Relationship");
+        col_rel.push_attribute(("Name", "ColumnSpecifications"));
+        writer.write_event(Event::Start(col_rel))?;
+
+        for col_name in idx_columns {
+            write_table_type_indexed_column_spec(writer, type_name, col_name, false, &[])?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // SqlInlineIndexAnnotation
+    if let Some(disam) = disambiguator {
+        let mut annotation = BytesStart::new("Annotation");
+        annotation.push_attribute(("Type", "SqlInlineIndexAnnotation"));
+        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        writer.write_event(Event::Empty(annotation))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     Ok(())
 }
 
@@ -3594,6 +3948,9 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
     // Pattern: standalone [column] (unqualified)
     let single_bracket_regex = regex::Regex::new(r"\[([^\]]+)\]").unwrap();
 
+    // Pattern: alias.[column] references (for resolving aliases)
+    let alias_col_regex = regex::Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap();
+
     // Process INSERT statements with SELECT FROM inserted/deleted (without JOIN)
     // Pattern: INSERT INTO [schema].[table] ([cols]) SELECT ... FROM inserted|deleted;
     // The negative lookahead (?!\s+\w+\s+(?:INNER\s+)?JOIN) ensures we don't match JOIN cases
@@ -3680,8 +4037,6 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         table_aliases.insert(alias1.to_lowercase(), parent_ref.to_string());
         table_aliases.insert(alias2.to_lowercase(), parent_ref.to_string());
 
-        let alias_col_regex = regex::Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap();
-
         // Emit column references - SELECT clause columns
         // DotNet deduplicates but allows duplicates for different aliases referring to same column
         for col_match in alias_col_regex.captures_iter(select_expr) {
@@ -3726,8 +4081,6 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
             deps.push(BodyDependency::ObjectRef(table_ref.clone()));
         }
 
-        let alias_col_regex = regex::Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap();
-
         // Process ON clause FIRST - extract alias.[col] patterns (these can be duplicated)
         for col_match in alias_col_regex.captures_iter(on_clause) {
             let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -3758,14 +4111,10 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
     deps
 }
 
-fn write_raw<W: Write>(
-    writer: &mut Writer<W>,
-    raw: &RawElement,
-    views_with_triggers: &HashSet<String>,
-) -> anyhow::Result<()> {
+fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {
     // Handle SqlView specially to get full property/relationship support
     if raw.sql_type == "SqlView" {
-        return write_raw_view(writer, raw, views_with_triggers);
+        return write_raw_view(writer, raw);
     }
 
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
@@ -3787,11 +4136,7 @@ fn write_raw<W: Write>(
 
 /// Write a view from a RawElement (for views parsed via fallback)
 /// Mirrors the write_view function but works with raw definition text
-fn write_raw_view<W: Write>(
-    writer: &mut Writer<W>,
-    raw: &RawElement,
-    views_with_triggers: &HashSet<String>,
-) -> anyhow::Result<()> {
+fn write_raw_view<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
 
     let mut elem = BytesStart::new("Element");
@@ -3838,24 +4183,18 @@ fn write_raw_view<W: Write>(
     // Modern .NET DacFx emits this property for all views
     write_property(writer, "IsAnsiNullsOn", "True")?;
 
-    // Emit Columns and QueryDependencies for views that have:
-    // - SCHEMABINDING option
-    // - WITH CHECK OPTION
-    // - INSTEAD OF triggers attached
-    let has_triggers = views_with_triggers.contains(&full_name);
-    if is_schema_bound || is_with_check_option || has_triggers {
-        // Extract view columns and dependencies from the query
-        let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &raw.schema);
+    // Extract view columns and dependencies from the query
+    // DotNet emits Columns and QueryDependencies for ALL views
+    let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &raw.schema);
 
-        // 6. Write Columns relationship with SqlComputedColumn elements
-        if !columns.is_empty() {
-            write_view_columns(writer, &full_name, &columns)?;
-        }
+    // 6. Write Columns relationship with SqlComputedColumn elements
+    if !columns.is_empty() {
+        write_view_columns(writer, &full_name, &columns)?;
+    }
 
-        // 7. Write QueryDependencies relationship
-        if !query_deps.is_empty() {
-            write_query_dependencies(writer, &query_deps)?;
-        }
+    // 7. Write QueryDependencies relationship
+    if !query_deps.is_empty() {
+        write_query_dependencies(writer, &query_deps)?;
     }
 
     // 8. Schema relationship

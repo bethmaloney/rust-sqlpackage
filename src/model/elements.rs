@@ -90,6 +90,24 @@ impl ModelElement {
             ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),
         }
     }
+
+    /// Get the Name attribute value as it appears in XML.
+    /// Returns empty string for elements without Name attribute (SqlDatabaseOptions, inline constraints).
+    /// DotNet sorts elements by (Name, Type) where empty names sort first.
+    pub fn xml_name_attr(&self) -> String {
+        match self {
+            // Constraints: emit_name determines if Name attribute is present
+            ModelElement::Constraint(c) => {
+                if c.emit_name {
+                    format!("[{}].[{}]", c.table_schema, c.name)
+                } else {
+                    String::new() // No Name attribute for inline constraints without emit_name
+                }
+            }
+            // All other elements always have Name attribute (or none like SqlDatabaseOptions)
+            _ => self.full_name(),
+        }
+    }
 }
 
 /// Schema element
@@ -184,6 +202,34 @@ pub enum FunctionType {
     InlineTableValued,
 }
 
+/// Data compression type for indexes and tables
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataCompressionType {
+    /// No compression (CompressionLevel = 0)
+    None,
+    /// Row-level compression (CompressionLevel = 1)
+    Row,
+    /// Page-level compression (CompressionLevel = 2)
+    Page,
+    /// Columnstore compression (CompressionLevel = 3)
+    Columnstore,
+    /// Columnstore archive compression (CompressionLevel = 4)
+    ColumnstoreArchive,
+}
+
+impl DataCompressionType {
+    /// Get the compression level value for model.xml
+    pub fn compression_level(&self) -> u8 {
+        match self {
+            DataCompressionType::None => 0,
+            DataCompressionType::Row => 1,
+            DataCompressionType::Page => 2,
+            DataCompressionType::Columnstore => 3,
+            DataCompressionType::ColumnstoreArchive => 4,
+        }
+    }
+}
+
 /// Function element
 #[derive(Debug, Clone)]
 pub struct FunctionElement {
@@ -210,6 +256,10 @@ pub struct IndexElement {
     pub is_clustered: bool,
     /// Fill factor percentage (0-100), controls page fill density
     pub fill_factor: Option<u8>,
+    /// Filter predicate for filtered indexes (WHERE clause condition)
+    pub filter_predicate: Option<String>,
+    /// Data compression type (NONE, ROW, PAGE, COLUMNSTORE, COLUMNSTORE_ARCHIVE)
+    pub data_compression: Option<DataCompressionType>,
 }
 
 /// A column in a full-text index with optional language specification
@@ -306,12 +356,20 @@ pub struct ConstraintElement {
     pub referenced_columns: Option<Vec<String>>,
     /// Whether this constraint is clustered (for PK/unique)
     pub is_clustered: Option<bool>,
-    /// Whether this is an inline constraint (defined on column without CONSTRAINT keyword)
-    /// Inline constraints have no Name attribute in XML and get SqlInlineConstraintAnnotation
+    /// Whether this is an inline constraint (defined within a column definition).
+    /// DotNet DacFx treats ALL column-level constraints as inline, regardless of whether
+    /// they have explicit CONSTRAINT names. Only table-level constraints (at end of
+    /// CREATE TABLE or via ALTER TABLE) are treated as non-inline.
+    /// Inline constraints have no Name attribute in XML and get SqlInlineConstraintAnnotation.
     pub is_inline: bool,
     /// Disambiguator for SqlInlineConstraintAnnotation (inline constraints only)
     /// Also used for AttachedAnnotation on named constraints that reference a table's disambiguator
     pub inline_constraint_disambiguator: Option<u32>,
+    /// Whether to emit the Name attribute in XML.
+    /// - True for all table-level (non-inline) constraints
+    /// - True for inline constraints with explicit CONSTRAINT [name] in SQL
+    /// - False for inline constraints without explicit CONSTRAINT name
+    pub emit_name: bool,
 }
 
 /// Sequence element

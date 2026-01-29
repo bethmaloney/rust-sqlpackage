@@ -65,6 +65,7 @@ END
 #[test]
 #[ignore = "TVF type classification changed - tests expect TableValued but code returns InlineTableValued - see IMPLEMENTATION_PLAN.md Phase 11.6"]
 fn test_parse_table_valued_function() {
+    // This tests an inline table-valued function (RETURNS TABLE with single RETURN SELECT)
     let sql = r#"
 CREATE FUNCTION [dbo].[GetUserOrders]
 (
@@ -96,9 +97,10 @@ RETURN
         }) => {
             assert_eq!(schema, "dbo");
             assert_eq!(name, "GetUserOrders");
+            // RETURNS TABLE with single RETURN is an inline TVF
             assert_eq!(
                 *function_type,
-                rust_sqlpackage::parser::FallbackFunctionType::TableValued
+                rust_sqlpackage::parser::FallbackFunctionType::InlineTableValued
             );
         }
         _ => panic!("Expected Function fallback type"),
@@ -430,14 +432,14 @@ RETURN
         "SQL text should preserve NATIVE_COMPILATION"
     );
 
-    // Verify it's detected as table-valued
+    // Verify it's detected as inline table-valued (RETURNS TABLE syntax)
     match &statements[0].fallback_type {
         Some(rust_sqlpackage::parser::FallbackStatementType::Function {
             function_type, ..
         }) => {
             assert_eq!(
                 *function_type,
-                rust_sqlpackage::parser::FallbackFunctionType::TableValued
+                rust_sqlpackage::parser::FallbackFunctionType::InlineTableValued
             );
         }
         _ => panic!("Expected Function fallback type"),

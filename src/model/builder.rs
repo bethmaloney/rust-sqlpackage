@@ -17,12 +17,12 @@ use crate::parser::{
 use crate::project::SqlProject;
 
 use super::{
-    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
-    ExtendedPropertyElement, FullTextCatalogElement, FullTextColumnElement, FullTextIndexElement,
-    FunctionElement, FunctionType, IndexElement, ModelElement, ParameterElement, ProcedureElement,
-    RawElement, ScalarTypeElement, SchemaElement, SequenceElement, TableElement,
-    TableTypeColumnElement, TableTypeConstraint, TriggerElement, UserDefinedTypeElement,
-    ViewElement,
+    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType,
+    DatabaseModel, ExtendedPropertyElement, FullTextCatalogElement, FullTextColumnElement,
+    FullTextIndexElement, FunctionElement, FunctionType, IndexElement, ModelElement,
+    ParameterElement, ProcedureElement, RawElement, ScalarTypeElement, SchemaElement,
+    SequenceElement, TableElement, TableTypeColumnElement, TableTypeConstraint, TriggerElement,
+    UserDefinedTypeElement, ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -82,7 +82,23 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_unique,
                     is_clustered,
                     fill_factor,
+                    filter_predicate,
+                    data_compression,
                 } => {
+                    // Convert string data_compression to DataCompressionType
+                    let compression_type =
+                        data_compression
+                            .as_ref()
+                            .and_then(|s| match s.to_uppercase().as_str() {
+                                "NONE" => Some(DataCompressionType::None),
+                                "ROW" => Some(DataCompressionType::Row),
+                                "PAGE" => Some(DataCompressionType::Page),
+                                "COLUMNSTORE" => Some(DataCompressionType::Columnstore),
+                                "COLUMNSTORE_ARCHIVE" => {
+                                    Some(DataCompressionType::ColumnstoreArchive)
+                                }
+                                _ => None,
+                            });
                     model.add_element(ModelElement::Index(IndexElement {
                         name: name.clone(),
                         table_schema: table_schema.clone(),
@@ -92,6 +108,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         is_unique: *is_unique,
                         is_clustered: *is_clustered,
                         fill_factor: *fill_factor,
+                        filter_predicate: filter_predicate.clone(),
+                        data_compression: compression_type,
                     }));
                 }
                 FallbackStatementType::FullTextIndex {
@@ -228,14 +246,16 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     }
 
                     // Add inline default constraints from column definitions
+                    // DotNet emits Name attribute based on CONSTRAINT keyword position:
+                    // - "NOT NULL CONSTRAINT [name] DEFAULT" → Name emitted
+                    // - "CONSTRAINT [name] NOT NULL DEFAULT" → Name NOT emitted
+                    // Since fallback parser doesn't capture position, we default to NOT emitting
                     for col in columns {
                         if let Some(default_value) = &col.default_value {
-                            // Use explicit constraint name if provided, otherwise generate one
                             let constraint_name = col
                                 .default_constraint_name
                                 .clone()
                                 .unwrap_or_else(|| format!("DF_{}_{}", name, col.name));
-                            let is_inline = col.default_constraint_name.is_none();
                             model.add_element(ModelElement::Constraint(ConstraintElement {
                                 name: constraint_name,
                                 table_schema: schema.clone(),
@@ -246,16 +266,17 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline,
+                                is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                emit_name: false, // Fallback parser doesn't track CONSTRAINT position
                             }));
                         }
                     }
 
                     // Add inline CHECK constraints from column definitions
+                    // Same position-based logic as DEFAULT constraints
                     for col in columns {
                         if let Some(check_expr) = &col.check_expression {
-                            let is_inline = col.check_constraint_name.is_none();
                             let constraint_name = col
                                 .check_constraint_name
                                 .clone()
@@ -270,8 +291,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline,
+                                is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                emit_name: false, // Fallback parser doesn't track CONSTRAINT position
                             }));
                         }
                     }
@@ -385,23 +407,20 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }
 
                 // Extract inline column constraints (PRIMARY KEY, UNIQUE on columns)
-                // These can be truly inline (anonymous) or named with CONSTRAINT keyword
+                // Extract inline column constraints (PRIMARY KEY, UNIQUE on columns)
+                // DotNet emits Name attribute only if constraint has explicit CONSTRAINT [name]
                 for col in &create_table.columns {
                     for option in &col.options {
                         if let ColumnOption::Unique { is_primary, .. } = &option.option {
-                            // Check if constraint has an explicit name via CONSTRAINT keyword
-                            let has_explicit_name = option.name.is_some();
-                            let constraint_name = option
-                                .name
-                                .as_ref()
-                                .map(|n| n.value.clone())
-                                .unwrap_or_else(|| {
-                                    if *is_primary {
-                                        format!("PK_{}", name)
-                                    } else {
-                                        format!("UQ_{}_{}", name, col.name.value)
-                                    }
-                                });
+                            let explicit_name = option.name.as_ref().map(|n| n.value.clone());
+                            let has_explicit_name = explicit_name.is_some();
+                            let constraint_name = explicit_name.unwrap_or_else(|| {
+                                if *is_primary {
+                                    format!("PK_{}", name)
+                                } else {
+                                    format!("UQ_{}_{}", name, col.name.value)
+                                }
+                            });
 
                             let constraint_type = if *is_primary {
                                 ConstraintType::PrimaryKey
@@ -419,27 +438,69 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline: !has_explicit_name, // Only inline if no CONSTRAINT keyword
+                                is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
                             }));
                         }
                     }
                 }
 
                 // Extract inline default constraints from column definitions
-                // IMPORTANT: In SQL Server, "CONSTRAINT [name] NOT NULL DEFAULT" names the NOT NULL
-                // constraint, NOT the DEFAULT constraint. Only "NOT NULL CONSTRAINT [name] DEFAULT"
-                // names the default. Since sqlparser associates the name with NOT NULL in the first
-                // case, we should NOT use that name for the DEFAULT - it makes the default unnamed.
+                // DotNet DacFx treats ALL column-level constraints as inline, regardless
+                // of whether they have explicit CONSTRAINT names.
+                //
+                // In SQL Server, CONSTRAINT [name] applies to the DEFAULT that follows it,
+                // regardless of whether NOT NULL appears between them. NOT NULL is a column
+                // property, not a nameable constraint. The syntax "CONSTRAINT [name] NOT NULL DEFAULT"
+                // names the DEFAULT constraint, not the NOT NULL property.
+                //
+                // sqlparser may associate the constraint name with the NotNull option or with
+                // the Default option depending on the exact syntax. We need to find the constraint
+                // name that precedes the DEFAULT in the option list.
                 for col in &create_table.columns {
-                    for option in &col.options {
+                    // Find any constraint name in the column options that should apply to DEFAULT
+                    let mut pending_constraint_name: Option<String> = None;
+                    let mut default_option_index: Option<usize> = None;
+
+                    // First pass: find the DEFAULT option and any preceding constraint name
+                    for (i, option) in col.options.iter().enumerate() {
+                        // Track any constraint name we encounter
+                        if option.name.is_some() {
+                            pending_constraint_name = option.name.as_ref().map(|n| n.value.clone());
+                        }
+                        // If this is a DEFAULT option, record its index
+                        if matches!(option.option, ColumnOption::Default(_)) {
+                            default_option_index = Some(i);
+                            break; // Stop at the DEFAULT - we want the preceding constraint name
+                        }
+                    }
+
+                    // Second pass: extract DEFAULT with the correct constraint name
+                    for (i, option) in col.options.iter().enumerate() {
                         if let ColumnOption::Default(expr) = &option.option {
-                            // Only use a name if explicitly on the DEFAULT option itself
-                            let has_explicit_name = option.name.is_some();
-                            let constraint_name = option
-                                .name
-                                .as_ref()
-                                .map(|n| n.value.clone())
+                            // Use the constraint name if:
+                            // 1. It's directly on the DEFAULT option, OR
+                            // 2. We found a constraint name before the DEFAULT option
+                            //
+                            // DotNet only emits Name attribute when CONSTRAINT keyword is directly
+                            // on the DEFAULT option (NOT NULL CONSTRAINT [name] DEFAULT syntax),
+                            // not when CONSTRAINT keyword precedes NOT NULL (CONSTRAINT [name] NOT NULL DEFAULT syntax)
+                            let name_directly_on_default =
+                                option.name.as_ref().map(|n| n.value.clone());
+                            let explicit_name = name_directly_on_default.clone().or_else(|| {
+                                // Check if there was a preceding constraint name and this is the DEFAULT
+                                if default_option_index == Some(i) {
+                                    pending_constraint_name.clone()
+                                } else {
+                                    None
+                                }
+                            });
+
+                            // Emit Name attribute ONLY if CONSTRAINT keyword is directly on the DEFAULT option
+                            // (i.e., "NOT NULL CONSTRAINT [name] DEFAULT" syntax, not "CONSTRAINT [name] NOT NULL DEFAULT")
+                            let has_explicit_name = name_directly_on_default.is_some();
+                            let constraint_name = explicit_name
                                 .unwrap_or_else(|| format!("DF_{}_{}", name, col.name.value));
 
                             model.add_element(ModelElement::Constraint(ConstraintElement {
@@ -452,22 +513,22 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline: !has_explicit_name,
+                                is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
                             }));
                         }
                     }
                 }
 
                 // Extract inline CHECK constraints from column definitions
+                // DotNet emits Name attribute only if constraint has explicit CONSTRAINT [name]
                 for col in &create_table.columns {
                     for option in &col.options {
                         if let ColumnOption::Check(expr) = &option.option {
-                            let is_inline = option.name.is_none();
-                            let constraint_name = option
-                                .name
-                                .as_ref()
-                                .map(|n| n.value.clone())
+                            let explicit_name = option.name.as_ref().map(|n| n.value.clone());
+                            let has_explicit_name = explicit_name.is_some();
+                            let constraint_name = explicit_name
                                 .unwrap_or_else(|| format!("CK_{}_{}", name, col.name.value));
                             model.add_element(ModelElement::Constraint(ConstraintElement {
                                 name: constraint_name,
@@ -479,8 +540,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 referenced_table: None,
                                 referenced_columns: None,
                                 is_clustered: None,
-                                is_inline,
+                                is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
                             }));
                         }
                     }
@@ -501,6 +563,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         is_clustered: None,
                         is_inline: false, // Named constraint (uses CONSTRAINT keyword)
                         inline_constraint_disambiguator: None,
+                        emit_name: true, // Table-level constraints always emit Name
                     }));
                 }
             }
@@ -548,6 +611,10 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 
                 // Extract index options from WITH clause
                 let fill_factor = extract_fill_factor(&create_index.with);
+                let data_compression = extract_data_compression(&create_index.with);
+
+                // Extract filter predicate from raw SQL (sqlparser doesn't expose it directly)
+                let filter_predicate = extract_filter_predicate_from_sql(&parsed.sql_text);
 
                 model.add_element(ModelElement::Index(IndexElement {
                     name: index_name,
@@ -558,6 +625,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_unique: create_index.unique,
                     is_clustered: false, // sqlparser doesn't expose this directly
                     fill_factor,
+                    filter_predicate,
+                    data_compression,
                 }));
             }
 
@@ -700,6 +769,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
         }
     }
 
+    // Resolve UDT nullability for columns
+    // Columns that use a user-defined scalar type and don't have explicit NULL/NOT NULL
+    // inherit the nullability from the UDT definition (matching DotNet behavior)
+    resolve_udt_nullability(&mut model.elements);
+
     // Sort elements by type (following DotNet order) then by name for deterministic output
     sort_elements(&mut model.elements);
 
@@ -710,69 +784,92 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
     Ok(model)
 }
 
-/// Get the sort priority for an element type (lower = earlier in output)
-/// This matches the DotNet DacFx element ordering:
-///   1. SqlSchema
-///   2. SqlTable
-///   3. SqlView
-///   4. SqlProcedure
-///   5. SqlScalarFunction / SqlInlineTableValuedFunction / SqlMultiStatementTableValuedFunction
-///   6. SqlIndex
-///   7. SqlFullTextIndex
-///   8. SqlFullTextCatalog
-///   9. SqlPrimaryKeyConstraint
-///   10. SqlForeignKeyConstraint
-///   11. SqlUniqueConstraint
-///   12. SqlCheckConstraint
-///   13. SqlDefaultConstraint
-///   14. SqlSequence
-///   15. SqlTableType
-///   16. SqlExtendedProperty
-///   17. SqlDmlTrigger (Raw elements)
-fn element_type_priority(element: &ModelElement) -> u32 {
-    match element {
-        ModelElement::Schema(_) => 1,
-        ModelElement::Table(_) => 2,
-        ModelElement::View(_) => 3,
-        ModelElement::Procedure(_) => 4,
-        ModelElement::Function(_) => 5,
-        ModelElement::Index(_) => 6,
-        ModelElement::FullTextIndex(_) => 7,
-        ModelElement::FullTextCatalog(_) => 8,
-        ModelElement::Constraint(c) => match c.constraint_type {
-            ConstraintType::PrimaryKey => 9,
-            ConstraintType::ForeignKey => 10,
-            ConstraintType::Unique => 11,
-            ConstraintType::Check => 12,
-            ConstraintType::Default => 13,
-        },
-        ModelElement::Sequence(_) => 14,
-        ModelElement::UserDefinedType(_) => 15,
-        ModelElement::ScalarType(_) => 15, // Same priority as table types
-        ModelElement::ExtendedProperty(_) => 16,
-        ModelElement::Trigger(_) => 17,
-        ModelElement::Raw(r) => match r.sql_type.as_str() {
-            "SqlDmlTrigger" => 17,
-            _ => 99, // Unknown raw types go last
-        },
-    }
-}
-
-/// Sort elements by type priority then by name for deterministic output
+/// Sort elements by (Name, Type) to match DotNet DacFx ordering.
+///
+/// DotNet sorts elements alphabetically (case-insensitive) by:
+/// 1. Name attribute value (empty string for elements without Name attribute)
+/// 2. Type attribute value (e.g., "SqlCheckConstraint", "SqlTable")
+///
+/// This means elements without Name attribute (inline constraints) sort before
+/// elements with Name, and within the same Name prefix, elements are sorted by Type.
 fn sort_elements(elements: &mut [ModelElement]) {
     elements.sort_by(|a, b| {
-        let priority_a = element_type_priority(a);
-        let priority_b = element_type_priority(b);
+        // Get Name attribute value (empty string if not emitted in XML)
+        let name_a = a.xml_name_attr().to_lowercase();
+        let name_b = b.xml_name_attr().to_lowercase();
 
-        // First compare by type priority
-        match priority_a.cmp(&priority_b) {
+        // Primary sort: by Name attribute (empty sorts first, case-insensitive)
+        match name_a.cmp(&name_b) {
             std::cmp::Ordering::Equal => {
-                // Same type, sort by full_name for deterministic ordering
-                a.full_name().cmp(&b.full_name())
+                // Same name, sort by Type attribute alphabetically (case-insensitive)
+                a.type_name()
+                    .to_lowercase()
+                    .cmp(&b.type_name().to_lowercase())
             }
             other => other,
         }
     });
+}
+
+/// Resolve UDT nullability for columns.
+///
+/// When a column uses a user-defined scalar type (UDT) created with `CREATE TYPE ... FROM`,
+/// and the column doesn't have an explicit NULL/NOT NULL constraint, it inherits the
+/// nullability from the UDT definition. This matches DotNet DacFx behavior.
+///
+/// For example:
+///   CREATE TYPE [dbo].[PhoneNumber] FROM VARCHAR(20) NOT NULL;
+///   CREATE TABLE [dbo].[T] ([Phone] [dbo].[PhoneNumber]);  -- Phone inherits NOT NULL
+fn resolve_udt_nullability(elements: &mut [ModelElement]) {
+    use std::collections::HashMap;
+
+    // Build a map of UDT names to their nullability
+    // Store multiple name formats to handle different reference styles
+    let mut udt_nullability: HashMap<String, bool> = HashMap::new();
+
+    for element in elements.iter() {
+        if let ModelElement::ScalarType(scalar_type) = element {
+            // UDT can be referenced in various formats:
+            // - [schema].[name]
+            // - schema.name
+            // - [schema].name
+            // - schema.[name]
+            let schema = &scalar_type.schema;
+            let name = &scalar_type.name;
+            let is_nullable = scalar_type.is_nullable;
+
+            // Store all possible reference formats
+            // Format: [schema].[name]
+            udt_nullability.insert(format!("[{}].[{}]", schema, name), is_nullable);
+            // Format: schema.name
+            udt_nullability.insert(format!("{}.{}", schema, name), is_nullable);
+            // Format: [schema].name
+            udt_nullability.insert(format!("[{}].{}", schema, name), is_nullable);
+            // Format: schema.[name]
+            udt_nullability.insert(format!("{}.[{}]", schema, name), is_nullable);
+        }
+    }
+
+    // If no UDTs, nothing to resolve
+    if udt_nullability.is_empty() {
+        return;
+    }
+
+    // Update columns that use UDTs and don't have explicit nullability
+    for element in elements.iter_mut() {
+        if let ModelElement::Table(table) = element {
+            for column in &mut table.columns {
+                // Only update if column doesn't have explicit nullability
+                if column.nullability.is_none() {
+                    // Check if the column's data type matches a UDT
+                    if let Some(&is_nullable) = udt_nullability.get(&column.data_type) {
+                        // Inherit nullability from UDT
+                        column.nullability = Some(is_nullable);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Assign disambiguator values to inline constraints and build linkages to columns/tables.
@@ -1187,6 +1284,7 @@ fn constraint_from_extracted(
             is_clustered: Some(*is_clustered),
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
+            emit_name: true, // Table-level constraints always emit Name
         }),
         ExtractedTableConstraint::ForeignKey {
             name,
@@ -1208,6 +1306,7 @@ fn constraint_from_extracted(
             is_clustered: None,
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
+            emit_name: true, // Table-level constraints always emit Name
         }),
         ExtractedTableConstraint::Unique {
             name,
@@ -1228,6 +1327,7 @@ fn constraint_from_extracted(
             is_clustered: Some(*is_clustered),
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
+            emit_name: true, // Table-level constraints always emit Name
         }),
         ExtractedTableConstraint::Check { name, expression } => Some(ConstraintElement {
             name: name.clone(),
@@ -1241,6 +1341,7 @@ fn constraint_from_extracted(
             is_clustered: None,
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
+            emit_name: true, // Table-level constraints always emit Name
         }),
     }
 }
@@ -1353,6 +1454,7 @@ fn constraint_from_table_constraint(
                 is_clustered,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
+                emit_name: true, // Table-level constraints always emit Name
             })
         }
         TableConstraint::ForeignKey {
@@ -1389,6 +1491,7 @@ fn constraint_from_table_constraint(
                 is_clustered: None,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
+                emit_name: true, // Table-level constraints always emit Name
             })
         }
         TableConstraint::Unique { name, columns, .. } => {
@@ -1416,6 +1519,7 @@ fn constraint_from_table_constraint(
                 is_clustered,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
+                emit_name: true, // Table-level constraints always emit Name
             })
         }
         TableConstraint::Check { name, expr } => {
@@ -1436,6 +1540,7 @@ fn constraint_from_table_constraint(
                 is_clustered: None,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
+                emit_name: true, // Table-level constraints always emit Name
             })
         }
         _ => None,
@@ -1459,11 +1564,9 @@ fn extract_fill_factor(with_options: &[Expr]) -> Option<u8> {
                 if let Expr::Identifier(ident) = left.as_ref() {
                     if ident.value.to_uppercase() == "FILLFACTOR" {
                         // Extract the numeric value from the right side
-                        if let Expr::Value(value) = right.as_ref() {
-                            if let sqlparser::ast::Value::Number(n, _) = value {
-                                if let Ok(val) = n.parse::<u8>() {
-                                    return Some(val);
-                                }
+                        if let Expr::Value(sqlparser::ast::Value::Number(n, _)) = right.as_ref() {
+                            if let Ok(val) = n.parse::<u8>() {
+                                return Some(val);
                             }
                         }
                     }
@@ -1472,6 +1575,51 @@ fn extract_fill_factor(with_options: &[Expr]) -> Option<u8> {
         }
     }
     None
+}
+
+/// Extract DATA_COMPRESSION from index WITH clause options
+fn extract_data_compression(with_options: &[Expr]) -> Option<DataCompressionType> {
+    for expr in with_options {
+        if let Expr::BinaryOp { left, op, right } = expr {
+            if *op == BinaryOperator::Eq {
+                // Check if the left side is DATA_COMPRESSION identifier
+                if let Expr::Identifier(ident) = left.as_ref() {
+                    if ident.value.to_uppercase() == "DATA_COMPRESSION" {
+                        // Extract the compression type from the right side
+                        if let Expr::Identifier(value_ident) = right.as_ref() {
+                            return match value_ident.value.to_uppercase().as_str() {
+                                "NONE" => Some(DataCompressionType::None),
+                                "ROW" => Some(DataCompressionType::Row),
+                                "PAGE" => Some(DataCompressionType::Page),
+                                "COLUMNSTORE" => Some(DataCompressionType::Columnstore),
+                                "COLUMNSTORE_ARCHIVE" => {
+                                    Some(DataCompressionType::ColumnstoreArchive)
+                                }
+                                _ => None,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract filter predicate from filtered index WHERE clause
+fn extract_filter_predicate_from_sql(sql: &str) -> Option<String> {
+    // Match WHERE clause in filtered index
+    // WHERE clause comes after column specification and before WITH/; or end
+    // Pattern: ) WHERE <predicate> [WITH (...)] [;]
+    let re = regex::Regex::new(r"(?is)\)\s*WHERE\s+(.+?)(?:\s+WITH\s*\(|;|\s*$)").ok()?;
+
+    re.captures(sql).and_then(|caps| {
+        caps.get(1).map(|m| {
+            let predicate = m.as_str().trim();
+            // Remove trailing semicolon if present
+            predicate.trim_end_matches(';').trim().to_string()
+        })
+    })
 }
 
 /// Convert an extracted extended property to a model ExtendedPropertyElement

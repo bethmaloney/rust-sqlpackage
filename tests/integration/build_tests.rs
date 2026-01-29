@@ -307,10 +307,8 @@ fn test_build_with_sqlcmd_includes() {
         predeploy.contains("Creating application settings"),
         "Predeploy should contain expanded CreateSettings.sql content"
     );
-    assert!(
-        predeploy.contains("-- BEGIN :r"),
-        "Predeploy should contain include markers"
-    );
+    // Note: DotNet doesn't add marker comments for :r includes, so neither do we.
+    // The content is inlined directly without -- BEGIN/END :r markers.
 
     // Verify post-deploy script has expanded :r content
     let postdeploy = info
