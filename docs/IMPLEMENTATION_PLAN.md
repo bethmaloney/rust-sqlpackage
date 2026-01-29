@@ -19,10 +19,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Relationships | 40/44 | 90.9% | 4 fixtures with relationship differences |
+| Relationships | 37/44 | 84.1% | 7 fixtures with relationship differences |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **40/44** | **90.9%** | 40 fixtures pass all layers |
+| **Full Parity** | **37/44** | **84.1%** | 37 fixtures pass all layers |
 
 **Note:** Error fixtures (`external_reference`, `unresolved_reference`) are now excluded from parity testing since DotNet cannot build them. These test Rust's ability to handle edge cases.
 
@@ -179,17 +179,42 @@ The following 4 fixtures have relationship differences that are either intention
 - **Impact:** Intentional difference - Rust deduplication is a design decision
 
 #### 11.8.5 table_types
-**Status:** FULLY RESOLVED
-- **Resolved:** Table type indexes now emit in separate "Indexes" relationship (not "Constraints")
-- **Resolved:** SqlTableTypeDefaultConstraint now generated for columns with DEFAULT values
-- **Resolved:** All procedure/TVP relationships now match DotNet
-- **Impact:** None - full parity achieved for this fixture
+**Status:** REGRESSED (6 errors)
+**Test:** `SQL_TEST_PROJECT=tests/fixtures/table_types/project.sqlproj cargo test --test e2e_tests test_relationship -- --nocapture`
+
+Missing relationships for procedures that use table-valued parameters (TVP):
+- `SqlProcedure.[dbo].[GetItemsByIds]` - Missing: Parameters, BodyDependencies, DynamicObjects
+- `SqlProcedure.[dbo].[ProcessOrderItems]` - Missing: BodyDependencies, DynamicObjects, and 1 more
+
+- [ ] **11.8.5.1** Emit Parameters relationship for procedures with TVP parameters
+- [ ] **11.8.5.2** Emit BodyDependencies relationship for procedures using TVPs
+- [ ] **11.8.5.3** Emit DynamicObjects relationship for procedures with TVPs
 
 #### 11.8.6 view_options
 **Issue:** Duplicate refs in GROUP BY clauses
 - DotNet preserves duplicate column references in GROUP BY
 - Rust deduplicates (e.g., `GROUP BY a, a, b` emits refs to a and b, not a, a, b)
 - **Impact:** Intentional difference - Rust deduplication is a design decision
+
+#### 11.8.7 element_types
+**Status:** FAILING (2 errors)
+**Test:** `SQL_TEST_PROJECT=tests/fixtures/element_types/project.sqlproj cargo test --test e2e_tests test_relationship -- --nocapture`
+
+Missing Columns relationship for table-valued functions:
+- `SqlMultiStatementTableValuedFunction.[dbo].[GetUsersByName]` - Missing: Columns
+- `SqlInlineTableValuedFunction.[dbo].[GetActiveUsers]` - Missing: Columns
+
+- [ ] **11.8.7.1** Emit Columns relationship for SqlMultiStatementTableValuedFunction
+- [ ] **11.8.7.2** Emit Columns relationship for SqlInlineTableValuedFunction
+
+#### 11.8.8 procedure_parameters
+**Status:** FAILING (1 error)
+**Test:** `SQL_TEST_PROJECT=tests/fixtures/procedure_parameters/project.sqlproj cargo test --test e2e_tests test_relationship -- --nocapture`
+
+Missing Columns relationship for inline table-valued function:
+- `SqlInlineTableValuedFunction.[dbo].[GetOrdersByCustomer]` - Missing: Columns
+
+- [ ] **11.8.8.1** Emit Columns relationship for SqlInlineTableValuedFunction (same fix as 11.8.7.2)
 
 #### Summary of Intentional Differences
 
@@ -203,11 +228,11 @@ These differences would require significant changes to the dependency tracking m
 
 ---
 
-### 11.9 Table Type Fixes
+### 11.9 Table Type Fixes (Partial)
 
 #### 11.9.1 Table Type Index and Default Constraint Generation
 **Fixtures:** `table_types`
-**Status:** COMPLETE
+**Status:** PARTIAL - Index/constraint generation complete, but procedure relationships regressed
 
 - [x] **11.9.1.1** Fixed table type indexes to emit in separate "Indexes" relationship
   - Previously indexes were incorrectly emitted in "Constraints" relationship
@@ -222,7 +247,7 @@ These differences would require significant changes to the dependency tracking m
 - [x] **11.9.1.5** Added type-level AttachedAnnotation linking to indexes
   - Table types now include attached annotations for their indexes
 
-**Impact:** Full parity achieved for table_types fixture (0 differences)
+**Note:** Procedure relationships regressed - see section 11.8.5 for remaining tasks.
 
 ---
 
@@ -237,12 +262,19 @@ These differences would require significant changes to the dependency tracking m
 | 11.5 | Error Fixtures | 4/4 | Complete (excluded from parity testing) |
 | 11.6 | Final Verification | 10/10 | Complete |
 | 11.7 | Inline Constraint Handling | 11/11 | Complete |
-| 11.8 | Remaining Relationship Differences | N/A | Documented (4 fixtures) |
-| 11.9 | Table Type Fixes | 5/5 | Complete |
+| 11.8 | Remaining Relationship Differences | 0/6 | 7 fixtures with relationship errors |
+| 11.9 | Table Type Fixes | 5/5 | Partial (index/constraint complete) |
 
-**Phase 11 Total**: 62/62 tasks complete
+**Phase 11 Total**: 62/68 tasks complete (6 new tasks added)
 
-> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 90.9% (40/44). Error fixtures resolved by excluding from parity testing. Remaining 4 relationship differences documented in section 11.8 - some are intentional design decisions (deduplication). Table type fixes fully completed (100% parity) in section 11.9.
+> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 84.1% (37/44). 7 fixtures have relationship differences:
+> - **ampersand_encoding** (3 errors): SELECT * handling - intentional difference
+> - **e2e_comprehensive** (8 errors): Computed column type refs, function/view columns
+> - **element_types** (2 errors): Missing Columns relationship for TVFs
+> - **instead_of_triggers** (2 errors): Duplicate ref deduplication - intentional difference
+> - **procedure_parameters** (1 error): Missing Columns relationship for inline TVF
+> - **table_types** (6 errors): Missing procedure relationships for TVP usage
+> - **view_options** (2 errors): Duplicate ref deduplication - intentional difference
 
 ---
 
@@ -266,9 +298,14 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **COMPLETE** 62/62 |
+| Phase 11 | **IN PROGRESS** 62/68 |
 
-**Total**: 125/125 tasks complete
+**Total**: 125/131 tasks complete
+
+**Remaining tasks (6):**
+- 11.8.5.1-3: table_types - Procedure TVP relationships (3 tasks)
+- 11.8.7.1-2: element_types - TVF Columns relationship (2 tasks)
+- 11.8.8.1: procedure_parameters - Inline TVF Columns relationship (1 task)
 
 ---
 
