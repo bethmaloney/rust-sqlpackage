@@ -1,14 +1,14 @@
 {
   "version": 1,
-  "updated": "2026-01-28T22:53:09.100663844+00:00",
-  "commit": "8c8e51c",
+  "updated": "2026-01-29T00:23:14.444532578+00:00",
+  "commit": "46a7cf1",
   "fixtures": [
     {
       "name": "all_constraints",
       "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
-      "layer4_pass": false,
+      "layer4_pass": true,
       "metadata_pass": true
     },
     {
@@ -111,7 +111,7 @@
       "name": "element_types",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
     },
@@ -143,7 +143,7 @@
       "name": "filtered_indexes",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
     },

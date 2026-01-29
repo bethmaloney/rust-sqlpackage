@@ -2071,6 +2071,47 @@ fn extract_check_expression_columns(
     extract_expression_column_references(expression, table_schema, table_name)
 }
 
+/// Extract column references from a filtered index predicate.
+///
+/// Filter predicates reference columns by their unqualified names
+/// (e.g., `[DeletedAt] IS NULL` or `[Status] = N'Pending' AND [IsActive] = 1`).
+/// This function extracts those column names and returns them as fully-qualified references.
+///
+/// DotNet emits these as the `BodyDependencies` relationship for filtered indexes.
+fn extract_filter_predicate_columns(predicate: &str, table_ref: &str) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut columns = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // Match bracketed identifiers: [ColumnName]
+    // These are column references in the predicate
+    let column_regex = regex::Regex::new(r"\[([A-Za-z_][A-Za-z0-9_]*)\]").unwrap();
+
+    for cap in column_regex.captures_iter(predicate) {
+        if let Some(col_match) = cap.get(1) {
+            let col_name = col_match.as_str();
+            let upper_name = col_name.to_uppercase();
+
+            // Skip SQL keywords
+            if is_sql_keyword(&upper_name) {
+                continue;
+            }
+
+            // Build fully-qualified column reference using provided table_ref
+            // table_ref is in format "[schema].[table]"
+            let col_ref = format!("{}.[{}]", table_ref, col_name);
+
+            // Only add each column once, but preserve order of first appearance
+            if !seen.contains(&col_ref) {
+                seen.insert(col_ref.clone());
+                columns.push(col_ref);
+            }
+        }
+    }
+
+    columns
+}
+
 /// Extract column references from a computed column expression.
 ///
 /// Computed column expressions reference columns by their unqualified names
@@ -2565,9 +2606,27 @@ fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow
         write_property(writer, "FillFactor", &fill_factor.to_string())?;
     }
 
+    // Write FilterPredicate property for filtered indexes (before relationships)
+    // DotNet emits this as a CDATA script property
+    if let Some(ref filter_predicate) = index.filter_predicate {
+        write_script_property(writer, "FilterPredicate", filter_predicate)?;
+    }
+
     // Reference to table
     let table_ref = format!("[{}].[{}]", index.table_schema, index.table_name);
-    write_relationship(writer, "IndexedObject", &[&table_ref])?;
+
+    // Write BodyDependencies for filtered indexes (column references from filter predicate)
+    // DotNet emits this before ColumnSpecifications
+    if let Some(ref filter_predicate) = index.filter_predicate {
+        let body_deps = extract_filter_predicate_columns(filter_predicate, &table_ref);
+        if !body_deps.is_empty() {
+            let body_deps: Vec<BodyDependency> = body_deps
+                .into_iter()
+                .map(BodyDependency::ObjectRef)
+                .collect();
+            write_body_dependencies(writer, &body_deps)?;
+        }
+    }
 
     // Write ColumnSpecifications for key columns
     if !index.columns.is_empty() {
@@ -2584,6 +2643,9 @@ fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow
         let include_refs: Vec<&str> = include_refs.iter().map(|s| s.as_str()).collect();
         write_relationship(writer, "IncludedColumns", &include_refs)?;
     }
+
+    // IndexedObject relationship comes after ColumnSpecifications and IncludedColumns
+    write_relationship(writer, "IndexedObject", &[&table_ref])?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
