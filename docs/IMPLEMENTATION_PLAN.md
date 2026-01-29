@@ -124,11 +124,14 @@ The following 5 fixtures have relationship differences that are either intention
 - **Impact:** Intentional difference - Rust deduplication is a design decision
 
 #### 11.8.5 table_types
-**Issue:** Missing relationships for table types and procedures
-- **DynamicObjects:** Missing relationship for procedures that use dynamic SQL
-- **Parameters:** Missing relationship for table type parameters
-- **Indexes:** Missing relationship for table type indexes
-- **Impact:** Moderate - affects table-valued parameters and dynamic SQL tracking
+**Status:** MOSTLY RESOLVED - Only 6 relationship differences remain (down from 8)
+- **Resolved:** Table type indexes now emit in separate "Indexes" relationship (not "Constraints")
+- **Resolved:** SqlTableTypeDefaultConstraint now generated for columns with DEFAULT values
+- **Remaining (6 differences):** All procedure-related
+  - **BodyDependencies:** Missing for procedures using table-valued parameters
+  - **Parameters:** Missing relationship for table type parameters
+  - **DynamicObjects:** Missing for procedures that use dynamic SQL
+- **Impact:** Minor - affects only procedure/TVP integration, table types themselves are correct
 
 #### 11.8.6 view_options
 **Issue:** Duplicate refs in GROUP BY clauses
@@ -148,6 +151,29 @@ These differences would require significant changes to the dependency tracking m
 
 ---
 
+### 11.9 Table Type Fixes
+
+#### 11.9.1 Table Type Index and Default Constraint Generation
+**Fixtures:** `table_types`
+**Status:** COMPLETE
+
+- [x] **11.9.1.1** Fixed table type indexes to emit in separate "Indexes" relationship
+  - Previously indexes were incorrectly emitted in "Constraints" relationship
+  - Now correctly generated as `SqlIndex` elements with proper annotations
+- [x] **11.9.1.2** Added SqlTableTypeDefaultConstraint generation for columns with DEFAULT values
+  - Implemented default constraint extraction and generation
+  - Fixed regex in `extract_table_type_column_default` to handle simple literals (0, 'string', etc)
+- [x] **11.9.1.3** Added SqlInlineConstraintAnnotation on columns with defaults
+  - Columns with DEFAULT values now include inline constraint annotations
+- [x] **11.9.1.4** Added SqlInlineIndexAnnotation on table type indexes
+  - Indexes now include proper inline index annotations
+- [x] **11.9.1.5** Added type-level AttachedAnnotation linking to indexes
+  - Table types now include attached annotations for their indexes
+
+**Impact:** Reduced table_types relationship differences from 8 to 6 (only procedure-related differences remain)
+
+---
+
 ### Phase 11 Progress
 
 | Section | Description | Tasks | Status |
@@ -160,10 +186,11 @@ These differences would require significant changes to the dependency tracking m
 | 11.6 | Final Verification | 10/10 | Complete |
 | 11.7 | Inline Constraint Handling | 11/11 | Complete |
 | 11.8 | Remaining Relationship Differences | N/A | Documented (5 fixtures) |
+| 11.9 | Table Type Fixes | 5/5 | Complete |
 
-**Phase 11 Total**: 57/57 tasks complete
+**Phase 11 Total**: 62/62 tasks complete
 
-> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 88.6% (39/44). Error fixtures resolved by excluding from parity testing. Remaining 5 relationship differences documented in section 11.8 - some are intentional design decisions (deduplication).
+> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 88.6% (39/44). Error fixtures resolved by excluding from parity testing. Remaining 5 relationship differences documented in section 11.8 - some are intentional design decisions (deduplication). Table type index/default fixes completed in section 11.9.
 
 ---
 
@@ -187,9 +214,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **COMPLETE** 57/57 |
+| Phase 11 | **COMPLETE** 62/62 |
 
-**Total**: 120/120 tasks complete
+**Total**: 125/125 tasks complete
 
 ---
 

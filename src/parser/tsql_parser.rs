@@ -1505,8 +1505,16 @@ fn extract_table_type_structure(
 
 /// Extract default value from a table type column definition
 fn extract_table_type_column_default(col_def: &str) -> Option<String> {
-    // Pattern: DEFAULT (value) or DEFAULT value
-    let default_re = Regex::new(r"(?i)DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\)|\w+\(\))").ok()?;
+    // Match DEFAULT followed by:
+    // 1. Parenthesized expression: (value) or (GETDATE())
+    // 2. Function call: GETDATE()
+    // 3. String literal: 'text' or N'text'
+    // 4. Numeric literal: 0, 1.5, -10
+    // 5. Identifier: NULL
+    let default_re = Regex::new(
+        r"(?i)DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\)|\w+\(\)|N?'[^']*'|[-+]?\d+(?:\.\d+)?|\w+)",
+    )
+    .ok()?;
     default_re
         .captures(col_def)
         .and_then(|caps| caps.get(1).or(caps.get(0)))

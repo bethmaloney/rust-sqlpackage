@@ -572,10 +572,11 @@ fn write_expression_dependencies<W: Write>(
 
 /// Write a table type column (uses SqlTableTypeSimpleColumn for user-defined table types)
 /// Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn, so we don't either
-fn write_table_type_column<W: Write>(
+fn write_table_type_column_with_annotation<W: Write>(
     writer: &mut Writer<W>,
     column: &TableTypeColumnElement,
     type_name: &str,
+    disambiguator: Option<u32>,
 ) -> anyhow::Result<()> {
     let col_name = format!("{}.[{}]", type_name, column.name);
 
@@ -597,6 +598,14 @@ fn write_table_type_column<W: Write>(
         column.precision,
         column.scale,
     )?;
+
+    // SqlInlineConstraintAnnotation for columns with default values
+    if let Some(disam) = disambiguator {
+        let mut annotation = BytesStart::new("Annotation");
+        annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
+        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        writer.write_event(Event::Empty(annotation))?;
+    }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -3337,6 +3346,37 @@ fn write_user_defined_type<W: Write>(
     elem.push_attribute(("Name", full_name.as_str()));
     writer.write_event(Event::Start(elem))?;
 
+    // Calculate disambiguators:
+    // - Start at 5 for first default constraint annotation
+    // - Increment for each default constraint and index
+    let mut disambiguator = 5;
+
+    // Build map of column name to disambiguator for columns with defaults
+    let mut column_disambiguators: std::collections::HashMap<&str, u32> =
+        std::collections::HashMap::new();
+    for col in &udt.columns {
+        if col.default_value.is_some() {
+            column_disambiguators.insert(&col.name, disambiguator);
+            disambiguator += 1;
+        }
+    }
+
+    // Track index disambiguators
+    let mut index_disambiguators: Vec<u32> = Vec::new();
+    for constraint in &udt.constraints {
+        if matches!(constraint, TableTypeConstraint::Index { .. }) {
+            index_disambiguators.push(disambiguator);
+            disambiguator += 1;
+        }
+    }
+
+    // Track the highest disambiguator used for the type-level AttachedAnnotation
+    let type_disambiguator = if !index_disambiguators.is_empty() {
+        Some(*index_disambiguators.last().unwrap())
+    } else {
+        None
+    };
+
     // Relationship to schema
     write_schema_relationship(writer, &udt.schema)?;
 
@@ -3347,24 +3387,95 @@ fn write_user_defined_type<W: Write>(
         writer.write_event(Event::Start(rel))?;
 
         for col in &udt.columns {
-            write_table_type_column(writer, col, &full_name)?;
+            let col_disambiguator = column_disambiguators.get(col.name.as_str()).copied();
+            write_table_type_column_with_annotation(writer, col, &full_name, col_disambiguator)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     }
 
-    // Write constraints (PRIMARY KEY, UNIQUE, CHECK, INDEX) under a unified Constraints relationship
-    // DotNet uses a single "Constraints" relationship containing all constraint types
-    if !udt.constraints.is_empty() {
+    // Separate constraints from indexes
+    let non_index_constraints: Vec<_> = udt
+        .constraints
+        .iter()
+        .filter(|c| !matches!(c, TableTypeConstraint::Index { .. }))
+        .collect();
+    let index_constraints: Vec<_> = udt
+        .constraints
+        .iter()
+        .filter_map(|c| match c {
+            TableTypeConstraint::Index {
+                name,
+                columns,
+                is_unique,
+                is_clustered,
+            } => Some((name, columns, *is_unique, *is_clustered)),
+            _ => None,
+        })
+        .collect();
+
+    // Collect columns with defaults for default constraint emission
+    let columns_with_defaults: Vec<_> = udt
+        .columns
+        .iter()
+        .filter(|c| c.default_value.is_some())
+        .collect();
+
+    // Write Constraints relationship (non-index constraints + default constraints)
+    if !non_index_constraints.is_empty() || !columns_with_defaults.is_empty() {
         let mut rel = BytesStart::new("Relationship");
         rel.push_attribute(("Name", "Constraints"));
         writer.write_event(Event::Start(rel))?;
 
-        for (idx, constraint) in udt.constraints.iter().enumerate() {
+        // Write default constraints first (DotNet order)
+        for col in &columns_with_defaults {
+            if let Some(default_value) = &col.default_value {
+                let col_disambiguator = column_disambiguators.get(col.name.as_str()).copied();
+                write_table_type_default_constraint(
+                    writer,
+                    &full_name,
+                    &col.name,
+                    default_value,
+                    col_disambiguator,
+                )?;
+            }
+        }
+
+        // Write other constraints (PK, UNIQUE, CHECK)
+        for (idx, constraint) in non_index_constraints.iter().enumerate() {
             write_table_type_constraint(writer, constraint, &full_name, idx, &udt.columns)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // Write Indexes relationship separately
+    if !index_constraints.is_empty() {
+        let mut rel = BytesStart::new("Relationship");
+        rel.push_attribute(("Name", "Indexes"));
+        writer.write_event(Event::Start(rel))?;
+
+        for (i, (name, columns, is_unique, is_clustered)) in index_constraints.iter().enumerate() {
+            let idx_disambiguator = index_disambiguators.get(i).copied();
+            write_table_type_index_with_annotation(
+                writer,
+                &full_name,
+                name,
+                columns,
+                *is_unique,
+                *is_clustered,
+                idx_disambiguator,
+            )?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // Type-level AttachedAnnotation (if we have indexes)
+    if let Some(disam) = type_disambiguator {
+        let mut annotation = BytesStart::new("AttachedAnnotation");
+        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        writer.write_event(Event::Empty(annotation))?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -3531,6 +3642,49 @@ fn write_table_type_check_constraint<W: Write>(
     Ok(())
 }
 
+/// Write SqlTableTypeDefaultConstraint element for columns with DEFAULT values
+fn write_table_type_default_constraint<W: Write>(
+    writer: &mut Writer<W>,
+    type_name: &str,
+    column_name: &str,
+    default_value: &str,
+    disambiguator: Option<u32>,
+) -> anyhow::Result<()> {
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTableTypeDefaultConstraint"));
+    writer.write_event(Event::Start(elem))?;
+
+    // DefaultExpressionScript property
+    write_script_property(writer, "DefaultExpressionScript", default_value)?;
+
+    // ForColumn relationship
+    let col_ref = format!("{}.[{}]", type_name, column_name);
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "ForColumn"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+    let mut refs = BytesStart::new("References");
+    refs.push_attribute(("Name", col_ref.as_str()));
+    writer.write_event(Event::Empty(refs))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    // AttachedAnnotation linking to the column's SqlInlineConstraintAnnotation
+    if let Some(disam) = disambiguator {
+        let mut annotation = BytesStart::new("AttachedAnnotation");
+        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        writer.write_event(Event::Empty(annotation))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    Ok(())
+}
+
 /// Write table type index element (Entry + Element only, no outer Relationship)
 fn write_table_type_index<W: Write>(
     writer: &mut Writer<W>,
@@ -3569,6 +3723,58 @@ fn write_table_type_index<W: Write>(
         }
 
         writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    Ok(())
+}
+
+/// Write table type index element with SqlInlineIndexAnnotation for Indexes relationship
+fn write_table_type_index_with_annotation<W: Write>(
+    writer: &mut Writer<W>,
+    type_name: &str,
+    name: &str,
+    idx_columns: &[String],
+    is_unique: bool,
+    is_clustered: bool,
+    disambiguator: Option<u32>,
+) -> anyhow::Result<()> {
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let idx_name = format!("{}.[{}]", type_name, name);
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTableTypeIndex"));
+    elem.push_attribute(("Name", idx_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
+
+    // Properties
+    if is_unique {
+        write_property(writer, "IsUnique", "True")?;
+    }
+    if is_clustered {
+        write_property(writer, "IsClustered", "True")?;
+    }
+
+    // ColumnSpecifications relationship
+    if !idx_columns.is_empty() {
+        let mut col_rel = BytesStart::new("Relationship");
+        col_rel.push_attribute(("Name", "ColumnSpecifications"));
+        writer.write_event(Event::Start(col_rel))?;
+
+        for col_name in idx_columns {
+            write_table_type_indexed_column_spec(writer, type_name, col_name, false, &[])?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // SqlInlineIndexAnnotation
+    if let Some(disam) = disambiguator {
+        let mut annotation = BytesStart::new("Annotation");
+        annotation.push_attribute(("Type", "SqlInlineIndexAnnotation"));
+        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        writer.write_event(Event::Empty(annotation))?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
