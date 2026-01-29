@@ -8,9 +8,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|-------------|--------|
 | Phase 1-9 | Core implementation (properties, relationships, XML structure, metadata) | 58/58 |
 | Phase 10 | Fix extended properties, function classification, constraint naming, SqlPackage config | 5/5 |
-| Phase 12 | Achieve 100% relationship parity (fix 2 remaining fixtures) | 6/6 |
+| Phase 11 | Fix remaining parity failures, error fixtures, ignored tests | 70/70 |
+| Phase 12 | SELECT * expansion, TVF columns, duplicate refs | 6/6 |
+| Phase 13 | Fix remaining relationship parity issues (3 fixtures) | 0/4 |
 
-**Total Completed**: 72/72 tasks
+**Total Completed**: 139/143 tasks
 
 ---
 
@@ -20,12 +22,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Relationships | 44/44 | 100% | All fixtures pass |
+| Relationships | 41/44 | 93.2% | 3 fixtures have relationship errors |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **44/44** | **100%** | Complete |
+| **Full Parity** | **41/44** | **93.2%** | 3 fixtures need fixes |
 
-**Note (2026-01-29):** Phase 12 complete - 100% parity achieved across all layers including relationships.
+**Note (2026-01-29):** Corrected parity baseline after fixing stale DotNet dacpac issue. Added `--no-incremental` flag to dotnet build to prevent cached dacpacs from masking failures.
 
 **Note:** Error fixtures (`external_reference`, `unresolved_reference`) are now excluded from parity testing since DotNet cannot build them. These test Rust's ability to handle edge cases.
 
@@ -195,10 +197,11 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phases 1-10 | **COMPLETE** 63/63 |
 | Phase 11 | **COMPLETE** 70/70 |
 | Phase 12 | **COMPLETE** 6/6 |
+| Phase 13 | **IN PROGRESS** 0/4 |
 
-**Total**: 139/139 tasks complete
+**Total**: 139/143 tasks complete
 
-**Status:** All phases complete. 100% parity achieved across all layers (inventory, properties, relationships, ordering, metadata).
+**Status:** Phase 13 in progress. 41/44 fixtures pass relationship parity. 3 fixtures need fixes.
 
 ---
 
@@ -477,6 +480,122 @@ END
 | 12.5 | Final verification | Complete |
 
 **Phase 12 Total**: 6/6 sections complete
+
+---
+
+## Phase 13: Fix Remaining Relationship Parity Issues
+
+> **Status:** IN PROGRESS - 3 fixtures have relationship errors detected after fixing stale dacpac issue.
+>
+> The previous 100% parity claim was based on tests run against stale cached DotNet dacpacs.
+> After adding `--no-incremental` to dotnet build, the actual relationship mismatches were revealed.
+
+---
+
+### 13.1 Fix e2e_comprehensive Relationship Errors
+
+**Fixture:** `e2e_comprehensive`
+**Errors:** 3 relationship errors
+**Test:** `cargo test --test e2e_tests test_parity_e2e_comprehensive -- --nocapture`
+
+**Failing Output:**
+```
+REFERENCE COUNT MISMATCH: SqlView.[Sales].[CustomerOrderSummary].QueryDependencies (Rust: 13, DotNet: 10)
+REFERENCE MISMATCH: SqlView.[Sales].[CustomerOrderSummary].QueryDependencies
+  Rust: ["[Sales].[Customers]", "[Sales].[Orders]", "[Sales].[Customers].[Id]", "[Sales].[Orders].[CustomerId]",
+         "[Sales].[Customers].[Id]", "[Sales].[Customers].[FirstName]", "[Sales].[Customers].[LastName]",
+         "[Sales].[Customers].[Email]", "[Sales].[Orders].[Id]", "[Sales].[Orders].[TotalAmount]",
+         "[Sales].[Customers].[FirstName]", "[Sales].[Customers].[LastName]", "[Sales].[Customers].[Email]"]
+  DotNet: ["[Sales].[Customers]", "[Sales].[Orders]", "[Sales].[Customers].[Id]", "[Sales].[Orders].[CustomerId]",
+           "[Sales].[Customers].[Id]", "[Sales].[Customers].[FirstName]", "[Sales].[Customers].[LastName]",
+           "[Sales].[Customers].[Email]", "[Sales].[Orders].[Id]", "[Sales].[Orders].[TotalAmount]"]
+MISSING RELATIONSHIP: SqlView.[dbo].[Terms&ConditionsView] - Columns (not in Rust)
+```
+
+**Root Cause Analysis:**
+1. QueryDependencies has 3 extra duplicate column refs (FirstName, LastName, Email appear twice)
+2. View with ampersand in name is missing Columns relationship
+
+**Tasks:**
+- [ ] **13.1.1** Investigate duplicate QueryDependencies - likely SELECT * expansion emitting refs that shouldn't be in QueryDependencies
+- [ ] **13.1.2** Fix Columns relationship for views with special characters in name (ampersand)
+- [ ] **13.1.3** Run `test_parity_e2e_comprehensive` and verify 0 errors
+
+---
+
+### 13.2 Fix procedure_parameters Relationship Errors
+
+**Fixture:** `procedure_parameters`
+**Errors:** 1 relationship error
+**Test:** `cargo test --test e2e_tests test_parity_procedure_parameters -- --nocapture`
+
+**Failing Output:**
+```
+MISSING RELATIONSHIP: SqlInlineTableValuedFunction.[dbo].[GetOrdersByCustomer] - Columns (not in Rust)
+```
+
+**Root Cause Analysis:**
+- Inline TVF is missing Columns relationship
+- Phase 12.4 added Columns for inline TVFs but may have missed this case
+
+**Tasks:**
+- [ ] **13.2.1** Investigate why `[dbo].[GetOrdersByCustomer]` inline TVF doesn't emit Columns relationship
+- [ ] **13.2.2** Fix Columns extraction/emission for this inline TVF case
+- [ ] **13.2.3** Run `test_parity_procedure_parameters` and verify 0 errors
+
+---
+
+### 13.3 Fix table_types Relationship Errors
+
+**Fixture:** `table_types`
+**Errors:** 6 relationship errors
+**Test:** `cargo test --test e2e_tests test_parity_table_types -- --nocapture`
+
+**Failing Output:**
+```
+MISSING RELATIONSHIP: SqlProcedure.[dbo].[GetItemsByIds] - DynamicObjects (not in Rust)
+MISSING RELATIONSHIP: SqlProcedure.[dbo].[GetItemsByIds] - Parameters (not in Rust)
+MISSING RELATIONSHIP: SqlProcedure.[dbo].[GetItemsByIds] - BodyDependencies (not in Rust)
+MISSING RELATIONSHIP: SqlProcedure.[dbo].[ProcessOrderItems] - Parameters (not in Rust)
+MISSING RELATIONSHIP: SqlProcedure.[dbo].[ProcessOrderItems] - BodyDependencies (not in Rust)
+... and 1 more
+```
+
+**Root Cause Analysis:**
+- Two procedures are missing all their relationships (Parameters, BodyDependencies, DynamicObjects)
+- These procedures likely use table type parameters which may not be parsed correctly
+
+**Tasks:**
+- [ ] **13.3.1** Investigate why procedures `GetItemsByIds` and `ProcessOrderItems` have no relationships
+- [ ] **13.3.2** Check if procedures with table type parameters are being parsed correctly
+- [ ] **13.3.3** Fix relationship emission for procedures with table type parameters
+- [ ] **13.3.4** Run `test_parity_table_types` and verify 0 errors
+
+---
+
+### 13.4 Final Verification
+
+**Goal:** Verify all tests pass, no clippy warnings, and full parity achieved.
+
+**Tasks:**
+- [ ] **13.4.1** Run `just test` - all unit and integration tests pass
+- [ ] **13.4.2** Run `cargo clippy -- -D warnings` - no warnings
+- [ ] **13.4.3** Run `test_parity_regression_check` - 44/44 fixtures pass all layers
+- [ ] **13.4.4** Update baseline to reflect 100% parity
+- [ ] **13.4.5** Verify CI passes on GitHub Actions
+
+---
+
+### Phase 13 Progress
+
+| Task | Description | Status |
+|------|-------------|--------|
+| 13.1 | Fix e2e_comprehensive (3 errors) | Pending |
+| 13.2 | Fix procedure_parameters (1 error) | Pending |
+| 13.3 | Fix table_types (6 errors) | Pending |
+| 13.4 | Final verification | Pending |
+
+**Phase 13 Total**: 0/4 sections complete
 
 ---
 
