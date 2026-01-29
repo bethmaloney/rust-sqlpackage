@@ -444,9 +444,10 @@ fn build_both_dacpacs(
     })
     .map_err(|e| format!("Rust build failed: {}", e))?;
 
-    // Build with DotNet
+    // Build with DotNet (use --no-incremental to avoid stale cached dacpacs)
     let dotnet_output = Command::new("dotnet")
         .arg("build")
+        .arg("--no-incremental")
         .arg(project_path)
         .output()
         .map_err(|e| format!("Failed to run dotnet: {}", e))?;
