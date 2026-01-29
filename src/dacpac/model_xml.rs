@@ -854,15 +854,28 @@ fn extract_view_columns_and_deps(
         });
     }
 
-    // Build QueryDependencies: tables first, then columns
-    // Add all referenced tables (unique)
+    // Build QueryDependencies in DotNet order:
+    // 1. Tables (in order of appearance)
+    // 2. JOIN ON columns (FK/PK columns from JOIN conditions)
+    // 3. SELECT list columns
+    // 4. Other columns (WHERE, GROUP BY, etc.)
+
+    // 1. Add all referenced tables (unique)
     for (_alias, table_ref) in &table_aliases {
         if !query_deps.contains(table_ref) {
             query_deps.push(table_ref.clone());
         }
     }
 
-    // Add column references from the SELECT columns (the ones we already parsed)
+    // 2. Add JOIN ON condition columns (these come before SELECT columns in DotNet)
+    let join_on_cols = extract_join_on_columns(query, &table_aliases, default_schema);
+    for col_ref in join_on_cols {
+        if !query_deps.contains(&col_ref) {
+            query_deps.push(col_ref);
+        }
+    }
+
+    // 3. Add column references from the SELECT columns
     for col in &columns {
         if let Some(ref source_ref) = col.source_ref {
             if !query_deps.contains(source_ref) {
@@ -871,7 +884,7 @@ fn extract_view_columns_and_deps(
         }
     }
 
-    // Add all column references from the rest of the query (WHERE, ON, GROUP BY, etc.)
+    // 4. Add remaining column references from the query (WHERE, HAVING, GROUP BY, etc.)
     let all_column_refs = extract_all_column_references(query, &table_aliases, default_schema);
     for col_ref in all_column_refs {
         if !query_deps.contains(&col_ref) {
@@ -1122,6 +1135,53 @@ fn resolve_column_reference(
         }
         _ => None,
     }
+}
+
+/// Extract column references from JOIN ON clauses
+/// These need to come before SELECT columns in QueryDependencies to match DotNet ordering
+fn extract_join_on_columns(
+    query: &str,
+    table_aliases: &[(String, String)],
+    default_schema: &str,
+) -> Vec<String> {
+    let mut refs = Vec::new();
+
+    // Find all ON clauses by matching "ON" followed by condition
+    // We use a simpler approach: find each ON keyword and extract until we hit a terminating keyword
+    let on_keyword_pattern = regex::Regex::new(r"(?i)\bON\s+").unwrap();
+    let terminator_pattern = regex::Regex::new(
+        r"(?i)\b(?:WHERE|GROUP|ORDER|HAVING|UNION|INNER|LEFT|RIGHT|OUTER|CROSS|JOIN)\b|;",
+    )
+    .unwrap();
+    let col_pattern = regex::Regex::new(r"(\[?\w+\]?)\.(\[?\w+\]?)(?:\.(\[?\w+\]?))?").unwrap();
+
+    for on_match in on_keyword_pattern.find_iter(query) {
+        let start = on_match.end();
+        let remaining = &query[start..];
+
+        // Find where this ON clause ends
+        let end = terminator_pattern
+            .find(remaining)
+            .map(|m| m.start())
+            .unwrap_or(remaining.len());
+
+        let clause_text = &remaining[..end];
+
+        // Extract column references from the ON clause
+        for col_cap in col_pattern.captures_iter(clause_text) {
+            let full_match = col_cap.get(0).map(|m| m.as_str()).unwrap_or("");
+
+            if let Some(resolved) =
+                resolve_column_reference(full_match, table_aliases, default_schema)
+            {
+                if !refs.contains(&resolved) {
+                    refs.push(resolved);
+                }
+            }
+        }
+    }
+
+    refs
 }
 
 /// Extract all column references from the entire query (SELECT, WHERE, ON, GROUP BY, etc.)

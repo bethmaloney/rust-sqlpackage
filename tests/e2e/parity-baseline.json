@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-29T00:34:33.106313995+00:00",
-  "commit": "c43ecd5",
+  "updated": "2026-01-29T00:48:28.900678008+00:00",
+  "commit": "c2dbbfd",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -103,7 +103,7 @@
       "name": "e2e_simple",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
     },
