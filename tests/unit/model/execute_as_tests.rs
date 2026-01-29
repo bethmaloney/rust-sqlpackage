@@ -196,7 +196,6 @@ END
 }
 
 #[test]
-#[ignore = "TVF type classification changed - tests expect TableValued but code returns InlineTableValued - see IMPLEMENTATION_PLAN.md Phase 11.6"]
 fn test_build_tvf_with_execute_as() {
     // This is an inline TVF (RETURNS TABLE with single RETURN SELECT)
     let sql = r#"

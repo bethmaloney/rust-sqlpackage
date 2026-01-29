@@ -267,7 +267,6 @@ fn test_build_with_pre_post_deploy_scripts() {
 // ============================================================================
 
 #[test]
-#[ignore = "SQLCMD include marker handling needs investigation - see IMPLEMENTATION_PLAN.md Phase 11.6"]
 fn test_build_with_sqlcmd_includes() {
     let ctx = TestContext::with_fixture("sqlcmd_includes");
     let result = ctx.build();
