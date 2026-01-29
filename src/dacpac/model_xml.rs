@@ -2278,11 +2278,14 @@ fn extract_computed_expression_columns(
     extract_expression_column_references(expression, table_schema, table_name)
 }
 
-/// Extract column references from an expression.
+/// Extract column references and type references from an expression.
 ///
 /// Expressions reference columns by their unqualified names (e.g., `[ColumnName]`).
 /// This function extracts those column names and returns them as fully-qualified references
 /// in the format `[schema].[table].[column]`.
+///
+/// Additionally, CAST expressions emit type references (e.g., `[nvarchar]`) to match
+/// DotNet DacFx behavior.
 ///
 /// Used by both CHECK constraints and computed columns.
 fn extract_expression_column_references(
@@ -2291,13 +2294,39 @@ fn extract_expression_column_references(
     table_name: &str,
 ) -> Vec<String> {
     use std::collections::HashSet;
-    let mut columns = Vec::new();
+    let mut refs = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
     // Match bracketed identifiers: [ColumnName]
     // These are column references in the expression
     let column_regex = regex::Regex::new(r"\[([A-Za-z_][A-Za-z0-9_]*)\]").unwrap();
 
+    // Match CAST(... AS TYPE) or CAST(... AS TYPE(n)) patterns
+    // Capture the entire CAST expression to get the CAST keyword position, and the type name
+    // DotNet emits the type reference at the position of CAST (before inner column refs)
+    let cast_regex = regex::Regex::new(r"(?i)(CAST)\s*\([^)]+\s+AS\s+(\w+)").unwrap();
+
+    // Process expression to preserve order of appearance
+    // We need to track positions where each reference appears
+    let mut position_refs: Vec<(usize, String)> = Vec::new();
+
+    // Track CAST ranges so we can skip column references inside CAST expressions
+    // (they'll be processed separately after the CAST type ref)
+    let mut cast_ranges: Vec<(usize, usize, usize)> = Vec::new(); // (cast_start, cast_end, type_pos)
+    for cap in cast_regex.captures_iter(expression) {
+        if let (Some(cast_match), Some(type_match)) = (cap.get(1), cap.get(2)) {
+            let cast_start = cap.get(0).map(|m| m.start()).unwrap_or(0);
+            let cast_end = cap.get(0).map(|m| m.end()).unwrap_or(0);
+            let type_name = type_match.as_str().to_lowercase();
+            // Emit type reference at the CAST keyword position (before inner column refs)
+            let type_ref = format!("[{}]", type_name);
+            let cast_pos = cast_match.start();
+            position_refs.push((cast_pos, type_ref));
+            cast_ranges.push((cast_start, cast_end, cast_pos));
+        }
+    }
+
+    // Collect column references with their positions
     for cap in column_regex.captures_iter(expression) {
         if let Some(col_match) = cap.get(1) {
             let col_name = col_match.as_str();
@@ -2310,16 +2339,33 @@ fn extract_expression_column_references(
 
             // Build fully-qualified column reference
             let col_ref = format!("[{}].[{}].[{}]", table_schema, table_name, col_name);
+            let pos = col_match.start();
 
-            // Only add each column once, but preserve order of first appearance
-            if !seen.contains(&col_ref) {
-                seen.insert(col_ref.clone());
-                columns.push(col_ref);
-            }
+            // For columns inside a CAST, adjust position to appear after the type
+            // This matches DotNet's behavior: CAST type first, then inner columns
+            let adjusted_pos = cast_ranges
+                .iter()
+                .find(|(start, end, _)| pos >= *start && pos < *end)
+                .map(|(_, _, type_pos)| type_pos + 1)
+                .unwrap_or(pos);
+
+            position_refs.push((adjusted_pos, col_ref));
         }
     }
 
-    columns
+    // Sort by position to maintain order of appearance in expression
+    // Use stable sort to preserve original order when positions are equal
+    position_refs.sort_by_key(|(pos, _)| *pos);
+
+    // Add references in order, deduplicating
+    for (_, ref_str) in position_refs {
+        if !seen.contains(&ref_str) {
+            seen.insert(ref_str.clone());
+            refs.push(ref_str);
+        }
+    }
+
+    refs
 }
 
 /// Write BodyDependencies relationship for procedures and functions

@@ -134,7 +134,7 @@ The following 2 fixtures have relationship differences. See **Phase 12** for tas
 | Fixture | Errors | Issue | Phase 12 Task |
 |---------|--------|-------|---------------|
 | `ampersand_encoding` | 1 missing relationship (SELECT * expansion needed) | SELECT * emits `[*]` reference | 12.1 |
-| `e2e_comprehensive` | 8 | Type refs + TVF columns | 12.3, 12.4 |
+| `e2e_comprehensive` | 4 (down from 8) | TVF columns (type refs fixed in 12.3) | 12.4 |
 
 ---
 
@@ -370,8 +370,13 @@ for cap in cast_regex.captures_iter(expression) {
 ```
 
 **Tasks:**
-- [ ] **12.3.1** Add CAST type extraction in `extract_expression_column_references()`
-- [ ] **12.3.2** Emit type as `[typename]` reference (lowercase, matches DotNet format)
+- [x] **12.3.1** Add CAST type extraction in `extract_expression_column_references()`
+- [x] **12.3.2** Emit type as `[typename]` reference (lowercase, matches DotNet format)
+
+**Solution Implemented (2026-01-29):**
+- Added CAST type extraction in `extract_expression_column_references()`
+- Type references are emitted at the CAST keyword position (before inner column refs) to match DotNet order
+- Test verified: `test_parity_e2e_comprehensive` shows EntityKey.ExpressionDependencies now matches DotNet output
 
 ---
 
@@ -436,7 +441,7 @@ For inline TVFs, parse the SELECT columns from the RETURN statement and emit a C
 |------|-------------|--------|
 | 12.1 | SELECT * column reference fix | Partial (skip `[*]` done; SELECT * expansion needed) |
 | 12.2 | Remove reference deduplication | Complete |
-| 12.3 | Computed column type references | Pending |
+| 12.3 | Computed column type references | Complete |
 | 12.4 | Inline TVF Columns relationship | Pending |
 | 12.5 | Final verification | Pending |
 
