@@ -19,10 +19,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Relationships | 38/44 | 86.4% | 6 fixtures with relationship differences |
+| Relationships | 39/44 | 88.6% | 5 fixtures with relationship differences |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **38/44** | **86.4%** | 38 fixtures pass all layers |
+| **Full Parity** | **39/44** | **88.6%** | 39 fixtures pass all layers |
 
 **Note:** Error fixtures (`external_reference`, `unresolved_reference`) are now excluded from parity testing since DotNet cannot build them. These test Rust's ability to handle edge cases.
 
@@ -97,7 +97,7 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 
 ### 11.8 Remaining Relationship Differences
 
-The following 6 fixtures have relationship differences that are either intentional design decisions or would require significant changes to the dependency tracking model.
+The following 5 fixtures have relationship differences that are either intentional design decisions or would require significant changes to the dependency tracking model.
 
 #### 11.8.1 ampersand_encoding
 **Issue:** SELECT * handling
@@ -112,10 +112,10 @@ The following 6 fixtures have relationship differences that are either intention
 - **Impact:** Moderate - affects complex computed columns and special character handling
 
 #### 11.8.3 index_options
-**Issue:** Missing DataCompressionOptions relationship
-- Indexes with DATA_COMPRESSION should emit a DataCompressionOptions relationship
-- Rust currently does not emit this relationship for compressed indexes
-- **Impact:** Minor - affects index compression metadata
+**Status:** RESOLVED
+- **Original Issue:** Missing DataCompressionOptions relationship - indexes with DATA_COMPRESSION should emit a DataCompressionOptions relationship
+- **Fix:** DataCompressionOptions relationship is now emitted for indexes with DATA_COMPRESSION
+- **Impact:** None - parity achieved for this fixture
 
 #### 11.8.4 instead_of_triggers
 **Issue:** BodyDependencies reference count mismatch
@@ -159,11 +159,11 @@ These differences would require significant changes to the dependency tracking m
 | 11.5 | Error Fixtures | 4/4 | Complete (excluded from parity testing) |
 | 11.6 | Final Verification | 10/10 | Complete |
 | 11.7 | Inline Constraint Handling | 11/11 | Complete |
-| 11.8 | Remaining Relationship Differences | N/A | Documented (6 fixtures) |
+| 11.8 | Remaining Relationship Differences | N/A | Documented (5 fixtures) |
 
 **Phase 11 Total**: 57/57 tasks complete
 
-> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 86.4% (38/44). Error fixtures resolved by excluding from parity testing. Remaining 6 relationship differences documented in section 11.8 - some are intentional design decisions (deduplication).
+> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 88.6% (39/44). Error fixtures resolved by excluding from parity testing. Remaining 5 relationship differences documented in section 11.8 - some are intentional design decisions (deduplication).
 
 ---
 

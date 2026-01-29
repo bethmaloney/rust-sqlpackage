@@ -5,11 +5,11 @@ use quick_xml::Writer;
 use std::io::Write;
 
 use crate::model::{
-    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
-    ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement, FunctionElement,
-    IndexElement, ModelElement, ProcedureElement, RawElement, ScalarTypeElement, SchemaElement,
-    SequenceElement, SortDirection, TableElement, TableTypeColumnElement, TableTypeConstraint,
-    TriggerElement, UserDefinedTypeElement, ViewElement,
+    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType,
+    DatabaseModel, ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement,
+    FunctionElement, IndexElement, ModelElement, ProcedureElement, RawElement, ScalarTypeElement,
+    SchemaElement, SequenceElement, SortDirection, TableElement, TableTypeColumnElement,
+    TableTypeConstraint, TriggerElement, UserDefinedTypeElement, ViewElement,
 };
 use crate::project::SqlProject;
 
@@ -2693,6 +2693,11 @@ fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow
         write_index_column_specifications(writer, index, &table_ref)?;
     }
 
+    // Write DataCompressionOptions relationship if index has compression
+    if let Some(ref compression) = index.data_compression {
+        write_data_compression_options(writer, compression)?;
+    }
+
     // Write IncludedColumns relationship if present
     if !index.include_columns.is_empty() {
         let include_refs: Vec<String> = index
@@ -2741,6 +2746,37 @@ fn write_index_column_specifications<W: Write>(
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     }
 
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write DataCompressionOptions relationship for indexes with data compression
+fn write_data_compression_options<W: Write>(
+    writer: &mut Writer<W>,
+    compression: &DataCompressionType,
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "DataCompressionOptions"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlDataCompressionOption"));
+    writer.write_event(Event::Start(elem))?;
+
+    // Write CompressionLevel property
+    write_property(
+        writer,
+        "CompressionLevel",
+        &compression.compression_level().to_string(),
+    )?;
+
+    // Write PartitionNumber property (always 1 for single-partition indexes)
+    write_property(writer, "PartitionNumber", "1")?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
 }

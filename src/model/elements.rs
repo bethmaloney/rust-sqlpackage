@@ -202,6 +202,34 @@ pub enum FunctionType {
     InlineTableValued,
 }
 
+/// Data compression type for indexes and tables
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataCompressionType {
+    /// No compression (CompressionLevel = 0)
+    None,
+    /// Row-level compression (CompressionLevel = 1)
+    Row,
+    /// Page-level compression (CompressionLevel = 2)
+    Page,
+    /// Columnstore compression (CompressionLevel = 3)
+    Columnstore,
+    /// Columnstore archive compression (CompressionLevel = 4)
+    ColumnstoreArchive,
+}
+
+impl DataCompressionType {
+    /// Get the compression level value for model.xml
+    pub fn compression_level(&self) -> u8 {
+        match self {
+            DataCompressionType::None => 0,
+            DataCompressionType::Row => 1,
+            DataCompressionType::Page => 2,
+            DataCompressionType::Columnstore => 3,
+            DataCompressionType::ColumnstoreArchive => 4,
+        }
+    }
+}
+
 /// Function element
 #[derive(Debug, Clone)]
 pub struct FunctionElement {
@@ -230,6 +258,8 @@ pub struct IndexElement {
     pub fill_factor: Option<u8>,
     /// Filter predicate for filtered indexes (WHERE clause condition)
     pub filter_predicate: Option<String>,
+    /// Data compression type (NONE, ROW, PAGE, COLUMNSTORE, COLUMNSTORE_ARCHIVE)
+    pub data_compression: Option<DataCompressionType>,
 }
 
 /// A column in a full-text index with optional language specification

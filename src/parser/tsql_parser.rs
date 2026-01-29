@@ -216,6 +216,8 @@ pub enum FallbackStatementType {
         fill_factor: Option<u8>,
         /// Filter predicate for filtered indexes (WHERE clause condition)
         filter_predicate: Option<String>,
+        /// Data compression type (NONE, ROW, PAGE, etc.)
+        data_compression: Option<String>,
     },
     /// Full-text index (CREATE FULLTEXT INDEX ON table ...)
     FullTextIndex {
@@ -1920,6 +1922,9 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     // Extract FILLFACTOR from WITH clause if present
     let fill_factor = extract_index_fill_factor(sql);
 
+    // Extract DATA_COMPRESSION from WITH clause if present
+    let data_compression = extract_index_data_compression(sql);
+
     // Extract filter predicate from WHERE clause if present
     let filter_predicate = extract_index_filter_predicate(sql);
 
@@ -1933,6 +1938,7 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
         is_clustered,
         fill_factor,
         filter_predicate,
+        data_compression,
     })
 }
 
@@ -1972,6 +1978,17 @@ fn extract_index_fill_factor(sql: &str) -> Option<u8> {
     re.captures(sql)
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse::<u8>().ok())
+}
+
+/// Extract DATA_COMPRESSION value from index WITH clause
+fn extract_index_data_compression(sql: &str) -> Option<String> {
+    // Match DATA_COMPRESSION = <type> in WITH clause
+    // Type can be: NONE, ROW, PAGE, COLUMNSTORE, COLUMNSTORE_ARCHIVE
+    let re = regex::Regex::new(r"(?i)DATA_COMPRESSION\s*=\s*(\w+)").ok()?;
+
+    re.captures(sql)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_uppercase())
 }
 
 /// Extract filter predicate from filtered index WHERE clause

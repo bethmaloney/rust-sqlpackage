@@ -17,12 +17,12 @@ use crate::parser::{
 use crate::project::SqlProject;
 
 use super::{
-    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel,
-    ExtendedPropertyElement, FullTextCatalogElement, FullTextColumnElement, FullTextIndexElement,
-    FunctionElement, FunctionType, IndexElement, ModelElement, ParameterElement, ProcedureElement,
-    RawElement, ScalarTypeElement, SchemaElement, SequenceElement, TableElement,
-    TableTypeColumnElement, TableTypeConstraint, TriggerElement, UserDefinedTypeElement,
-    ViewElement,
+    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType,
+    DatabaseModel, ExtendedPropertyElement, FullTextCatalogElement, FullTextColumnElement,
+    FullTextIndexElement, FunctionElement, FunctionType, IndexElement, ModelElement,
+    ParameterElement, ProcedureElement, RawElement, ScalarTypeElement, SchemaElement,
+    SequenceElement, TableElement, TableTypeColumnElement, TableTypeConstraint, TriggerElement,
+    UserDefinedTypeElement, ViewElement,
 };
 
 /// Build a database model from parsed statements
@@ -83,7 +83,22 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_clustered,
                     fill_factor,
                     filter_predicate,
+                    data_compression,
                 } => {
+                    // Convert string data_compression to DataCompressionType
+                    let compression_type =
+                        data_compression
+                            .as_ref()
+                            .and_then(|s| match s.to_uppercase().as_str() {
+                                "NONE" => Some(DataCompressionType::None),
+                                "ROW" => Some(DataCompressionType::Row),
+                                "PAGE" => Some(DataCompressionType::Page),
+                                "COLUMNSTORE" => Some(DataCompressionType::Columnstore),
+                                "COLUMNSTORE_ARCHIVE" => {
+                                    Some(DataCompressionType::ColumnstoreArchive)
+                                }
+                                _ => None,
+                            });
                     model.add_element(ModelElement::Index(IndexElement {
                         name: name.clone(),
                         table_schema: table_schema.clone(),
@@ -94,6 +109,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         is_clustered: *is_clustered,
                         fill_factor: *fill_factor,
                         filter_predicate: filter_predicate.clone(),
+                        data_compression: compression_type,
                     }));
                 }
                 FallbackStatementType::FullTextIndex {
@@ -595,6 +611,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 
                 // Extract index options from WITH clause
                 let fill_factor = extract_fill_factor(&create_index.with);
+                let data_compression = extract_data_compression(&create_index.with);
 
                 // Extract filter predicate from raw SQL (sqlparser doesn't expose it directly)
                 let filter_predicate = extract_filter_predicate_from_sql(&parsed.sql_text);
@@ -609,6 +626,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_clustered: false, // sqlparser doesn't expose this directly
                     fill_factor,
                     filter_predicate,
+                    data_compression,
                 }));
             }
 
@@ -1550,6 +1568,35 @@ fn extract_fill_factor(with_options: &[Expr]) -> Option<u8> {
                             if let Ok(val) = n.parse::<u8>() {
                                 return Some(val);
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract DATA_COMPRESSION from index WITH clause options
+fn extract_data_compression(with_options: &[Expr]) -> Option<DataCompressionType> {
+    for expr in with_options {
+        if let Expr::BinaryOp { left, op, right } = expr {
+            if *op == BinaryOperator::Eq {
+                // Check if the left side is DATA_COMPRESSION identifier
+                if let Expr::Identifier(ident) = left.as_ref() {
+                    if ident.value.to_uppercase() == "DATA_COMPRESSION" {
+                        // Extract the compression type from the right side
+                        if let Expr::Identifier(value_ident) = right.as_ref() {
+                            return match value_ident.value.to_uppercase().as_str() {
+                                "NONE" => Some(DataCompressionType::None),
+                                "ROW" => Some(DataCompressionType::Row),
+                                "PAGE" => Some(DataCompressionType::Page),
+                                "COLUMNSTORE" => Some(DataCompressionType::Columnstore),
+                                "COLUMNSTORE_ARCHIVE" => {
+                                    Some(DataCompressionType::ColumnstoreArchive)
+                                }
+                                _ => None,
+                            };
                         }
                     }
                 }
