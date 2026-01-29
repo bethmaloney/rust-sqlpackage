@@ -10,9 +10,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Phase 10 | Fix extended properties, function classification, constraint naming, SqlPackage config | 5/5 |
 | Phase 11 | Fix remaining parity failures, error fixtures, ignored tests | 70/70 |
 | Phase 12 | SELECT * expansion, TVF columns, duplicate refs | 6/6 |
-| Phase 13 | Fix remaining relationship parity issues (2 fixtures) | 1/4 |
+| Phase 13 | Fix remaining relationship parity issues (1 fixture) | 2/4 |
 
-**Total Completed**: 140/144 tasks
+**Total Completed**: 141/144 tasks
 
 ---
 
@@ -22,10 +22,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Relationships | 42/44 | 95.5% | 2 fixtures have relationship errors |
+| Relationships | 43/44 | 97.7% | 1 fixture has relationship errors (table_types - TVP support needed) |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **42/44** | **95.5%** | 2 fixtures need fixes |
+| **Full Parity** | **43/44** | **97.7%** | 1 fixture needs fixes (table_types - TVP support) |
 
 **Note (2026-01-29):** Corrected parity baseline after fixing stale DotNet dacpac issue. Added `--no-incremental` flag to dotnet build to prevent cached dacpacs from masking failures.
 
@@ -199,9 +199,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase 12 | **COMPLETE** 6/6 |
 | Phase 13 | **IN PROGRESS** 1/4 |
 
-**Total**: 140/144 tasks complete
+**Total**: 141/144 tasks complete
 
-**Status:** Phase 13.1 complete. 42/44 fixtures pass relationship parity. 2 fixtures need fixes (procedure_parameters, table_types - both require TVP support).
+**Status:** Phase 13.1 and 13.2 complete. 43/44 fixtures pass relationship parity. 1 fixture needs fixes (table_types - requires TVP support).
 
 ---
 
@@ -485,9 +485,9 @@ END
 
 ## Phase 13: Fix Remaining Relationship Parity Issues
 
-> **Status:** IN PROGRESS - 2 fixtures have relationship errors (procedure_parameters: 4 errors, table_types: 6 errors).
+> **Status:** IN PROGRESS - 1 fixture has relationship errors (table_types: 6 errors).
 >
-> Phase 13.1 complete. The remaining issues (13.2, 13.3) involve table-valued parameter support which requires
+> Phase 13.1 and 13.2 complete. The remaining issue (13.3) involves table-valued parameter support which requires
 > more substantial implementation (DynamicObjects relationship, table type parameter parsing, etc.).
 
 ---
@@ -515,19 +515,33 @@ END
 ### 13.2 Fix procedure_parameters Relationship Errors
 
 **Fixture:** `procedure_parameters`
-**Errors:** 4 relationship errors
+**Status:** COMPLETE
 **Test:** `cargo test --test e2e_tests test_parity_procedure_parameters -- --nocapture`
 
 **Root Cause Analysis:**
-- Procedures with table-valued parameters require special handling
-- Table-valued parameters need DynamicObjects relationship and proper parameter type resolution
-- This requires more substantial implementation work to support table type parameters properly
+The issue was that inline table-valued function columns referencing function parameters (like `@CustomerId AS CustomerId`) were not generating ExpressionDependencies. These parameter references need to be tracked as dependencies in the same way that column references are.
+
+**Implementation Details:**
+- **File:** `src/dacpac/model_xml.rs`
+- **Function:** `extract_inline_tvf_columns()` (updated)
+- **Changes:**
+  1. Modified function signature to accept the function's full name as a parameter
+  2. Added logic to detect parameter references (expressions starting with `@`)
+  3. Format parameter references as `[schema].[FuncName].[@ParamName]` to match DotNet format
+  4. These references are emitted in the ExpressionDependencies relationship for each SqlSimpleColumn
+
+**Fixed Issues:**
+- All 4 relationship errors resolved:
+  - `[dbo].[GetCustomerOrders].[CustomerId]` now has ExpressionDependencies: `[dbo].[GetCustomerOrders].[@CustomerId]`
+  - `[dbo].[GetCustomerOrders].[StartDate]` now has ExpressionDependencies: `[dbo].[GetCustomerOrders].[@StartDate]`
+  - `[dbo].[GetCustomerOrders].[EndDate]` now has ExpressionDependencies: `[dbo].[GetCustomerOrders].[@EndDate]`
+  - Parameter references in inline TVF SELECT columns now properly tracked
 
 **Tasks:**
-- [ ] **13.2.1** Implement table-valued parameter parsing
-- [ ] **13.2.2** Add DynamicObjects relationship support for procedures using TVPs
-- [ ] **13.2.3** Fix parameter type resolution for table type parameters
-- [ ] **13.2.4** Run `test_parity_procedure_parameters` and verify 0 errors
+- [x] **13.2.1** Updated `extract_inline_tvf_columns()` to accept function full name
+- [x] **13.2.2** Added parameter reference detection (expressions starting with @)
+- [x] **13.2.3** Format parameter refs as `[schema].[FuncName].[@ParamName]`
+- [x] **13.2.4** Run `test_parity_procedure_parameters` and verify 0 errors
 
 ---
 
@@ -577,13 +591,13 @@ MISSING RELATIONSHIP: SqlProcedure.[dbo].[ProcessOrderItems] - BodyDependencies 
 | Task | Description | Status |
 |------|-------------|--------|
 | 13.1 | Fix e2e_comprehensive and view_options | Complete |
-| 13.2 | Fix procedure_parameters (4 errors) | Pending (TVP support needed) |
+| 13.2 | Fix procedure_parameters (4 errors) | Complete |
 | 13.3 | Fix table_types (6 errors) | Pending (TVP support needed) |
 | 13.4 | Final verification | Pending |
 
-**Phase 13 Total**: 1/4 sections complete
+**Phase 13 Total**: 2/4 sections complete
 
-**Note:** Tasks 13.2 and 13.3 both involve table-valued parameter (TVP) support, which requires:
+**Note:** Task 13.3 involves table-valued parameter (TVP) support, which requires:
 - DynamicObjects relationship implementation
 - Table type parameter parsing and type resolution
 - This is a more substantial feature that may warrant its own phase

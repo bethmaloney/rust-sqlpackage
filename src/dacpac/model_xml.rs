@@ -1028,8 +1028,10 @@ fn extract_view_columns_and_deps(
 
 /// Extract columns from an inline table-valued function's RETURN statement
 /// The body contains "RETURN (SELECT [cols] FROM ...)" or "RETURN SELECT [cols] FROM ..."
+/// func_full_name is needed to construct parameter references like [dbo].[FuncName].[@Param]
 fn extract_inline_tvf_columns(
     body: &str,
+    func_full_name: &str,
     default_schema: &str,
     model: &DatabaseModel,
 ) -> Vec<ViewColumn> {
@@ -1048,8 +1050,32 @@ fn extract_inline_tvf_columns(
         // Now we should have the SELECT statement
         // Use the existing extract_view_columns_and_deps logic
         // TVFs don't have SCHEMABINDING affecting GROUP BY, use false
-        let (columns, _deps) =
+        let (mut columns, _deps) =
             extract_view_columns_and_deps(query_start, default_schema, model, false);
+
+        // For inline TVFs, handle parameter references in the SELECT list
+        // When column expression is a parameter reference like @CustomerId,
+        // the source_ref should be [schema].[FuncName].[@ParamName]
+        let select_columns = extract_select_columns(query_start);
+        for (idx, col_expr) in select_columns.iter().enumerate() {
+            if idx < columns.len() {
+                let trimmed_expr = col_expr.trim();
+                // Check if the expression (before AS) is a parameter reference
+                let expr_part = if let Some(as_pos) = trimmed_expr.to_uppercase().rfind(" AS ") {
+                    trimmed_expr[..as_pos].trim()
+                } else {
+                    trimmed_expr
+                };
+
+                // If it's a parameter reference like @ParamName
+                if expr_part.starts_with('@') && !expr_part.contains('(') {
+                    let param_name = expr_part.trim_matches(|c| c == '[' || c == ']');
+                    // DotNet format: [schema].[FuncName].[@ParamName] (brackets around the @param)
+                    columns[idx].source_ref = Some(format!("{}.[{}]", func_full_name, param_name));
+                }
+            }
+        }
+
         return columns;
     }
 
@@ -2981,7 +3007,7 @@ fn write_function<W: Write>(
         func.function_type,
         crate::model::FunctionType::InlineTableValued
     ) {
-        let inline_tvf_columns = extract_inline_tvf_columns(&body, &func.schema, model);
+        let inline_tvf_columns = extract_inline_tvf_columns(&body, &full_name, &func.schema, model);
         if !inline_tvf_columns.is_empty() {
             write_view_columns(writer, &full_name, &inline_tvf_columns)?;
         }

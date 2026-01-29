@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-29T19:46:30.801351866+00:00",
-  "commit": "0b9c5ec",
+  "updated": "2026-01-29T20:09:46.920960309+00:00",
+  "commit": "8b273f1",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -263,7 +263,7 @@
       "name": "procedure_parameters",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
     },
