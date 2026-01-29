@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-29T12:37:34.220135238+00:00",
-  "commit": "2590b1f",
+  "updated": "2026-01-29T13:00:41.783282607+00:00",
+  "commit": "5120778",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -15,7 +15,7 @@
       "name": "ampersand_encoding",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
     },
@@ -95,7 +95,7 @@
       "name": "e2e_comprehensive",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
     },

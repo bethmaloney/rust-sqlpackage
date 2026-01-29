@@ -85,7 +85,7 @@ pub fn generate_model_xml<W: Write>(
                 db_options_written = true;
             }
         }
-        write_element(&mut xml_writer, element)?;
+        write_element(&mut xml_writer, element, model)?;
     }
 
     // Write SqlDatabaseOptions at the end if not yet written (happens when all elements
@@ -370,13 +370,17 @@ fn write_database_options<W: Write>(
     Ok(())
 }
 
-fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> anyhow::Result<()> {
+fn write_element<W: Write>(
+    writer: &mut Writer<W>,
+    element: &ModelElement,
+    model: &DatabaseModel,
+) -> anyhow::Result<()> {
     match element {
         ModelElement::Schema(s) => write_schema(writer, s),
         ModelElement::Table(t) => write_table(writer, t),
-        ModelElement::View(v) => write_view(writer, v),
+        ModelElement::View(v) => write_view(writer, v, model),
         ModelElement::Procedure(p) => write_procedure(writer, p),
-        ModelElement::Function(f) => write_function(writer, f),
+        ModelElement::Function(f) => write_function(writer, f, model),
         ModelElement::Index(i) => write_index(writer, i),
         ModelElement::FullTextIndex(f) => write_fulltext_index(writer, f),
         ModelElement::FullTextCatalog(c) => write_fulltext_catalog(writer, c),
@@ -386,7 +390,7 @@ fn write_element<W: Write>(writer: &mut Writer<W>, element: &ModelElement) -> an
         ModelElement::ScalarType(s) => write_scalar_type(writer, s),
         ModelElement::ExtendedProperty(e) => write_extended_property(writer, e),
         ModelElement::Trigger(t) => write_trigger(writer, t),
-        ModelElement::Raw(r) => write_raw(writer, r),
+        ModelElement::Raw(r) => write_raw(writer, r, model),
     }
 }
 
@@ -750,7 +754,11 @@ fn sql_type_to_reference(data_type: &str) -> String {
     .to_string()
 }
 
-fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::Result<()> {
+fn write_view<W: Write>(
+    writer: &mut Writer<W>,
+    view: &ViewElement,
+    model: &DatabaseModel,
+) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", view.schema, view.name);
 
     let mut elem = BytesStart::new("Element");
@@ -784,7 +792,8 @@ fn write_view<W: Write>(writer: &mut Writer<W>, view: &ViewElement) -> anyhow::R
 
     // Extract view columns and dependencies from the query
     // DotNet emits Columns and QueryDependencies for ALL views
-    let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &view.schema);
+    // Pass the model to enable SELECT * expansion to actual table columns
+    let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &view.schema, model);
 
     // 6. Write Columns relationship with SqlComputedColumn elements
     if !columns.is_empty() {
@@ -835,6 +844,58 @@ struct ViewColumn {
     name: String,
     /// The source column reference (if direct column reference), e.g., "[dbo].[Products].[Id]"
     source_ref: Option<String>,
+    /// Whether this column was expanded from SELECT * (for QueryDependencies filtering)
+    from_select_star: bool,
+}
+
+/// Expand SELECT * to actual table columns using the database model
+/// When a view uses SELECT *, DotNet expands it to the actual columns from the referenced table(s)
+fn expand_select_star(
+    table_aliases: &[(String, String)],
+    model: &DatabaseModel,
+) -> Vec<ViewColumn> {
+    let mut columns = Vec::new();
+
+    // For each table in the FROM clause, look up its columns in the model
+    for (_alias, table_ref) in table_aliases {
+        // table_ref is like "[dbo].[TableName]"
+        // Parse schema and table name from the reference
+        let parts: Vec<&str> = table_ref
+            .trim_matches(|c| c == '[' || c == ']')
+            .split("].[")
+            .collect();
+
+        if parts.len() != 2 {
+            continue;
+        }
+
+        let schema = parts[0].trim_matches(|c| c == '[' || c == ']');
+        let table_name = parts[1].trim_matches(|c| c == '[' || c == ']');
+
+        // Find the table in the model
+        for element in &model.elements {
+            if let ModelElement::Table(table) = element {
+                // Case-insensitive comparison for schema and table name
+                if table.schema.eq_ignore_ascii_case(schema)
+                    && table.name.eq_ignore_ascii_case(table_name)
+                {
+                    // Add each column from the table
+                    for col in &table.columns {
+                        // Skip computed columns - their original column name is what we need
+                        let col_ref = format!("{}.[{}]", table_ref, col.name);
+                        columns.push(ViewColumn {
+                            name: col.name.clone(),
+                            source_ref: Some(col_ref),
+                            from_select_star: true, // Mark as expanded from SELECT *
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    columns
 }
 
 /// Extract view columns and query dependencies from a SELECT statement
@@ -844,6 +905,7 @@ struct ViewColumn {
 fn extract_view_columns_and_deps(
     query: &str,
     default_schema: &str,
+    model: &DatabaseModel,
 ) -> (Vec<ViewColumn>, Vec<String>) {
     let mut columns = Vec::new();
     let mut query_deps = Vec::new();
@@ -857,15 +919,18 @@ fn extract_view_columns_and_deps(
     for col_expr in select_columns {
         let (col_name, source_ref) =
             parse_column_expression(&col_expr, &table_aliases, default_schema);
-        // Skip SELECT * columns - DotNet expands these to actual table columns,
-        // but we don't have table definitions available here. Omitting them is
-        // closer to parity than emitting [*] which DotNet never does.
+        // Handle SELECT * - expand to actual table columns using the model
         if col_name == "*" {
+            // For SELECT *, expand to actual columns from the referenced table(s)
+            // DotNet expands these to the actual table columns
+            let expanded = expand_select_star(&table_aliases, model);
+            columns.extend(expanded);
             continue;
         }
         columns.push(ViewColumn {
             name: col_name,
             source_ref,
+            from_select_star: false,
         });
     }
 
@@ -896,7 +961,11 @@ fn extract_view_columns_and_deps(
 
     // 3. Add column references from the SELECT columns
     // DotNet allows duplicates of JOIN ON columns (unique within SELECT)
+    // Skip columns expanded from SELECT * - they go in ExpressionDependencies, not QueryDependencies
     for col in &columns {
+        if col.from_select_star {
+            continue; // SELECT * column refs don't go in QueryDependencies
+        }
         if let Some(ref source_ref) = col.source_ref {
             // Unique within SELECT phase only
             if !select_seen.contains(source_ref) {
@@ -934,7 +1003,11 @@ fn extract_view_columns_and_deps(
 
 /// Extract columns from an inline table-valued function's RETURN statement
 /// The body contains "RETURN (SELECT [cols] FROM ...)" or "RETURN SELECT [cols] FROM ..."
-fn extract_inline_tvf_columns(body: &str, default_schema: &str) -> Vec<ViewColumn> {
+fn extract_inline_tvf_columns(
+    body: &str,
+    default_schema: &str,
+    model: &DatabaseModel,
+) -> Vec<ViewColumn> {
     // Extract the SELECT statement from RETURN clause
     // Pattern: RETURN followed by optional whitespace, optional parenthesis, then SELECT
     let body_upper = body.to_uppercase();
@@ -949,7 +1022,7 @@ fn extract_inline_tvf_columns(body: &str, default_schema: &str) -> Vec<ViewColum
 
         // Now we should have the SELECT statement
         // Use the existing extract_view_columns_and_deps logic
-        let (columns, _deps) = extract_view_columns_and_deps(query_start, default_schema);
+        let (columns, _deps) = extract_view_columns_and_deps(query_start, default_schema, model);
         return columns;
     }
 
@@ -2829,7 +2902,11 @@ fn parse_data_type(data_type: &str) -> (String, Option<i32>, Option<i32>, Option
     }
 }
 
-fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> anyhow::Result<()> {
+fn write_function<W: Write>(
+    writer: &mut Writer<W>,
+    func: &FunctionElement,
+    model: &DatabaseModel,
+) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", func.schema, func.name);
     let type_name = match func.function_type {
         crate::model::FunctionType::Scalar => "SqlScalarFunction",
@@ -2867,7 +2944,7 @@ fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> a
         func.function_type,
         crate::model::FunctionType::InlineTableValued
     ) {
-        let inline_tvf_columns = extract_inline_tvf_columns(&body, &func.schema);
+        let inline_tvf_columns = extract_inline_tvf_columns(&body, &func.schema, model);
         if !inline_tvf_columns.is_empty() {
             write_view_columns(writer, &full_name, &inline_tvf_columns)?;
         }
@@ -4527,10 +4604,14 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
     deps
 }
 
-fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {
+fn write_raw<W: Write>(
+    writer: &mut Writer<W>,
+    raw: &RawElement,
+    model: &DatabaseModel,
+) -> anyhow::Result<()> {
     // Handle SqlView specially to get full property/relationship support
     if raw.sql_type == "SqlView" {
-        return write_raw_view(writer, raw);
+        return write_raw_view(writer, raw, model);
     }
 
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
@@ -4552,7 +4633,11 @@ fn write_raw<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Resu
 
 /// Write a view from a RawElement (for views parsed via fallback)
 /// Mirrors the write_view function but works with raw definition text
-fn write_raw_view<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow::Result<()> {
+fn write_raw_view<W: Write>(
+    writer: &mut Writer<W>,
+    raw: &RawElement,
+    model: &DatabaseModel,
+) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
 
     let mut elem = BytesStart::new("Element");
@@ -4601,7 +4686,7 @@ fn write_raw_view<W: Write>(writer: &mut Writer<W>, raw: &RawElement) -> anyhow:
 
     // Extract view columns and dependencies from the query
     // DotNet emits Columns and QueryDependencies for ALL views
-    let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &raw.schema);
+    let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &raw.schema, model);
 
     // 6. Write Columns relationship with SqlComputedColumn elements
     if !columns.is_empty() {

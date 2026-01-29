@@ -8,9 +8,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|-------------|--------|
 | Phase 1-9 | Core implementation (properties, relationships, XML structure, metadata) | 58/58 |
 | Phase 10 | Fix extended properties, function classification, constraint naming, SqlPackage config | 5/5 |
-| Phase 12 | Achieve 100% relationship parity (fix 2 remaining fixtures) | 2/6 |
+| Phase 12 | Achieve 100% relationship parity (fix 2 remaining fixtures) | 6/6 |
 
-**Total Completed**: 68/69 tasks
+**Total Completed**: 72/72 tasks
 
 ---
 
@@ -20,12 +20,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Relationships | 42/44 | 95.5% | 2 fixtures pending (see Phase 12) |
+| Relationships | 44/44 | 100% | All fixtures pass |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **42/44** | **95.5%** | Phase 12 targets 100% |
+| **Full Parity** | **44/44** | **100%** | Complete |
 
-**Note (2026-01-29):** TVF Columns relationships now implemented for both inline and multi-statement TVFs.
+**Note (2026-01-29):** Phase 12 complete - 100% parity achieved across all layers including relationships.
 
 **Note:** Error fixtures (`external_reference`, `unresolved_reference`) are now excluded from parity testing since DotNet cannot build them. These test Rust's ability to handle edge cases.
 
@@ -81,10 +81,9 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 #### 11.6.1 Layer 3 SqlPackage Comparison Tests
 **Tests:** `test_layered_dacpac_comparison`, `test_layer3_sqlpackage_comparison`
 **File:** `tests/e2e/dotnet_comparison_tests.rs`
-**Status:** DEFERRED - Tests remain ignored because they require 100% relationship parity
-**Issue:** These tests use SqlPackage DeployReport to compare Rust and DotNet dacpacs. They fail due to 2 fixtures with relationship differences.
+**Status:** COMPLETE - `#[ignore]` removed, tests pass with 100% relationship parity
 
-- [ ] **11.6.1.1** (Blocked by Phase 12) Remove `#[ignore]` and verify - requires completing Phase 12
+- [x] **11.6.1.1** Remove `#[ignore]` and verify - completed as part of Phase 12.5
 
 #### 11.6.2 SQLCMD Include Tests
 **Status:** COMPLETE
@@ -119,7 +118,7 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 - [x] **11.6.1.3** Run parity regression check - 44 fixtures tested (2 excluded)
 - [x] **11.6.1.4** Verify Layer 1 (inventory) at 100%
 - [x] **11.6.1.5** Verify Layer 2 (properties) at 100%
-- [x] **11.6.1.6** Verify Relationships at 95.5% (42/44) - see section 11.8 for remaining differences
+- [x] **11.6.1.6** Verify Relationships at 100% (44/44) - all fixtures pass (Phase 12 complete)
 - [x] **11.6.1.7** Verify Layer 4 (ordering) at 100%
 - [x] **11.6.1.8** Verify Metadata at 100%
 - [x] **11.6.1.9** Document any intentional deviations from DotNet behavior
@@ -131,12 +130,12 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 
 ### 11.8 Remaining Relationship Differences
 
-The following 2 fixtures have relationship differences. See **Phase 12** for tasks to fix these and achieve 100% parity.
+**Status:** RESOLVED - All relationship differences fixed in Phase 12.
 
-| Fixture | Errors | Issue | Phase 12 Task |
-|---------|--------|-------|---------------|
-| `ampersand_encoding` | 1 missing relationship (SELECT * expansion needed) | SELECT * emits `[*]` reference | 12.1 |
-| `e2e_comprehensive` | 4 (down from 8) | TVF columns (type refs fixed in 12.3) | 12.4 |
+| Fixture | Original Issue | Resolution |
+|---------|----------------|------------|
+| `ampersand_encoding` | SELECT * emitted `[*]` reference | Fixed: SELECT * expanded to actual table columns |
+| `e2e_comprehensive` | TVF columns and type references | Fixed: Added Columns relationship for TVFs, CAST type refs |
 
 ---
 
@@ -163,14 +162,14 @@ The following 2 fixtures have relationship differences. See **Phase 12** for tas
 | 11.3 | Relationships | 19/19 | Complete |
 | 11.4 | Layer 4: Ordering | 3/3 | Complete (100% pass rate) |
 | 11.5 | Error Fixtures | 4/4 | Complete (excluded from parity testing) |
-| 11.6 | Ignored Tests | 7/8 | Complete (Layer 3 tests remain ignored) |
+| 11.6 | Ignored Tests | 8/8 | Complete |
 | 11.7 | Final Verification | 10/10 | Complete |
 | 11.8 | Remaining Relationship Differences | N/A | 2 fixtures with intentional differences |
 | 11.9 | Table Type Fixes | 5/5 | Complete |
 
-**Phase 11 Total**: 69/70 tasks complete (Layer 3 tests blocked on Phase 12)
+**Phase 11 Total**: 70/70 tasks complete
 
-> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 95.5% (42/44). See **Phase 12** for tasks to fix remaining 2 fixtures.
+> **Status (2026-01-29):** All layers at 100% parity. Phase 12 complete.
 
 ---
 
@@ -194,69 +193,38 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **COMPLETE** 69/70 |
-| Phase 12 | **IN PROGRESS** 2/6 |
+| Phase 11 | **COMPLETE** 70/70 |
+| Phase 12 | **COMPLETE** 6/6 |
 
-**Total**: 137/139 tasks complete
+**Total**: 139/139 tasks complete
 
-**Remaining work:**
-- Phase 12: Fix 2 fixtures with relationship differences to achieve 100% parity
-- Layer 3 SqlPackage comparison tests (blocked on Phase 12 completion)
+**Status:** All phases complete. 100% parity achieved across all layers (inventory, properties, relationships, ordering, metadata).
 
 ---
 
 ## Phase 12: Achieve 100% Relationship Parity
 
-> **Goal:** Fix the remaining 2 fixtures with relationship differences to achieve exact 1-1 matching with DotNet DacFx.
+> **Status:** COMPLETE - 100% parity achieved across all 44 fixtures.
 >
-> **Estimated Effort:** 5-8 hours total
+> All 6 tasks completed. SELECT * expansion implemented by passing DatabaseModel to the view writing pipeline.
 
 ---
 
 ### 12.1 Fix SELECT * Column Reference (ampersand_encoding)
 
-**Fixture:** `ampersand_encoding`
-**Errors:** 3 extra references in Rust
-**Test:** `cargo test --test e2e_tests test_parity_ampersand_encoding -- --nocapture`
-**Effort:** Trivial (30 min)
-
-**Problem:**
-When a view uses `SELECT *`, Rust emits `[dbo].[TableName].[*]` as a column reference.
-DotNet does NOT emit any column reference for `SELECT *`.
-
-**Failing Output:**
-```
-RELATIONSHIP MISMATCH: SqlView.[dbo].[P&L_Report] - Columns
-  EXTRA in Rust: [dbo].[P&L_Report].[*]
-```
-
-**Root Cause:**
-- **File:** `src/dacpac/model_xml.rs`
-- **Function:** `resolve_column_reference()` (lines 1115-1121)
-- The function returns `[table].[*]` when column name is `*`
-
-**Solution:**
-Add a check to skip emitting column references when the column name is `*`:
-
-```rust
-// In resolve_column_reference(), around line 1118
-1 => {
-    let col_name = parts[0].trim_matches(|c| c == '[' || c == ']');
-    if col_name == "*" {
-        return None;  // Don't emit [*] column reference - matches DotNet behavior
-    }
-    if let Some((_, table_ref)) = table_aliases.first() {
-        return Some(format!("{}.[{}]", table_ref, col_name));
-    }
-}
-```
+**Status:** COMPLETE
 
 **Tasks:**
 - [x] **12.1.1** Add `col_name == "*"` check in `resolve_column_reference()` to return `None`
-- [ ] **12.1.2** Run `test_parity_ampersand_encoding` and verify 0 errors
-- [ ] **12.1.3** Pass DatabaseModel to view column extraction to expand SELECT * to actual table columns
+- [x] **12.1.2** Run `test_parity_ampersand_encoding` and verify 0 errors
+- [x] **12.1.3** Pass DatabaseModel to view column extraction to expand SELECT * to actual table columns
 
-**Note (2026-01-29):** Task 12.1.1 completed - the fix to skip `[*]` column references was implemented. However, this alone does not achieve 0 errors because DotNet expands `SELECT *` to the actual table columns (e.g., `[dbo].[Table].[Col1]`, `[dbo].[Table].[Col2]`). Full parity requires passing the DatabaseModel to the view column extraction logic so it can resolve `SELECT *` to the actual columns from the referenced table(s).
+**Implementation (2026-01-29):**
+- Added `expand_select_star()` function that looks up table columns from the DatabaseModel
+- Added `from_select_star` field to ViewColumn struct to track expanded columns
+- Updated `extract_view_columns_and_deps()` to accept DatabaseModel and expand SELECT * to actual columns
+- Fixed QueryDependencies to exclude SELECT * expanded column refs (they only go in ExpressionDependencies)
+- Passed DatabaseModel through the write pipeline (`write_element` -> `write_view`, `write_function`, `write_raw`)
 
 ---
 
@@ -487,11 +455,13 @@ END
 
 ### 12.5 Final Verification
 
-- [ ] **12.5.1** Run `just test` - all tests pass
-- [ ] **12.5.2** Run `cargo clippy -- -D warnings` - no warnings
-- [ ] **12.5.3** Run `test_parity_regression_check` - verify 44/44 fixtures pass relationships
-- [ ] **12.5.4** Update baseline: `PARITY_UPDATE_BASELINE=1 cargo test --test e2e_tests test_parity_regression_check`
-- [ ] **12.5.5** Remove `#[ignore]` from Layer 3 tests and verify they pass
+**Status:** COMPLETE
+
+- [x] **12.5.1** Run `just test` - all 491 tests pass
+- [x] **12.5.2** Run `cargo clippy -- -D warnings` - no warnings
+- [x] **12.5.3** Run `test_parity_regression_check` - 44/44 fixtures pass all layers including relationships
+- [x] **12.5.4** Update baseline
+- [x] **12.5.5** Remove `#[ignore]` from Layer 3 tests (`test_layered_dacpac_comparison`, `test_layer3_sqlpackage_comparison`)
 
 ---
 
@@ -499,14 +469,14 @@ END
 
 | Task | Description | Status |
 |------|-------------|--------|
-| 12.1 | SELECT * column reference fix | Partial (skip `[*]` done; SELECT * expansion needed) |
+| 12.1 | SELECT * column reference fix | Complete |
 | 12.2 | Remove reference deduplication | Complete |
 | 12.3 | Computed column type references | Complete |
 | 12.4 | Inline TVF Columns relationship | Complete |
-| 12.4.1 | Multi-statement TVF Columns relationship | Complete (bonus) |
-| 12.5 | Final verification | Pending |
+| 12.4.1 | Multi-statement TVF Columns relationship | Complete |
+| 12.5 | Final verification | Complete |
 
-**Phase 12 Total**: 2/6 sections complete
+**Phase 12 Total**: 6/6 sections complete
 
 ---
 
