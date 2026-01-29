@@ -793,7 +793,9 @@ fn write_view<W: Write>(
     // Extract view columns and dependencies from the query
     // DotNet emits Columns and QueryDependencies for ALL views
     // Pass the model to enable SELECT * expansion to actual table columns
-    let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &view.schema, model);
+    // Pass is_schema_bound to control GROUP BY duplicate handling
+    let (columns, query_deps) =
+        extract_view_columns_and_deps(&query_script, &view.schema, model, view.is_schema_bound);
 
     // 6. Write Columns relationship with SqlComputedColumn elements
     if !columns.is_empty() {
@@ -902,10 +904,12 @@ fn expand_select_star(
 /// Returns: (columns, query_dependencies)
 /// - columns: List of output columns with their source references
 /// - query_dependencies: All tables and columns referenced in the query
+/// - is_schema_bound: If true, allows GROUP BY columns to duplicate SELECT columns
 fn extract_view_columns_and_deps(
     query: &str,
     default_schema: &str,
     model: &DatabaseModel,
+    is_schema_bound: bool,
 ) -> (Vec<ViewColumn>, Vec<String>) {
     let mut columns = Vec::new();
     let mut query_deps = Vec::new();
@@ -984,17 +988,38 @@ fn extract_view_columns_and_deps(
         }
     }
 
-    // 5. Add GROUP BY columns - allow one duplicate (max 2 total occurrences per column)
+    // 5. Add GROUP BY columns
+    // DotNet behavior varies based on SCHEMABINDING:
+    // - WITH SCHEMABINDING: GROUP BY adds duplicates for all columns (max 2 total)
+    // - Without SCHEMABINDING: GROUP BY only adds duplicates for columns in JOIN ON
     let group_by_cols = extract_group_by_columns(query, &table_aliases, default_schema);
+    let join_on_set: std::collections::HashSet<String> = join_on_cols.iter().cloned().collect();
     let mut group_by_added: std::collections::HashSet<String> = std::collections::HashSet::new();
     for col_ref in group_by_cols {
-        // Count how many times this column already appears
-        let existing_count = query_deps.iter().filter(|r| *r == &col_ref).count();
-        // DotNet allows max 2 occurrences (e.g., JOIN ON + SELECT, or SELECT + GROUP BY)
-        // Skip if already at 2 or if already added in GROUP BY phase
-        if existing_count < 2 && !group_by_added.contains(&col_ref) {
-            group_by_added.insert(col_ref.clone());
-            query_deps.push(col_ref);
+        let already_present = query_deps.contains(&col_ref);
+        let in_join_on = join_on_set.contains(&col_ref);
+
+        if !group_by_added.contains(&col_ref) {
+            if !already_present {
+                // Not present yet - add it
+                group_by_added.insert(col_ref.clone());
+                query_deps.push(col_ref);
+            } else if is_schema_bound {
+                // SCHEMABINDING views: allow duplicates for all columns (max 2)
+                let existing_count = query_deps.iter().filter(|r| *r == &col_ref).count();
+                if existing_count < 2 {
+                    group_by_added.insert(col_ref.clone());
+                    query_deps.push(col_ref);
+                }
+            } else if in_join_on {
+                // Non-SCHEMABINDING views: only allow duplicates for JOIN ON columns
+                let existing_count = query_deps.iter().filter(|r| *r == &col_ref).count();
+                if existing_count < 2 {
+                    group_by_added.insert(col_ref.clone());
+                    query_deps.push(col_ref);
+                }
+            }
+            // If already present, not schema_bound, and NOT in JOIN ON, skip
         }
     }
 
@@ -1022,7 +1047,9 @@ fn extract_inline_tvf_columns(
 
         // Now we should have the SELECT statement
         // Use the existing extract_view_columns_and_deps logic
-        let (columns, _deps) = extract_view_columns_and_deps(query_start, default_schema, model);
+        // TVFs don't have SCHEMABINDING affecting GROUP BY, use false
+        let (columns, _deps) =
+            extract_view_columns_and_deps(query_start, default_schema, model, false);
         return columns;
     }
 
@@ -1279,12 +1306,22 @@ fn normalize_table_reference(table_name: &str, default_schema: &str) -> String {
 fn extract_select_columns(query: &str) -> Vec<String> {
     let mut columns = Vec::new();
 
-    // Find the SELECT ... FROM section
+    // Find the SELECT keyword
     let upper = query.to_uppercase();
     let select_pos = upper.find("SELECT");
     let from_pos = upper.find("FROM");
 
-    if let (Some(start), Some(end)) = (select_pos, from_pos) {
+    if let Some(start) = select_pos {
+        // Determine where the SELECT column list ends
+        // If there's a FROM clause, columns are between SELECT and FROM
+        // If there's no FROM clause (e.g., SELECT 1 AS Id), columns run to end or semicolon
+        let end = if let Some(from_end) = from_pos {
+            from_end
+        } else {
+            // No FROM clause - find the end of the SELECT (semicolon or end of query)
+            upper.find(';').unwrap_or(query.len())
+        };
+
         let select_section = &query[start + 6..end].trim();
 
         // Split by comma, but handle nested parentheses
@@ -4686,7 +4723,8 @@ fn write_raw_view<W: Write>(
 
     // Extract view columns and dependencies from the query
     // DotNet emits Columns and QueryDependencies for ALL views
-    let (columns, query_deps) = extract_view_columns_and_deps(&query_script, &raw.schema, model);
+    let (columns, query_deps) =
+        extract_view_columns_and_deps(&query_script, &raw.schema, model, is_schema_bound);
 
     // 6. Write Columns relationship with SqlComputedColumn elements
     if !columns.is_empty() {

@@ -10,9 +10,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Phase 10 | Fix extended properties, function classification, constraint naming, SqlPackage config | 5/5 |
 | Phase 11 | Fix remaining parity failures, error fixtures, ignored tests | 70/70 |
 | Phase 12 | SELECT * expansion, TVF columns, duplicate refs | 6/6 |
-| Phase 13 | Fix remaining relationship parity issues (3 fixtures) | 0/4 |
+| Phase 13 | Fix remaining relationship parity issues (2 fixtures) | 1/4 |
 
-**Total Completed**: 139/143 tasks
+**Total Completed**: 140/144 tasks
 
 ---
 
@@ -22,10 +22,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Relationships | 41/44 | 93.2% | 3 fixtures have relationship errors |
+| Relationships | 42/44 | 95.5% | 2 fixtures have relationship errors |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **41/44** | **93.2%** | 3 fixtures need fixes |
+| **Full Parity** | **42/44** | **95.5%** | 2 fixtures need fixes |
 
 **Note (2026-01-29):** Corrected parity baseline after fixing stale DotNet dacpac issue. Added `--no-incremental` flag to dotnet build to prevent cached dacpacs from masking failures.
 
@@ -197,11 +197,11 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phases 1-10 | **COMPLETE** 63/63 |
 | Phase 11 | **COMPLETE** 70/70 |
 | Phase 12 | **COMPLETE** 6/6 |
-| Phase 13 | **IN PROGRESS** 0/4 |
+| Phase 13 | **IN PROGRESS** 1/4 |
 
-**Total**: 139/143 tasks complete
+**Total**: 140/144 tasks complete
 
-**Status:** Phase 13 in progress. 41/44 fixtures pass relationship parity. 3 fixtures need fixes.
+**Status:** Phase 13.1 complete. 42/44 fixtures pass relationship parity. 2 fixtures need fixes (procedure_parameters, table_types - both require TVP support).
 
 ---
 
@@ -485,63 +485,49 @@ END
 
 ## Phase 13: Fix Remaining Relationship Parity Issues
 
-> **Status:** IN PROGRESS - 3 fixtures have relationship errors detected after fixing stale dacpac issue.
+> **Status:** IN PROGRESS - 2 fixtures have relationship errors (procedure_parameters: 4 errors, table_types: 6 errors).
 >
-> The previous 100% parity claim was based on tests run against stale cached DotNet dacpacs.
-> After adding `--no-incremental` to dotnet build, the actual relationship mismatches were revealed.
+> Phase 13.1 complete. The remaining issues (13.2, 13.3) involve table-valued parameter support which requires
+> more substantial implementation (DynamicObjects relationship, table type parameter parsing, etc.).
 
 ---
 
 ### 13.1 Fix e2e_comprehensive Relationship Errors
 
 **Fixture:** `e2e_comprehensive`
-**Errors:** 3 relationship errors
+**Status:** COMPLETE
 **Test:** `cargo test --test e2e_tests test_parity_e2e_comprehensive -- --nocapture`
 
-**Failing Output:**
-```
-REFERENCE COUNT MISMATCH: SqlView.[Sales].[CustomerOrderSummary].QueryDependencies (Rust: 13, DotNet: 10)
-REFERENCE MISMATCH: SqlView.[Sales].[CustomerOrderSummary].QueryDependencies
-  Rust: ["[Sales].[Customers]", "[Sales].[Orders]", "[Sales].[Customers].[Id]", "[Sales].[Orders].[CustomerId]",
-         "[Sales].[Customers].[Id]", "[Sales].[Customers].[FirstName]", "[Sales].[Customers].[LastName]",
-         "[Sales].[Customers].[Email]", "[Sales].[Orders].[Id]", "[Sales].[Orders].[TotalAmount]",
-         "[Sales].[Customers].[FirstName]", "[Sales].[Customers].[LastName]", "[Sales].[Customers].[Email]"]
-  DotNet: ["[Sales].[Customers]", "[Sales].[Orders]", "[Sales].[Customers].[Id]", "[Sales].[Orders].[CustomerId]",
-           "[Sales].[Customers].[Id]", "[Sales].[Customers].[FirstName]", "[Sales].[Customers].[LastName]",
-           "[Sales].[Customers].[Email]", "[Sales].[Orders].[Id]", "[Sales].[Orders].[TotalAmount]"]
-MISSING RELATIONSHIP: SqlView.[dbo].[Terms&ConditionsView] - Columns (not in Rust)
-```
-
-**Root Cause Analysis:**
-1. QueryDependencies has 3 extra duplicate column refs (FirstName, LastName, Email appear twice)
-2. View with ampersand in name is missing Columns relationship
+**Issues Fixed:**
+1. **Terms&ConditionsView missing Columns relationship** - Fixed SELECT column extraction for views without FROM clause
+2. **CustomerOrderSummary duplicate QueryDependencies** - Fixed GROUP BY duplicate logic using SCHEMABINDING flag:
+   - WITH SCHEMABINDING views: Allow GROUP BY to add duplicates for all columns (max 2)
+   - Without SCHEMABINDING views: Only allow GROUP BY duplicates for columns in JOIN ON clause
 
 **Tasks:**
-- [ ] **13.1.1** Investigate duplicate QueryDependencies - likely SELECT * expansion emitting refs that shouldn't be in QueryDependencies
-- [ ] **13.1.2** Fix Columns relationship for views with special characters in name (ampersand)
-- [ ] **13.1.3** Run `test_parity_e2e_comprehensive` and verify 0 errors
+- [x] **13.1.1** Fixed SELECT column extraction for views without FROM clause (Terms&ConditionsView now generates Columns relationship)
+- [x] **13.1.2** Fixed QueryDependencies GROUP BY duplicate logic - uses SCHEMABINDING flag to control behavior
+- [x] **13.1.3** Verified both e2e_comprehensive and view_options pass with 0 relationship errors
+- [x] **13.1.4** Updated baseline
 
 ---
 
 ### 13.2 Fix procedure_parameters Relationship Errors
 
 **Fixture:** `procedure_parameters`
-**Errors:** 1 relationship error
+**Errors:** 4 relationship errors
 **Test:** `cargo test --test e2e_tests test_parity_procedure_parameters -- --nocapture`
 
-**Failing Output:**
-```
-MISSING RELATIONSHIP: SqlInlineTableValuedFunction.[dbo].[GetOrdersByCustomer] - Columns (not in Rust)
-```
-
 **Root Cause Analysis:**
-- Inline TVF is missing Columns relationship
-- Phase 12.4 added Columns for inline TVFs but may have missed this case
+- Procedures with table-valued parameters require special handling
+- Table-valued parameters need DynamicObjects relationship and proper parameter type resolution
+- This requires more substantial implementation work to support table type parameters properly
 
 **Tasks:**
-- [ ] **13.2.1** Investigate why `[dbo].[GetOrdersByCustomer]` inline TVF doesn't emit Columns relationship
-- [ ] **13.2.2** Fix Columns extraction/emission for this inline TVF case
-- [ ] **13.2.3** Run `test_parity_procedure_parameters` and verify 0 errors
+- [ ] **13.2.1** Implement table-valued parameter parsing
+- [ ] **13.2.2** Add DynamicObjects relationship support for procedures using TVPs
+- [ ] **13.2.3** Fix parameter type resolution for table type parameters
+- [ ] **13.2.4** Run `test_parity_procedure_parameters` and verify 0 errors
 
 ---
 
@@ -590,12 +576,17 @@ MISSING RELATIONSHIP: SqlProcedure.[dbo].[ProcessOrderItems] - BodyDependencies 
 
 | Task | Description | Status |
 |------|-------------|--------|
-| 13.1 | Fix e2e_comprehensive (3 errors) | Pending |
-| 13.2 | Fix procedure_parameters (1 error) | Pending |
-| 13.3 | Fix table_types (6 errors) | Pending |
+| 13.1 | Fix e2e_comprehensive and view_options | Complete |
+| 13.2 | Fix procedure_parameters (4 errors) | Pending (TVP support needed) |
+| 13.3 | Fix table_types (6 errors) | Pending (TVP support needed) |
 | 13.4 | Final verification | Pending |
 
-**Phase 13 Total**: 0/4 sections complete
+**Phase 13 Total**: 1/4 sections complete
+
+**Note:** Tasks 13.2 and 13.3 both involve table-valued parameter (TVP) support, which requires:
+- DynamicObjects relationship implementation
+- Table type parameter parsing and type resolution
+- This is a more substantial feature that may warrant its own phase
 
 ---
 
