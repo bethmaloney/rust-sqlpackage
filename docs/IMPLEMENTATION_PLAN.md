@@ -17,18 +17,23 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 | Layer | Passing | Rate | Notes |
 |-------|---------|------|-------|
-| Layer 1 (Inventory) | 44/46 | 95.7% | 2 ERROR fixtures failing |
-| Layer 2 (Properties) | 44/46 | 95.7% | 2 ERROR fixtures failing |
-| Relationships | 37/46 | 80.4% | 9 failing |
-| Layer 4 (Ordering) | 43/46 | 93.5% | 1 real failure (all_constraints) + 2 ERROR fixtures |
-| Metadata | 44/46 | 95.7% | 2 ERROR fixtures |
-| **Full Parity** | **37/46** | **80.4%** | 37 fixtures pass all layers |
+| Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
+| Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
+| Relationships | 37/44 | 84.1% | 7 fixtures with relationship differences |
+| Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
+| Metadata | 44/44 | 100% | All fixtures pass |
+| **Full Parity** | **37/44** | **84.1%** | 37 fixtures pass all layers |
 
-**Note:** DotNet 8.0.417 is now available in the development environment. All blocked items can now be investigated.
+**Note:** Error fixtures (`external_reference`, `unresolved_reference`) are now excluded from parity testing since DotNet cannot build them. These test Rust's ability to handle edge cases.
 
-### Layer 4 Ordering Notes
+### Excluded Fixtures
 
-The `all_constraints` fixture fails Layer 4 due to DotNet using ordinal (case-sensitive) string comparison for that specific project, while most other fixtures use case-insensitive ordering. This inconsistency in DotNet's behavior appears to be related to project CollationCaseSensitive settings. Our implementation uses case-insensitive sorting which matches 43/46 fixtures correctly.
+Two fixtures are excluded from parity testing because DotNet fails to build them:
+
+1. **external_reference** - References an external database via synonym; DotNet fails with SQL71501
+2. **unresolved_reference** - View references non-existent table; DotNet fails with SQL71501
+
+These fixtures test Rust's ability to build projects that DotNet cannot handle. They are not bugs - they are intentional edge case tests.
 
 ---
 
@@ -46,19 +51,25 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 
 #### 11.5.1 External Reference Fixture
 **Fixtures:** `external_reference`
-**Status:** ERROR - DotNet build likely fails due to missing referenced dacpac
+**Status:** RESOLVED - Excluded from parity testing
 
-- [ ] **11.5.1.1** Investigate external_reference DotNet build failure
-- [ ] **11.5.1.2** Fix or mark as expected failure
+- [x] **11.5.1.1** Investigate external_reference DotNet build failure
+  - DotNet fails with SQL71501: Synonym references external database `[OtherDatabase].[dbo].[SomeTable]`
+  - View depends on the synonym, causing cascading unresolved reference error
+- [x] **11.5.1.2** Fix or mark as expected failure
+  - Excluded from parity testing via `PARITY_EXCLUDED_FIXTURES` constant
+  - Fixture remains for testing Rust's ability to handle external references
 
 #### 11.5.2 Unresolved Reference Fixture
 **Fixtures:** `unresolved_reference`
-**Status:** ERROR - DotNet build likely fails due to unresolved references
+**Status:** RESOLVED - Excluded from parity testing
 
-- [ ] **11.5.2.1** Investigate unresolved_reference DotNet build failure
-- [ ] **11.5.2.2** Fix or mark as expected failure
-
-**Note (2026-01-28):** DotNet is required to investigate error fixtures as they depend on DotNet build behavior.
+- [x] **11.5.2.1** Investigate unresolved_reference DotNet build failure
+  - DotNet fails with SQL71501: View references non-existent table `[dbo].[NonExistentTable]`
+  - This is expected - the fixture intentionally tests unresolved references
+- [x] **11.5.2.2** Fix or mark as expected failure
+  - Excluded from parity testing via `PARITY_EXCLUDED_FIXTURES` constant
+  - Fixture remains for testing Rust's lenient reference handling
 
 ---
 
@@ -71,16 +82,16 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 - [x] **11.6.1.2** Run `cargo clippy` - no warnings
   - Fixed: Added SQL Server availability check to `test_e2e_sql_server_connectivity`
   - Fixed: Clippy warnings (regex in loops, collapsible match, doc comments)
-- [ ] **11.6.1.3** Run parity regression check - all 46 fixtures at full parity
-- [ ] **11.6.1.4** Verify Layer 1 (inventory) at 100%
-- [ ] **11.6.1.5** Verify Layer 2 (properties) at 100%
-- [ ] **11.6.1.6** Verify Relationships at 100%
-- [ ] **11.6.1.7** Verify Layer 4 (ordering) at 100%
-- [ ] **11.6.1.8** Verify Metadata at 100%
+- [x] **11.6.1.3** Run parity regression check - 44 fixtures tested (2 excluded)
+- [x] **11.6.1.4** Verify Layer 1 (inventory) at 100%
+- [x] **11.6.1.5** Verify Layer 2 (properties) at 100%
+- [ ] **11.6.1.6** Verify Relationships at 100% (currently 84.1%)
+- [x] **11.6.1.7** Verify Layer 4 (ordering) at 100%
+- [x] **11.6.1.8** Verify Metadata at 100%
 - [x] **11.6.1.9** Document any intentional deviations from DotNet behavior
-- [ ] **11.6.1.10** Update baseline and confirm no regressions
+- [x] **11.6.1.10** Update baseline and confirm no regressions
 
-**Note (2026-01-28):** Several baseline entries are stale and show false negatives (`filtered_indexes`, `table_types`, `view_options`, etc.). These need updating when DotNet is available to regenerate reference outputs. Rust output for these fixtures may already match DotNet exactly.
+**Note (2026-01-29):** Baseline updated. Error fixtures excluded from parity testing. Remaining 7 fixtures have relationship differences (not Layer 1-4 or metadata issues).
 
 ---
 
@@ -91,14 +102,14 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 | 11.1 | Layer 1: Element Inventory | 8/8 | Complete |
 | 11.2 | Layer 2: Properties | 2/2 | Complete |
 | 11.3 | Relationships | 19/19 | Complete |
-| 11.4 | Layer 4: Ordering | 3/3 | Complete (93.5% pass rate) |
-| 11.5 | Error Fixtures | 0/4 | Ready to investigate (DotNet available) |
-| 11.6 | Final Verification | 3/10 | In Progress |
+| 11.4 | Layer 4: Ordering | 3/3 | Complete (100% pass rate) |
+| 11.5 | Error Fixtures | 4/4 | Complete (excluded from parity testing) |
+| 11.6 | Final Verification | 9/10 | In Progress (relationships remaining) |
 | 11.7 | Inline Constraint Handling | 11/11 | Complete |
 
-**Phase 11 Total**: 46/57 tasks complete
+**Phase 11 Total**: 56/57 tasks complete
 
-> **Status (2026-01-29):** Relationships improved to 80.4% (37/46). Full parity improved to 80.4% (37/46). Remaining work: Error fixtures and final verification.
+> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 84.1% (37/44). Error fixtures resolved by excluding from parity testing.
 
 ---
 
@@ -122,9 +133,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase | Status |
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
-| Phase 11 | **IN PROGRESS** 46/57 |
+| Phase 11 | **IN PROGRESS** 56/57 |
 
-**Total**: 109/120 tasks complete
+**Total**: 119/120 tasks complete
 
 ---
 

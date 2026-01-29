@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-29T00:23:14.444532578+00:00",
-  "commit": "46a7cf1",
+  "updated": "2026-01-29T00:34:33.106313995+00:00",
+  "commit": "c43ecd5",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -130,14 +130,6 @@
       "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
-    },
-    {
-      "name": "external_reference",
-      "layer1_pass": false,
-      "layer2_pass": false,
-      "relationship_pass": false,
-      "layer4_pass": false,
-      "metadata_pass": false
     },
     {
       "name": "filtered_indexes",
@@ -338,14 +330,6 @@
       "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
-    },
-    {
-      "name": "unresolved_reference",
-      "layer1_pass": false,
-      "layer2_pass": false,
-      "relationship_pass": false,
-      "layer4_pass": false,
-      "metadata_pass": false
     },
     {
       "name": "varbinary_max",
