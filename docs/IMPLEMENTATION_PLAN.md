@@ -8,9 +8,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|-------------|--------|
 | Phase 1-9 | Core implementation (properties, relationships, XML structure, metadata) | 58/58 |
 | Phase 10 | Fix extended properties, function classification, constraint naming, SqlPackage config | 5/5 |
-| Phase 12 | Achieve 100% relationship parity (fix 2 remaining fixtures) | 1/6 |
+| Phase 12 | Achieve 100% relationship parity (fix 2 remaining fixtures) | 2/6 |
 
-**Total Completed**: 67/69 tasks
+**Total Completed**: 68/69 tasks
 
 ---
 
@@ -24,6 +24,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
 | **Full Parity** | **42/44** | **95.5%** | Phase 12 targets 100% |
+
+**Note (2026-01-29):** TVF Columns relationships now implemented for both inline and multi-statement TVFs.
 
 **Note:** Error fixtures (`external_reference`, `unresolved_reference`) are now excluded from parity testing since DotNet cannot build them. These test Rust's ability to handle edge cases.
 
@@ -193,9 +195,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
 | Phase 11 | **COMPLETE** 69/70 |
-| Phase 12 | **IN PROGRESS** 1/6 |
+| Phase 12 | **IN PROGRESS** 2/6 |
 
-**Total**: 136/139 tasks complete
+**Total**: 137/139 tasks complete
 
 **Remaining work:**
 - Phase 12: Fix 2 fixtures with relationship differences to achieve 100% parity
@@ -419,9 +421,67 @@ For inline TVFs, parse the SELECT columns from the RETURN statement and emit a C
 ```
 
 **Tasks:**
-- [ ] **12.4.1** Parse SELECT columns from inline TVF RETURN statement
-- [ ] **12.4.2** Emit Columns relationship with column references
-- [ ] **12.4.3** Run `test_parity_e2e_comprehensive` and verify 0 errors
+- [x] **12.4.1** Parse SELECT columns from inline TVF RETURN statement
+- [x] **12.4.2** Emit Columns relationship with column references
+- [x] **12.4.3** Run `test_parity_e2e_comprehensive` and verify 0 errors
+
+**Solution Implemented (2026-01-29):**
+- Added `extract_inline_tvf_columns()` function to parse SELECT columns from inline TVF RETURN statements
+- Added `extract_multi_statement_tvf_columns()` function to parse column definitions from RETURNS @Table TABLE clause
+- Added `write_tvf_columns()` function to emit SqlSimpleColumn elements with TypeSpecifier for multi-statement TVFs
+- Modified `write_function()` to call these new functions for the appropriate function types
+- Fixed balanced parentheses parsing to handle types like NVARCHAR(100) correctly
+
+---
+
+### 12.4.1 Multi-Statement TVF Columns (bonus implementation)
+
+**Status:** COMPLETE (implemented alongside 12.4)
+
+As part of the inline TVF Columns work, multi-statement table-valued function Columns support was also implemented.
+
+**Implementation Details:**
+- Multi-statement TVFs have explicit column definitions in the `RETURNS @TableVariable TABLE (...)` clause
+- The `extract_multi_statement_tvf_columns()` function parses these column definitions
+- Columns are emitted as `SqlSimpleColumn` elements with a `TypeSpecifier` child element
+- TypeSpecifier contains a `BuiltIn` reference for SQL Server data types (e.g., `[nvarchar]`, `[int]`)
+
+**Example SQL:**
+```sql
+CREATE FUNCTION [dbo].[GetOrderDetails](@OrderId INT)
+RETURNS @Results TABLE (
+    ProductName NVARCHAR(100),
+    Quantity INT,
+    UnitPrice DECIMAL(10,2)
+)
+AS
+BEGIN
+    -- function body
+    RETURN
+END
+```
+
+**Generated XML Structure:**
+```xml
+<Relationship Name="Columns">
+  <Entry>
+    <Element Type="SqlSimpleColumn" Name="[dbo].[GetOrderDetails].[ProductName]">
+      <Relationship Name="TypeSpecifier">
+        <Entry>
+          <Element Type="SqlTypeSpecifier">
+            <Relationship Name="Type">
+              <Entry>
+                <References Name="[nvarchar]" />
+              </Entry>
+            </Relationship>
+          </Element>
+        </Entry>
+      </Relationship>
+    </Element>
+  </Entry>
+  <!-- additional columns... -->
+</Relationship>
+```
 
 ---
 
@@ -442,10 +502,11 @@ For inline TVFs, parse the SELECT columns from the RETURN statement and emit a C
 | 12.1 | SELECT * column reference fix | Partial (skip `[*]` done; SELECT * expansion needed) |
 | 12.2 | Remove reference deduplication | Complete |
 | 12.3 | Computed column type references | Complete |
-| 12.4 | Inline TVF Columns relationship | Pending |
+| 12.4 | Inline TVF Columns relationship | Complete |
+| 12.4.1 | Multi-statement TVF Columns relationship | Complete (bonus) |
 | 12.5 | Final verification | Pending |
 
-**Phase 12 Total**: 1/6 sections complete
+**Phase 12 Total**: 2/6 sections complete
 
 ---
 

@@ -932,6 +932,186 @@ fn extract_view_columns_and_deps(
     (columns, query_deps)
 }
 
+/// Extract columns from an inline table-valued function's RETURN statement
+/// The body contains "RETURN (SELECT [cols] FROM ...)" or "RETURN SELECT [cols] FROM ..."
+fn extract_inline_tvf_columns(body: &str, default_schema: &str) -> Vec<ViewColumn> {
+    // Extract the SELECT statement from RETURN clause
+    // Pattern: RETURN followed by optional whitespace, optional parenthesis, then SELECT
+    let body_upper = body.to_uppercase();
+
+    // Find RETURN keyword
+    if let Some(return_pos) = body_upper.find("RETURN") {
+        let after_return = &body[return_pos + 6..]; // Skip "RETURN"
+
+        // Skip whitespace and optional opening parenthesis
+        let trimmed = after_return.trim_start();
+        let query_start = trimmed.strip_prefix('(').unwrap_or(trimmed);
+
+        // Now we should have the SELECT statement
+        // Use the existing extract_view_columns_and_deps logic
+        let (columns, _deps) = extract_view_columns_and_deps(query_start, default_schema);
+        return columns;
+    }
+
+    Vec::new()
+}
+
+/// Column definition for multi-statement TVF (RETURNS @Table TABLE (...))
+#[derive(Debug)]
+struct TvfColumn {
+    name: String,
+    data_type: String,
+    length: Option<u32>,
+    precision: Option<u8>,
+    scale: Option<u8>,
+}
+
+/// Extract columns from a multi-statement TVF's RETURNS @TableVar TABLE (...) clause
+fn extract_multi_statement_tvf_columns(definition: &str) -> Vec<TvfColumn> {
+    let mut columns = Vec::new();
+
+    // Find the RETURNS @var TABLE (...) clause
+    // We need to handle nested parentheses in column types like NVARCHAR(100)
+    // First find "RETURNS @name TABLE ("
+    let def_upper = definition.to_uppercase();
+    let table_pattern = regex::Regex::new(r"(?i)RETURNS\s+@\w+\s+TABLE\s*\(").unwrap();
+
+    if let Some(table_match) = table_pattern.find(&def_upper) {
+        let start_pos = table_match.end();
+        // Now find the matching closing paren, accounting for nested parens
+        if let Some(cols_str) = extract_balanced_parens(definition, start_pos) {
+            // Split by comma, respecting parentheses for types like NVARCHAR(100)
+            let col_defs = split_column_definitions(&cols_str);
+
+            for col_def in col_defs {
+                if let Some(col) = parse_tvf_column_definition(&col_def) {
+                    columns.push(col);
+                }
+            }
+        }
+    }
+
+    columns
+}
+
+/// Extract content inside balanced parentheses, handling nested parens
+fn extract_balanced_parens(input: &str, start: usize) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut depth = 1; // We start after the opening paren
+    let mut end = start;
+
+    while end < bytes.len() && depth > 0 {
+        match bytes[end] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth > 0 {
+            end += 1;
+        }
+    }
+
+    if depth == 0 {
+        Some(input[start..end].to_string())
+    } else {
+        None
+    }
+}
+
+/// Split column definitions by comma, respecting parentheses
+fn split_column_definitions(input: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut paren_depth = 0;
+
+    for c in input.chars() {
+        match c {
+            '(' => {
+                paren_depth += 1;
+                current.push(c);
+            }
+            ')' => {
+                paren_depth -= 1;
+                current.push(c);
+            }
+            ',' if paren_depth == 0 => {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    result.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => current.push(c),
+        }
+    }
+
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        result.push(trimmed);
+    }
+
+    result
+}
+
+/// Parse a single column definition like "Id INT" or "Name NVARCHAR(100)"
+fn parse_tvf_column_definition(def: &str) -> Option<TvfColumn> {
+    let def = def.trim();
+    if def.is_empty() {
+        return None;
+    }
+
+    // Pattern: [col_name] type[(length/precision,scale)] [optional modifiers]
+    // Examples: Id INT, Name NVARCHAR(100), Price DECIMAL(18,2)
+    let parts: Vec<&str> = def.split_whitespace().collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    let name = parts[0].trim_matches(|c| c == '[' || c == ']').to_string();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    // Join remaining parts and parse type with optional length/precision/scale
+    let type_part = parts[1..].join(" ");
+    let type_regex =
+        regex::Regex::new(r"(?i)^\[?(\w+)\]?(?:\s*\(\s*(\d+)(?:\s*,\s*(\d+))?\s*\))?").unwrap();
+
+    if let Some(cap) = type_regex.captures(&type_part) {
+        let data_type = cap
+            .get(1)
+            .map(|m| m.as_str().to_lowercase())
+            .unwrap_or_default();
+        let first_num = cap.get(2).and_then(|m| m.as_str().parse::<u32>().ok());
+        let second_num = cap.get(3).and_then(|m| m.as_str().parse::<u8>().ok());
+
+        // Determine if first_num is length or precision based on type
+        let (length, precision, scale) = if is_precision_scale_type(&data_type) {
+            (None, first_num.map(|n| n as u8), second_num)
+        } else {
+            (first_num, None, None)
+        };
+
+        Some(TvfColumn {
+            name,
+            data_type,
+            length,
+            precision,
+            scale,
+        })
+    } else {
+        None
+    }
+}
+
+/// Check if a data type uses precision/scale (like DECIMAL, NUMERIC) vs length (like VARCHAR)
+fn is_precision_scale_type(data_type: &str) -> bool {
+    matches!(
+        data_type.to_lowercase().as_str(),
+        "decimal" | "numeric" | "float" | "real" | "money" | "smallmoney"
+    )
+}
+
 /// Extract table aliases from FROM and JOIN clauses
 /// Returns a map of alias -> full table reference (e.g., "p" -> "[dbo].[Products]")
 fn extract_table_aliases(query: &str, default_schema: &str) -> Vec<(String, String)> {
@@ -1383,6 +1563,76 @@ fn write_query_dependencies<W: Write>(
         refs.push_attribute(("Name", dep.as_str()));
         writer.write_event(Event::Empty(refs))?;
 
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write Columns relationship for multi-statement TVFs
+/// Uses SqlSimpleColumn with TypeSpecifier (different from views which use SqlComputedColumn)
+fn write_tvf_columns<W: Write>(
+    writer: &mut Writer<W>,
+    func_full_name: &str,
+    columns: &[TvfColumn],
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "Columns"));
+    writer.write_event(Event::Start(rel))?;
+
+    for col in columns {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let col_full_name = format!("{}.[{}]", func_full_name, col.name);
+        let mut elem = BytesStart::new("Element");
+        elem.push_attribute(("Type", "SqlSimpleColumn"));
+        elem.push_attribute(("Name", col_full_name.as_str()));
+        writer.write_event(Event::Start(elem))?;
+
+        // Write TypeSpecifier relationship
+        let mut type_rel = BytesStart::new("Relationship");
+        type_rel.push_attribute(("Name", "TypeSpecifier"));
+        writer.write_event(Event::Start(type_rel))?;
+
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let mut spec_elem = BytesStart::new("Element");
+        spec_elem.push_attribute(("Type", "SqlTypeSpecifier"));
+        writer.write_event(Event::Start(spec_elem))?;
+
+        // Write Length or Precision/Scale properties if present
+        if let Some(length) = col.length {
+            write_property(writer, "Length", &length.to_string())?;
+        }
+        if let Some(precision) = col.precision {
+            write_property(writer, "Precision", &precision.to_string())?;
+        }
+        if let Some(scale) = col.scale {
+            write_property(writer, "Scale", &scale.to_string())?;
+        }
+
+        // Write Type reference to built-in type
+        let mut inner_type_rel = BytesStart::new("Relationship");
+        inner_type_rel.push_attribute(("Name", "Type"));
+        writer.write_event(Event::Start(inner_type_rel))?;
+
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let type_ref = format!("[{}]", col.data_type);
+        let mut refs = BytesStart::new("References");
+        refs.push_attribute(("ExternalSource", "BuiltIns"));
+        refs.push_attribute(("Name", type_ref.as_str()));
+        writer.write_event(Event::Empty(refs))?;
+
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?; // Type
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?; // SqlTypeSpecifier
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?; // TypeSpecifier
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?; // SqlSimpleColumn
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     }
 
@@ -2611,6 +2861,25 @@ fn write_function<W: Write>(writer: &mut Writer<W>, func: &FunctionElement) -> a
     // Extract and write BodyDependencies
     let body_deps = extract_body_dependencies(&body, &full_name, &param_names);
     write_body_dependencies(writer, &body_deps)?;
+
+    // For inline TVFs, write Columns relationship (after BodyDependencies, before FunctionBody)
+    if matches!(
+        func.function_type,
+        crate::model::FunctionType::InlineTableValued
+    ) {
+        let inline_tvf_columns = extract_inline_tvf_columns(&body, &func.schema);
+        if !inline_tvf_columns.is_empty() {
+            write_view_columns(writer, &full_name, &inline_tvf_columns)?;
+        }
+    }
+
+    // For multi-statement TVFs, write Columns relationship from RETURNS @Table TABLE definition
+    if matches!(func.function_type, crate::model::FunctionType::TableValued) {
+        let tvf_columns = extract_multi_statement_tvf_columns(&func.definition);
+        if !tvf_columns.is_empty() {
+            write_tvf_columns(writer, &full_name, &tvf_columns)?;
+        }
+    }
 
     // Write FunctionBody relationship with SqlScriptFunctionImplementation
     // BodyScript contains only the function body (BEGIN...END), not the header
