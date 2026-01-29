@@ -251,16 +251,22 @@ fn compare_element_pair_internal(
     }
 
     // Recursively compare children (columns, parameters, etc.)
-    // Match children by name if available, otherwise by index
+    // Match children by (type, name) to handle elements with same name but different types
+    // (e.g., SqlDynamicColumnSource and SqlSubroutineParameter can have the same name)
     let rust_named: HashMap<_, _> = rust_elem
         .children
         .iter()
-        .filter_map(|c| c.name.as_ref().map(|n| (n.clone(), c)))
+        .filter_map(|c| {
+            c.name
+                .as_ref()
+                .map(|n| ((c.element_type.clone(), n.clone()), c))
+        })
         .collect();
 
     for dotnet_child in &dotnet_elem.children {
         if let Some(ref child_name) = dotnet_child.name {
-            if let Some(rust_child) = rust_named.get(child_name) {
+            let key = (dotnet_child.element_type.clone(), child_name.clone());
+            if let Some(rust_child) = rust_named.get(&key) {
                 errors.extend(compare_element_pair_internal(
                     rust_child,
                     dotnet_child,

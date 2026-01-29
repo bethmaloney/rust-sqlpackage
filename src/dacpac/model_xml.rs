@@ -379,7 +379,7 @@ fn write_element<W: Write>(
         ModelElement::Schema(s) => write_schema(writer, s),
         ModelElement::Table(t) => write_table(writer, t),
         ModelElement::View(v) => write_view(writer, v, model),
-        ModelElement::Procedure(p) => write_procedure(writer, p),
+        ModelElement::Procedure(p) => write_procedure(writer, p, model),
         ModelElement::Function(f) => write_function(writer, f, model),
         ModelElement::Index(i) => write_index(writer, i),
         ModelElement::FullTextIndex(f) => write_fulltext_index(writer, f),
@@ -1779,6 +1779,7 @@ fn write_tvf_columns<W: Write>(
 fn write_procedure<W: Write>(
     writer: &mut Writer<W>,
     proc: &ProcedureElement,
+    model: &DatabaseModel,
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", proc.schema, proc.name);
 
@@ -1789,6 +1790,24 @@ fn write_procedure<W: Write>(
 
     // Extract parameters for both writing and dependency extraction
     let params = extract_procedure_parameters(&proc.definition);
+
+    // Find table type parameters (TVPs) - these have READONLY modifier or reference a table type
+    let tvp_params: Vec<(&ProcedureParameter, Option<&UserDefinedTypeElement>)> = params
+        .iter()
+        .filter_map(|p| {
+            // Check if parameter references a table type in the model
+            let table_type = find_table_type_for_parameter(&p.data_type, model);
+            if table_type.is_some() || p.is_readonly {
+                Some((p, table_type))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Calculate disambiguator for TVP parameters (DotNet uses specific values)
+    // The disambiguator is typically 2 for first TVP, 3 for second, etc.
+    let tvp_disambiguator_base = 2u32;
 
     // Extract just the body part (after final AS)
     let body = extract_procedure_body_only(&proc.definition);
@@ -1805,9 +1824,22 @@ fn write_procedure<W: Write>(
     }
 
     // Extract and write BodyDependencies
+    // For procedures with TVPs, we need special handling for TVP column references
+    // For all procedures, we still need regular body dependencies (table refs, param refs, etc.)
     let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-    let body_deps = extract_body_dependencies(&body, &full_name, &param_names);
+    let body_deps = if tvp_params.is_empty() {
+        // No TVPs - use regular body dependency extraction
+        extract_body_dependencies(&body, &full_name, &param_names)
+    } else {
+        // Has TVPs - extract TVP-specific dependencies
+        extract_body_dependencies_with_tvp(&body, &full_name, &param_names, &tvp_params)
+    };
     write_body_dependencies(writer, &body_deps)?;
+
+    // Write DynamicObjects relationship for TVP parameters
+    if !tvp_params.is_empty() {
+        write_dynamic_objects(writer, &full_name, &tvp_params)?;
+    }
 
     // Write Parameters relationship
     if !params.is_empty() {
@@ -1825,9 +1857,18 @@ fn write_procedure<W: Write>(
                 format!("@{}", param.name)
             };
             let param_name = format!("{}.[{}]", full_name, param_name_with_at);
+
+            // Check if this is a TVP parameter
+            let tvp_idx = tvp_params.iter().position(|(p, _)| std::ptr::eq(*p, param));
+            let is_tvp = tvp_idx.is_some();
+            let disambiguator = tvp_idx.map(|i| tvp_disambiguator_base + i as u32);
+
             let mut param_elem = BytesStart::new("Element");
             param_elem.push_attribute(("Type", "SqlSubroutineParameter"));
             param_elem.push_attribute(("Name", param_name.as_str()));
+            if let Some(disamb) = disambiguator {
+                param_elem.push_attribute(("Disambiguator", disamb.to_string().as_str()));
+            }
             writer.write_event(Event::Start(param_elem))?;
 
             // Write default value if present
@@ -1840,8 +1881,17 @@ fn write_procedure<W: Write>(
                 write_property(writer, "IsOutput", "True")?;
             }
 
-            // Data type relationship
-            write_data_type_relationship(writer, &param.data_type)?;
+            // IsReadOnly property for TVP parameters
+            if param.is_readonly || is_tvp {
+                write_property(writer, "IsReadOnly", "True")?;
+            }
+
+            // Data type relationship - different handling for TVPs vs built-in types
+            if is_tvp {
+                write_table_type_relationship(writer, &param.data_type)?;
+            } else {
+                write_data_type_relationship(writer, &param.data_type)?;
+            }
 
             writer.write_event(Event::End(BytesEnd::new("Element")))?;
             writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -1856,12 +1906,298 @@ fn write_procedure<W: Write>(
     Ok(())
 }
 
+/// Find a table type element in the model matching the parameter data type
+fn find_table_type_for_parameter<'a>(
+    data_type: &str,
+    model: &'a DatabaseModel,
+) -> Option<&'a UserDefinedTypeElement> {
+    // Normalize the data type for comparison
+    // Handle both [dbo].[TypeName] and dbo.TypeName formats
+    let normalized = normalize_type_name(data_type);
+
+    for element in &model.elements {
+        if let ModelElement::UserDefinedType(udt) = element {
+            let type_full_name = format!("[{}].[{}]", udt.schema, udt.name);
+            if type_full_name.eq_ignore_ascii_case(&normalized) {
+                return Some(udt);
+            }
+        }
+    }
+    None
+}
+
+/// Normalize a type name to [schema].[name] format
+fn normalize_type_name(type_name: &str) -> String {
+    let trimmed = type_name.trim();
+
+    // Already in [schema].[name] format
+    if trimmed.starts_with('[') && trimmed.contains("].[") {
+        return trimmed.to_string();
+    }
+
+    // Handle dbo.TypeName format (no brackets)
+    if trimmed.contains('.') && !trimmed.contains('[') {
+        let parts: Vec<&str> = trimmed.split('.').collect();
+        if parts.len() == 2 {
+            return format!("[{}].[{}]", parts[0].trim(), parts[1].trim());
+        }
+    }
+
+    // Return as-is if we can't normalize
+    trimmed.to_string()
+}
+
+/// Write DynamicObjects relationship for table-valued parameters
+fn write_dynamic_objects<W: Write>(
+    writer: &mut Writer<W>,
+    proc_full_name: &str,
+    tvp_params: &[(&ProcedureParameter, Option<&UserDefinedTypeElement>)],
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "DynamicObjects"));
+    writer.write_event(Event::Start(rel))?;
+
+    for (param, table_type_opt) in tvp_params {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let param_name_with_at = if param.name.starts_with('@') {
+            param.name.clone()
+        } else {
+            format!("@{}", param.name)
+        };
+        let dynamic_source_name = format!("{}.[{}]", proc_full_name, param_name_with_at);
+
+        let mut elem = BytesStart::new("Element");
+        elem.push_attribute(("Type", "SqlDynamicColumnSource"));
+        elem.push_attribute(("Name", dynamic_source_name.as_str()));
+        writer.write_event(Event::Start(elem))?;
+
+        // Write Columns relationship if we have the table type definition
+        if let Some(table_type) = table_type_opt {
+            write_dynamic_columns(writer, &dynamic_source_name, table_type)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write Columns relationship for a SqlDynamicColumnSource
+fn write_dynamic_columns<W: Write>(
+    writer: &mut Writer<W>,
+    dynamic_source_name: &str,
+    table_type: &UserDefinedTypeElement,
+) -> anyhow::Result<()> {
+    if table_type.columns.is_empty() {
+        return Ok(());
+    }
+
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "Columns"));
+    writer.write_event(Event::Start(rel))?;
+
+    for col in &table_type.columns {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let col_full_name = format!("{}.[{}]", dynamic_source_name, col.name);
+        let mut col_elem = BytesStart::new("Element");
+        col_elem.push_attribute(("Type", "SqlSimpleColumn"));
+        col_elem.push_attribute(("Name", col_full_name.as_str()));
+        writer.write_event(Event::Start(col_elem))?;
+
+        // Write IsNullable property - in DynamicObjects columns, IsNullable is based on
+        // the table type column definition
+        let is_nullable = col.nullability.unwrap_or(true);
+        if !is_nullable {
+            write_property(writer, "IsNullable", "False")?;
+        }
+
+        // Write TypeSpecifier relationship
+        write_column_type_specifier(writer, &col.data_type, col.precision, col.scale)?;
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write TypeSpecifier relationship for a column
+fn write_column_type_specifier<W: Write>(
+    writer: &mut Writer<W>,
+    data_type: &str,
+    precision: Option<u8>,
+    scale: Option<u8>,
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "TypeSpecifier"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut type_spec = BytesStart::new("Element");
+    type_spec.push_attribute(("Type", "SqlTypeSpecifier"));
+    writer.write_event(Event::Start(type_spec))?;
+
+    // Write Scale before Precision (DotNet order)
+    if let Some(sc) = scale {
+        write_property(writer, "Scale", &sc.to_string())?;
+    }
+    if let Some(prec) = precision {
+        write_property(writer, "Precision", &prec.to_string())?;
+    }
+
+    // Write Type relationship
+    let (base_type, _, _, _) = parse_data_type(data_type);
+    let type_ref = format!("[{}]", base_type.to_lowercase());
+
+    let mut type_rel = BytesStart::new("Relationship");
+    type_rel.push_attribute(("Name", "Type"));
+    writer.write_event(Event::Start(type_rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+    let mut refs = BytesStart::new("References");
+    refs.push_attribute(("ExternalSource", "BuiltIns"));
+    refs.push_attribute(("Name", type_ref.as_str()));
+    writer.write_event(Event::Empty(refs))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    Ok(())
+}
+
+/// Write Type relationship for a table type parameter (no ExternalSource attribute)
+fn write_table_type_relationship<W: Write>(
+    writer: &mut Writer<W>,
+    data_type: &str,
+) -> anyhow::Result<()> {
+    let mut rel = BytesStart::new("Relationship");
+    rel.push_attribute(("Name", "Type"));
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let mut elem = BytesStart::new("Element");
+    elem.push_attribute(("Type", "SqlTypeSpecifier"));
+    writer.write_event(Event::Start(elem))?;
+
+    // Write the type reference (no ExternalSource for user-defined types)
+    let type_ref = normalize_type_name(data_type);
+    let mut type_rel = BytesStart::new("Relationship");
+    type_rel.push_attribute(("Name", "Type"));
+    writer.write_event(Event::Start(type_rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+    let mut refs = BytesStart::new("References");
+    // No ExternalSource for user-defined table types
+    refs.push_attribute(("Name", type_ref.as_str()));
+    writer.write_event(Event::Empty(refs))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    Ok(())
+}
+
+/// Extract body dependencies including TVP column references
+fn extract_body_dependencies_with_tvp(
+    body: &str,
+    full_name: &str,
+    _params: &[String],
+    tvp_params: &[(&ProcedureParameter, Option<&UserDefinedTypeElement>)],
+) -> Vec<BodyDependency> {
+    use std::collections::HashSet;
+    let mut deps = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    // Build a map of TVP param names to their table type columns
+    let tvp_columns: std::collections::HashMap<String, Vec<String>> = tvp_params
+        .iter()
+        .filter_map(|(param, tt_opt)| {
+            tt_opt.map(|tt| {
+                let param_name = if param.name.starts_with('@') {
+                    param.name.clone()
+                } else {
+                    format!("@{}", param.name)
+                };
+                let cols = tt.columns.iter().map(|c| c.name.clone()).collect();
+                (param_name, cols)
+            })
+        })
+        .collect();
+
+    // First, add the TVP parameter reference with disambiguator
+    // This reference appears first in BodyDependencies with the same disambiguator as in Parameters
+    for (idx, (param, _)) in tvp_params.iter().enumerate() {
+        let param_name_with_at = if param.name.starts_with('@') {
+            param.name.clone()
+        } else {
+            format!("@{}", param.name)
+        };
+        let disambiguator = 2 + idx as u32;
+        let param_ref = format!(
+            "{}.[@{}]",
+            full_name,
+            param_name_with_at.trim_start_matches('@')
+        );
+        // Store with disambiguator info - we'll need to emit this specially
+        if !seen.contains(&param_ref) {
+            seen.insert(param_ref.clone());
+            deps.push(BodyDependency::TvpParameter(param_ref, disambiguator));
+        }
+    }
+
+    // Now scan the body for column references from TVP parameters
+    // Pattern: FROM @ParamName or @ParamName.Column or just column names used with TVP
+    for (tvp_param_name, columns) in &tvp_columns {
+        // Look for column references in SELECT, WHERE, etc. that match TVP columns
+        // Pattern: column names that appear after FROM @ParamName
+        let param_pattern = format!(r"(?i)FROM\s+{}\b", regex::escape(tvp_param_name));
+        if regex::Regex::new(&param_pattern).unwrap().is_match(body) {
+            // This TVP is used as a table source - add column references
+            for col_name in columns {
+                // Check if this column is referenced in the body
+                let col_pattern = format!(r"\b{}\b", regex::escape(col_name));
+                if regex::Regex::new(&col_pattern).unwrap().is_match(body) {
+                    let col_ref = format!(
+                        "{}.[@{}].[{}]",
+                        full_name,
+                        tvp_param_name.trim_start_matches('@'),
+                        col_name
+                    );
+                    if !seen.contains(&col_ref) {
+                        seen.insert(col_ref.clone());
+                        deps.push(BodyDependency::ObjectRef(col_ref));
+                    }
+                }
+            }
+        }
+    }
+
+    deps
+}
+
 /// Represents an extracted procedure parameter
 #[derive(Debug)]
 struct ProcedureParameter {
     name: String,
     data_type: String,
     is_output: bool,
+    /// Whether this is a READONLY table-valued parameter
+    is_readonly: bool,
     #[allow(dead_code)] // Captured for potential future use
     default_value: Option<String>,
 }
@@ -1893,8 +2229,13 @@ fn extract_procedure_parameters(definition: &str) -> Vec<ProcedureParameter> {
 
     // Find parameters - they start with @
     // Parameters can be on the same line or multiple lines
+    // Updated regex to handle:
+    // 1. Simple types like INT, VARCHAR(50), DECIMAL(10,2)
+    // 2. Schema-qualified types like [dbo].[TableType] or dbo.TableType
+    // 3. READONLY keyword for table-valued parameters
+    // 4. OUTPUT/OUT modifiers
     let param_regex = regex::Regex::new(
-        r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:\s*=\s*([^,@]+?))?(?:\s+(OUTPUT|OUT))?(?:,|$|\s*\n)",
+        r"@(\w+)\s+(\[[^\]]+\]\s*\.\s*\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*\s*\.\s*[A-Za-z_][A-Za-z0-9_]*|[A-Za-z0-9_]+(?:\s*\([^)]*\))?)(?:\s+(READONLY))?(?:\s*=\s*([^,@\n]+?))?(?:\s+(OUTPUT|OUT))?(?:\s*,|\s*$|\s*\n)",
     )
     .unwrap();
 
@@ -1907,16 +2248,18 @@ fn extract_procedure_parameters(definition: &str) -> Vec<ProcedureParameter> {
             .get(2)
             .map(|m| m.as_str().trim().to_string())
             .unwrap_or_default();
-        let default_value = cap.get(3).map(|m| m.as_str().trim().to_string());
-        let is_output = cap.get(4).is_some();
+        let is_readonly = cap.get(3).is_some();
+        let default_value = cap.get(4).map(|m| m.as_str().trim().to_string());
+        let is_output = cap.get(5).is_some();
 
         if !name.is_empty() && !data_type.is_empty() {
-            // Clean up data type (remove trailing keywords like NULL, OUTPUT)
+            // Clean up data type (remove trailing keywords like NULL)
             let clean_type = clean_data_type(&data_type);
             params.push(ProcedureParameter {
                 name,
                 data_type: clean_type,
                 is_output,
+                is_readonly,
                 default_value,
             });
         }
@@ -2076,13 +2419,22 @@ fn find_standalone_as(s: &str) -> Option<usize> {
 
 /// Clean up a data type string removing trailing keywords
 fn clean_data_type(dt: &str) -> String {
-    let trimmed = dt.trim().to_uppercase();
-    // Remove trailing NULL, NOT NULL, etc.
-    let cleaned = trimmed
+    let trimmed = dt.trim();
+    // Remove trailing NULL, NOT NULL, READONLY, etc. (case-insensitive)
+    let upper = trimmed.to_uppercase();
+    let cleaned = upper
+        .trim_end_matches(" READONLY")
         .trim_end_matches(" NULL")
         .trim_end_matches(" NOT")
         .trim();
-    cleaned.to_string()
+    // Return with original case preserved for schema-qualified types like [dbo].[TableType]
+    // For built-in types, we uppercase; for schema-qualified, preserve brackets
+    if cleaned.starts_with('[') || cleaned.contains(".[") {
+        // Schema-qualified type - return with proper formatting
+        trimmed[..cleaned.len()].to_string()
+    } else {
+        cleaned.to_string()
+    }
 }
 
 /// Represents a dependency extracted from a procedure/function body
@@ -2092,6 +2444,8 @@ enum BodyDependency {
     BuiltInType(String),
     /// Reference to a table or other object (e.g., [dbo].[Products])
     ObjectRef(String),
+    /// Reference to a TVP parameter with its disambiguator
+    TvpParameter(String, u32),
 }
 
 /// Extract body dependencies from a procedure/function body
@@ -2780,6 +3134,12 @@ fn write_body_dependencies<W: Write>(
             BodyDependency::ObjectRef(obj_ref) => {
                 let mut refs = BytesStart::new("References");
                 refs.push_attribute(("Name", obj_ref.as_str()));
+                writer.write_event(Event::Empty(refs))?;
+            }
+            BodyDependency::TvpParameter(param_ref, disambiguator) => {
+                let mut refs = BytesStart::new("References");
+                refs.push_attribute(("Name", param_ref.as_str()));
+                refs.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
                 writer.write_event(Event::Empty(refs))?;
             }
         }

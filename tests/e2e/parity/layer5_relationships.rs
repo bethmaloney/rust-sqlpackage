@@ -92,15 +92,22 @@ pub fn compare_relationships(
     }
 
     // Recursively compare relationships in nested elements (children)
+    // Use (type, name) as key to handle elements with same name but different types
+    // (e.g., SqlDynamicColumnSource and SqlSubroutineParameter can have the same name)
     let rust_named_children: HashMap<_, _> = rust_elem
         .children
         .iter()
-        .filter_map(|c| c.name.as_ref().map(|n| (n.clone(), c)))
+        .filter_map(|c| {
+            c.name
+                .as_ref()
+                .map(|n| ((c.element_type.clone(), n.clone()), c))
+        })
         .collect();
 
     for dotnet_child in &dotnet_elem.children {
         if let Some(ref child_name) = dotnet_child.name {
-            if let Some(rust_child) = rust_named_children.get(child_name) {
+            let key = (dotnet_child.element_type.clone(), child_name.clone());
+            if let Some(rust_child) = rust_named_children.get(&key) {
                 errors.extend(compare_relationships(rust_child, dotnet_child));
             }
         }

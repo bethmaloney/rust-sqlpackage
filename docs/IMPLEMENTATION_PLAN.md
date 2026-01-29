@@ -10,9 +10,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Phase 10 | Fix extended properties, function classification, constraint naming, SqlPackage config | 5/5 |
 | Phase 11 | Fix remaining parity failures, error fixtures, ignored tests | 70/70 |
 | Phase 12 | SELECT * expansion, TVF columns, duplicate refs | 6/6 |
-| Phase 13 | Fix remaining relationship parity issues (1 fixture) | 2/4 |
+| Phase 13 | Fix remaining relationship parity issues (1 fixture) | 4/4 |
 
-**Total Completed**: 141/144 tasks
+**Total Completed**: 144/144 tasks
 
 ---
 
@@ -22,10 +22,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Relationships | 43/44 | 97.7% | 1 fixture has relationship errors (table_types - TVP support needed) |
+| Relationships | 44/44 | 100% | All fixtures pass |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **43/44** | **97.7%** | 1 fixture needs fixes (table_types - TVP support) |
+| **Full Parity** | **44/44** | **100%** | All fixtures pass |
 
 **Note (2026-01-29):** Corrected parity baseline after fixing stale DotNet dacpac issue. Added `--no-incremental` flag to dotnet build to prevent cached dacpacs from masking failures.
 
@@ -197,11 +197,11 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phases 1-10 | **COMPLETE** 63/63 |
 | Phase 11 | **COMPLETE** 70/70 |
 | Phase 12 | **COMPLETE** 6/6 |
-| Phase 13 | **IN PROGRESS** 1/4 |
+| Phase 13 | **COMPLETE** 4/4 |
 
-**Total**: 141/144 tasks complete
+**Total**: 144/144 tasks complete
 
-**Status:** Phase 13.1 and 13.2 complete. 43/44 fixtures pass relationship parity. 1 fixture needs fixes (table_types - requires TVP support).
+**Status:** All phases complete. 44/44 fixtures pass relationship parity (100%).
 
 ---
 
@@ -485,10 +485,9 @@ END
 
 ## Phase 13: Fix Remaining Relationship Parity Issues
 
-> **Status:** IN PROGRESS - 1 fixture has relationship errors (table_types: 6 errors).
+> **Status:** COMPLETE - All 44 fixtures pass relationship parity (100%).
 >
-> Phase 13.1 and 13.2 complete. The remaining issue (13.3) involves table-valued parameter support which requires
-> more substantial implementation (DynamicObjects relationship, table type parameter parsing, etc.).
+> All tasks complete including table-valued parameter (TVP) support for procedures.
 
 ---
 
@@ -548,41 +547,62 @@ The issue was that inline table-valued function columns referencing function par
 ### 13.3 Fix table_types Relationship Errors
 
 **Fixture:** `table_types`
-**Errors:** 6 relationship errors
+**Status:** COMPLETE
 **Test:** `cargo test --test e2e_tests test_parity_table_types -- --nocapture`
 
-**Failing Output:**
-```
-MISSING RELATIONSHIP: SqlProcedure.[dbo].[GetItemsByIds] - DynamicObjects (not in Rust)
-MISSING RELATIONSHIP: SqlProcedure.[dbo].[GetItemsByIds] - Parameters (not in Rust)
-MISSING RELATIONSHIP: SqlProcedure.[dbo].[GetItemsByIds] - BodyDependencies (not in Rust)
-MISSING RELATIONSHIP: SqlProcedure.[dbo].[ProcessOrderItems] - Parameters (not in Rust)
-MISSING RELATIONSHIP: SqlProcedure.[dbo].[ProcessOrderItems] - BodyDependencies (not in Rust)
-... and 1 more
-```
-
 **Root Cause Analysis:**
-- Two procedures are missing all their relationships (Parameters, BodyDependencies, DynamicObjects)
-- These procedures likely use table type parameters which may not be parsed correctly
+- Two procedures (`GetItemsByIds` and `ProcessOrderItems`) were missing all their relationships
+- These procedures use table-valued parameters (TVPs) which require special handling
+- The parameter regex didn't support `[schema].[type]` format or the READONLY keyword
+
+**Implementation Details:**
+- **Parameter Parsing:** Updated parameter regex to handle `[schema].[type]` format and READONLY keyword
+- **Table Type Lookup:** Added `find_table_type_for_parameter()` function to look up table types in the model
+- **DynamicObjects Relationship:** Implemented with `SqlDynamicColumnSource` element and nested Columns relationship
+- **Parameters Relationship:** Added `write_table_type_relationship()` for TVP parameters to reference table types
+- **BodyDependencies:** Added `extract_body_dependencies_with_tvp()` for TVP column references (e.g., `@Ids.Id`)
+- **Test Comparison Fix:** Updated test comparison logic to use `(type, name)` tuple as key instead of just name
+
+**Generated XML Structure (DynamicObjects):**
+```xml
+<Relationship Name="DynamicObjects">
+  <Entry>
+    <Element Type="SqlDynamicColumnSource" Name="[dbo].[GetItemsByIds].[@Ids]">
+      <Relationship Name="Columns">
+        <Entry>
+          <Element Type="SqlSubroutineColumn" Name="[dbo].[GetItemsByIds].[@Ids].[Id]">
+            <Property Name="IsNullable" Value="True" />
+          </Element>
+        </Entry>
+      </Relationship>
+    </Element>
+  </Entry>
+</Relationship>
+```
 
 **Tasks:**
-- [ ] **13.3.1** Investigate why procedures `GetItemsByIds` and `ProcessOrderItems` have no relationships
-- [ ] **13.3.2** Check if procedures with table type parameters are being parsed correctly
-- [ ] **13.3.3** Fix relationship emission for procedures with table type parameters
-- [ ] **13.3.4** Run `test_parity_table_types` and verify 0 errors
+- [x] **13.3.1** Updated parameter regex to handle `[schema].[type]` format and READONLY keyword
+- [x] **13.3.2** Added `find_table_type_for_parameter()` function to look up table types in the model
+- [x] **13.3.3** Implemented DynamicObjects relationship with SqlDynamicColumnSource element and nested Columns
+- [x] **13.3.4** Added `write_table_type_relationship()` for Parameters relationship to reference table types
+- [x] **13.3.5** Added `extract_body_dependencies_with_tvp()` for TVP column references in BodyDependencies
+- [x] **13.3.6** Fixed test comparison logic to use `(type, name)` tuple as key instead of just name
+- [x] **13.3.7** Run `test_parity_table_types` and verify 0 errors
 
 ---
 
 ### 13.4 Final Verification
 
+**Status:** COMPLETE
+
 **Goal:** Verify all tests pass, no clippy warnings, and full parity achieved.
 
 **Tasks:**
-- [ ] **13.4.1** Run `just test` - all unit and integration tests pass
-- [ ] **13.4.2** Run `cargo clippy -- -D warnings` - no warnings
-- [ ] **13.4.3** Run `test_parity_regression_check` - 44/44 fixtures pass all layers
-- [ ] **13.4.4** Update baseline to reflect 100% parity
-- [ ] **13.4.5** Verify CI passes on GitHub Actions
+- [x] **13.4.1** Run `just test` - all unit and integration tests pass
+- [x] **13.4.2** Run `cargo clippy -- -D warnings` - no warnings
+- [x] **13.4.3** Run `test_parity_regression_check` - 44/44 fixtures pass all layers
+- [x] **13.4.4** Update baseline to reflect 100% parity
+- [x] **13.4.5** Verify CI passes on GitHub Actions
 
 ---
 
@@ -592,15 +612,16 @@ MISSING RELATIONSHIP: SqlProcedure.[dbo].[ProcessOrderItems] - BodyDependencies 
 |------|-------------|--------|
 | 13.1 | Fix e2e_comprehensive and view_options | Complete |
 | 13.2 | Fix procedure_parameters (4 errors) | Complete |
-| 13.3 | Fix table_types (6 errors) | Pending (TVP support needed) |
-| 13.4 | Final verification | Pending |
+| 13.3 | Fix table_types (6 errors - TVP support) | Complete |
+| 13.4 | Final verification | Complete |
 
-**Phase 13 Total**: 2/4 sections complete
+**Phase 13 Total**: 4/4 sections complete
 
-**Note:** Task 13.3 involves table-valued parameter (TVP) support, which requires:
-- DynamicObjects relationship implementation
-- Table type parameter parsing and type resolution
-- This is a more substantial feature that may warrant its own phase
+**Note:** Task 13.3 implemented full table-valued parameter (TVP) support including:
+- DynamicObjects relationship with SqlDynamicColumnSource elements
+- Table type parameter parsing with [schema].[type] format and READONLY keyword
+- TVP column reference extraction for BodyDependencies
+- Parameters relationship referencing table types
 
 ---
 
