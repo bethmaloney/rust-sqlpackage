@@ -857,6 +857,12 @@ fn extract_view_columns_and_deps(
     for col_expr in select_columns {
         let (col_name, source_ref) =
             parse_column_expression(&col_expr, &table_aliases, default_schema);
+        // Skip SELECT * columns - DotNet expands these to actual table columns,
+        // but we don't have table definitions available here. Omitting them is
+        // closer to parity than emitting [*] which DotNet never does.
+        if col_name == "*" {
+            continue;
+        }
         columns.push(ViewColumn {
             name: col_name,
             source_ref,
@@ -1115,6 +1121,10 @@ fn resolve_column_reference(
         1 => {
             // Just column name, try to resolve using first table alias
             let col_name = parts[0].trim_matches(|c| c == '[' || c == ']');
+            // Don't emit [*] column reference for SELECT * - matches DotNet behavior
+            if col_name == "*" {
+                return None;
+            }
             if let Some((_, table_ref)) = table_aliases.first() {
                 return Some(format!("{}.[{}]", table_ref, col_name));
             }
@@ -1124,6 +1134,11 @@ fn resolve_column_reference(
             // alias.column or schema.table
             let alias_or_schema = parts[0].trim_matches(|c| c == '[' || c == ']');
             let col_or_table = parts[1].trim_matches(|c| c == '[' || c == ']');
+
+            // Don't emit [*] column reference for alias.* - matches DotNet behavior
+            if col_or_table == "*" {
+                return None;
+            }
 
             // Try to find matching alias
             for (alias, table_ref) in table_aliases {
@@ -1140,6 +1155,10 @@ fn resolve_column_reference(
             let schema = parts[0].trim_matches(|c| c == '[' || c == ']');
             let table = parts[1].trim_matches(|c| c == '[' || c == ']');
             let column = parts[2].trim_matches(|c| c == '[' || c == ']');
+            // Don't emit [*] column reference for schema.table.* - matches DotNet behavior
+            if column == "*" {
+                return None;
+            }
             Some(format!("[{}].[{}].[{}]", schema, table, column))
         }
         _ => None,

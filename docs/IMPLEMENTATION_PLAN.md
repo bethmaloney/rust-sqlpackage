@@ -8,8 +8,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|-------------|--------|
 | Phase 1-9 | Core implementation (properties, relationships, XML structure, metadata) | 58/58 |
 | Phase 10 | Fix extended properties, function classification, constraint naming, SqlPackage config | 5/5 |
+| Phase 12 | Achieve 100% relationship parity (fix 4 remaining fixtures) | 0/6 |
 
-**Total Completed**: 63/63 tasks
+**Total Completed**: 63/69 tasks
 
 ---
 
@@ -19,10 +20,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Relationships | 40/44 | 90.9% | 4 fixtures with intentional differences |
+| Relationships | 40/44 | 90.9% | 4 fixtures pending (see Phase 12) |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **40/44** | **90.9%** | 40 fixtures pass all layers |
+| **Full Parity** | **40/44** | **90.9%** | Phase 12 targets 100% |
 
 **Note:** Error fixtures (`external_reference`, `unresolved_reference`) are now excluded from parity testing since DotNet cannot build them. These test Rust's ability to handle edge cases.
 
@@ -79,9 +80,9 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 **Tests:** `test_layered_dacpac_comparison`, `test_layer3_sqlpackage_comparison`
 **File:** `tests/e2e/dotnet_comparison_tests.rs`
 **Status:** DEFERRED - Tests remain ignored because they require 100% relationship parity
-**Issue:** These tests use SqlPackage DeployReport to compare Rust and DotNet dacpacs. They fail due to 4 fixtures with intentional relationship differences.
+**Issue:** These tests use SqlPackage DeployReport to compare Rust and DotNet dacpacs. They fail due to 4 fixtures with relationship differences.
 
-- [ ] **11.6.1.1** (Blocked) Remove `#[ignore]` and verify - requires resolving intentional differences
+- [ ] **11.6.1.1** (Blocked by Phase 12) Remove `#[ignore]` and verify - requires completing Phase 12
 
 #### 11.6.2 SQLCMD Include Tests
 **Status:** COMPLETE
@@ -128,41 +129,14 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 
 ### 11.8 Remaining Relationship Differences
 
-The following 4 fixtures have relationship differences that are intentional design decisions where Rust's behavior is arguably cleaner.
+The following 4 fixtures have relationship differences. See **Phase 12** for tasks to fix these and achieve 100% parity.
 
-#### 11.8.1 ampersand_encoding
-**Status:** Intentional difference (3 errors)
-- Rust emits `[*]` column reference when SELECT * is used
-- DotNet does not emit a column reference for SELECT *
-- **Impact:** Minor - affects SqlColumnRef entries
-
-#### 11.8.2 e2e_comprehensive
-**Status:** Intentional difference (8 errors)
-- **Computed column type refs:** Differences in type references in computed column expressions
-- **Function/View columns:** Differences in Columns relationship for functions and views with special characters
-- **Impact:** Minor - Rust behavior is functionally equivalent
-
-#### 11.8.3 instead_of_triggers
-**Status:** Intentional difference (2 errors)
-- DotNet preserves duplicate references in BodyDependencies
-- Rust deduplicates references (e.g., if a column is referenced twice, Rust emits one ref)
-- **Impact:** Intentional difference - Rust deduplication is a design decision
-
-#### 11.8.4 view_options
-**Status:** Intentional difference (2 errors)
-- DotNet preserves duplicate column references in GROUP BY
-- Rust deduplicates (e.g., `GROUP BY a, a, b` emits refs to a and b, not a, a, b)
-- **Impact:** Intentional difference - Rust deduplication is a design decision
-
-#### Summary of Intentional Differences
-
-Some differences are intentional design decisions where Rust's behavior is arguably cleaner:
-
-1. **Reference deduplication:** Rust deduplicates column references in BodyDependencies, while DotNet preserves duplicates. This affects `instead_of_triggers` and `view_options`.
-
-2. **SELECT * handling:** Rust emits an explicit `[*]` reference, DotNet does not. This affects `ampersand_encoding`.
-
-These differences would require significant changes to the dependency tracking model to match DotNet exactly, and the current Rust behavior is functionally equivalent for most use cases.
+| Fixture | Errors | Issue | Phase 12 Task |
+|---------|--------|-------|---------------|
+| `ampersand_encoding` | 1 missing relationship (SELECT * expansion needed) | SELECT * emits `[*]` reference | 12.1 |
+| `instead_of_triggers` | 2 | Duplicate refs deduplicated | 12.2 |
+| `view_options` | 2 | Duplicate refs deduplicated | 12.2 |
+| `e2e_comprehensive` | 8 | Type refs + TVF columns | 12.3, 12.4 |
 
 ---
 
@@ -194,13 +168,9 @@ These differences would require significant changes to the dependency tracking m
 | 11.8 | Remaining Relationship Differences | N/A | 4 fixtures with intentional differences |
 | 11.9 | Table Type Fixes | 5/5 | Complete |
 
-**Phase 11 Total**: 69/70 tasks complete (Layer 3 tests blocked on relationship differences)
+**Phase 11 Total**: 69/70 tasks complete (Layer 3 tests blocked on Phase 12)
 
-> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 90.9% (40/44). 4 fixtures have intentional differences:
-> - **ampersand_encoding** (3 errors): SELECT * handling - intentional difference
-> - **e2e_comprehensive** (8 errors): Computed column type refs, function/view columns - intentional difference
-> - **instead_of_triggers** (2 errors): Duplicate ref deduplication - intentional difference
-> - **view_options** (2 errors): Duplicate ref deduplication - intentional difference
+> **Status (2026-01-29):** Layer 1, Layer 2, Layer 4, and Metadata all at 100%. Relationships at 90.9% (40/44). See **Phase 12** for tasks to fix remaining 4 fixtures.
 
 ---
 
@@ -225,13 +195,250 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 |-------|--------|
 | Phases 1-10 | **COMPLETE** 63/63 |
 | Phase 11 | **COMPLETE** 69/70 |
+| Phase 12 | **IN PROGRESS** 0/6 |
 
-**Total**: 132/133 tasks complete
+**Total**: 132/139 tasks complete
 
 **Remaining work:**
-- Layer 3 SqlPackage comparison tests remain ignored (blocked on 4 fixtures with intentional differences)
-- 4 fixtures have intentional relationship differences (see section 11.8)
-- These represent design decisions where Rust's behavior is functionally equivalent to DotNet
+- Phase 12: Fix 4 fixtures with relationship differences to achieve 100% parity
+- Layer 3 SqlPackage comparison tests (blocked on Phase 12 completion)
+
+---
+
+## Phase 12: Achieve 100% Relationship Parity
+
+> **Goal:** Fix the remaining 4 fixtures with relationship differences to achieve exact 1-1 matching with DotNet DacFx.
+>
+> **Estimated Effort:** 5-8 hours total
+
+---
+
+### 12.1 Fix SELECT * Column Reference (ampersand_encoding)
+
+**Fixture:** `ampersand_encoding`
+**Errors:** 3 extra references in Rust
+**Test:** `cargo test --test e2e_tests test_parity_ampersand_encoding -- --nocapture`
+**Effort:** Trivial (30 min)
+
+**Problem:**
+When a view uses `SELECT *`, Rust emits `[dbo].[TableName].[*]` as a column reference.
+DotNet does NOT emit any column reference for `SELECT *`.
+
+**Failing Output:**
+```
+RELATIONSHIP MISMATCH: SqlView.[dbo].[P&L_Report] - Columns
+  EXTRA in Rust: [dbo].[P&L_Report].[*]
+```
+
+**Root Cause:**
+- **File:** `src/dacpac/model_xml.rs`
+- **Function:** `resolve_column_reference()` (lines 1115-1121)
+- The function returns `[table].[*]` when column name is `*`
+
+**Solution:**
+Add a check to skip emitting column references when the column name is `*`:
+
+```rust
+// In resolve_column_reference(), around line 1118
+1 => {
+    let col_name = parts[0].trim_matches(|c| c == '[' || c == ']');
+    if col_name == "*" {
+        return None;  // Don't emit [*] column reference - matches DotNet behavior
+    }
+    if let Some((_, table_ref)) = table_aliases.first() {
+        return Some(format!("{}.[{}]", table_ref, col_name));
+    }
+}
+```
+
+**Tasks:**
+- [x] **12.1.1** Add `col_name == "*"` check in `resolve_column_reference()` to return `None`
+- [ ] **12.1.2** Run `test_parity_ampersand_encoding` and verify 0 errors
+- [ ] **12.1.3** Pass DatabaseModel to view column extraction to expand SELECT * to actual table columns
+
+**Note (2026-01-29):** Task 12.1.1 completed - the fix to skip `[*]` column references was implemented. However, this alone does not achieve 0 errors because DotNet expands `SELECT *` to the actual table columns (e.g., `[dbo].[Table].[Col1]`, `[dbo].[Table].[Col2]`). Full parity requires passing the DatabaseModel to the view column extraction logic so it can resolve `SELECT *` to the actual columns from the referenced table(s).
+
+---
+
+### 12.2 Remove Reference Deduplication (instead_of_triggers, view_options)
+
+**Fixtures:** `instead_of_triggers`, `view_options`
+**Errors:** 2 missing references each (4 total)
+**Tests:**
+- `cargo test --test e2e_tests test_parity_instead_of_triggers -- --nocapture`
+- `cargo test --test e2e_tests test_parity_view_options -- --nocapture`
+**Effort:** Small (1-2 hours)
+
+**Problem:**
+Rust deduplicates column/table references in BodyDependencies and QueryDependencies.
+DotNet preserves duplicate references when they appear multiple times in the SQL.
+
+**Failing Output (instead_of_triggers):**
+```
+RELATIONSHIP MISMATCH: SqlDmlTrigger.[dbo].[trg_Products_InsteadOfUpdate] - BodyDependencies
+  Rust:   20 references
+  DotNet: 21 references
+  MISSING in Rust: [dbo].[Products].[Name] (appears twice in DotNet)
+```
+
+**Failing Output (view_options):**
+```
+RELATIONSHIP MISMATCH: SqlView.[dbo].[vw_CategorySummary] - QueryDependencies
+  Rust:   7 references
+  DotNet: 9 references
+  MISSING in Rust: [dbo].[Categories].[Id], [dbo].[Categories].[Name] (duplicates in GROUP BY)
+```
+
+**Root Cause:**
+- **File:** `src/dacpac/model_xml.rs`
+- **Trigger dedup:** `extract_trigger_body_dependencies()` (line ~3926) uses `HashSet<String>` to track seen refs
+- **View dedup:** `extract_view_columns_and_deps()` (lines 872-902) uses `!query_deps.contains()` checks
+
+**Solution:**
+Remove the deduplication logic to preserve duplicate references:
+
+```rust
+// In extract_trigger_body_dependencies() - REMOVE these patterns:
+let mut seen: HashSet<String> = HashSet::new();  // DELETE this line
+// ...
+if !seen.contains(&dep_str) {  // DELETE this check
+    seen.insert(dep_str.clone());  // DELETE this line
+    deps.push(dep_str);
+}
+// Change to just:
+deps.push(dep_str);
+
+// In extract_view_columns_and_deps() - REMOVE .contains() checks:
+// Before:
+if !query_deps.contains(table_ref) {
+    query_deps.push(table_ref.clone());
+}
+// After:
+query_deps.push(table_ref.clone());
+```
+
+**Tasks:**
+- [ ] **12.2.1** Remove `HashSet` deduplication in `extract_trigger_body_dependencies()`
+- [ ] **12.2.2** Remove `.contains()` guards in `extract_view_columns_and_deps()` (lines 874, 882, 890, 899)
+- [ ] **12.2.3** Run `test_parity_instead_of_triggers` and verify 0 errors
+- [ ] **12.2.4** Run `test_parity_view_options` and verify 0 errors
+
+---
+
+### 12.3 Add Type References in Computed Columns (e2e_comprehensive)
+
+**Fixture:** `e2e_comprehensive`
+**Errors:** 2 missing type references
+**Test:** `cargo test --test e2e_tests test_parity_e2e_comprehensive -- --nocapture`
+**Effort:** Small (1-2 hours)
+
+**Problem:**
+Computed columns with CAST expressions should emit type references in ExpressionDependencies.
+Rust only extracts column references, not the type used in CAST.
+
+**Failing Output:**
+```
+RELATIONSHIP MISMATCH: SqlComputedColumn.[dbo].[AuditLog].[EntityKey] - ExpressionDependencies
+  Rust:   ["[dbo].[AuditLog].[EntityType]", "[dbo].[AuditLog].[EntityId]"]
+  DotNet: ["[dbo].[AuditLog].[EntityType]", "[nvarchar]", "[dbo].[AuditLog].[EntityId]"]
+  MISSING in Rust: [nvarchar]
+```
+
+**SQL Example:**
+```sql
+[EntityKey] AS (CONCAT([EntityType], ':', CAST([EntityId] AS NVARCHAR(20))))
+```
+
+**Root Cause:**
+- **File:** `src/dacpac/model_xml.rs`
+- **Function:** `extract_expression_column_references()` (lines 2206-2241)
+- Only extracts bracketed column names, not types in CAST expressions
+
+**Solution:**
+Add logic to detect CAST expressions and extract the type as a BuiltInType reference:
+
+```rust
+// Add regex to find CAST(... AS TYPE) patterns
+let cast_regex = Regex::new(r"(?i)CAST\s*\([^)]+\s+AS\s+(\w+)").unwrap();
+for cap in cast_regex.captures_iter(expression) {
+    let type_name = cap[1].to_lowercase();
+    // Add as BuiltInType reference: [typename]
+    refs.push(format!("[{}]", type_name));
+}
+```
+
+**Tasks:**
+- [ ] **12.3.1** Add CAST type extraction in `extract_expression_column_references()`
+- [ ] **12.3.2** Emit type as `[typename]` reference (lowercase, matches DotNet format)
+
+---
+
+### 12.4 Add Columns Relationship for Inline TVFs (e2e_comprehensive)
+
+**Fixture:** `e2e_comprehensive`
+**Errors:** 1 missing relationship
+**Test:** `cargo test --test e2e_tests test_parity_e2e_comprehensive -- --nocapture`
+**Effort:** Medium (1-2 hours)
+
+**Problem:**
+Inline table-valued functions should emit a Columns relationship listing the columns in their RETURNS TABLE clause.
+Rust doesn't emit this relationship.
+
+**Failing Output:**
+```
+MISSING RELATIONSHIP: SqlInlineTableValuedFunction.[dbo].[GetProductsInPriceRange] - Columns
+```
+
+**SQL Example:**
+```sql
+CREATE FUNCTION [dbo].[GetProductsInPriceRange](@MinPrice DECIMAL, @MaxPrice DECIMAL)
+RETURNS TABLE
+AS
+RETURN (SELECT Id, Name, Price FROM Products WHERE Price BETWEEN @MinPrice AND @MaxPrice)
+```
+
+**Root Cause:**
+- **File:** `src/dacpac/model_xml.rs`
+- Inline TVFs don't have explicit RETURNS TABLE column definitions parsed
+- DotNet infers columns from the SELECT statement and emits them
+
+**Solution:**
+For inline TVFs, parse the SELECT columns from the RETURN statement and emit a Columns relationship:
+
+```rust
+// In write_inline_table_valued_function() or similar:
+// 1. Extract SELECT columns from the RETURN (...) statement
+// 2. Create Columns relationship with SqlSimpleColumn entries for each
+```
+
+**Tasks:**
+- [ ] **12.4.1** Parse SELECT columns from inline TVF RETURN statement
+- [ ] **12.4.2** Emit Columns relationship with column references
+- [ ] **12.4.3** Run `test_parity_e2e_comprehensive` and verify 0 errors
+
+---
+
+### 12.5 Final Verification
+
+- [ ] **12.5.1** Run `just test` - all tests pass
+- [ ] **12.5.2** Run `cargo clippy -- -D warnings` - no warnings
+- [ ] **12.5.3** Run `test_parity_regression_check` - verify 44/44 fixtures pass relationships
+- [ ] **12.5.4** Update baseline: `PARITY_UPDATE_BASELINE=1 cargo test --test e2e_tests test_parity_regression_check`
+- [ ] **12.5.5** Remove `#[ignore]` from Layer 3 tests and verify they pass
+
+---
+
+### Phase 12 Progress
+
+| Task | Description | Status |
+|------|-------------|--------|
+| 12.1 | SELECT * column reference fix | Partial (skip `[*]` done; SELECT * expansion needed) |
+| 12.2 | Remove reference deduplication | Pending |
+| 12.3 | Computed column type references | Pending |
+| 12.4 | Inline TVF Columns relationship | Pending |
+| 12.5 | Final verification | Pending |
+
+**Phase 12 Total**: 0/6 sections complete
 
 ---
 
