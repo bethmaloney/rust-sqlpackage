@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use regex::Regex;
 use sqlparser::ast::Statement;
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::parser::Parser;
 
+use super::tsql_dialect::ExtendedTsqlDialect;
 use crate::error::SqlPackageError;
 
 /// Sentinel value used to represent MAX in binary types (since sqlparser expects u64)
@@ -402,7 +402,7 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
     // Split on GO statements (batch separator)
     let batches = split_batches(content);
 
-    let dialect = MsSqlDialect {};
+    let dialect = ExtendedTsqlDialect::new();
     let mut statements = Vec::new();
 
     for batch in batches {
@@ -2913,7 +2913,7 @@ mod tests {
         assert!(!result.sql.contains("DEFAULT (1) FOR"));
 
         // Should still be valid SQL (parseable by sqlparser)
-        let dialect = MsSqlDialect {};
+        let dialect = ExtendedTsqlDialect::new();
         let parsed = Parser::parse_sql(&dialect, &result.sql);
         assert!(
             parsed.is_ok(),
@@ -2934,7 +2934,7 @@ mod tests {
         assert!(!result.sql.contains("VARBINARY(MAX)"));
 
         // Should be parseable
-        let dialect = MsSqlDialect {};
+        let dialect = ExtendedTsqlDialect::new();
         let parsed = Parser::parse_sql(&dialect, &result.sql);
         assert!(
             parsed.is_ok(),
@@ -2992,7 +2992,7 @@ CREATE TABLE [dbo].[Products] (
         );
 
         // Should be parseable by sqlparser
-        let dialect = MsSqlDialect {};
+        let dialect = ExtendedTsqlDialect::new();
         let parsed = Parser::parse_sql(&dialect, &result.sql);
         assert!(
             parsed.is_ok(),

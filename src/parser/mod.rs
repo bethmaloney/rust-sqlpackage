@@ -1,9 +1,11 @@
 //! T-SQL parsing
 
 mod sqlcmd;
+mod tsql_dialect;
 mod tsql_parser;
 
 pub use sqlcmd::expand_includes;
+pub use tsql_dialect::ExtendedTsqlDialect;
 pub use tsql_parser::{
     extract_extended_property_from_sql, parse_sql_file, parse_sql_files, ExtractedConstraintColumn,
     ExtractedDefaultConstraint, ExtractedExtendedProperty, ExtractedFullTextColumn,

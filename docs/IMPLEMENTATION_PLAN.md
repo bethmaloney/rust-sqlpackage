@@ -2,10 +2,11 @@
 
 This document tracks progress toward achieving exact 1-1 matching between rust-sqlpackage and DotNet DacFx dacpac output.
 
-## Status: PARITY COMPLETE | PARSER REFACTORING PLANNED
+## Status: PARITY COMPLETE | PARSER REFACTORING IN PROGRESS
 
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
-**Phase 15 planned: Replace regex fallbacks with custom sqlparser-rs dialect (34 tasks).**
+**Phase 15.1 complete: ExtendedTsqlDialect infrastructure created.**
+**Phase 15.2-15.7 planned: Replace regex fallbacks with token-based parsing (33 tasks remaining).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -56,13 +57,24 @@ This does not affect Layer 3 parity testing (which compares dacpacs, not deploym
 
 ## Phase 15: Parser Refactoring - Replace Regex Fallbacks with Custom sqlparser-rs Dialect
 
-**Status:** PLANNED
+**Status:** IN PROGRESS (Phase 15.1 complete)
 
 **Goal:** Replace brittle regex-based fallback parsing with proper token-based parsing using sqlparser-rs custom dialect extension. This improves maintainability, error messages, and handles edge cases better.
 
-**Approach:** Create a custom `TsqlDialect` that intercepts specific token sequences before delegating to the base MsSqlDialect.
+**Approach:** Create a custom `ExtendedTsqlDialect` that intercepts specific token sequences before delegating to the base MsSqlDialect.
 
 **Documentation:** See **[PARSER_REFACTORING_GUIDE.md](./PARSER_REFACTORING_GUIDE.md)** for detailed implementation guidance, API reference, code examples, and migration path.
+
+### Phase 15.1: Infrastructure ✅ COMPLETE
+
+Created `ExtendedTsqlDialect` wrapper in `src/parser/tsql_dialect.rs`:
+
+- Wraps `MsSqlDialect` and delegates all parsing to it
+- Overrides `dialect()` method to return `MsSqlDialect`'s TypeId, ensuring `dialect_of!(self is MsSqlDialect)` checks pass
+- This is critical because sqlparser uses these checks internally for T-SQL-specific parsing (e.g., IDENTITY columns)
+- Added comprehensive tests for dialect behavior and MsSqlDialect equivalence
+- Updated `parse_sql_file()` to use the new dialect
+- All 250+ existing tests pass
 
 ### Regex Inventory
 
@@ -144,7 +156,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 
 ### Implementation Strategy
 
-1. **Phase 15.1: Infrastructure** - Create `TsqlDialect` wrapper, tokenizer utilities, and test harness
+1. **Phase 15.1: Infrastructure** ✅ - Created `ExtendedTsqlDialect` wrapper with MsSqlDialect delegation
 2. **Phase 15.2: Critical Path** - D1, E1 (column definitions - most complex, most used)
 3. **Phase 15.3: DDL Objects** - B1-B6 (procedures, functions, triggers, types, indexes)
 4. **Phase 15.4: Constraints** - C1-C4, E2 (constraint parsing)
