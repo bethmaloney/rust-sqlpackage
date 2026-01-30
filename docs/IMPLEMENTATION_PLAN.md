@@ -708,6 +708,20 @@ The issue was that inline table-valued function columns referencing function par
 
 ---
 
+## Known Issues
+
+### Deploy Test [nvarchar] Reference Error
+**Test:** `test_e2e_deploy_comprehensive_with_post_deploy`
+**Status:** Known issue - works in CI, fails locally without SQL Server
+
+When deploying the e2e_comprehensive dacpac, SqlPackage may report "The reference to the element that has the name [nvarchar] could not be resolved". This is caused by type references (e.g., `[nvarchar]`) emitted in ExpressionDependencies for computed columns with CAST expressions.
+
+This does not affect Layer 3 parity testing (which compares dacpacs, not deployments) and the test passes in CI where SQL Server is available via Docker.
+
+**Note:** This issue predates the Layer 3 parity work and is tracked separately.
+
+---
+
 <details>
 <summary>Archived: Phases 1-10 Details</summary>
 
