@@ -7,6 +7,7 @@ use regex::Regex;
 use sqlparser::ast::Statement;
 use sqlparser::parser::Parser;
 
+use super::column_parser::{parse_column_definition_tokens, TokenParsedColumn};
 use super::tsql_dialect::ExtendedTsqlDialect;
 use crate::error::SqlPackageError;
 
@@ -2050,25 +2051,6 @@ fn extract_table_structure(sql: &str) -> Option<FallbackStatementType> {
     })
 }
 
-/// Strip leading SQL comments from a string.
-/// Handles single-line comments (-- style) at the start of the string.
-fn strip_leading_sql_comments(s: &str) -> &str {
-    let mut result = s.trim_start();
-
-    // Keep stripping comments until we find actual content
-    while result.starts_with("--") {
-        // Find the end of the comment line
-        if let Some(newline_pos) = result.find('\n') {
-            result = result[newline_pos + 1..].trim_start();
-        } else {
-            // Comment goes to end of string, nothing left
-            return "";
-        }
-    }
-
-    result
-}
-
 /// Extract content between balanced parentheses (returns content without the outer parens)
 fn extract_balanced_parens(sql: &str) -> Option<String> {
     if !sql.starts_with('(') {
@@ -2170,252 +2152,35 @@ fn split_by_top_level_comma(s: &str) -> Vec<String> {
     parts
 }
 
-/// Parse a column definition
+/// Parse a column definition using token-based parsing (Phase 15.2)
+///
+/// This function uses the token-based `ColumnTokenParser` for improved maintainability
+/// and error handling, replacing the previous regex-based approach.
 fn parse_column_definition(col_def: &str) -> Option<ExtractedTableColumn> {
-    // Column pattern: [Name] TYPE [IDENTITY] [CONSTRAINT name DEFAULT (value)] [NOT NULL|NULL]
-    // OR computed column: [Name] AS (expression) [PERSISTED] [NOT NULL]
-    // The order can vary, so we need to be flexible
+    // Use the new token-based parser
+    let parsed = parse_column_definition_tokens(col_def)?;
 
-    // Strip leading SQL comments (-- style) before parsing
-    // This handles cases where comments appear between column definitions
-    let col_def = strip_leading_sql_comments(col_def);
-    let col_def = col_def.trim();
-    if col_def.is_empty() {
-        return None;
+    // Convert TokenParsedColumn to ExtractedTableColumn
+    Some(convert_token_parsed_column(parsed))
+}
+
+/// Convert a TokenParsedColumn to ExtractedTableColumn
+fn convert_token_parsed_column(parsed: TokenParsedColumn) -> ExtractedTableColumn {
+    ExtractedTableColumn {
+        name: parsed.name,
+        data_type: parsed.data_type,
+        nullability: parsed.nullability,
+        is_identity: parsed.is_identity,
+        is_rowguidcol: parsed.is_rowguidcol,
+        is_sparse: parsed.is_sparse,
+        is_filestream: parsed.is_filestream,
+        default_constraint_name: parsed.default_constraint_name,
+        default_value: parsed.default_value,
+        check_constraint_name: parsed.check_constraint_name,
+        check_expression: parsed.check_expression,
+        computed_expression: parsed.computed_expression,
+        is_persisted: parsed.is_persisted,
     }
-
-    // First check if this is a computed column: [Name] AS (expression)
-    let computed_re = Regex::new(r"(?i)^\[?(\w+)\]?\s+AS\s+\(").ok()?;
-    if let Some(caps) = computed_re.captures(col_def) {
-        let name = caps.get(1)?.as_str().to_string();
-
-        // Find the start of the expression (position of AS followed by '(')
-        let as_match = Regex::new(r"(?i)\bAS\s*\(").ok()?.find(col_def)?;
-        let expr_start = as_match.end() - 1; // Position of '('
-
-        // Extract the full balanced expression using existing helper
-        // extract_balanced_parens returns content without outer parens, so we add them back
-        let inner_expr = extract_balanced_parens(&col_def[expr_start..])?;
-        let expression = format!("({})", inner_expr);
-
-        // Check for PERSISTED keyword
-        let is_persisted = col_def.to_uppercase().contains("PERSISTED");
-
-        // Check for nullability - track explicit vs implicit
-        // Some(false) = explicit NOT NULL, Some(true) = explicit NULL, None = implicit
-        let upper = col_def.to_uppercase();
-        let nullability = if upper.contains("NOT NULL") {
-            Some(false)
-        } else if upper.contains(" NULL") && !upper.contains("NOT NULL") {
-            Some(true)
-        } else {
-            None // Implicit (not specified)
-        };
-
-        return Some(ExtractedTableColumn {
-            name,
-            data_type: String::new(), // Computed columns have no explicit data type
-            nullability,
-            is_identity: false,
-            is_rowguidcol: false,
-            is_sparse: false,
-            is_filestream: false,
-            default_constraint_name: None,
-            default_value: None,
-            check_constraint_name: None,
-            check_expression: None,
-            computed_expression: Some(expression),
-            is_persisted,
-        });
-    }
-
-    // Not a computed column - parse as regular column
-    // First extract the column name and type
-    let col_re = Regex::new(r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)").ok()?;
-    let caps = col_re.captures(col_def)?;
-
-    let name = caps.get(1)?.as_str().to_string();
-    let data_type = caps.get(2)?.as_str().trim().to_uppercase();
-
-    // Check for IDENTITY
-    let is_identity = col_def.to_uppercase().contains("IDENTITY");
-
-    // Check for ROWGUIDCOL
-    let is_rowguidcol = col_def.to_uppercase().contains("ROWGUIDCOL");
-
-    // Check for SPARSE
-    let is_sparse = col_def.to_uppercase().contains("SPARSE");
-
-    // Check for FILESTREAM
-    let is_filestream = col_def.to_uppercase().contains("FILESTREAM");
-
-    // Check for nullability - track explicit vs implicit
-    // Some(false) = explicit NOT NULL, Some(true) = explicit NULL, None = implicit
-    let upper = col_def.to_uppercase();
-    let nullability = if upper.contains("NOT NULL") {
-        Some(false)
-    } else if upper.contains(" NULL") && !upper.contains("NOT NULL") {
-        Some(true)
-    } else {
-        None // Implicit (not specified)
-    };
-
-    // Extract inline DEFAULT constraint
-    // Pattern: CONSTRAINT [name] [NOT NULL] DEFAULT (value) or just DEFAULT (value)
-    // In SQL Server, CONSTRAINT [name] before a DEFAULT names the DEFAULT constraint.
-    // NOT NULL is a column property (not a nameable constraint), so CONSTRAINT [name] NOT NULL DEFAULT
-    // names the DEFAULT constraint, not the NOT NULL property.
-    let default_constraint_name;
-    let default_value;
-
-    // Try named constraint with NOT NULL between CONSTRAINT name and DEFAULT:
-    // Pattern: CONSTRAINT [name] NOT NULL DEFAULT ((value)) or CONSTRAINT [name] NULL DEFAULT ((value))
-    let named_default_with_nullability_paren_re = Regex::new(
-        r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+(?:NOT\s+)?NULL\s+DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))",
-    )
-    .ok()?;
-
-    // Try named constraint with NOT NULL between CONSTRAINT name and DEFAULT with function call:
-    // Pattern: CONSTRAINT [name] NOT NULL DEFAULT GETDATE()
-    let named_default_with_nullability_func_re =
-        Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+(?:NOT\s+)?NULL\s+DEFAULT\s+(\w+\(\))").ok()?;
-
-    // Try named constraint after NOT NULL with parenthesized value: NOT NULL CONSTRAINT [name] DEFAULT ((value))
-    let named_default_after_notnull_paren_re = Regex::new(
-        r"(?i)NOT\s+NULL\s+CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))",
-    )
-    .ok()?;
-
-    // Try named constraint after NOT NULL with function call: NOT NULL CONSTRAINT [name] DEFAULT GETDATE()
-    let named_default_after_notnull_func_re =
-        Regex::new(r"(?i)NOT\s+NULL\s+CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\w+\(\))").ok()?;
-
-    // Try named constraint directly before DEFAULT (no nullability): CONSTRAINT [name] DEFAULT ((value))
-    let named_default_direct_paren_re =
-        Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))")
-            .ok()?;
-
-    // Try named constraint directly before DEFAULT with function call: CONSTRAINT [name] DEFAULT GETDATE()
-    let named_default_direct_func_re =
-        Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\w+\(\))").ok()?;
-
-    // Try named constraint with NOT NULL and bare number: CONSTRAINT [name] NOT NULL DEFAULT 0.00
-    let named_default_with_nullability_number_re =
-        Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+(?:NOT\s+)?NULL\s+DEFAULT\s+(-?\d+(?:\.\d+)?)")
-            .ok()?;
-
-    // Try named constraint directly before DEFAULT with bare number: CONSTRAINT [name] DEFAULT 0
-    let named_default_direct_number_re =
-        Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(-?\d+(?:\.\d+)?)").ok()?;
-
-    // Check patterns in order of specificity
-    if let Some(caps) = named_default_with_nullability_paren_re.captures(col_def) {
-        // CONSTRAINT [name] NOT NULL DEFAULT ((value))
-        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-        default_value = caps.get(2).map(|m| m.as_str().to_string());
-    } else if let Some(caps) = named_default_with_nullability_func_re.captures(col_def) {
-        // CONSTRAINT [name] NOT NULL DEFAULT GETDATE()
-        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-        default_value = caps.get(2).map(|m| m.as_str().to_string());
-    } else if let Some(caps) = named_default_after_notnull_paren_re.captures(col_def) {
-        // NOT NULL CONSTRAINT [name] DEFAULT ((value))
-        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-        default_value = caps.get(2).map(|m| m.as_str().to_string());
-    } else if let Some(caps) = named_default_after_notnull_func_re.captures(col_def) {
-        // NOT NULL CONSTRAINT [name] DEFAULT GETDATE()
-        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-        default_value = caps.get(2).map(|m| m.as_str().to_string());
-    } else if let Some(caps) = named_default_direct_paren_re.captures(col_def) {
-        // CONSTRAINT [name] DEFAULT ((value))
-        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-        default_value = caps.get(2).map(|m| m.as_str().to_string());
-    } else if let Some(caps) = named_default_direct_func_re.captures(col_def) {
-        // CONSTRAINT [name] DEFAULT GETDATE()
-        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-        default_value = caps.get(2).map(|m| m.as_str().to_string());
-    } else if let Some(caps) = named_default_with_nullability_number_re.captures(col_def) {
-        // CONSTRAINT [name] NOT NULL DEFAULT 0.00
-        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-        default_value = caps.get(2).map(|m| m.as_str().to_string());
-    } else if let Some(caps) = named_default_direct_number_re.captures(col_def) {
-        // CONSTRAINT [name] DEFAULT 0
-        default_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-        default_value = caps.get(2).map(|m| m.as_str().to_string());
-    } else {
-        // Try unnamed default with parenthesized value: DEFAULT ((value))
-        let unnamed_default_paren_re =
-            Regex::new(r"(?i)DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))").ok()?;
-
-        // Try unnamed default with function call: DEFAULT GETDATE()
-        let unnamed_default_func_re = Regex::new(r"(?i)DEFAULT\s+(\w+\(\))").ok()?;
-
-        // Try unnamed default with string literal: DEFAULT 'value'
-        let unnamed_default_string_re = Regex::new(r"(?i)DEFAULT\s+('(?:[^']|'')*')").ok()?;
-
-        // Try unnamed default with bare number: DEFAULT 0.00 or DEFAULT 1
-        // Match numbers that are NOT followed by CHECK to avoid matching constraint names
-        let unnamed_default_number_re = Regex::new(
-            r"(?i)DEFAULT\s+(-?\d+(?:\.\d+)?)\s*(?:CHECK|UNIQUE|PRIMARY|FOREIGN|CONSTRAINT|,|$|\))",
-        )
-        .ok()?;
-
-        if let Some(caps) = unnamed_default_paren_re.captures(col_def) {
-            default_constraint_name = None;
-            default_value = caps.get(1).map(|m| m.as_str().to_string());
-        } else if let Some(caps) = unnamed_default_func_re.captures(col_def) {
-            default_constraint_name = None;
-            default_value = caps.get(1).map(|m| m.as_str().to_string());
-        } else if let Some(caps) = unnamed_default_string_re.captures(col_def) {
-            default_constraint_name = None;
-            default_value = caps.get(1).map(|m| m.as_str().to_string());
-        } else if let Some(caps) = unnamed_default_number_re.captures(col_def) {
-            default_constraint_name = None;
-            default_value = caps.get(1).map(|m| m.as_str().to_string());
-        } else {
-            default_constraint_name = None;
-            default_value = None;
-        }
-    }
-
-    // Extract inline CHECK constraint
-    // Pattern: [CONSTRAINT name] CHECK (expression)
-    let check_constraint_name;
-    let check_expression;
-
-    // Try named check constraint: CONSTRAINT [name] CHECK (expression)
-    let named_check_re = Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?\s+CHECK\s*\((.+)\)").ok();
-
-    if let Some(caps) = named_check_re.and_then(|re| re.captures(col_def)) {
-        check_constraint_name = caps.get(1).map(|m| m.as_str().to_string());
-        check_expression = caps.get(2).map(|m| m.as_str().to_string());
-    } else {
-        // Try unnamed check constraint: CHECK (expression)
-        let unnamed_check_re = Regex::new(r"(?i)\bCHECK\s*\((.+)\)").ok();
-
-        if let Some(caps) = unnamed_check_re.and_then(|re| re.captures(col_def)) {
-            check_constraint_name = None;
-            check_expression = caps.get(1).map(|m| m.as_str().to_string());
-        } else {
-            check_constraint_name = None;
-            check_expression = None;
-        }
-    }
-
-    Some(ExtractedTableColumn {
-        name,
-        data_type,
-        nullability,
-        is_identity,
-        is_rowguidcol,
-        is_sparse,
-        is_filestream,
-        default_constraint_name,
-        default_value,
-        check_constraint_name,
-        check_expression,
-        computed_expression: None, // Regular column, not computed
-        is_persisted: false,
-    })
 }
 
 /// Parse a table-level constraint

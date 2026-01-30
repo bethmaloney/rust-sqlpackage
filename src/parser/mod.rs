@@ -1,5 +1,6 @@
 //! T-SQL parsing
 
+mod column_parser;
 mod sqlcmd;
 mod tsql_dialect;
 mod tsql_parser;

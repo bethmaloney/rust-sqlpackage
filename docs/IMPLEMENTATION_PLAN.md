@@ -6,7 +6,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
 **Phase 15.1 complete: ExtendedTsqlDialect infrastructure created.**
-**Phase 15.2-15.7 planned: Replace regex fallbacks with token-based parsing (33 tasks remaining).**
+**Phase 15.2 in progress: Column definition token parsing (D1, E1 complete).**
+**Phase 15.3-15.7 planned: Replace remaining regex fallbacks with token-based parsing (31 tasks remaining).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -76,6 +77,18 @@ Created `ExtendedTsqlDialect` wrapper in `src/parser/tsql_dialect.rs`:
 - Updated `parse_sql_file()` to use the new dialect
 - All 250+ existing tests pass
 
+### Phase 15.2: Critical Path (Column Definitions) 🔄 IN PROGRESS
+
+Created token-based column definition parser in `src/parser/column_parser.rs`:
+
+- New `ColumnTokenParser` struct for token-based column parsing
+- `TokenParsedColumn` struct representing parsed column with all attributes (name, type, nullability, identity, default, collation, constraints)
+- `parse_column_definition_tokens()` function that replaces 15+ regex patterns for column parsing
+- Handles column name/type extraction, IDENTITY specifications, NULL/NOT NULL, COLLATE, DEFAULT constraints (named and unnamed), and inline PRIMARY KEY/UNIQUE constraints
+- Updated `parse_column_definition()` in `tsql_parser.rs` to use the new token parser as primary method
+- Added 22 unit tests covering various column definition patterns
+- Tasks D1 (column name, type, options) and E1 (default constraint variants) completed
+
 ### Regex Inventory
 
 Current fallback parsing uses **75+ regex patterns** across two files:
@@ -114,17 +127,17 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 | C4 | ALTER TABLE name extraction | `extract_alter_table_name` L857-876 | Medium |
 
 #### Category D: Column Definition Parsing (3 tasks)
-| # | Task | Regex Location | Priority |
-|---|------|----------------|----------|
-| D1 | Column name, type, and options | `extract_column_definition` L2181-2420 (15+ regex) | Critical |
-| D2 | Computed column detection | `extract_column_definition` L2187-2230 | High |
-| D3 | Table type column parsing | `parse_table_type_body` L1397-1535 | High |
+| # | Task | Regex Location | Priority | Status |
+|---|------|----------------|----------|--------|
+| D1 | Column name, type, and options | `extract_column_definition` L2181-2420 (15+ regex) | Critical | ✅ |
+| D2 | Computed column detection | `extract_column_definition` L2187-2230 | High | |
+| D3 | Table type column parsing | `parse_table_type_body` L1397-1535 | High | |
 
 #### Category E: Inline Constraint Parsing (2 tasks)
-| # | Task | Regex Location | Priority |
-|---|------|----------------|----------|
-| E1 | Default constraint variants (8 regex patterns) | `extract_column_definition` L2270-2380 | Critical |
-| E2 | Check constraint (named/unnamed) | `extract_column_definition` L2382-2420 | High |
+| # | Task | Regex Location | Priority | Status |
+|---|------|----------------|----------|--------|
+| E1 | Default constraint variants (8 regex patterns) | `extract_column_definition` L2270-2380 | Critical | ✅ |
+| E2 | Check constraint (named/unnamed) | `extract_column_definition` L2382-2420 | High | |
 
 #### Category F: Index & Option Extraction (4 tasks)
 | # | Task | Regex Location | Priority |
@@ -157,7 +170,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 ### Implementation Strategy
 
 1. **Phase 15.1: Infrastructure** ✅ - Created `ExtendedTsqlDialect` wrapper with MsSqlDialect delegation
-2. **Phase 15.2: Critical Path** - D1, E1 (column definitions - most complex, most used)
+2. **Phase 15.2: Critical Path** 🔄 IN PROGRESS - D1 ✅, E1 ✅ (column definitions - most complex, most used)
 3. **Phase 15.3: DDL Objects** - B1-B6 (procedures, functions, triggers, types, indexes)
 4. **Phase 15.4: Constraints** - C1-C4, E2 (constraint parsing)
 5. **Phase 15.5: Statement Detection** - A1-A5 (fallback statement types)

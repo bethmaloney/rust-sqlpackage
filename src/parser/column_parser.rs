@@ -1,0 +1,918 @@
+//! Token-based column definition parsing for T-SQL
+//!
+//! This module provides token-based parsing for column definitions, replacing
+//! the previous regex-based approach. Part of Phase 15.2 of the implementation plan.
+//!
+//! ## Supported Syntax
+//!
+//! Regular columns:
+//! ```sql
+//! [Name] TYPE [IDENTITY(seed, increment)] [NOT NULL|NULL]
+//!     [CONSTRAINT name DEFAULT (value)|DEFAULT (value)]
+//!     [CONSTRAINT name CHECK (expr)|CHECK (expr)]
+//!     [ROWGUIDCOL] [SPARSE] [FILESTREAM]
+//! ```
+//!
+//! Computed columns:
+//! ```sql
+//! [Name] AS (expression) [PERSISTED] [NOT NULL]
+//! ```
+
+use sqlparser::dialect::MsSqlDialect;
+use sqlparser::keywords::Keyword;
+use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+
+/// Result of parsing a column definition using tokens
+#[derive(Debug, Clone, Default)]
+pub struct TokenParsedColumn {
+    /// Column name
+    pub name: String,
+    /// Data type (e.g., "NVARCHAR(50)", "INT", "DECIMAL(18, 2)")
+    /// For computed columns, this will be empty
+    pub data_type: String,
+    /// Column nullability: Some(true) = explicit NULL, Some(false) = explicit NOT NULL, None = implicit
+    pub nullability: Option<bool>,
+    /// Whether the column has IDENTITY
+    pub is_identity: bool,
+    /// Whether the column has ROWGUIDCOL
+    pub is_rowguidcol: bool,
+    /// Whether the column has SPARSE attribute
+    pub is_sparse: bool,
+    /// Whether the column has FILESTREAM attribute
+    pub is_filestream: bool,
+    /// Default constraint name (if any)
+    pub default_constraint_name: Option<String>,
+    /// Default value expression (if any)
+    pub default_value: Option<String>,
+    /// Inline CHECK constraint name (if any)
+    pub check_constraint_name: Option<String>,
+    /// Inline CHECK constraint expression (if any)
+    pub check_expression: Option<String>,
+    /// Computed column expression (e.g., "([Qty] * [Price])")
+    /// If Some, this is a computed column with no explicit data type
+    pub computed_expression: Option<String>,
+    /// Whether the computed column is PERSISTED (stored physically)
+    pub is_persisted: bool,
+}
+
+/// Token-based column definition parser
+pub struct ColumnTokenParser {
+    tokens: Vec<TokenWithSpan>,
+    pos: usize,
+}
+
+impl ColumnTokenParser {
+    /// Create a new parser for a column definition string
+    pub fn new(col_def: &str) -> Option<Self> {
+        let dialect = MsSqlDialect {};
+        let tokens = Tokenizer::new(&dialect, col_def)
+            .tokenize_with_location()
+            .ok()?;
+
+        Some(Self { tokens, pos: 0 })
+    }
+
+    /// Parse the column definition and return the result
+    pub fn parse(&mut self) -> Option<TokenParsedColumn> {
+        // Skip leading whitespace tokens
+        self.skip_whitespace();
+
+        // Check if empty
+        if self.is_at_end() {
+            return None;
+        }
+
+        // First token should be the column name (identifier)
+        let name = self.parse_identifier()?;
+
+        self.skip_whitespace();
+
+        // Check if this is a computed column: [Name] AS (expression)
+        if self.check_keyword(Keyword::AS) {
+            return self.parse_computed_column(name);
+        }
+
+        // Regular column: parse data type
+        let data_type = self.parse_data_type()?;
+
+        // Now parse optional column modifiers in any order
+        let mut result = TokenParsedColumn {
+            name,
+            data_type,
+            ..Default::default()
+        };
+
+        self.parse_column_modifiers(&mut result);
+
+        Some(result)
+    }
+
+    /// Parse a computed column: [Name] AS (expression) [PERSISTED] [NOT NULL]
+    fn parse_computed_column(&mut self, name: String) -> Option<TokenParsedColumn> {
+        // Consume AS
+        self.expect_keyword(Keyword::AS)?;
+        self.skip_whitespace();
+
+        // Parse the expression (everything in parentheses)
+        let expression = self.parse_parenthesized_expression()?;
+
+        let mut result = TokenParsedColumn {
+            name,
+            computed_expression: Some(format!("({})", expression)),
+            ..Default::default()
+        };
+
+        // Parse optional PERSISTED and nullability
+        loop {
+            self.skip_whitespace();
+            if self.is_at_end() {
+                break;
+            }
+
+            if self.check_word_ci("PERSISTED") {
+                self.advance();
+                result.is_persisted = true;
+            } else if self.check_keyword(Keyword::NOT) {
+                self.advance();
+                self.skip_whitespace();
+                if self.check_keyword(Keyword::NULL) {
+                    self.advance();
+                    result.nullability = Some(false);
+                }
+            } else if self.check_keyword(Keyword::NULL) {
+                self.advance();
+                result.nullability = Some(true);
+            } else {
+                break;
+            }
+        }
+
+        Some(result)
+    }
+
+    /// Parse column modifiers (IDENTITY, NOT NULL, DEFAULT, CHECK, etc.)
+    fn parse_column_modifiers(&mut self, result: &mut TokenParsedColumn) {
+        // Track whether we've seen CONSTRAINT keyword (may name the next constraint)
+        let mut pending_constraint_name: Option<String> = None;
+
+        loop {
+            self.skip_whitespace();
+            if self.is_at_end() {
+                break;
+            }
+
+            // Check for IDENTITY
+            if self.check_keyword(Keyword::IDENTITY) {
+                self.advance();
+                result.is_identity = true;
+                // Skip optional (seed, increment)
+                self.skip_whitespace();
+                if self.check_token(&Token::LParen) {
+                    self.skip_parenthesized();
+                }
+                continue;
+            }
+
+            // Check for NOT NULL
+            if self.check_keyword(Keyword::NOT) {
+                self.advance();
+                self.skip_whitespace();
+                if self.check_keyword(Keyword::NULL) {
+                    self.advance();
+                    result.nullability = Some(false);
+                }
+                continue;
+            }
+
+            // Check for NULL (explicit nullable)
+            if self.check_keyword(Keyword::NULL) {
+                // Make sure this isn't part of NOT NULL
+                self.advance();
+                if result.nullability.is_none() {
+                    result.nullability = Some(true);
+                }
+                continue;
+            }
+
+            // Check for CONSTRAINT keyword (names the next constraint)
+            if self.check_keyword(Keyword::CONSTRAINT) {
+                self.advance();
+                self.skip_whitespace();
+                let constraint_name = self.parse_identifier();
+                pending_constraint_name = constraint_name;
+                continue;
+            }
+
+            // Check for DEFAULT
+            if self.check_keyword(Keyword::DEFAULT) {
+                self.advance();
+                self.skip_whitespace();
+
+                // Parse default value
+                let default_value = self.parse_default_value();
+                result.default_value = default_value;
+                result.default_constraint_name = pending_constraint_name.take();
+                continue;
+            }
+
+            // Check for CHECK
+            if self.check_keyword(Keyword::CHECK) {
+                self.advance();
+                self.skip_whitespace();
+
+                // Parse check expression
+                if self.check_token(&Token::LParen) {
+                    let expr = self.parse_parenthesized_expression();
+                    result.check_expression = expr;
+                    result.check_constraint_name = pending_constraint_name.take();
+                }
+                continue;
+            }
+
+            // Check for ROWGUIDCOL
+            if self.check_word_ci("ROWGUIDCOL") {
+                self.advance();
+                result.is_rowguidcol = true;
+                continue;
+            }
+
+            // Check for SPARSE
+            if self.check_word_ci("SPARSE") {
+                self.advance();
+                result.is_sparse = true;
+                continue;
+            }
+
+            // Check for FILESTREAM
+            if self.check_word_ci("FILESTREAM") {
+                self.advance();
+                result.is_filestream = true;
+                continue;
+            }
+
+            // Check for PERSISTED (for computed columns, but can appear in regular column context)
+            if self.check_word_ci("PERSISTED") {
+                self.advance();
+                result.is_persisted = true;
+                continue;
+            }
+
+            // Check for PRIMARY KEY (inline) - skip it
+            if self.check_keyword(Keyword::PRIMARY) {
+                self.advance();
+                self.skip_whitespace();
+                if self.check_keyword(Keyword::KEY) {
+                    self.advance();
+                    // Skip optional CLUSTERED/NONCLUSTERED
+                    self.skip_whitespace();
+                    if self.check_keyword(Keyword::CLUSTERED) || self.check_word_ci("NONCLUSTERED")
+                    {
+                        self.advance();
+                    }
+                }
+                continue;
+            }
+
+            // Check for UNIQUE (inline) - skip it
+            if self.check_keyword(Keyword::UNIQUE) {
+                self.advance();
+                // Skip optional CLUSTERED/NONCLUSTERED
+                self.skip_whitespace();
+                if self.check_keyword(Keyword::CLUSTERED) || self.check_word_ci("NONCLUSTERED") {
+                    self.advance();
+                }
+                continue;
+            }
+
+            // Check for FOREIGN KEY (inline) - skip it
+            if self.check_keyword(Keyword::FOREIGN) {
+                self.advance();
+                self.skip_whitespace();
+                if self.check_keyword(Keyword::KEY) {
+                    self.advance();
+                }
+                // Skip REFERENCES clause
+                self.skip_whitespace();
+                if self.check_keyword(Keyword::REFERENCES) {
+                    // Skip until end or next keyword
+                    while !self.is_at_end() {
+                        if self.check_keyword(Keyword::CONSTRAINT)
+                            || self.check_keyword(Keyword::DEFAULT)
+                            || self.check_keyword(Keyword::CHECK)
+                        {
+                            break;
+                        }
+                        self.advance();
+                    }
+                }
+                continue;
+            }
+
+            // Unknown token - break to avoid infinite loop
+            break;
+        }
+    }
+
+    /// Parse an identifier (column name, constraint name, etc.)
+    fn parse_identifier(&mut self) -> Option<String> {
+        self.skip_whitespace();
+
+        let token = self.current_token()?;
+        match &token.token {
+            Token::Word(word) => {
+                let name = word.value.clone();
+                self.advance();
+                Some(name)
+            }
+            _ => None,
+        }
+    }
+
+    /// Parse a data type (e.g., INT, NVARCHAR(50), DECIMAL(18, 2))
+    fn parse_data_type(&mut self) -> Option<String> {
+        self.skip_whitespace();
+
+        let mut data_type = String::new();
+
+        // Get the base type name
+        let token = self.current_token()?;
+        match &token.token {
+            Token::Word(word) => {
+                data_type.push_str(&word.value.to_uppercase());
+                self.advance();
+            }
+            _ => return None,
+        }
+
+        // Check for type parameters in parentheses
+        self.skip_whitespace();
+        if self.check_token(&Token::LParen) {
+            let params = self.consume_parenthesized_raw()?;
+            data_type.push('(');
+            data_type.push_str(&params);
+            data_type.push(')');
+        }
+
+        Some(data_type)
+    }
+
+    /// Parse a DEFAULT value (handles various forms: function calls, literals, parenthesized expressions)
+    fn parse_default_value(&mut self) -> Option<String> {
+        self.skip_whitespace();
+
+        // Check what kind of default value we have
+        if self.check_token(&Token::LParen) {
+            // Parenthesized expression like ((0)) or (GETDATE())
+            let expr = self.parse_parenthesized_expression()?;
+            return Some(format!("({})", expr));
+        }
+
+        // Check for function call like GETDATE(), NEWID(), etc.
+        if let Some(token) = self.current_token() {
+            if let Token::Word(word) = &token.token {
+                let func_name = word.value.clone();
+                self.advance();
+                self.skip_whitespace();
+
+                // Check if followed by ()
+                if self.check_token(&Token::LParen) {
+                    self.advance(); // consume (
+                    self.skip_whitespace();
+                    if self.check_token(&Token::RParen) {
+                        self.advance(); // consume )
+                        return Some(format!("{}()", func_name));
+                    }
+                    // Function with args - reconstruct
+                    let mut args = String::new();
+                    let mut depth = 1;
+                    while !self.is_at_end() && depth > 0 {
+                        if let Some(t) = self.current_token() {
+                            match &t.token {
+                                Token::LParen => depth += 1,
+                                Token::RParen => depth -= 1,
+                                _ => {}
+                            }
+                            if depth > 0 {
+                                args.push_str(&self.token_to_string(&t.token));
+                            }
+                            self.advance();
+                        }
+                    }
+                    return Some(format!("{}({})", func_name, args.trim()));
+                }
+
+                // Just a word - could be a keyword like NULL
+                return Some(func_name);
+            }
+        }
+
+        // Check for string literal
+        if let Some(token) = self.current_token() {
+            match &token.token {
+                Token::SingleQuotedString(s) => {
+                    let value = format!("'{}'", s.replace('\'', "''"));
+                    self.advance();
+                    return Some(value);
+                }
+                Token::NationalStringLiteral(s) => {
+                    let value = format!("N'{}'", s.replace('\'', "''"));
+                    self.advance();
+                    return Some(value);
+                }
+                Token::Number(n, _) => {
+                    let value = n.clone();
+                    self.advance();
+                    return Some(value);
+                }
+                Token::Minus => {
+                    // Negative number
+                    self.advance();
+                    if let Some(next) = self.current_token() {
+                        if let Token::Number(n, _) = &next.token {
+                            let value = format!("-{}", n);
+                            self.advance();
+                            return Some(value);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    /// Parse a parenthesized expression and return its contents
+    /// Reconstructs the content from tokens
+    fn parse_parenthesized_expression(&mut self) -> Option<String> {
+        if !self.check_token(&Token::LParen) {
+            return None;
+        }
+
+        self.advance(); // consume (
+
+        let mut depth = 1;
+        let mut content = String::new();
+
+        while !self.is_at_end() && depth > 0 {
+            if let Some(token) = self.current_token() {
+                match &token.token {
+                    Token::LParen => {
+                        depth += 1;
+                        content.push('(');
+                    }
+                    Token::RParen => {
+                        depth -= 1;
+                        if depth > 0 {
+                            content.push(')');
+                        }
+                        // depth == 0 means we hit the closing paren, don't add it
+                    }
+                    _ => {
+                        content.push_str(&self.token_to_string(&token.token));
+                    }
+                }
+                self.advance();
+            }
+        }
+
+        Some(content.trim().to_string())
+    }
+
+    /// Consume a parenthesized section and return the raw content
+    fn consume_parenthesized_raw(&mut self) -> Option<String> {
+        if !self.check_token(&Token::LParen) {
+            return None;
+        }
+
+        self.advance(); // consume (
+
+        let mut depth = 1;
+        let mut content = String::new();
+
+        while !self.is_at_end() && depth > 0 {
+            if let Some(token) = self.current_token() {
+                match &token.token {
+                    Token::LParen => {
+                        depth += 1;
+                        content.push('(');
+                    }
+                    Token::RParen => {
+                        depth -= 1;
+                        if depth > 0 {
+                            content.push(')');
+                        }
+                    }
+                    _ => {
+                        content.push_str(&self.token_to_string(&token.token));
+                    }
+                }
+                self.advance();
+            }
+        }
+
+        Some(content.trim().to_string())
+    }
+
+    /// Skip a parenthesized section without returning content
+    fn skip_parenthesized(&mut self) {
+        if !self.check_token(&Token::LParen) {
+            return;
+        }
+
+        self.advance(); // consume (
+        let mut depth = 1;
+
+        while !self.is_at_end() && depth > 0 {
+            if let Some(token) = self.current_token() {
+                match &token.token {
+                    Token::LParen => depth += 1,
+                    Token::RParen => depth -= 1,
+                    _ => {}
+                }
+                self.advance();
+            }
+        }
+    }
+
+    // =========================================================================
+    // Helper methods for token navigation
+    // =========================================================================
+
+    fn current_token(&self) -> Option<&TokenWithSpan> {
+        self.tokens.get(self.pos)
+    }
+
+    fn advance(&mut self) {
+        if self.pos < self.tokens.len() {
+            self.pos += 1;
+        }
+    }
+
+    fn is_at_end(&self) -> bool {
+        self.pos >= self.tokens.len()
+            || matches!(
+                self.tokens.get(self.pos),
+                Some(TokenWithSpan {
+                    token: Token::EOF,
+                    ..
+                })
+            )
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(token) = self.current_token() {
+            if matches!(token.token, Token::Whitespace(_)) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn check_token(&self, expected: &Token) -> bool {
+        self.current_token()
+            .is_some_and(|t| std::mem::discriminant(&t.token) == std::mem::discriminant(expected))
+    }
+
+    fn check_keyword(&self, keyword: Keyword) -> bool {
+        self.current_token()
+            .is_some_and(|t| matches!(&t.token, Token::Word(w) if w.keyword == keyword))
+    }
+
+    fn check_word_ci(&self, word: &str) -> bool {
+        self.current_token().is_some_and(
+            |t| matches!(&t.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word)),
+        )
+    }
+
+    fn expect_keyword(&mut self, keyword: Keyword) -> Option<()> {
+        if self.check_keyword(keyword) {
+            self.advance();
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    fn token_to_string(&self, token: &Token) -> String {
+        match token {
+            Token::Word(w) => {
+                if w.quote_style == Some('[') {
+                    format!("[{}]", w.value)
+                } else if w.quote_style == Some('"') {
+                    format!("\"{}\"", w.value)
+                } else {
+                    w.value.clone()
+                }
+            }
+            Token::Number(n, _) => n.clone(),
+            Token::SingleQuotedString(s) => format!("'{}'", s),
+            Token::NationalStringLiteral(s) => format!("N'{}'", s),
+            Token::LParen => "(".to_string(),
+            Token::RParen => ")".to_string(),
+            Token::Comma => ",".to_string(),
+            Token::Period => ".".to_string(),
+            Token::SemiColon => ";".to_string(),
+            Token::Eq => "=".to_string(),
+            Token::Plus => "+".to_string(),
+            Token::Minus => "-".to_string(),
+            Token::Mul => "*".to_string(),
+            Token::Div => "/".to_string(),
+            Token::Whitespace(w) => w.to_string(),
+            Token::LBracket => "[".to_string(),
+            Token::RBracket => "]".to_string(),
+            // Comparison operators
+            Token::Lt => "<".to_string(),
+            Token::Gt => ">".to_string(),
+            Token::LtEq => "<=".to_string(),
+            Token::GtEq => ">=".to_string(),
+            Token::Neq => "<>".to_string(),
+            // Logical operators
+            Token::Ampersand => "&".to_string(),
+            Token::Pipe => "|".to_string(),
+            Token::Caret => "^".to_string(),
+            Token::Mod => "%".to_string(),
+            Token::Colon => ":".to_string(),
+            Token::ExclamationMark => "!".to_string(),
+            Token::AtSign => "@".to_string(),
+            // Fallback - use Debug representation for unhandled tokens
+            _ => format!("{:?}", token),
+        }
+    }
+}
+
+/// Parse a column definition using token-based parsing
+///
+/// This function replaces the regex-based `parse_column_definition` function
+/// with a token-based approach for better maintainability and error handling.
+pub fn parse_column_definition_tokens(col_def: &str) -> Option<TokenParsedColumn> {
+    // Strip leading SQL comments (-- style) before parsing
+    let col_def = strip_leading_comments(col_def);
+    let col_def = col_def.trim();
+    if col_def.is_empty() {
+        return None;
+    }
+
+    let mut parser = ColumnTokenParser::new(col_def)?;
+    parser.parse()
+}
+
+/// Strip leading SQL line comments (-- style)
+fn strip_leading_comments(sql: &str) -> String {
+    let mut result = String::new();
+    let mut in_comment = false;
+
+    for line in sql.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("--") {
+            in_comment = true;
+            continue;
+        }
+        if in_comment && trimmed.is_empty() {
+            continue;
+        }
+        in_comment = false;
+        if !result.is_empty() {
+            result.push(' ');
+        }
+        result.push_str(line);
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_column() {
+        let result = parse_column_definition_tokens("[Id] INT").unwrap();
+        assert_eq!(result.name, "Id");
+        assert_eq!(result.data_type, "INT");
+        assert!(result.nullability.is_none());
+    }
+
+    #[test]
+    fn test_column_with_not_null() {
+        let result = parse_column_definition_tokens("[Name] NVARCHAR(100) NOT NULL").unwrap();
+        assert_eq!(result.name, "Name");
+        assert_eq!(result.data_type, "NVARCHAR(100)");
+        assert_eq!(result.nullability, Some(false));
+    }
+
+    #[test]
+    fn test_column_with_null() {
+        let result = parse_column_definition_tokens("[Description] NVARCHAR(MAX) NULL").unwrap();
+        assert_eq!(result.name, "Description");
+        assert_eq!(result.data_type, "NVARCHAR(MAX)");
+        assert_eq!(result.nullability, Some(true));
+    }
+
+    #[test]
+    fn test_column_with_identity() {
+        let result = parse_column_definition_tokens("[Id] INT NOT NULL IDENTITY(1, 1)").unwrap();
+        assert_eq!(result.name, "Id");
+        assert_eq!(result.data_type, "INT");
+        assert!(result.is_identity);
+        assert_eq!(result.nullability, Some(false));
+    }
+
+    #[test]
+    fn test_column_with_default_function() {
+        let result =
+            parse_column_definition_tokens("[CreatedAt] DATETIME NOT NULL DEFAULT GETDATE()")
+                .unwrap();
+        assert_eq!(result.name, "CreatedAt");
+        assert_eq!(result.data_type, "DATETIME");
+        assert_eq!(result.default_value, Some("GETDATE()".to_string()));
+        assert!(result.default_constraint_name.is_none());
+    }
+
+    #[test]
+    fn test_column_with_named_default() {
+        let result = parse_column_definition_tokens(
+            "[Status] INT NOT NULL CONSTRAINT [DF_Status] DEFAULT ((0))",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Status");
+        assert_eq!(result.data_type, "INT");
+        assert_eq!(
+            result.default_constraint_name,
+            Some("DF_Status".to_string())
+        );
+        assert_eq!(result.default_value, Some("((0))".to_string()));
+    }
+
+    #[test]
+    fn test_column_with_named_default_number() {
+        let result = parse_column_definition_tokens(
+            "[Amount] DECIMAL(18, 2) NOT NULL CONSTRAINT [DF_Amount] DEFAULT 0.00",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Amount");
+        assert_eq!(result.data_type, "DECIMAL(18, 2)");
+        assert_eq!(
+            result.default_constraint_name,
+            Some("DF_Amount".to_string())
+        );
+        assert_eq!(result.default_value, Some("0.00".to_string()));
+    }
+
+    #[test]
+    fn test_column_with_default_string() {
+        let result =
+            parse_column_definition_tokens("[Status] VARCHAR(20) NOT NULL DEFAULT 'Pending'")
+                .unwrap();
+        assert_eq!(result.name, "Status");
+        assert_eq!(result.default_value, Some("'Pending'".to_string()));
+    }
+
+    #[test]
+    fn test_column_with_check_constraint() {
+        let result = parse_column_definition_tokens(
+            "[Age] INT NOT NULL CONSTRAINT [CK_Age] CHECK ([Age] >= 0)",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Age");
+        assert_eq!(result.check_constraint_name, Some("CK_Age".to_string()));
+        assert_eq!(result.check_expression, Some("[Age] >= 0".to_string()));
+    }
+
+    #[test]
+    fn test_column_with_unnamed_check() {
+        let result =
+            parse_column_definition_tokens("[Quantity] INT NOT NULL CHECK ([Quantity] > 0)")
+                .unwrap();
+        assert_eq!(result.name, "Quantity");
+        assert!(result.check_constraint_name.is_none());
+        assert_eq!(result.check_expression, Some("[Quantity] > 0".to_string()));
+    }
+
+    #[test]
+    fn test_computed_column() {
+        let result = parse_column_definition_tokens("[Total] AS ([Qty] * [Price])").unwrap();
+        assert_eq!(result.name, "Total");
+        assert!(result.data_type.is_empty());
+        assert_eq!(
+            result.computed_expression,
+            Some("([Qty] * [Price])".to_string())
+        );
+        assert!(!result.is_persisted);
+    }
+
+    #[test]
+    fn test_computed_column_persisted() {
+        let result =
+            parse_column_definition_tokens("[Total] AS ([Qty] * [Price]) PERSISTED").unwrap();
+        assert_eq!(result.name, "Total");
+        assert_eq!(
+            result.computed_expression,
+            Some("([Qty] * [Price])".to_string())
+        );
+        assert!(result.is_persisted);
+    }
+
+    #[test]
+    fn test_computed_column_with_nullability() {
+        let result =
+            parse_column_definition_tokens("[Total] AS ([Qty] * [Price]) PERSISTED NOT NULL")
+                .unwrap();
+        assert_eq!(result.name, "Total");
+        assert!(result.is_persisted);
+        assert_eq!(result.nullability, Some(false));
+    }
+
+    #[test]
+    fn test_column_with_rowguidcol() {
+        let result = parse_column_definition_tokens(
+            "[RowGuid] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() ROWGUIDCOL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "RowGuid");
+        assert!(result.is_rowguidcol);
+    }
+
+    #[test]
+    fn test_column_with_sparse() {
+        let result =
+            parse_column_definition_tokens("[OptionalField] NVARCHAR(100) SPARSE NULL").unwrap();
+        assert_eq!(result.name, "OptionalField");
+        assert!(result.is_sparse);
+        assert_eq!(result.nullability, Some(true));
+    }
+
+    #[test]
+    fn test_column_without_brackets() {
+        let result = parse_column_definition_tokens("Id INT NOT NULL").unwrap();
+        assert_eq!(result.name, "Id");
+        assert_eq!(result.data_type, "INT");
+    }
+
+    #[test]
+    fn test_column_with_constraint_before_not_null() {
+        // T-SQL allows: CONSTRAINT name NOT NULL DEFAULT value
+        let result = parse_column_definition_tokens(
+            "[Guid] UNIQUEIDENTIFIER CONSTRAINT [DF_Documents_Guid] NOT NULL DEFAULT NEWSEQUENTIALID()",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Guid");
+        assert_eq!(
+            result.default_constraint_name,
+            Some("DF_Documents_Guid".to_string())
+        );
+        // Note: The constraint name applies to the DEFAULT, not NOT NULL
+        assert_eq!(result.nullability, Some(false));
+    }
+
+    #[test]
+    fn test_column_with_default_and_check() {
+        let result = parse_column_definition_tokens(
+            "[Score] INT NOT NULL CONSTRAINT [DF_Score] DEFAULT ((0)) CONSTRAINT [CK_Score] CHECK ([Score] >= 0 AND [Score] <= 100)",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Score");
+        assert_eq!(result.default_constraint_name, Some("DF_Score".to_string()));
+        assert_eq!(result.default_value, Some("((0))".to_string()));
+        assert_eq!(result.check_constraint_name, Some("CK_Score".to_string()));
+        assert!(result.check_expression.is_some());
+    }
+
+    #[test]
+    fn test_column_with_negative_default() {
+        let result = parse_column_definition_tokens("[Offset] INT NOT NULL DEFAULT -1").unwrap();
+        assert_eq!(result.name, "Offset");
+        assert_eq!(result.default_value, Some("-1".to_string()));
+    }
+
+    #[test]
+    fn test_column_definition_with_leading_comment() {
+        let result = parse_column_definition_tokens("-- This is a comment\n[Id] INT").unwrap();
+        assert_eq!(result.name, "Id");
+        assert_eq!(result.data_type, "INT");
+    }
+
+    #[test]
+    fn test_unquoted_column_name() {
+        let result = parse_column_definition_tokens("UserName VARCHAR(50) NOT NULL").unwrap();
+        assert_eq!(result.name, "UserName");
+        assert_eq!(result.data_type, "VARCHAR(50)");
+    }
+
+    #[test]
+    fn test_constraint_null_default_pattern() {
+        // Pattern: CONSTRAINT [name] NULL DEFAULT value
+        let result = parse_column_definition_tokens(
+            "[Active] BIT CONSTRAINT [DF_Active] NULL DEFAULT ((1))",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Active");
+        assert_eq!(
+            result.default_constraint_name,
+            Some("DF_Active".to_string())
+        );
+        assert_eq!(result.default_value, Some("((1))".to_string()));
+        assert_eq!(result.nullability, Some(true)); // explicit NULL
+    }
+}
