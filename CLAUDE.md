@@ -52,7 +52,28 @@ The codebase follows a pipeline architecture:
 
 See `TESTING.md` for detailed testing documentation including the parity testing strategy.
 
-Test fixtures in `tests/fixtures/` are self-contained SQL projects:
+Test fixtures in `tests/fixtures/` are self-contained SQL projects.
+
+## Local SQL Server for Testing
+
+A compose file is provided in `docker/compose.yml` to run SQL Server locally.
+
+```bash
+# Start SQL Server
+cd docker && podman-compose up -d
+
+# Stop SQL Server
+cd docker && podman-compose down
+```
+
+**Connection Details:**
+
+| Property | Value |
+|----------|-------|
+| Host     | localhost |
+| Port     | 1433 |
+| User     | sa |
+| Password | Testing123! |
 
 ## Dacpac File Format
 

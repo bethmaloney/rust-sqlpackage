@@ -11,9 +11,7 @@
 //! - SQL_SERVER_HOST (default: localhost)
 //! - SQL_SERVER_PORT (default: 1433)
 //! - SQL_SERVER_USER (default: sa)
-//! - SQL_SERVER_PASSWORD (default: Password1)
-//!
-//! Run with: cargo test --test e2e_tests -- --ignored
+//! - SQL_SERVER_PASSWORD (default: Testing123!)
 
 use std::process::Command;
 use std::sync::LazyLock;
@@ -39,7 +37,8 @@ static SQL_CONFIG: LazyLock<SqlServerConfig> = LazyLock::new(|| {
             .and_then(|p| p.parse().ok())
             .unwrap_or(1433),
         user: std::env::var("SQL_SERVER_USER").unwrap_or_else(|_| "sa".to_string()),
-        password: std::env::var("SQL_SERVER_PASSWORD").unwrap_or_else(|_| "Password1".to_string()),
+        password: std::env::var("SQL_SERVER_PASSWORD")
+            .unwrap_or_else(|_| "Testing123!".to_string()),
     }
 });
 
@@ -408,7 +407,6 @@ fn test_e2e_build_comprehensive_dacpac() {
 // ============================================================================
 
 #[tokio::test]
-#[ignore = "Requires SQL Server (configure via .env or environment variables)"]
 async fn test_e2e_sql_server_connectivity() {
     if !sql_server_available() {
         eprintln!(
@@ -465,7 +463,6 @@ async fn test_e2e_sql_server_connectivity() {
 ///
 /// Requires SQL Server and SqlPackage CLI (configure via .env or environment variables).
 #[tokio::test]
-#[ignore = "Requires SQL Server and SqlPackage CLI (configure via .env)"]
 async fn test_e2e_deploy_to_sql_server() {
     if !sqlpackage_available() {
         eprintln!("Skipping: SqlPackage CLI not found");
@@ -600,7 +597,6 @@ const TEST_DATABASE_COMPREHENSIVE: &str = "E2EComprehensive_Test";
 ///
 /// Requires SQL Server and SqlPackage CLI (configure via .env or environment variables).
 #[tokio::test]
-#[ignore = "Requires SQL Server and SqlPackage CLI (configure via .env)"]
 async fn test_e2e_deploy_comprehensive_with_post_deploy() {
     if !sqlpackage_available() {
         eprintln!("Skipping: SqlPackage CLI not found");
