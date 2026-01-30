@@ -591,6 +591,59 @@ fn parse_qualified_table_name(qualified_name: &str) -> Option<(String, String)> 
     Some((caps[1].to_string(), caps[2].to_string()))
 }
 
+/// Check if a reference string represents a built-in SQL type (e.g., "[nvarchar]", "[int]")
+fn is_builtin_type_reference(dep: &str) -> bool {
+    // Built-in types are single-part references like "[nvarchar]", not qualified like "[dbo].[Table].[Column]"
+    // They have exactly one set of brackets
+    let bracket_count = dep.matches('[').count();
+    if bracket_count != 1 {
+        return false;
+    }
+
+    // Extract the type name without brackets
+    let type_name = dep
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_lowercase();
+
+    matches!(
+        type_name.as_str(),
+        "int"
+            | "bigint"
+            | "smallint"
+            | "tinyint"
+            | "bit"
+            | "decimal"
+            | "numeric"
+            | "money"
+            | "smallmoney"
+            | "float"
+            | "real"
+            | "datetime"
+            | "datetime2"
+            | "date"
+            | "time"
+            | "datetimeoffset"
+            | "smalldatetime"
+            | "char"
+            | "varchar"
+            | "text"
+            | "nchar"
+            | "nvarchar"
+            | "ntext"
+            | "binary"
+            | "varbinary"
+            | "image"
+            | "uniqueidentifier"
+            | "xml"
+            | "sql_variant"
+            | "geography"
+            | "geometry"
+            | "hierarchyid"
+            | "sysname"
+    )
+}
+
 /// Write ExpressionDependencies relationship for computed columns
 fn write_expression_dependencies<W: Write>(
     writer: &mut Writer<W>,
@@ -608,6 +661,10 @@ fn write_expression_dependencies<W: Write>(
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
         let mut refs = BytesStart::new("References");
+        // Built-in types need ExternalSource="BuiltIns" attribute
+        if is_builtin_type_reference(dep) {
+            refs.push_attribute(("ExternalSource", "BuiltIns"));
+        }
         refs.push_attribute(("Name", dep.as_str()));
         writer.write_event(Event::Empty(refs))?;
 
