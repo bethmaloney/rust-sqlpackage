@@ -468,7 +468,7 @@ END
 - [x] **12.5.2** Run `cargo clippy -- -D warnings` - no warnings
 - [x] **12.5.3** Run `test_parity_regression_check` - 44/44 fixtures pass all layers including relationships
 - [x] **12.5.4** Update baseline
-- [ ] **12.5.5** Remove `#[ignore]` from Layer 3 tests - reverted, see Phase 14 for Layer 3 parity work
+- [x] **12.5.5** Remove `#[ignore]` from Layer 3 tests - completed in Phase 14
 
 ---
 
