@@ -2,9 +2,10 @@
 
 This document tracks progress toward achieving exact 1-1 matching between rust-sqlpackage and DotNet DacFx dacpac output.
 
-## Status: COMPLETE
+## Status: PARITY COMPLETE | PARSER REFACTORING PLANNED
 
-**All 146 tasks complete across 14 phases. Full parity achieved.**
+**Phases 1-14 complete (146 tasks). Full parity achieved.**
+**Phase 15 planned: Replace regex fallbacks with custom sqlparser-rs dialect (34 tasks).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -50,6 +51,119 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 When deploying the e2e_comprehensive dacpac, SqlPackage may report "The reference to the element that has the name [nvarchar] could not be resolved". This is caused by type references (e.g., `[nvarchar]`) emitted in ExpressionDependencies for computed columns with CAST expressions.
 
 This does not affect Layer 3 parity testing (which compares dacpacs, not deployments) and the test passes in CI where SQL Server is available via Docker.
+
+---
+
+## Phase 15: Parser Refactoring - Replace Regex Fallbacks with Custom sqlparser-rs Dialect
+
+**Status:** PLANNED
+
+**Goal:** Replace brittle regex-based fallback parsing with proper token-based parsing using sqlparser-rs custom dialect extension. This improves maintainability, error messages, and handles edge cases better.
+
+**Approach:** Create a custom `TsqlDialect` that intercepts specific token sequences before delegating to the base MsSqlDialect.
+
+**Documentation:** See **[PARSER_REFACTORING_GUIDE.md](./PARSER_REFACTORING_GUIDE.md)** for detailed implementation guidance, API reference, code examples, and migration path.
+
+### Regex Inventory
+
+Current fallback parsing uses **75+ regex patterns** across two files:
+- `src/parser/tsql_parser.rs` - Main T-SQL parsing (70+ patterns)
+- `src/parser/sqlcmd.rs` - SQLCMD directives (3 patterns)
+
+### Tasks by Category
+
+#### Category A: Statement Type Detection Fallbacks (5 tasks)
+| # | Task | Regex Location | Priority |
+|---|------|----------------|----------|
+| A1 | DROP SYNONYM/TRIGGER/INDEX/PROC detection | `try_drop_fallback` L692-769 | Medium |
+| A2 | CTE with DML (DELETE/UPDATE/INSERT/MERGE) | `try_cte_dml_fallback` L772-799 | High |
+| A3 | MERGE with OUTPUT clause | `try_merge_output_fallback` L801-826 | Medium |
+| A4 | UPDATE with XML methods (.MODIFY/.VALUE) | `try_xml_method_fallback` L828-855 | Low |
+| A5 | Generic CREATE fallback | `try_generic_create_fallback` L1115-1171 | Low |
+
+#### Category B: DDL Object Extraction (8 tasks)
+| # | Task | Regex Location | Priority |
+|---|------|----------------|----------|
+| B1 | CREATE/ALTER PROCEDURE name & params | `extract_procedure_info` L1616-1639, `extract_alter_procedure_info` L1641-1682 | High |
+| B2 | CREATE/ALTER FUNCTION name, params, return type | `extract_function_info` L1768-1899, `extract_alter_function_info` L1663-1682 | High |
+| B3 | CREATE TRIGGER (name, parent, events) | `extract_trigger_info` L1536-1614 | High |
+| B4 | CREATE/ALTER SEQUENCE (all options) | `extract_sequence_info` L1174-1260, `extract_alter_sequence_info` L1684-1766 | Medium |
+| B5 | CREATE TYPE AS TABLE | `extract_table_type_info` L1262-1535 | High |
+| B6 | CREATE INDEX (all options) | `extract_index_info` L1901-2018 | High |
+| B7 | CREATE FULLTEXT INDEX | `extract_fulltext_index_info` L2675-2789 | Low |
+| B8 | CREATE FULLTEXT CATALOG | `extract_fulltext_catalog_info` L2800-2815 | Low |
+
+#### Category C: Constraint Parsing (4 tasks)
+| # | Task | Regex Location | Priority |
+|---|------|----------------|----------|
+| C1 | ALTER TABLE ADD CONSTRAINT (FK) | `extract_alter_table_add_constraint` L887-992 | High |
+| C2 | ALTER TABLE ADD CONSTRAINT (PK/UNIQUE) | `extract_alter_table_add_constraint` L993-1072 | High |
+| C3 | Table constraint extraction | `extract_table_constraint` L2424-2540 | High |
+| C4 | ALTER TABLE name extraction | `extract_alter_table_name` L857-876 | Medium |
+
+#### Category D: Column Definition Parsing (3 tasks)
+| # | Task | Regex Location | Priority |
+|---|------|----------------|----------|
+| D1 | Column name, type, and options | `extract_column_definition` L2181-2420 (15+ regex) | Critical |
+| D2 | Computed column detection | `extract_column_definition` L2187-2230 | High |
+| D3 | Table type column parsing | `parse_table_type_body` L1397-1535 | High |
+
+#### Category E: Inline Constraint Parsing (2 tasks)
+| # | Task | Regex Location | Priority |
+|---|------|----------------|----------|
+| E1 | Default constraint variants (8 regex patterns) | `extract_column_definition` L2270-2380 | Critical |
+| E2 | Check constraint (named/unnamed) | `extract_column_definition` L2382-2420 | High |
+
+#### Category F: Index & Option Extraction (4 tasks)
+| # | Task | Regex Location | Priority |
+|---|------|----------------|----------|
+| F1 | INCLUDE columns | `extract_include_columns` L1971-1979 | Medium |
+| F2 | FILLFACTOR option | `extract_index_fill_factor` L1982-1989 | Medium |
+| F3 | DATA_COMPRESSION option | `extract_index_data_compression` L1992-2001 | Medium |
+| F4 | WHERE filter predicate | `extract_filter_predicate` L2003-2018 | Medium |
+
+#### Category G: Miscellaneous Extraction (3 tasks)
+| # | Task | Regex Location | Priority |
+|---|------|----------------|----------|
+| G1 | sp_addextendedproperty parsing | `extract_extended_property` L1073-1113 | Medium |
+| G2 | Full-text index columns with LANGUAGE | `extract_fulltext_columns` L2745-2789 | Low |
+| G3 | Data type parsing | `parse_data_type` L1314-1395 | Medium |
+
+#### Category H: SQL Preprocessing (3 tasks)
+| # | Task | Regex Location | Priority |
+|---|------|----------------|----------|
+| H1 | BINARY/VARBINARY(MAX) sentinel replacement | `preprocess_for_sqlparser` L2586-2590 | High |
+| H2 | DEFAULT FOR constraint extraction | `preprocess_for_sqlparser` L2597-2615 | High |
+| H3 | Trailing comma cleanup | `preprocess_for_sqlparser` L2615-2616 | Medium |
+
+#### Category I: SQLCMD Preprocessing (2 tasks)
+| # | Task | Regex Location | Priority |
+|---|------|----------------|----------|
+| I1 | :setvar directive parsing | `sqlcmd.rs` L71-82 | Low |
+| I2 | :r include directive parsing | `sqlcmd.rs` L87-93 | Low |
+
+### Implementation Strategy
+
+1. **Phase 15.1: Infrastructure** - Create `TsqlDialect` wrapper, tokenizer utilities, and test harness
+2. **Phase 15.2: Critical Path** - D1, E1 (column definitions - most complex, most used)
+3. **Phase 15.3: DDL Objects** - B1-B6 (procedures, functions, triggers, types, indexes)
+4. **Phase 15.4: Constraints** - C1-C4, E2 (constraint parsing)
+5. **Phase 15.5: Statement Detection** - A1-A5 (fallback statement types)
+6. **Phase 15.6: Options & Misc** - F1-F4, G1-G3 (index options, extended properties)
+7. **Phase 15.7: Preprocessing** - H1-H3, I1-I2 (SQL preprocessing, SQLCMD)
+
+### Success Criteria
+
+- [ ] All existing tests pass
+- [ ] No regex patterns in hot parsing paths
+- [ ] Improved error messages with line/column info
+- [ ] Reduced parsing time for large SQL files (benchmark)
+
+### Resources
+
+- [sqlparser-rs custom dialect docs](https://github.com/apache/datafusion-sqlparser-rs/blob/main/docs/custom_sql_parser.md)
+- [Databend custom parser blog](https://www.databend.com/blog/category-engineering/2025-09-10-query-parser/)
+- [antlr4rust](https://github.com/rrevenantt/antlr4rust) (alternative approach)
 
 ---
 
