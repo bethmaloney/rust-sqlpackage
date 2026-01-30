@@ -131,7 +131,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 |---|------|----------------|----------|--------|
 | D1 | Column name, type, and options | `extract_column_definition` L2181-2420 (15+ regex) | Critical | ✅ |
 | D2 | Computed column detection | `extract_column_definition` L2187-2230 | High | |
-| D3 | Table type column parsing | `parse_table_type_body` L1397-1535 | High | |
+| D3 | Table type column parsing | `parse_table_type_body` L1397-1535 | High | ✅ |
 
 #### Category E: Inline Constraint Parsing (2 tasks)
 | # | Task | Regex Location | Priority | Status |
@@ -170,7 +170,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 ### Implementation Strategy
 
 1. **Phase 15.1: Infrastructure** ✅ - Created `ExtendedTsqlDialect` wrapper with MsSqlDialect delegation
-2. **Phase 15.2: Critical Path** 🔄 IN PROGRESS - D1 ✅, E1 ✅ (column definitions - most complex, most used)
+2. **Phase 15.2: Critical Path** 🔄 IN PROGRESS - D1 ✅, D3 ✅, E1 ✅ (column definitions - most complex, most used)
 3. **Phase 15.3: DDL Objects** - B1-B6 (procedures, functions, triggers, types, indexes)
 4. **Phase 15.4: Constraints** - C1-C4, E2 (constraint parsing)
 5. **Phase 15.5: Statement Detection** - A1-A5 (fallback statement types)

@@ -1403,7 +1403,6 @@ fn extract_table_type_structure(
         r"(?i)INDEX\s+\[?(\w+)\]?\s*(UNIQUE)?\s*(CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)",
     )
     .unwrap();
-    let col_re = Regex::new(r"(?i)^\[?(\w+)\]?\s+(\w+(?:\s*\([^)]+\))?)").unwrap();
 
     for part in parts {
         let trimmed = part.trim();
@@ -1463,71 +1462,21 @@ fn extract_table_type_structure(
                 });
             }
         } else {
-            // This is a column definition
-            // Pattern: [ColumnName] DataType [NULL|NOT NULL] [DEFAULT (value)]
-
-            if let Some(caps) = col_re.captures(trimmed) {
-                let name = caps
-                    .get(1)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default();
-                let data_type = caps
-                    .get(2)
-                    .map(|m| m.as_str().trim().to_uppercase())
-                    .unwrap_or_default();
-
-                // Check nullability - track explicit vs implicit
-                // Some(false) = explicit NOT NULL, Some(true) = explicit NULL, None = implicit
-                let nullability = if upper.contains("NOT NULL") {
-                    Some(false)
-                } else if upper.contains(" NULL") && !upper.contains("NOT NULL") {
-                    Some(true)
-                } else {
-                    None // Implicit (not specified)
-                };
-
-                // Extract DEFAULT value if present
-                let default_value = extract_table_type_column_default(trimmed);
-
-                if !name.is_empty() && !data_type.is_empty() {
-                    columns.push(ExtractedTableTypeColumn {
-                        name,
-                        data_type,
-                        nullability,
-                        default_value,
-                    });
+            // This is a column definition - use token-based parser
+            if let Some(parsed) = parse_column_definition_tokens(trimmed) {
+                // Skip computed columns - table types don't support them
+                if parsed.computed_expression.is_some() {
+                    continue;
+                }
+                // Only add if we have a valid column name and data type
+                if !parsed.name.is_empty() && !parsed.data_type.is_empty() {
+                    columns.push(convert_token_parsed_column_to_table_type(parsed));
                 }
             }
         }
     }
 
     (columns, constraints)
-}
-
-/// Extract default value from a table type column definition
-fn extract_table_type_column_default(col_def: &str) -> Option<String> {
-    // Match DEFAULT followed by:
-    // 1. Parenthesized expression: (value) or (GETDATE())
-    // 2. Function call: GETDATE()
-    // 3. String literal: 'text' or N'text'
-    // 4. Numeric literal: 0, 1.5, -10
-    // 5. Identifier: NULL
-    let default_re = Regex::new(
-        r"(?i)DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\)|\w+\(\)|N?'[^']*'|[-+]?\d+(?:\.\d+)?|\w+)",
-    )
-    .ok()?;
-    default_re
-        .captures(col_def)
-        .and_then(|caps| caps.get(1).or(caps.get(0)))
-        .map(|m| {
-            let val = m.as_str();
-            // If it starts with DEFAULT, remove that prefix
-            if val.to_uppercase().starts_with("DEFAULT") {
-                val[7..].trim().to_string()
-            } else {
-                val.to_string()
-            }
-        })
 }
 
 /// Extract trigger information from CREATE TRIGGER statement
@@ -2180,6 +2129,19 @@ fn convert_token_parsed_column(parsed: TokenParsedColumn) -> ExtractedTableColum
         check_expression: parsed.check_expression,
         computed_expression: parsed.computed_expression,
         is_persisted: parsed.is_persisted,
+    }
+}
+
+/// Convert a TokenParsedColumn to ExtractedTableTypeColumn
+/// Table types support fewer features than regular tables (no IDENTITY, ROWGUIDCOL, etc.)
+fn convert_token_parsed_column_to_table_type(
+    parsed: TokenParsedColumn,
+) -> ExtractedTableTypeColumn {
+    ExtractedTableTypeColumn {
+        name: parsed.name,
+        data_type: parsed.data_type,
+        nullability: parsed.nullability,
+        default_value: parsed.default_value,
     }
 }
 
