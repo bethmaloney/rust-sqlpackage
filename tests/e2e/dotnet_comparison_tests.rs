@@ -523,7 +523,6 @@ fn build_both_dacpacs(
 
 /// Full layered comparison test - Layer 1, 2, and optionally 3
 #[test]
-#[ignore = "Layer 3 parity not yet achieved - see IMPLEMENTATION_PLAN.md Phase 11.3"]
 fn test_layered_dacpac_comparison() {
     if !dotnet_available() {
         eprintln!("Skipping: dotnet SDK not available");
@@ -853,7 +852,6 @@ fn test_strict_comparison_options() {
 
 /// Test Layer 3 only: SqlPackage DeployReport comparison
 #[test]
-#[ignore = "Layer 3 parity not yet achieved - see IMPLEMENTATION_PLAN.md Phase 11.3"]
 fn test_layer3_sqlpackage_comparison() {
     if !dotnet_available() {
         eprintln!("Skipping: dotnet SDK not available");

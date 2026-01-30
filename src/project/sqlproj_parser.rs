@@ -96,6 +96,8 @@ pub struct DatabaseOptions {
     pub collation: Option<String>,
     /// Page verify mode (e.g., "CHECKSUM", "TORN_PAGE_DETECTION", "NONE")
     pub page_verify: Option<String>,
+    /// Default filegroup (e.g., "PRIMARY")
+    pub default_filegroup: Option<String>,
     /// ANSI_NULL_DEFAULT ON/OFF setting
     pub ansi_null_default_on: bool,
     /// ANSI_NULLS ON/OFF setting
@@ -108,19 +110,36 @@ pub struct DatabaseOptions {
     pub concat_null_yields_null_on: bool,
     /// Full-text enabled
     pub full_text_enabled: bool,
+    /// Torn page protection enabled
+    pub torn_page_protection_on: bool,
+    /// Default language (empty string if not specified)
+    pub default_language: String,
+    /// Default full-text language (empty string if not specified)
+    pub default_full_text_language: String,
+    /// Query store stale query threshold in days
+    pub query_store_stale_query_threshold: u32,
 }
 
 impl Default for DatabaseOptions {
     fn default() -> Self {
         Self {
-            collation: None,
+            // Default collation when not specified in sqlproj
+            collation: Some("SQL_Latin1_General_CP1_CI_AS".to_string()),
             page_verify: Some("CHECKSUM".to_string()),
+            default_filegroup: Some("PRIMARY".to_string()),
             ansi_null_default_on: true,
             ansi_nulls_on: true,
             ansi_warnings_on: true,
             arith_abort_on: true,
             concat_null_yields_null_on: true,
-            full_text_enabled: false,
+            // DotNet defaults to True for full-text enabled
+            full_text_enabled: true,
+            // DotNet defaults to False for torn page protection
+            torn_page_protection_on: false,
+            default_language: String::new(),
+            default_full_text_language: String::new(),
+            // DotNet default: 367 days
+            query_store_stale_query_threshold: 367,
         }
     }
 }
@@ -252,6 +271,11 @@ fn parse_database_options(root: &roxmltree::Node) -> DatabaseOptions {
     // PageVerify (e.g., "CHECKSUM", "TORN_PAGE_DETECTION", "NONE")
     if let Some(page_verify) = find_property_value(root, "PageVerify") {
         options.page_verify = Some(page_verify);
+    }
+
+    // DefaultFilegroup (e.g., "PRIMARY")
+    if let Some(filegroup) = find_property_value(root, "DefaultFilegroup") {
+        options.default_filegroup = Some(filegroup);
     }
 
     // AnsiNullDefaultOn (default: true)

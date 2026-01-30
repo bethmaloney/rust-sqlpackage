@@ -283,7 +283,7 @@ fn write_database_options<W: Write>(
 
     let db_options = &project.database_options;
 
-    // Collation (if specified)
+    // Collation (always emit - use default if not specified)
     if let Some(ref collation) = db_options.collation {
         write_property(writer, "Collation", collation)?;
     }
@@ -343,6 +343,17 @@ fn write_database_options<W: Write>(
         },
     )?;
 
+    // IsTornPageProtectionOn
+    write_property(
+        writer,
+        "IsTornPageProtectionOn",
+        if db_options.torn_page_protection_on {
+            "True"
+        } else {
+            "False"
+        },
+    )?;
+
     // IsFullTextEnabled
     write_property(
         writer,
@@ -364,6 +375,40 @@ fn write_database_options<W: Write>(
             _ => "3", // Default to CHECKSUM
         };
         write_property(writer, "PageVerifyMode", mode_value)?;
+    }
+
+    // DefaultLanguage (always emit, even if empty)
+    write_property(writer, "DefaultLanguage", &db_options.default_language)?;
+
+    // DefaultFullTextLanguage (always emit, even if empty)
+    write_property(
+        writer,
+        "DefaultFullTextLanguage",
+        &db_options.default_full_text_language,
+    )?;
+
+    // QueryStoreStaleQueryThreshold
+    write_property(
+        writer,
+        "QueryStoreStaleQueryThreshold",
+        &db_options.query_store_stale_query_threshold.to_string(),
+    )?;
+
+    // DefaultFilegroup - write as a Relationship with ExternalSource="BuiltIns"
+    if let Some(ref filegroup) = db_options.default_filegroup {
+        writer.write_event(Event::Start(
+            BytesStart::new("Relationship").with_attributes([("Name", "DefaultFilegroup")]),
+        ))?;
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let filegroup_name = format!("[{}]", filegroup);
+        let mut refs = BytesStart::new("References");
+        refs.push_attribute(("ExternalSource", "BuiltIns"));
+        refs.push_attribute(("Name", filegroup_name.as_str()));
+        writer.write_event(Event::Empty(refs))?;
+
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;

@@ -11,9 +11,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Phase 11 | Fix remaining parity failures, error fixtures, ignored tests | 70/70 |
 | Phase 12 | SELECT * expansion, TVF columns, duplicate refs | 6/6 |
 | Phase 13 | Fix remaining relationship parity issues (1 fixture) | 4/4 |
-| Phase 14 | Layer 3 (SqlPackage) parity | 0/3 |
+| Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
 
-**Total Completed**: 143/146 tasks (Phase 14 in progress)
+**Total Completed**: 146/146 tasks
 
 ---
 
@@ -23,11 +23,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
-| Layer 3 (SqlPackage) | 0/44 | 0% | Tests `#[ignore]`d - see Phase 14 |
+| Layer 3 (SqlPackage) | 44/44 | 100% | All fixtures pass |
 | Relationships | 44/44 | 100% | All fixtures pass |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **0/44** | **0%** | Blocked by Layer 3 |
+| **Full Parity** | **44/44** | **100%** | All layers complete |
 
 **Note (2026-01-29):** Corrected parity baseline after fixing stale DotNet dacpac issue. Added `--no-incremental` flag to dotnet build to prevent cached dacpacs from masking failures.
 
@@ -85,10 +85,10 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 #### 11.6.1 Layer 3 SqlPackage Comparison Tests
 **Tests:** `test_layered_dacpac_comparison`, `test_layer3_sqlpackage_comparison`
 **File:** `tests/e2e/dotnet_comparison_tests.rs`
-**Status:** IN PROGRESS - Tests still `#[ignore]`d due to Layer 3 (SqlPackage) parity issues. See Phase 14.
+**Status:** COMPLETE - Layer 3 parity achieved. See Phase 14 for implementation details.
 
 - [x] **11.6.1.1** Fixed race condition: copy fixtures to temp directories for isolated dotnet builds
-- [ ] **11.6.1.2** Achieve Layer 3 parity - see Phase 14
+- [x] **11.6.1.2** Achieve Layer 3 parity - see Phase 14
 
 #### 11.6.2 SQLCMD Include Tests
 **Status:** COMPLETE
@@ -201,11 +201,11 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase 11 | **COMPLETE** 70/70 |
 | Phase 12 | **COMPLETE** 6/6 |
 | Phase 13 | **COMPLETE** 4/4 |
-| Phase 14 | **IN PROGRESS** 0/3 |
+| Phase 14 | **COMPLETE** 3/3 |
 
-**Total**: 143/146 tasks complete
+**Total**: 146/146 tasks complete
 
-**Status:** Layer 1-2 and relationship parity complete (44/44 fixtures). Layer 3 (SqlPackage) parity in progress.
+**Status:** Full parity achieved across all layers (44/44 fixtures).
 
 ---
 
@@ -631,10 +631,10 @@ The issue was that inline table-valued function columns referencing function par
 
 ## Phase 14: Layer 3 (SqlPackage) Parity
 
-> **Status:** IN PROGRESS - Layer 3 tests currently `#[ignore]`d pending parity fixes.
+> **Status:** COMPLETE - Layer 3 parity achieved across all 44 fixtures.
 >
-> SqlPackage's DeployReport action detects semantic differences between Rust and DotNet dacpacs
-> that aren't caught by Layer 1-2 comparisons (e.g., FILEGROUP settings, database options).
+> SqlPackage's DeployReport action now shows no semantic differences between Rust and DotNet dacpacs.
+> Fixed DefaultFilegroup relationship and database options properties.
 
 ---
 
@@ -642,14 +642,24 @@ The issue was that inline table-valued function columns referencing function par
 
 **Test:** `test_layered_dacpac_comparison`
 **File:** `tests/e2e/dotnet_comparison_tests.rs`
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 
-**Issue:** SqlPackage DeployReport generates ALTER DATABASE statements for FILEGROUP differences.
+**Issue:** SqlPackage DeployReport generated ALTER DATABASE statements for FILEGROUP and database options differences.
 
 **Tasks:**
-- [ ] **14.1.1** Analyze SqlPackage deploy script output to identify all differences
-- [ ] **14.1.2** Fix identified parity issues in Rust dacpac generation
-- [ ] **14.1.3** Verify test passes without `#[ignore]`
+- [x] **14.1.1** Analyze SqlPackage deploy script output to identify all differences
+- [x] **14.1.2** Fix identified parity issues in Rust dacpac generation
+- [x] **14.1.3** Verify test passes without `#[ignore]`
+
+**Implementation Notes:**
+- Fixed by implementing DefaultFilegroup relationship in SqlDatabaseOptions
+- Added missing database options properties to match DotNet defaults:
+  - Collation (default: SQL_Latin1_General_CP1_CI_AS)
+  - IsTornPageProtectionOn (default: False)
+  - DefaultLanguage (default: empty)
+  - DefaultFullTextLanguage (default: empty)
+  - QueryStoreStaleQueryThreshold (default: 367)
+- Changed IsFullTextEnabled default from False to True to match DotNet
 
 ---
 
@@ -657,28 +667,32 @@ The issue was that inline table-valued function columns referencing function par
 
 **Test:** `test_layer3_sqlpackage_comparison`
 **File:** `tests/e2e/dotnet_comparison_tests.rs`
-**Status:** IN PROGRESS
+**Status:** COMPLETE
 
-**Issue:** Same as 14.1 - SqlPackage detects schema differences between Rust and DotNet dacpacs.
+**Issue:** Same as 14.1 - SqlPackage detected schema differences between Rust and DotNet dacpacs.
 
 **Tasks:**
-- [ ] **14.2.1** Analyze SqlPackage deploy script output to identify all differences
-- [ ] **14.2.2** Fix identified parity issues in Rust dacpac generation
-- [ ] **14.2.3** Remove `#[ignore]` and verify test passes
+- [x] **14.2.1** Analyze SqlPackage deploy script output to identify all differences
+- [x] **14.2.2** Fix identified parity issues in Rust dacpac generation
+- [x] **14.2.3** Remove `#[ignore]` and verify test passes
+
+**Implementation Notes:**
+- Same fixes as 14.1 resolved all Layer 3 differences
+- Removed `#[ignore]` from `test_layered_dacpac_comparison` and `test_layer3_sqlpackage_comparison`
 
 ---
 
 ### 14.3 Final Verification
 
-**Status:** NOT STARTED
+**Status:** COMPLETE
 
 **Goal:** Verify all tests pass, no clippy warnings, and Layer 3 parity achieved.
 
 **Tasks:**
-- [ ] **14.3.1** Run `just test` - all unit and integration tests pass
-- [ ] **14.3.2** Run `cargo clippy -- -D warnings` - no warnings
-- [ ] **14.3.3** Run Layer 3 tests without `#[ignore]` - both pass
-- [ ] **14.3.4** Verify CI passes on GitHub Actions
+- [x] **14.3.1** Run `just test` - all unit and integration tests pass
+- [x] **14.3.2** Run `cargo clippy -- -D warnings` - no warnings
+- [x] **14.3.3** Run Layer 3 tests without `#[ignore]` - both pass
+- [x] **14.3.4** Verify CI passes on GitHub Actions
 
 ---
 
@@ -686,11 +700,11 @@ The issue was that inline table-valued function columns referencing function par
 
 | Task | Description | Status |
 |------|-------------|--------|
-| 14.1 | Fix test_layered_dacpac_comparison | Not Started |
-| 14.2 | Fix test_layer3_sqlpackage_comparison | Not Started |
-| 14.3 | Final verification | Not Started |
+| 14.1 | Fix test_layered_dacpac_comparison | Complete |
+| 14.2 | Fix test_layer3_sqlpackage_comparison | Complete |
+| 14.3 | Final verification | Complete |
 
-**Phase 14 Total**: 0/3 sections complete
+**Phase 14 Total**: 3/3 sections complete
 
 ---
 
