@@ -11,8 +11,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Phase 11 | Fix remaining parity failures, error fixtures, ignored tests | 70/70 |
 | Phase 12 | SELECT * expansion, TVF columns, duplicate refs | 6/6 |
 | Phase 13 | Fix remaining relationship parity issues (1 fixture) | 4/4 |
+| Phase 14 | Layer 3 (SqlPackage) parity | 0/3 |
 
-**Total Completed**: 144/144 tasks
+**Total Completed**: 143/146 tasks (Phase 14 in progress)
 
 ---
 
@@ -22,10 +23,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|---------|------|-------|
 | Layer 1 (Inventory) | 44/44 | 100% | All fixtures pass |
 | Layer 2 (Properties) | 44/44 | 100% | All fixtures pass |
+| Layer 3 (SqlPackage) | 0/44 | 0% | Tests `#[ignore]`d - see Phase 14 |
 | Relationships | 44/44 | 100% | All fixtures pass |
 | Layer 4 (Ordering) | 44/44 | 100% | All fixtures pass |
 | Metadata | 44/44 | 100% | All fixtures pass |
-| **Full Parity** | **44/44** | **100%** | All fixtures pass |
+| **Full Parity** | **0/44** | **0%** | Blocked by Layer 3 |
 
 **Note (2026-01-29):** Corrected parity baseline after fixing stale DotNet dacpac issue. Added `--no-incremental` flag to dotnet build to prevent cached dacpacs from masking failures.
 
@@ -83,9 +85,10 @@ All tasks in sections 11.1 (Layer 1), 11.2 (Layer 2), 11.3 (Relationships), 11.4
 #### 11.6.1 Layer 3 SqlPackage Comparison Tests
 **Tests:** `test_layered_dacpac_comparison`, `test_layer3_sqlpackage_comparison`
 **File:** `tests/e2e/dotnet_comparison_tests.rs`
-**Status:** COMPLETE - `#[ignore]` removed, tests pass with 100% relationship parity
+**Status:** IN PROGRESS - Tests still `#[ignore]`d due to Layer 3 (SqlPackage) parity issues. See Phase 14.
 
-- [x] **11.6.1.1** Remove `#[ignore]` and verify - completed as part of Phase 12.5
+- [x] **11.6.1.1** Fixed race condition: copy fixtures to temp directories for isolated dotnet builds
+- [ ] **11.6.1.2** Achieve Layer 3 parity - see Phase 14
 
 #### 11.6.2 SQLCMD Include Tests
 **Status:** COMPLETE
@@ -198,10 +201,11 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | Phase 11 | **COMPLETE** 70/70 |
 | Phase 12 | **COMPLETE** 6/6 |
 | Phase 13 | **COMPLETE** 4/4 |
+| Phase 14 | **IN PROGRESS** 0/3 |
 
-**Total**: 144/144 tasks complete
+**Total**: 143/146 tasks complete
 
-**Status:** All phases complete. 44/44 fixtures pass relationship parity (100%).
+**Status:** Layer 1-2 and relationship parity complete (44/44 fixtures). Layer 3 (SqlPackage) parity in progress.
 
 ---
 
@@ -464,7 +468,7 @@ END
 - [x] **12.5.2** Run `cargo clippy -- -D warnings` - no warnings
 - [x] **12.5.3** Run `test_parity_regression_check` - 44/44 fixtures pass all layers including relationships
 - [x] **12.5.4** Update baseline
-- [x] **12.5.5** Remove `#[ignore]` from Layer 3 tests (`test_layered_dacpac_comparison`, `test_layer3_sqlpackage_comparison`)
+- [ ] **12.5.5** Remove `#[ignore]` from Layer 3 tests - reverted, see Phase 14 for Layer 3 parity work
 
 ---
 
@@ -622,6 +626,71 @@ The issue was that inline table-valued function columns referencing function par
 - Table type parameter parsing with [schema].[type] format and READONLY keyword
 - TVP column reference extraction for BodyDependencies
 - Parameters relationship referencing table types
+
+---
+
+## Phase 14: Layer 3 (SqlPackage) Parity
+
+> **Status:** IN PROGRESS - Layer 3 tests currently `#[ignore]`d pending parity fixes.
+>
+> SqlPackage's DeployReport action detects semantic differences between Rust and DotNet dacpacs
+> that aren't caught by Layer 1-2 comparisons (e.g., FILEGROUP settings, database options).
+
+---
+
+### 14.1 Fix test_layered_dacpac_comparison
+
+**Test:** `test_layered_dacpac_comparison`
+**File:** `tests/e2e/dotnet_comparison_tests.rs`
+**Status:** IN PROGRESS
+
+**Issue:** SqlPackage DeployReport generates ALTER DATABASE statements for FILEGROUP differences.
+
+**Tasks:**
+- [ ] **14.1.1** Analyze SqlPackage deploy script output to identify all differences
+- [ ] **14.1.2** Fix identified parity issues in Rust dacpac generation
+- [ ] **14.1.3** Verify test passes without `#[ignore]`
+
+---
+
+### 14.2 Fix test_layer3_sqlpackage_comparison
+
+**Test:** `test_layer3_sqlpackage_comparison`
+**File:** `tests/e2e/dotnet_comparison_tests.rs`
+**Status:** IN PROGRESS
+
+**Issue:** Same as 14.1 - SqlPackage detects schema differences between Rust and DotNet dacpacs.
+
+**Tasks:**
+- [ ] **14.2.1** Analyze SqlPackage deploy script output to identify all differences
+- [ ] **14.2.2** Fix identified parity issues in Rust dacpac generation
+- [ ] **14.2.3** Remove `#[ignore]` and verify test passes
+
+---
+
+### 14.3 Final Verification
+
+**Status:** NOT STARTED
+
+**Goal:** Verify all tests pass, no clippy warnings, and Layer 3 parity achieved.
+
+**Tasks:**
+- [ ] **14.3.1** Run `just test` - all unit and integration tests pass
+- [ ] **14.3.2** Run `cargo clippy -- -D warnings` - no warnings
+- [ ] **14.3.3** Run Layer 3 tests without `#[ignore]` - both pass
+- [ ] **14.3.4** Verify CI passes on GitHub Actions
+
+---
+
+### Phase 14 Progress
+
+| Task | Description | Status |
+|------|-------------|--------|
+| 14.1 | Fix test_layered_dacpac_comparison | Not Started |
+| 14.2 | Fix test_layer3_sqlpackage_comparison | Not Started |
+| 14.3 | Final verification | Not Started |
+
+**Phase 14 Total**: 0/3 sections complete
 
 ---
 
