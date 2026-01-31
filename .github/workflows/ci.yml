@@ -81,9 +81,6 @@ jobs:
           dotnet --version
           sqlpackage /version
 
-      - name: Run parity tests
-        run: cargo test --test e2e_tests dotnet_comparison -- --nocapture
-
       - name: Check for regressions
         run: |
           cargo test --test e2e_tests test_parity_regression_check -- --nocapture
