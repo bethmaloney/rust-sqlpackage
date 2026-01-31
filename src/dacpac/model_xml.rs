@@ -124,6 +124,7 @@ static UNBRACKETED_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// 5. [ident] - single bracketed identifier (groups 13-14)
 /// 6. schema.table - unbracketed two-part reference (groups 15-16)
 /// 7. ident - unbracketed single identifier (group 17)
+///
 /// NOTE: Patterns 4, 6, 7 use (?:^|[^@\w\]]) as boundary to prevent partial matches
 static TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
