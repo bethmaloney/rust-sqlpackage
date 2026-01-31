@@ -155,7 +155,12 @@ Created token-based preprocessing parser in `src/parser/preprocess_parser.rs`:
 - The old `preprocess_tsql()` function now delegates to `preprocess_tsql_tokens()`
 - Key improvement: Patterns like `BINARY(MAX)` or `DEFAULT ... FOR` inside string literals are correctly preserved
 - I1-I2 (SQLCMD directives) intentionally remain regex-based - they are line-oriented preprocessing that works well with regex
-- All 491 tests pass
+- All 485 tests pass
+
+### Maintenance: Dead Code Cleanup
+
+- Removed unused `parse_alter_trigger` and `parse_alter_trigger_tokens` functions and related tests from `trigger_parser.rs`
+- Fixed clippy warnings: `if_same_then_else` for AFTER/FOR handling, `unnecessary_unwrap` in `tsql_dialect.rs`
 
 ### Regex Inventory
 
@@ -247,7 +252,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 
 ### Success Criteria
 
-- [ ] All existing tests pass
+- [x] All existing tests pass
 - [ ] No regex patterns in hot parsing paths
 - [ ] Improved error messages with line/column info
 - [ ] Reduced parsing time for large SQL files (benchmark)

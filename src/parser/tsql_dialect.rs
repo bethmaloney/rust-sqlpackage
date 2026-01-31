@@ -267,9 +267,9 @@ mod tests {
         let result = Parser::parse_sql(&dialect, sql);
         // Note: We don't assert failure here because we want to know if sqlparser
         // starts supporting this natively in future versions
-        if result.is_err() {
+        if let Err(err) = result {
             // Expected behavior - procedure parsing not yet supported
-            assert!(result.unwrap_err().to_string().contains("Expected:"));
+            assert!(err.to_string().contains("Expected:"));
         }
     }
 

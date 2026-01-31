@@ -120,54 +120,6 @@ impl TriggerTokenParser {
         })
     }
 
-    /// Parse ALTER TRIGGER and return trigger info
-    pub fn parse_alter_trigger(&mut self) -> Option<TokenParsedTrigger> {
-        self.skip_whitespace();
-
-        // Expect ALTER keyword
-        if !self.check_keyword(Keyword::ALTER) {
-            return None;
-        }
-        self.advance();
-        self.skip_whitespace();
-
-        // Expect TRIGGER keyword
-        if !self.check_keyword(Keyword::TRIGGER) {
-            return None;
-        }
-        self.advance();
-        self.skip_whitespace();
-
-        // Parse trigger name (schema-qualified)
-        let (trigger_schema, trigger_name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
-
-        // Expect ON keyword
-        if !self.check_keyword(Keyword::ON) {
-            return None;
-        }
-        self.advance();
-        self.skip_whitespace();
-
-        // Parse parent table/view name (schema-qualified)
-        let (parent_schema, parent_name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
-
-        // Parse trigger type and events
-        let (trigger_type, is_insert, is_update, is_delete) = self.parse_trigger_clause()?;
-
-        Some(TokenParsedTrigger {
-            schema: trigger_schema,
-            name: trigger_name,
-            parent_schema,
-            parent_name,
-            is_insert,
-            is_update,
-            is_delete,
-            trigger_type,
-        })
-    }
-
     /// Parse trigger clause: (INSTEAD OF | AFTER | FOR) (INSERT|UPDATE|DELETE)[,...]
     /// Returns (trigger_type, is_insert, is_update, is_delete)
     fn parse_trigger_clause(&mut self) -> Option<(u8, bool, bool, bool)> {
@@ -182,14 +134,11 @@ impl TriggerTokenParser {
             self.advance();
             self.skip_whitespace();
             3u8 // INSTEAD OF
-        } else if self.check_keyword(Keyword::AFTER) {
+        } else if self.check_keyword(Keyword::AFTER) || self.check_keyword(Keyword::FOR) {
+            // AFTER and FOR are equivalent trigger types in T-SQL
             self.advance();
             self.skip_whitespace();
-            2u8 // AFTER
-        } else if self.check_keyword(Keyword::FOR) {
-            self.advance();
-            self.skip_whitespace();
-            2u8 // FOR (equivalent to AFTER)
+            2u8 // AFTER or FOR
         } else {
             return None;
         };
@@ -344,16 +293,6 @@ impl TriggerTokenParser {
 pub fn parse_create_trigger_tokens(sql: &str) -> Option<TokenParsedTrigger> {
     let mut parser = TriggerTokenParser::new(sql)?;
     parser.parse_create_trigger()
-}
-
-/// Parse ALTER TRIGGER using tokens and return trigger info
-///
-/// Supports:
-/// - ALTER TRIGGER [dbo].[TriggerName] ON [dbo].[TableName] AFTER UPDATE
-/// - ALTER TRIGGER [dbo].[TriggerName] ON [dbo].[ViewName] INSTEAD OF INSERT
-pub fn parse_alter_trigger_tokens(sql: &str) -> Option<TokenParsedTrigger> {
-    let mut parser = TriggerTokenParser::new(sql)?;
-    parser.parse_alter_trigger()
 }
 
 #[cfg(test)]
@@ -555,94 +494,12 @@ END
     }
 
     // ========================================================================
-    // ALTER TRIGGER tests
-    // ========================================================================
-
-    #[test]
-    fn test_alter_trigger_basic() {
-        let sql = "ALTER TRIGGER [dbo].[TR_Users_Update] ON [dbo].[Users] AFTER UPDATE AS BEGIN SELECT 1 END";
-        let result = parse_alter_trigger_tokens(sql).unwrap();
-        assert_eq!(result.schema, "dbo");
-        assert_eq!(result.name, "TR_Users_Update");
-        assert_eq!(result.parent_schema, "dbo");
-        assert_eq!(result.parent_name, "Users");
-        assert!(!result.is_insert);
-        assert!(result.is_update);
-        assert!(!result.is_delete);
-        assert_eq!(result.trigger_type, 2);
-    }
-
-    #[test]
-    fn test_alter_trigger_instead_of() {
-        let sql = "ALTER TRIGGER [dbo].[TR_View_Insert] ON [dbo].[MyView] INSTEAD OF INSERT AS BEGIN SELECT 1 END";
-        let result = parse_alter_trigger_tokens(sql).unwrap();
-        assert_eq!(result.schema, "dbo");
-        assert_eq!(result.name, "TR_View_Insert");
-        assert_eq!(result.parent_schema, "dbo");
-        assert_eq!(result.parent_name, "MyView");
-        assert!(result.is_insert);
-        assert_eq!(result.trigger_type, 3);
-    }
-
-    #[test]
-    fn test_alter_trigger_multiple_events() {
-        let sql = "ALTER TRIGGER [dbo].[TR_Audit] ON [dbo].[Products] FOR INSERT, UPDATE, DELETE AS BEGIN SELECT 1 END";
-        let result = parse_alter_trigger_tokens(sql).unwrap();
-        assert!(result.is_insert);
-        assert!(result.is_update);
-        assert!(result.is_delete);
-        assert_eq!(result.trigger_type, 2);
-    }
-
-    #[test]
-    fn test_alter_trigger_multiline() {
-        let sql = r#"
-ALTER TRIGGER [dbo].[TR_Users_Update]
-ON [dbo].[Users]
-AFTER UPDATE
-AS
-BEGIN
-    SET NOCOUNT ON;
-    UPDATE [dbo].[Users] SET [ModifiedAt] = GETDATE()
-    FROM [dbo].[Users] u
-    INNER JOIN inserted i ON u.[Id] = i.[Id]
-END
-"#;
-        let result = parse_alter_trigger_tokens(sql).unwrap();
-        assert_eq!(result.schema, "dbo");
-        assert_eq!(result.name, "TR_Users_Update");
-        assert_eq!(result.parent_schema, "dbo");
-        assert_eq!(result.parent_name, "Users");
-        assert!(result.is_update);
-        assert_eq!(result.trigger_type, 2);
-    }
-
-    #[test]
-    fn test_alter_trigger_custom_schema() {
-        let sql = "ALTER TRIGGER [sales].[TR_OrderAudit] ON [sales].[Orders] AFTER UPDATE AS BEGIN SELECT 1 END";
-        let result = parse_alter_trigger_tokens(sql).unwrap();
-        assert_eq!(result.schema, "sales");
-        assert_eq!(result.name, "TR_OrderAudit");
-        assert_eq!(result.parent_schema, "sales");
-        assert_eq!(result.parent_name, "Orders");
-    }
-
-    // ========================================================================
     // Edge cases and negative tests
     // ========================================================================
 
     #[test]
     fn test_not_a_trigger() {
         let result = parse_create_trigger_tokens("CREATE TABLE [dbo].[Users] (Id INT)");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_create_on_alter() {
-        // CREATE TRIGGER should not match ALTER TRIGGER parser
-        let result = parse_alter_trigger_tokens(
-            "CREATE TRIGGER [dbo].[TR_Test] ON [dbo].[Test] AFTER INSERT AS BEGIN SELECT 1 END",
-        );
         assert!(result.is_none());
     }
 
