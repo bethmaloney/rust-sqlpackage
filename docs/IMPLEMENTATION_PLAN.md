@@ -67,9 +67,49 @@ This does not affect Layer 3 parity testing (which compares dacpacs, not deploym
 
 **Goal:** Establish benchmarking infrastructure and optimize build performance.
 
-**Current baseline:** 0.23s for e2e_comprehensive (30 files) - already 25x faster than .NET DacFx cold, 9.5x faster warm.
+### Baseline Performance Metrics (Phase 16.1.7)
 
-### Phase 16.1: Benchmark Infrastructure (6/7)
+Benchmarks run on criterion 0.5 with 100 samples per measurement.
+
+#### Full Pipeline (sqlproj → dacpac)
+
+| Fixture | Files | Mean Time | Notes |
+|---------|-------|-----------|-------|
+| e2e_simple | minimal | **19.4 ms** | Minimal project baseline |
+| e2e_comprehensive | 30 | **85.8 ms** | Production-realistic project |
+| stress_test | 135 | **462.1 ms** | High file count stress test |
+
+**Scaling:** ~3.4 ms/file for stress_test (135 files), ~2.9 ms/file for e2e_comprehensive (30 files).
+
+#### Pipeline Stage Breakdown (e2e_comprehensive)
+
+| Stage | Time | % of Total |
+|-------|------|------------|
+| sqlproj_parsing | 0.15 ms | 0.2% |
+| sql_parsing (28 stmts) | 5.25 ms | 6.1% |
+| model_building (34 stmts) | 8.18 ms | 9.5% |
+| xml_generation (85 elements) | 70.6 ms | **82.2%** |
+| dacpac_packaging | 73.5 ms | N/A (parallel) |
+
+**Key Finding:** XML generation dominates at 82% of pipeline time. This is the primary optimization target.
+
+#### Stress Test Stage Breakdown
+
+| Stage | Time | vs e2e_comprehensive |
+|-------|------|---------------------|
+| sql_parsing (135 stmts) | 12.0 ms | 2.3x |
+| model_building (135 stmts) | 38.2 ms | 4.7x |
+| Full pipeline | 462.1 ms | 5.4x |
+
+**Scaling Analysis:** Model building scales super-linearly (4.7x for 4.8x files), suggesting O(n log n) or relationship resolution overhead.
+
+#### Comparison with .NET DacFx
+
+| Metric | rust-sqlpackage | .NET DacFx | Speedup |
+|--------|-----------------|------------|---------|
+| e2e_comprehensive (30 files) | 85.8 ms | ~2.3s cold / ~800ms warm | **27x cold / 9x warm** |
+
+### Phase 16.1: Benchmark Infrastructure (7/7) ✅
 
 | ID | Task | Status | Blocked By |
 |----|------|--------|------------|
@@ -79,7 +119,7 @@ This does not affect Layer 3 parity testing (which compares dacpacs, not deploym
 | 16.1.4 | Create model building benchmark | ✅ | 16.1.1 |
 | 16.1.5 | Create XML generation benchmark | ✅ | 16.1.1 |
 | 16.1.6 | Create stress_test fixture (100+ SQL files) | ✅ | - |
-| 16.1.7 | Run initial profiling and document baseline | ⬜ | 16.1.2-16.1.6 |
+| 16.1.7 | Run initial profiling and document baseline | ✅ | 16.1.2-16.1.6 |
 
 ### Phase 16.2: Quick Wins (0/5)
 
@@ -158,7 +198,7 @@ cargo flamegraph --release -- build --project tests/fixtures/e2e_comprehensive/D
 | Phase 13 | Fix remaining relationship parity issues (TVP support) | 4/4 |
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
-| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 0/18 |
+| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 7/18 |
 
 ### Key Implementation Details
 
