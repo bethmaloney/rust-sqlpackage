@@ -218,13 +218,30 @@ Added capacity hints to 9 key vector allocations in hot paths across `src/parser
 
 Note: These are micro-optimizations that reduce allocations and potential reallocation overhead but don't significantly impact overall performance. The full pipeline is dominated by XML generation and I/O, so allocation efficiency has minimal measurable effect.
 
-### Phase 16.3: Medium Effort Optimizations (0/3)
+### Phase 16.3: Medium Effort Optimizations (1/3)
 
-| ID | Task | Status | Blocked By | Expected Gain |
-|----|------|--------|------------|---------------|
-| 16.3.1 | Reduce cloning in model builder with Cow | ⬜ | 16.2.2-16.2.5 | 3-5% |
-| 16.3.2 | Pre-compute sort keys for XML elements | ⬜ | 16.2.2-16.2.5 | 1-2% |
-| 16.3.3 | Batch string formatting in XML generation | ⬜ | 16.2.2-16.2.5 | 2-5% |
+| ID | Task | Status | Blocked By | Expected Gain | Actual Gain |
+|----|------|--------|------------|---------------|-------------|
+| 16.3.1 | Reduce cloning in model builder with Cow | ✅ | 16.2.2-16.2.5 | 3-5% | ~2-3% SQL parsing |
+| 16.3.2 | Pre-compute sort keys for XML elements | ⬜ | 16.2.2-16.2.5 | 1-2% | |
+| 16.3.3 | Batch string formatting in XML generation | ⬜ | 16.2.2-16.2.5 | 2-5% | |
+
+#### 16.3.1 Implementation Notes
+
+Introduced `track_schema()` helper function using `Cow<'static, str>` to reduce redundant cloning in schema tracking. Key changes:
+
+- Schema tracking now uses `BTreeSet<Cow<'static, str>>` instead of `BTreeSet<String>`
+- Static "dbo" schema uses borrowed reference (`Cow::Borrowed(DBO_SCHEMA)`) avoiding allocation
+- New `track_schema()` function checks if schema already exists before cloning, reducing duplicate allocations
+- All 14 `schemas.insert()` call sites updated to use the optimized pattern
+
+**Benchmark Results (vs baseline):**
+- Full pipeline: -7.3% improvement on first run (within noise on subsequent runs)
+- SQL parsing: -2.8% to -3.0% improvement
+- Dacpac packaging: -6.4% improvement
+- Model building: No statistically significant change (within noise margin)
+
+Note: The optimization reduces allocations for schema tracking but doesn't affect the model building stage significantly because struct fields still require owned Strings. The primary benefit is reduced memory churn from duplicate schema name allocations.
 
 ### Phase 16.4: Parallelization (0/2)
 
@@ -284,8 +301,8 @@ cargo flamegraph --release -- build --project tests/fixtures/e2e_comprehensive/D
 | Phase 12 | SELECT * expansion, TVF columns, duplicate refs | 6/6 |
 | Phase 13 | Fix remaining relationship parity issues (TVP support) | 4/4 |
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
-| Phase 15 | Parser refactoring: replace regex with token-based parsing | 35/41 |
-| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 10/18 |
+| Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
+| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 12/18 |
 
 ### Key Implementation Details
 

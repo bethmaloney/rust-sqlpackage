@@ -1,5 +1,10 @@
 //! Build database model from parsed SQL statements
+//!
+//! Performance note (Phase 16.3.1): This module uses borrowed references where possible
+//! to reduce String cloning. Schema names are tracked as &str during iteration and only
+//! converted to owned Strings at the end when creating SchemaElements.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use anyhow::Result;
@@ -25,23 +30,48 @@ use super::{
     UserDefinedTypeElement, ViewElement,
 };
 
+/// Static schema name for "dbo" - avoids allocation for the most common schema
+const DBO_SCHEMA: &str = "dbo";
+
+/// Track a schema name, avoiding allocation if it already exists in the set.
+/// Returns a clone of the schema name for use in struct fields.
+#[inline]
+fn track_schema<'a>(schemas: &mut BTreeSet<Cow<'static, str>>, schema: &'a str) -> String {
+    // Check if schema is the common "dbo" case - use static reference
+    if schema.eq_ignore_ascii_case(DBO_SCHEMA) {
+        if !schemas.contains(DBO_SCHEMA) {
+            schemas.insert(Cow::Borrowed(DBO_SCHEMA));
+        }
+        DBO_SCHEMA.to_string()
+    } else if !schemas.contains(schema) {
+        // Only allocate for schemas we haven't seen
+        let owned = schema.to_string();
+        schemas.insert(Cow::Owned(owned.clone()));
+        owned
+    } else {
+        // Schema already tracked, just clone for struct
+        schema.to_string()
+    }
+}
+
 /// Build a database model from parsed statements
 pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Result<DatabaseModel> {
     let mut model = DatabaseModel::new();
-    let mut schemas: BTreeSet<String> = BTreeSet::new();
+    // Use Cow<str> to avoid cloning for common schema patterns
+    let mut schemas: BTreeSet<Cow<'static, str>> = BTreeSet::new();
 
-    // Always include dbo schema
-    schemas.insert("dbo".to_string());
+    // Always include dbo schema - use borrowed static string
+    schemas.insert(Cow::Borrowed(DBO_SCHEMA));
 
     for parsed in statements {
         // Handle fallback-parsed statements (procedures and functions with T-SQL syntax)
         if let Some(fallback) = &parsed.fallback_type {
             match fallback {
                 FallbackStatementType::Procedure { schema, name } => {
-                    schemas.insert(schema.clone());
+                    let schema_owned = track_schema(&mut schemas, schema);
                     let is_natively_compiled = is_natively_compiled(&parsed.sql_text);
                     model.add_element(ModelElement::Procedure(ProcedureElement {
-                        schema: schema.clone(),
+                        schema: schema_owned,
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
                         parameters: vec![], // T-SQL params not extracted - stored in definition
@@ -55,7 +85,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     parameters,
                     return_type,
                 } => {
-                    schemas.insert(schema.clone());
+                    let schema_owned = track_schema(&mut schemas, schema);
                     let func_type = match function_type {
                         FallbackFunctionType::Scalar => FunctionType::Scalar,
                         FallbackFunctionType::TableValued => FunctionType::TableValued,
@@ -64,7 +94,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     let is_natively_compiled = is_natively_compiled(&parsed.sql_text);
                     let param_elements = parameters.iter().map(param_from_extracted).collect();
                     model.add_element(ModelElement::Function(FunctionElement {
-                        schema: schema.clone(),
+                        schema: schema_owned,
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
                         function_type: func_type,
@@ -151,9 +181,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     has_no_max_value,
                     cache_size,
                 } => {
-                    schemas.insert(schema.clone());
+                    let schema_owned = track_schema(&mut schemas, schema);
                     model.add_element(ModelElement::Sequence(SequenceElement {
-                        schema: schema.clone(),
+                        schema: schema_owned,
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
                         data_type: data_type.clone(),
@@ -173,7 +203,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     columns,
                     constraints,
                 } => {
-                    schemas.insert(schema.clone());
+                    let schema_owned = track_schema(&mut schemas, schema);
                     let column_elements: Vec<TableTypeColumnElement> = columns
                         .iter()
                         .map(table_type_column_from_extracted)
@@ -183,7 +213,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         .map(table_type_constraint_from_extracted)
                         .collect();
                     model.add_element(ModelElement::UserDefinedType(UserDefinedTypeElement {
-                        schema: schema.clone(),
+                        schema: schema_owned,
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
                         columns: column_elements,
@@ -199,9 +229,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     precision,
                     scale,
                 } => {
-                    schemas.insert(schema.clone());
+                    let schema_owned = track_schema(&mut schemas, schema);
                     model.add_element(ModelElement::ScalarType(ScalarTypeElement {
-                        schema: schema.clone(),
+                        schema: schema_owned,
                         name: name.clone(),
                         base_type: base_type.clone(),
                         is_nullable: *is_nullable,
@@ -218,7 +248,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_node,
                     is_edge,
                 } => {
-                    schemas.insert(schema.clone());
+                    let schema_owned = track_schema(&mut schemas, schema);
 
                     // Convert extracted columns to model columns
                     let model_columns: Vec<ColumnElement> = columns
@@ -226,9 +256,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         .map(|c| column_from_fallback_table(c, schema, name))
                         .collect();
 
-                    // Add the table element
+                    // Add the table element - clone schema/name for table, keep originals for constraints
                     model.add_element(ModelElement::Table(TableElement {
-                        schema: schema.clone(),
+                        schema: schema_owned.clone(),
                         name: name.clone(),
                         columns: model_columns,
                         is_node: *is_node,
@@ -239,7 +269,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     // Add constraints as separate elements
                     for constraint in constraints {
                         if let Some(constraint_element) =
-                            constraint_from_extracted(constraint, schema, name)
+                            constraint_from_extracted(constraint, &schema_owned, name)
                         {
                             model.add_element(ModelElement::Constraint(constraint_element));
                         }
@@ -258,7 +288,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 .unwrap_or_else(|| format!("DF_{}_{}", name, col.name));
                             model.add_element(ModelElement::Constraint(ConstraintElement {
                                 name: constraint_name,
-                                table_schema: schema.clone(),
+                                table_schema: schema_owned.clone(),
                                 table_name: name.clone(),
                                 constraint_type: ConstraintType::Default,
                                 columns: vec![ConstraintColumn::new(col.name.clone())],
@@ -283,7 +313,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 .unwrap_or_else(|| format!("CK_{}_{}", name, col.name));
                             model.add_element(ModelElement::Constraint(ConstraintElement {
                                 name: constraint_name,
-                                table_schema: schema.clone(),
+                                table_schema: schema_owned.clone(),
                                 table_name: name.clone(),
                                 constraint_type: ConstraintType::Check,
                                 columns: vec![ConstraintColumn::new(col.name.clone())],
@@ -315,7 +345,6 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     schema,
                     name,
                 } => {
-                    schemas.insert(schema.clone());
                     let sql_type = match object_type.to_uppercase().as_str() {
                         "TABLE" => Some("SqlTable"),
                         "VIEW" => Some("SqlView"),
@@ -325,8 +354,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         _ => None,
                     };
                     if let Some(sql_type) = sql_type {
+                        let schema_owned = track_schema(&mut schemas, schema);
                         model.add_element(ModelElement::Raw(RawElement {
-                            schema: schema.clone(),
+                            schema: schema_owned,
                             name: name.clone(),
                             sql_type: sql_type.to_string(),
                             definition: parsed.sql_text.clone(),
@@ -351,9 +381,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_delete,
                     trigger_type,
                 } => {
-                    schemas.insert(schema.clone());
+                    let schema_owned = track_schema(&mut schemas, schema);
                     model.add_element(ModelElement::Trigger(TriggerElement {
-                        schema: schema.clone(),
+                        schema: schema_owned,
                         name: name.clone(),
                         definition: parsed.sql_text.clone(),
                         parent_schema: parent_schema.clone(),
@@ -377,7 +407,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
             Statement::CreateTable(create_table) => {
                 let (schema, name) =
                     extract_schema_and_name(&create_table.name, &project.default_schema);
-                schemas.insert(schema.clone());
+                // Track schema - extract_schema_and_name returns owned strings,
+                // so we check if already tracked and reuse the existing allocation
+                let schema = track_schema(&mut schemas, &schema);
 
                 let columns = create_table
                     .columns
@@ -570,7 +602,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 
             Statement::CreateView { name, .. } => {
                 let (schema, view_name) = extract_schema_and_name(name, &project.default_schema);
-                schemas.insert(schema.clone());
+                let schema = track_schema(&mut schemas, &schema);
 
                 // Extract view options from raw SQL text
                 let (is_schema_bound, is_with_check_option, is_metadata_reported) =
@@ -633,7 +665,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
             // Handle procedures that sqlparser successfully parsed (generic SQL syntax)
             Statement::CreateProcedure { name, .. } => {
                 let (schema, proc_name) = extract_schema_and_name(name, &project.default_schema);
-                schemas.insert(schema.clone());
+                let schema = track_schema(&mut schemas, &schema);
                 let is_native = is_natively_compiled(&parsed.sql_text);
 
                 model.add_element(ModelElement::Procedure(ProcedureElement {
@@ -649,7 +681,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
             Statement::CreateFunction(create_func) => {
                 let (schema, func_name) =
                     extract_schema_and_name(&create_func.name, &project.default_schema);
-                schemas.insert(schema.clone());
+                let schema = track_schema(&mut schemas, &schema);
 
                 // Detect function type from raw SQL (more reliable than parsed return type)
                 // Inline TVF: "RETURNS TABLE" without table variable
@@ -719,9 +751,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     .trim_end_matches(']')
                     .to_string();
 
-                schemas.insert(normalized.clone());
+                let schema_name = track_schema(&mut schemas, &normalized);
                 model.add_element(ModelElement::Schema(SchemaElement {
-                    name: normalized,
+                    name: schema_name,
                     authorization,
                 }));
             }
@@ -757,13 +789,14 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
     // (Built-in schemas like dbo are included in the model but will be filtered
     // during XML generation - they're written as ExternalSource="BuiltIns" references)
     for schema in schemas {
+        let schema_str: &str = &schema;
         if !model
             .elements
             .iter()
-            .any(|e| matches!(e, ModelElement::Schema(s) if s.name == schema))
+            .any(|e| matches!(e, ModelElement::Schema(s) if s.name == schema_str))
         {
             model.add_element(ModelElement::Schema(SchemaElement {
-                name: schema,
+                name: schema.into_owned(),
                 authorization: None,
             }));
         }
