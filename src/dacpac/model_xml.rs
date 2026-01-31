@@ -135,9 +135,6 @@ static CAST_EXPR_RE: LazyLock<Regex> =
 static AS_KEYWORD_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)[\s\n]AS[\s\n]").unwrap());
 
-/// AS keyword pattern for trigger body extraction
-static TRIGGER_AS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bAS\s+").unwrap());
-
 /// Trigger table alias pattern: FROM/JOIN [schema].[table] alias
 static TRIGGER_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:FROM|JOIN)\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+([A-Za-z_]\w*)").unwrap()
@@ -5091,48 +5088,51 @@ fn write_trigger<W: Write>(writer: &mut Writer<W>, trigger: &TriggerElement) -> 
 }
 
 /// Extract the trigger body (everything after AS keyword) from the full trigger definition
+/// Uses token-based parsing (Phase 15.8 J4/J5) to handle any whitespace around keywords
 fn extract_trigger_body(definition: &str) -> String {
-    // Find the AS keyword that starts the trigger body
     // The pattern is: CREATE TRIGGER ... ON ... (FOR|AFTER|INSTEAD OF) ... AS <body>
-    // We need to find AS that's after the trigger events (INSERT/UPDATE/DELETE)
+    // We need to find the AS keyword that comes after FOR/AFTER/INSTEAD OF
 
-    let upper = definition.to_uppercase();
+    // Tokenize the definition using sqlparser
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, definition).tokenize() {
+        Ok(t) => t,
+        Err(_) => {
+            // Fallback: return the original definition if tokenization fails
+            return definition.to_string();
+        }
+    };
 
-    // Find position of trigger action keywords to ensure we find AS after them
-    let action_pos = upper
-        .find("INSTEAD OF")
-        .or_else(|| upper.find("AFTER"))
-        .or_else(|| upper.find(" FOR ")) // Use " FOR " to avoid matching substrings
-        .unwrap_or(0);
+    // Find the position of FOR/AFTER keyword (or INSTEAD OF pair)
+    // Then find the first AS keyword at top level after that position
+    let mut found_trigger_action = false;
+    let mut paren_depth: i32 = 0;
 
-    // Find AS after the trigger action
-    if let Some(as_pos) = upper[action_pos..].find("\nAS\n") {
-        let actual_pos = action_pos + as_pos + 4; // Skip past "\nAS\n"
-        return definition[actual_pos..].trim().to_string();
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::LParen => paren_depth += 1,
+            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+            // Look for trigger action keywords: FOR, AFTER, or INSTEAD (followed by OF)
+            Token::Word(w)
+                if paren_depth == 0
+                    && (w.keyword == Keyword::FOR
+                        || w.keyword == Keyword::AFTER
+                        || w.value.eq_ignore_ascii_case("INSTEAD")) =>
+            {
+                found_trigger_action = true;
+            }
+            // Once we've found the trigger action, look for AS keyword at top level
+            Token::Word(w)
+                if w.keyword == Keyword::AS && paren_depth == 0 && found_trigger_action =>
+            {
+                // Found the AS keyword - return everything after it
+                return reconstruct_tokens(&tokens[i + 1..]);
+            }
+            _ => {}
+        }
     }
 
-    if let Some(as_pos) = upper[action_pos..].find("\nAS ") {
-        let actual_pos = action_pos + as_pos + 4; // Skip past "\nAS "
-        return definition[actual_pos..].trim().to_string();
-    }
-
-    if let Some(as_pos) = upper[action_pos..].find(" AS\n") {
-        let actual_pos = action_pos + as_pos + 4; // Skip past " AS\n"
-        return definition[actual_pos..].trim().to_string();
-    }
-
-    if let Some(as_pos) = upper[action_pos..].find("\rAS\r") {
-        let actual_pos = action_pos + as_pos + 4;
-        return definition[actual_pos..].trim().to_string();
-    }
-
-    // Try a more flexible pattern - AS followed by whitespace
-    if let Some(m) = TRIGGER_AS_RE.find(&definition[action_pos..]) {
-        let actual_pos = action_pos + m.end();
-        return definition[actual_pos..].trim().to_string();
-    }
-
-    // Fallback - return entire definition if we can't parse it
+    // Fallback: return the original definition if we can't find the pattern
     definition.to_string()
 }
 
