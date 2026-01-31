@@ -3387,10 +3387,10 @@ fn test_parity_constraints() {
 /// This pattern is found in real-world databases but may not be parsed correctly
 /// by sqlparser-rs. This test validates that we handle this relaxed syntax.
 ///
-/// Known issue: sqlparser-rs doesn't parse constraints that follow column
-/// definitions without a comma separator. These constraints are silently ignored.
+/// sqlparser-rs fails to parse CREATE TABLE with comma-less constraints, so we use
+/// the fallback parser which correctly handles both comma-less constraints and
+/// inline DEFAULT/CHECK constraints with explicit CONSTRAINT names.
 #[test]
-#[ignore] // TODO: Fix comma-less constraint parsing - constraints without comma separators are not parsed
 fn test_parity_commaless_constraints() {
     if !dotnet_available() {
         println!("Skipping test: dotnet not available");

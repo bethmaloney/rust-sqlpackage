@@ -44,10 +44,15 @@ pub struct TokenParsedColumn {
     pub default_constraint_name: Option<String>,
     /// Default value expression (if any)
     pub default_value: Option<String>,
+    /// Whether the default constraint name should be emitted (true = "NOT NULL CONSTRAINT [name] DEFAULT" pattern)
+    /// DotNet only emits the Name attribute when CONSTRAINT appears AFTER NOT NULL.
+    pub emit_default_constraint_name: bool,
     /// Inline CHECK constraint name (if any)
     pub check_constraint_name: Option<String>,
     /// Inline CHECK constraint expression (if any)
     pub check_expression: Option<String>,
+    /// Whether the check constraint name should be emitted (true = appears after NOT NULL)
+    pub emit_check_constraint_name: bool,
     /// Computed column expression (e.g., "([Qty] * [Price])")
     /// If Some, this is a computed column with no explicit data type
     pub computed_expression: Option<String>,
@@ -152,8 +157,12 @@ impl ColumnTokenParser {
 
     /// Parse column modifiers (IDENTITY, NOT NULL, DEFAULT, CHECK, etc.)
     fn parse_column_modifiers(&mut self, result: &mut TokenParsedColumn) {
-        // Track whether we've seen CONSTRAINT keyword (may name the next constraint)
+        // Track CONSTRAINT [name] that immediately precedes DEFAULT/CHECK
+        // This is cleared when other keywords appear between CONSTRAINT and DEFAULT/CHECK
         let mut pending_constraint_name: Option<String> = None;
+        // Track whether pending_constraint_name immediately precedes the constraint
+        // (i.e., no intervening keywords like NOT NULL between CONSTRAINT and DEFAULT)
+        let mut constraint_immediately_precedes = false;
 
         loop {
             self.skip_whitespace();
@@ -170,6 +179,8 @@ impl ColumnTokenParser {
                 if self.check_token(&Token::LParen) {
                     self.skip_parenthesized();
                 }
+                // IDENTITY separates CONSTRAINT from DEFAULT
+                constraint_immediately_precedes = false;
                 continue;
             }
 
@@ -180,6 +191,8 @@ impl ColumnTokenParser {
                 if self.check_keyword(Keyword::NULL) {
                     self.advance();
                     result.nullability = Some(false);
+                    // NOT NULL separates CONSTRAINT from DEFAULT
+                    constraint_immediately_precedes = false;
                 }
                 continue;
             }
@@ -190,6 +203,8 @@ impl ColumnTokenParser {
                 self.advance();
                 if result.nullability.is_none() {
                     result.nullability = Some(true);
+                    // NULL separates CONSTRAINT from DEFAULT
+                    constraint_immediately_precedes = false;
                 }
                 continue;
             }
@@ -200,6 +215,8 @@ impl ColumnTokenParser {
                 self.skip_whitespace();
                 let constraint_name = self.parse_identifier();
                 pending_constraint_name = constraint_name;
+                // Mark that CONSTRAINT immediately precedes what comes next
+                constraint_immediately_precedes = true;
                 continue;
             }
 
@@ -212,6 +229,15 @@ impl ColumnTokenParser {
                 let default_value = self.parse_default_value();
                 result.default_value = default_value;
                 result.default_constraint_name = pending_constraint_name.take();
+                // .NET DacFx emits Name attribute only when CONSTRAINT [name] immediately
+                // precedes DEFAULT (e.g., "CONSTRAINT [name] DEFAULT value").
+                // When NOT NULL appears between CONSTRAINT and DEFAULT, Name is NOT emitted.
+                // Pattern "CONSTRAINT [name] NOT NULL DEFAULT" → Name NOT emitted
+                // Pattern "NOT NULL CONSTRAINT [name] DEFAULT" → Name emitted
+                // Pattern "CONSTRAINT [name] DEFAULT value NOT NULL" → Name emitted
+                result.emit_default_constraint_name =
+                    result.default_constraint_name.is_some() && constraint_immediately_precedes;
+                constraint_immediately_precedes = false;
                 continue;
             }
 
@@ -225,6 +251,10 @@ impl ColumnTokenParser {
                     let expr = self.parse_parenthesized_expression();
                     result.check_expression = expr;
                     result.check_constraint_name = pending_constraint_name.take();
+                    // Same logic as DEFAULT - emit Name only if CONSTRAINT immediately precedes CHECK
+                    result.emit_check_constraint_name =
+                        result.check_constraint_name.is_some() && constraint_immediately_precedes;
+                    constraint_immediately_precedes = false;
                 }
                 continue;
             }
@@ -761,6 +791,24 @@ mod tests {
     }
 
     #[test]
+    fn test_column_with_constraint_default_not_null_pattern() {
+        // Pattern: TYPE CONSTRAINT [name] DEFAULT (value) NOT NULL
+        // This is the pattern used in TableWithMultipleCommalessConstraints
+        let result = parse_column_definition_tokens(
+            "[Version] INT CONSTRAINT [DF_MultiCommaless_Version] DEFAULT ((0)) NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Version");
+        assert_eq!(result.data_type, "INT");
+        assert_eq!(
+            result.default_constraint_name,
+            Some("DF_MultiCommaless_Version".to_string())
+        );
+        assert_eq!(result.default_value, Some("((0))".to_string()));
+        assert_eq!(result.nullability, Some(false)); // NOT NULL
+    }
+
+    #[test]
     fn test_column_with_default_string() {
         let result =
             parse_column_definition_tokens("[Status] VARCHAR(20) NOT NULL DEFAULT 'Pending'")
@@ -914,5 +962,40 @@ mod tests {
         );
         assert_eq!(result.default_value, Some("((1))".to_string()));
         assert_eq!(result.nullability, Some(true)); // explicit NULL
+    }
+
+    #[test]
+    fn test_unnamed_check_emit_name_is_false() {
+        // Unnamed CHECK constraint should have emit_check_constraint_name = false
+        // This is the pattern used in AuditLog: CHECK ([Action] IN ('Insert', 'Update', 'Delete'))
+        let result = parse_column_definition_tokens(
+            "[Action] NVARCHAR(50) NOT NULL CHECK ([Action] IN ('Insert', 'Update', 'Delete'))",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Action");
+        assert!(result.check_constraint_name.is_none());
+        assert!(result.check_expression.is_some());
+        // Key assertion: emit_check_constraint_name should be false for unnamed CHECK
+        assert!(
+            !result.emit_check_constraint_name,
+            "emit_check_constraint_name should be false for unnamed CHECK constraint"
+        );
+    }
+
+    #[test]
+    fn test_named_check_after_not_null_emit_name_is_true() {
+        // Named CHECK constraint AFTER NOT NULL should have emit_check_constraint_name = true
+        // Pattern: NOT NULL CONSTRAINT [name] CHECK (...)
+        let result = parse_column_definition_tokens(
+            "[Age] INT NOT NULL CONSTRAINT [CK_Age] CHECK ([Age] >= 0)",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Age");
+        assert_eq!(result.check_constraint_name, Some("CK_Age".to_string()));
+        // Key assertion: emit_check_constraint_name should be true when CONSTRAINT is after NOT NULL
+        assert!(
+            result.emit_check_constraint_name,
+            "emit_check_constraint_name should be true for named CHECK after NOT NULL"
+        );
     }
 }

@@ -16,7 +16,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Phase 15.6: Miscellaneous extraction (G1-G3) ✅
 - Phase 15.7: SQL preprocessing (H1-H3) ✅
 - Phase 15.8: Whitespace-agnostic keyword matching (J1-J7) ✅
-- Phase 17.1: Comma-less constraint parsing (0/3) 🔄
+- Phase 17.1: Comma-less constraint parsing (3/3) ✅
 - Phase 17.2: SQLCMD variable header format (2/2) ✅
 - SQLCMD tasks I1-I2 remain regex-based by design (line-oriented preprocessing)
 
@@ -315,7 +315,7 @@ cargo flamegraph --release -- build --project tests/fixtures/e2e_comprehensive/D
 - Constraints without comma separators between column definitions and constraints
 - Different SQLCMD variable header formats
 
-### Phase 17.1: Comma-less Constraint Parsing (0/3)
+### Phase 17.1: Comma-less Constraint Parsing (3/3) ✅
 
 **Problem:** SQL Server accepts constraints without comma separators:
 ```sql
@@ -333,9 +333,20 @@ sqlparser-rs doesn't parse these constraints, causing them to be silently ignore
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 17.1.1 | Investigate sqlparser-rs constraint parsing behavior | ⬜ | Determine if fixable in dialect or needs post-processing |
-| 17.1.2 | Implement comma-less constraint detection and parsing | ⬜ | Either extend dialect or add fallback parser |
-| 17.1.3 | Verify all constraint types work (PK, FK, CHECK, DEFAULT) | ⬜ | Update fixture to cover all cases |
+| 17.1.1 | Investigate sqlparser-rs constraint parsing behavior | ✅ | sqlparser-rs fails on comma-less syntax, triggers fallback parser |
+| 17.1.2 | Implement comma-less constraint detection and parsing | ✅ | Fallback parser's `split_by_comma_or_constraint_tokens()` already handles this |
+| 17.1.3 | Verify all constraint types work (PK, FK, CHECK, DEFAULT) | ✅ | Fixed `emit_default_constraint_name` logic in column_parser.rs |
+
+**Implementation Notes:**
+
+The comma-less constraint syntax (e.g., `PRIMARY KEY ([Id])` without a preceding comma) causes sqlparser-rs to fail parsing, which triggers the fallback parser. The fallback parser's `split_by_comma_or_constraint_tokens()` function already handles comma-less constraints correctly by splitting on constraint keywords at the top level.
+
+The actual issue was in the `emit_default_constraint_name` logic in `src/parser/column_parser.rs`. The .NET DacFx only emits the `Name` attribute on default constraints when `CONSTRAINT` immediately precedes `DEFAULT` or `CHECK`:
+
+- Pattern `CONSTRAINT [name] NOT NULL DEFAULT ...` → Name **NOT** emitted (constraint keyword doesn't immediately precede DEFAULT)
+- Pattern `CONSTRAINT [name] DEFAULT ... NOT NULL` → Name **IS** emitted (constraint keyword immediately precedes DEFAULT)
+
+The fix tracks a `constraint_immediately_precedes` flag that is set when a `CONSTRAINT` keyword is encountered and cleared when any other keyword (like `NOT NULL`) intervenes before `DEFAULT` or `CHECK`.
 
 ### Phase 17.2: SQLCMD Variable Header Format (2/2) ✅
 
@@ -380,7 +391,7 @@ sqlparser-rs doesn't parse these constraints, causing them to be silently ignore
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 12/18 |
-| Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 2/5 |
+| Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
 
 ### Key Implementation Details
 

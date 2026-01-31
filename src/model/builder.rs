@@ -276,10 +276,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     }
 
                     // Add inline default constraints from column definitions
-                    // DotNet emits Name attribute based on CONSTRAINT keyword position:
-                    // - "NOT NULL CONSTRAINT [name] DEFAULT" → Name emitted
-                    // - "CONSTRAINT [name] NOT NULL DEFAULT" → Name NOT emitted
-                    // Since fallback parser doesn't capture position, we default to NOT emitting
+                    // DotNet emits Name attribute only when CONSTRAINT [name] appears AFTER NOT NULL.
+                    // The emit_default_constraint_name flag tracks this position.
                     for col in columns {
                         if let Some(default_value) = &col.default_value {
                             let constraint_name = col
@@ -298,13 +296,13 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
-                                emit_name: false, // Fallback parser doesn't track CONSTRAINT position
+                                emit_name: col.emit_default_constraint_name, // Emit Name only if CONSTRAINT after NOT NULL
                             }));
                         }
                     }
 
                     // Add inline CHECK constraints from column definitions
-                    // Same position-based logic as DEFAULT constraints
+                    // DotNet emits Name attribute only when CONSTRAINT [name] appears AFTER NOT NULL.
                     for col in columns {
                         if let Some(check_expr) = &col.check_expression {
                             let constraint_name = col
@@ -323,7 +321,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
-                                emit_name: false, // Fallback parser doesn't track CONSTRAINT position
+                                emit_name: col.emit_check_constraint_name, // Emit Name only if CONSTRAINT after NOT NULL
                             }));
                         }
                     }

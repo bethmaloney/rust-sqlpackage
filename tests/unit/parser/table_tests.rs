@@ -1076,3 +1076,70 @@ CREATE TABLE [dbo].[Attachments] (
         "Should preserve FILESTREAM"
     );
 }
+
+#[test]
+fn test_parse_table_with_commaless_inline_default() {
+    use rust_sqlpackage::parser::FallbackStatementType;
+
+    // Minimal test case for comma-less constraints with inline defaults
+    let sql = r#"CREATE TABLE [dbo].[TestTable]
+(
+    [Id] INT NOT NULL,
+    [Version] INT CONSTRAINT [DF_Version] DEFAULT ((0)) NOT NULL
+
+    CONSTRAINT [PK_Test] PRIMARY KEY ([Id])
+)"#;
+
+    // Parse the SQL
+    let file = create_sql_file(sql);
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    let parsed = result.expect("Should parse successfully");
+
+    println!("Parsed {} statements", parsed.len());
+    for (i, stmt) in parsed.iter().enumerate() {
+        println!("Statement {}: {:?}", i, stmt.fallback_type);
+    }
+
+    assert_eq!(parsed.len(), 1, "Should parse one statement");
+
+    // Check that we get a fallback Table statement
+    if let Some(FallbackStatementType::Table {
+        schema,
+        name,
+        columns,
+        constraints,
+        ..
+    }) = &parsed[0].fallback_type
+    {
+        println!("Table: [{}].[{}]", schema, name);
+        println!("Columns: {}", columns.len());
+        for col in columns {
+            println!(
+                "  Column: {} {} default={:?} constraint_name={:?}",
+                col.name, col.data_type, col.default_value, col.default_constraint_name
+            );
+        }
+        println!("Constraints: {}", constraints.len());
+
+        // Verify we have the inline default
+        let version_col = columns
+            .iter()
+            .find(|c| c.name == "Version")
+            .expect("Should find Version column");
+        assert_eq!(
+            version_col.default_value,
+            Some("((0))".to_string()),
+            "Version should have default value"
+        );
+        assert_eq!(
+            version_col.default_constraint_name,
+            Some("DF_Version".to_string()),
+            "Version should have constraint name"
+        );
+    } else {
+        panic!(
+            "Expected FallbackStatementType::Table, got {:?}",
+            &parsed[0].fallback_type
+        );
+    }
+}

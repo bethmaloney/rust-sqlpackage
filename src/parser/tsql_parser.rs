@@ -145,10 +145,16 @@ pub struct ExtractedTableColumn {
     pub default_constraint_name: Option<String>,
     /// Default value expression (if any)
     pub default_value: Option<String>,
+    /// Whether to emit the default constraint name in XML output
+    /// True if CONSTRAINT [name] appeared AFTER NOT NULL (DotNet compatibility)
+    pub emit_default_constraint_name: bool,
     /// Inline CHECK constraint name (if any)
     pub check_constraint_name: Option<String>,
     /// Inline CHECK constraint expression (if any)
     pub check_expression: Option<String>,
+    /// Whether to emit the check constraint name in XML output
+    /// True if CONSTRAINT [name] appeared AFTER NOT NULL (DotNet compatibility)
+    pub emit_check_constraint_name: bool,
     /// Computed column expression (e.g., "[Qty] * [Price]")
     /// If Some, this is a computed column with no explicit data type
     pub computed_expression: Option<String>,
@@ -1560,8 +1566,262 @@ fn parse_table_body(
 }
 
 /// Split string by commas at the top level (not inside parentheses)
+/// Also splits on constraint keywords (CONSTRAINT, PRIMARY, FOREIGN, UNIQUE, CHECK)
+/// that appear at depth 0 after column definitions, to handle SQL Server's
+/// relaxed syntax that allows omitting commas before constraints.
 fn split_by_top_level_comma(s: &str) -> Vec<String> {
-    // Estimate ~1 part per 30 chars (average column definition length)
+    use sqlparser::dialect::MsSqlDialect;
+    use sqlparser::tokenizer::Tokenizer;
+
+    // Try tokenization first for accurate constraint detection
+    let dialect = MsSqlDialect {};
+    if let Ok(tokens) = Tokenizer::new(&dialect, s).tokenize_with_location() {
+        return split_by_comma_or_constraint_tokens(&tokens);
+    }
+
+    // Fallback to simple character-based splitting if tokenization fails
+    split_by_top_level_comma_simple(s)
+}
+
+/// Token-based splitting that handles both commas and comma-less constraints
+/// Reconstructs parts from tokens to avoid needing offset tracking.
+fn split_by_comma_or_constraint_tokens(
+    tokens: &[sqlparser::tokenizer::TokenWithSpan],
+) -> Vec<String> {
+    use sqlparser::keywords::Keyword;
+    use sqlparser::tokenizer::Token;
+
+    let mut parts = Vec::new();
+    let mut current_part = String::new();
+    let mut depth = 0;
+    let mut seen_content_in_part = false; // Track if we've seen actual content (not just whitespace)
+    let mut in_constraint = false; // Track if we're inside a constraint definition
+
+    let mut i = 0;
+    while i < tokens.len() {
+        let token = &tokens[i];
+
+        match &token.token {
+            Token::EOF => break,
+            Token::LParen => {
+                depth += 1;
+                current_part.push('(');
+                seen_content_in_part = true;
+            }
+            Token::RParen => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+                current_part.push(')');
+                seen_content_in_part = true;
+            }
+            Token::Comma if depth == 0 => {
+                // Split at comma
+                let trimmed = current_part.trim().to_string();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed);
+                }
+                current_part = String::new();
+                seen_content_in_part = false;
+                in_constraint = false; // Reset constraint tracking
+            }
+            Token::Word(w) if depth == 0 => {
+                // Check for constraint keywords at depth 0
+                // We need to split before table-level constraints but NOT before inline constraints.
+                //
+                // Table-level constraints start with:
+                // - CONSTRAINT [name] PRIMARY KEY|FOREIGN KEY|UNIQUE|CHECK
+                // - PRIMARY KEY (without CONSTRAINT)
+                // - UNIQUE (without CONSTRAINT)
+                // - FOREIGN KEY (without CONSTRAINT)
+                //
+                // Inline constraints are:
+                // - CONSTRAINT [name] DEFAULT (value)
+                // - DEFAULT (value)
+                // - CHECK (expr) <- Standalone CHECK without CONSTRAINT is always inline!
+                //
+                // Strategy: Only split on CONSTRAINT if followed by PK/FK/UNIQUE/CHECK,
+                // and split on standalone PRIMARY/UNIQUE/FOREIGN KEY if not in a constraint.
+                // Standalone CHECK (without CONSTRAINT) is always an inline column constraint,
+                // never a table-level constraint - so we do NOT split on it.
+
+                let is_table_constraint_start = if w.keyword == Keyword::CONSTRAINT {
+                    // Check if this CONSTRAINT is followed by PRIMARY KEY, FOREIGN KEY, UNIQUE, or CHECK
+                    is_table_level_constraint_ahead(&tokens[i..])
+                } else if !in_constraint {
+                    // Standalone PRIMARY KEY, UNIQUE, or FOREIGN KEY (but NOT CHECK!)
+                    // Standalone CHECK is always an inline constraint, not table-level
+                    matches!(w.keyword, Keyword::PRIMARY | Keyword::UNIQUE)
+                        || (w.keyword == Keyword::FOREIGN && is_foreign_key_ahead(&tokens[i..]))
+                } else {
+                    false
+                };
+
+                if is_table_constraint_start && seen_content_in_part {
+                    // We've hit a table-level constraint without a preceding comma
+                    // Split before this keyword (don't include leading whitespace)
+                    let trimmed = current_part.trim().to_string();
+                    if !trimmed.is_empty() {
+                        parts.push(trimmed);
+                    }
+                    current_part = String::new();
+                    // Reset tracking for the new part (the constraint keyword will set it to true below)
+                    #[allow(unused_assignments)]
+                    {
+                        seen_content_in_part = false;
+                    }
+                }
+
+                // Mark that we're in a constraint if this is CONSTRAINT keyword
+                if w.keyword == Keyword::CONSTRAINT {
+                    in_constraint = true;
+                }
+
+                // Add the token to current part
+                current_part.push_str(&token_to_string_simple(&token.token));
+                seen_content_in_part = true;
+            }
+            Token::Whitespace(ws) => {
+                // Add whitespace but don't mark as seen content
+                current_part.push_str(&ws.to_string());
+            }
+            _ => {
+                current_part.push_str(&token_to_string_simple(&token.token));
+                seen_content_in_part = true;
+            }
+        }
+
+        i += 1;
+    }
+
+    // Don't forget the last part
+    let remaining = current_part.trim().to_string();
+    if !remaining.is_empty() {
+        parts.push(remaining);
+    }
+
+    parts
+}
+
+/// Check if tokens starting at current position represent FOREIGN KEY
+fn is_foreign_key_ahead(tokens: &[sqlparser::tokenizer::TokenWithSpan]) -> bool {
+    use sqlparser::keywords::Keyword;
+    use sqlparser::tokenizer::Token;
+
+    let mut i = 1; // Skip current FOREIGN token
+                   // Skip whitespace
+    while i < tokens.len() {
+        match &tokens[i].token {
+            Token::Whitespace(_) => i += 1,
+            Token::Word(w) if w.keyword == Keyword::KEY => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Check if tokens starting at CONSTRAINT keyword represent a table-level constraint
+/// (i.e., CONSTRAINT [name] PRIMARY KEY | FOREIGN KEY | UNIQUE | CHECK)
+/// Returns false for inline constraints like CONSTRAINT [name] DEFAULT (value)
+fn is_table_level_constraint_ahead(tokens: &[sqlparser::tokenizer::TokenWithSpan]) -> bool {
+    use sqlparser::keywords::Keyword;
+    use sqlparser::tokenizer::Token;
+
+    // Pattern: CONSTRAINT [name] <type>
+    // We need to skip: CONSTRAINT, whitespace, identifier, whitespace, then check type
+
+    let mut i = 1; // Skip CONSTRAINT token
+                   // Skip whitespace
+    while i < tokens.len() {
+        match &tokens[i].token {
+            Token::Whitespace(_) => i += 1,
+            _ => break,
+        }
+    }
+
+    // Skip the constraint name (identifier)
+    if i < tokens.len() {
+        if let Token::Word(_) = &tokens[i].token {
+            i += 1;
+        } else {
+            return false;
+        }
+    }
+
+    // Skip whitespace
+    while i < tokens.len() {
+        match &tokens[i].token {
+            Token::Whitespace(_) => i += 1,
+            _ => break,
+        }
+    }
+
+    // Now check if the next token is a table-level constraint type
+    if i < tokens.len() {
+        if let Token::Word(w) = &tokens[i].token {
+            return matches!(
+                w.keyword,
+                Keyword::PRIMARY | Keyword::UNIQUE | Keyword::CHECK
+            ) || (w.keyword == Keyword::FOREIGN && is_foreign_key_ahead(&tokens[i..]));
+        }
+    }
+
+    false
+}
+
+/// Convert a token back to its string representation
+fn token_to_string_simple(token: &sqlparser::tokenizer::Token) -> String {
+    use sqlparser::tokenizer::Token;
+
+    match token {
+        Token::Word(w) => {
+            if w.quote_style == Some('[') {
+                format!("[{}]", w.value)
+            } else if w.quote_style == Some('"') {
+                format!("\"{}\"", w.value)
+            } else {
+                w.value.clone()
+            }
+        }
+        Token::Number(n, _) => n.clone(),
+        Token::SingleQuotedString(s) => format!("'{}'", s.replace('\'', "''")),
+        Token::NationalStringLiteral(s) => format!("N'{}'", s.replace('\'', "''")),
+        Token::LParen => "(".to_string(),
+        Token::RParen => ")".to_string(),
+        Token::Comma => ",".to_string(),
+        Token::Period => ".".to_string(),
+        Token::Eq => "=".to_string(),
+        Token::Lt => "<".to_string(),
+        Token::Gt => ">".to_string(),
+        Token::LtEq => "<=".to_string(),
+        Token::GtEq => ">=".to_string(),
+        Token::Neq => "<>".to_string(),
+        Token::Plus => "+".to_string(),
+        Token::Minus => "-".to_string(),
+        Token::Mul => "*".to_string(),
+        Token::Div => "/".to_string(),
+        Token::Mod => "%".to_string(),
+        Token::Whitespace(ws) => ws.to_string(),
+        Token::SemiColon => ";".to_string(),
+        Token::Colon => ":".to_string(),
+        Token::DoubleColon => "::".to_string(),
+        Token::AtSign => "@".to_string(),
+        Token::LBracket => "[".to_string(),
+        Token::RBracket => "]".to_string(),
+        Token::LBrace => "{".to_string(),
+        Token::RBrace => "}".to_string(),
+        Token::Ampersand => "&".to_string(),
+        Token::Pipe => "|".to_string(),
+        Token::Caret => "^".to_string(),
+        Token::Tilde => "~".to_string(),
+        Token::ExclamationMark => "!".to_string(),
+        Token::Sharp => "#".to_string(),
+        _ => format!("{}", token),
+    }
+}
+
+/// Simple character-based splitting (fallback)
+fn split_by_top_level_comma_simple(s: &str) -> Vec<String> {
     let estimated_parts = (s.len() / 30).max(1);
     let mut parts = Vec::with_capacity(estimated_parts);
     let mut current = String::new();
@@ -1616,8 +1876,10 @@ fn convert_token_parsed_column(parsed: TokenParsedColumn) -> ExtractedTableColum
         is_filestream: parsed.is_filestream,
         default_constraint_name: parsed.default_constraint_name,
         default_value: parsed.default_value,
+        emit_default_constraint_name: parsed.emit_default_constraint_name,
         check_constraint_name: parsed.check_constraint_name,
         check_expression: parsed.check_expression,
+        emit_check_constraint_name: parsed.emit_check_constraint_name,
         computed_expression: parsed.computed_expression,
         is_persisted: parsed.is_persisted,
     }
@@ -1942,5 +2204,163 @@ CREATE TABLE [dbo].[Products] (
             }
             _ => panic!("Expected ExtendedProperty variant"),
         }
+    }
+
+    #[test]
+    fn test_split_by_top_level_comma_with_commaless_constraints() {
+        // Test SQL1: Table with one comma-less constraint
+        let sql1 = r#"[Id] UNIQUEIDENTIFIER NOT NULL,
+    [Name] NVARCHAR(100) NOT NULL
+    CONSTRAINT [PK_Test] PRIMARY KEY CLUSTERED ([Id] ASC),
+    CONSTRAINT [FK_Test_Self] FOREIGN KEY ([Id]) REFERENCES [dbo].[Test] ([Id])"#;
+
+        // Test SQL3: Inline constraints should not cause splits
+        let sql3 = r#"[Version] INT CONSTRAINT [DF_Test_Version] DEFAULT ((0)) NOT NULL,
+    [CreatedOn] DATETIME CONSTRAINT [DF_Test_CreatedOn] DEFAULT (GETDATE()) NOT NULL"#;
+
+        let parts = super::split_by_top_level_comma(sql3);
+        println!("SQL3 (inline constraints) parts:");
+        for (i, part) in parts.iter().enumerate() {
+            println!("  Part {}: {}", i, part.replace('\n', "\\n"));
+        }
+
+        assert_eq!(
+            parts.len(),
+            2,
+            "Expected 2 parts: two columns with inline defaults"
+        );
+        assert!(
+            parts[0].contains("CONSTRAINT [DF_Test_Version]"),
+            "Part 0 should contain inline default"
+        );
+        assert!(
+            parts[1].contains("CONSTRAINT [DF_Test_CreatedOn]"),
+            "Part 1 should contain inline default"
+        );
+
+        // Test SQL4: Simulating the actual problem SQL from TableWithMultipleCommalessConstraints
+        let sql4 = r#"[Id] UNIQUEIDENTIFIER NOT NULL,
+    [Version] INT CONSTRAINT [DF_MultiCommaless_Version] DEFAULT ((0)) NOT NULL,
+    [CreatedOn] DATETIME CONSTRAINT [DF_MultiCommaless_CreatedOn] DEFAULT (GETDATE()) NOT NULL,
+    [ParentId] UNIQUEIDENTIFIER NOT NULL,
+    [Status] NVARCHAR(20) CONSTRAINT [DF_MultiCommaless_Status] DEFAULT ('Active') NOT NULL
+
+    CONSTRAINT [PK_MultiCommaless] PRIMARY KEY ([Id] ASC)
+    CONSTRAINT [FK_MultiCommaless_Parent] FOREIGN KEY ([ParentId]) REFERENCES [dbo].[TableWithCommalessConstraints] ([Id]),
+    CONSTRAINT [CK_MultiCommaless_Status] CHECK ([Status] IN ('Active', 'Inactive', 'Pending'))"#;
+
+        let parts = super::split_by_top_level_comma(sql4);
+        println!("\nSQL4 (actual problem SQL) parts:");
+        for (i, part) in parts.iter().enumerate() {
+            println!("  Part {}: {}", i, part.replace('\n', "\\n").trim());
+        }
+
+        // Should have 8 parts: 5 columns + 3 constraints
+        assert_eq!(
+            parts.len(),
+            8,
+            "Expected 8 parts: 5 columns + 3 constraints"
+        );
+        assert!(
+            parts[1].contains("CONSTRAINT [DF_MultiCommaless_Version]"),
+            "Part 1 should contain inline default"
+        );
+        assert!(
+            parts[5].starts_with("CONSTRAINT [PK_MultiCommaless]"),
+            "Part 5 should be PK constraint"
+        );
+        assert!(
+            parts[6].starts_with("CONSTRAINT [FK_MultiCommaless_Parent]"),
+            "Part 6 should be FK constraint"
+        );
+
+        let parts = super::split_by_top_level_comma(sql1);
+        println!("SQL1 parts:");
+        for (i, part) in parts.iter().enumerate() {
+            println!("  Part {}: {}", i, part.replace('\n', "\\n"));
+        }
+
+        assert_eq!(
+            parts.len(),
+            4,
+            "Expected 4 parts: column, column, PK constraint, FK constraint"
+        );
+        assert!(
+            parts[0].contains("[Id] UNIQUEIDENTIFIER"),
+            "Part 0 should be Id column"
+        );
+        assert!(
+            parts[1].contains("[Name] NVARCHAR"),
+            "Part 1 should be Name column"
+        );
+        assert!(
+            parts[2].starts_with("CONSTRAINT [PK_Test]"),
+            "Part 2 should be PK constraint"
+        );
+        assert!(
+            parts[3].starts_with("CONSTRAINT [FK_Test_Self]"),
+            "Part 3 should be FK constraint"
+        );
+
+        // Test SQL2: Multiple comma-less constraints
+        let sql2 = r#"[Status] NVARCHAR(20) NOT NULL
+    CONSTRAINT [PK_Test] PRIMARY KEY ([Id] ASC)
+    CONSTRAINT [FK_Test_Parent] FOREIGN KEY ([ParentId]) REFERENCES [dbo].[Other] ([Id]),
+    CONSTRAINT [CK_Test_Status] CHECK ([Status] IN ('Active', 'Inactive'))"#;
+
+        let parts = super::split_by_top_level_comma(sql2);
+        println!("\nSQL2 parts:");
+        for (i, part) in parts.iter().enumerate() {
+            println!("  Part {}: {}", i, part.replace('\n', "\\n"));
+        }
+
+        assert_eq!(parts.len(), 4, "Expected 4 parts: column, PK, FK, CHECK");
+        assert!(
+            parts[0].contains("[Status] NVARCHAR"),
+            "Part 0 should be Status column"
+        );
+        assert!(
+            parts[1].starts_with("CONSTRAINT [PK_Test]"),
+            "Part 1 should be PK constraint"
+        );
+        assert!(
+            parts[2].starts_with("CONSTRAINT [FK_Test_Parent]"),
+            "Part 2 should be FK constraint"
+        );
+        assert!(
+            parts[3].starts_with("CONSTRAINT [CK_Test_Status]"),
+            "Part 3 should be CHECK constraint"
+        );
+    }
+
+    #[test]
+    fn test_split_inline_check_constraint_not_split() {
+        // Inline CHECK constraint (without CONSTRAINT keyword) should NOT be split from column
+        // This is the AuditLog case: [Action] NVARCHAR(50) NOT NULL CHECK ([Action] IN ('Insert', 'Update', 'Delete'))
+        let sql = r#"[Id] UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(),
+    [Action] NVARCHAR(50) NOT NULL CHECK ([Action] IN ('Insert', 'Update', 'Delete')),
+    [Timestamp] DATETIME2 NOT NULL"#;
+
+        let parts = super::split_by_top_level_comma(sql);
+        println!("Inline CHECK test parts:");
+        for (i, part) in parts.iter().enumerate() {
+            println!("  Part {}: {}", i, part.replace('\n', "\\n").trim());
+        }
+
+        // Should be 3 parts: 3 column definitions
+        // The inline CHECK constraint should NOT cause a split
+        assert_eq!(
+            parts.len(),
+            3,
+            "Expected 3 parts: 3 columns (inline CHECK should stay with column)"
+        );
+        assert!(
+            parts[1].contains("CHECK"),
+            "Part 1 should contain the inline CHECK constraint"
+        );
+        assert!(
+            parts[1].contains("[Action] NVARCHAR"),
+            "Part 1 should be the Action column definition"
+        );
     }
 }
