@@ -121,15 +121,23 @@ static UNBRACKETED_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// 2. [a].[b].[c] - three-part bracketed reference (groups 3-6)
 /// 3. [a].[b] - two-part bracketed reference (groups 7-9)
 /// 4. alias.[column] - unbracketed alias with bracketed column (groups 10-12)
-/// 5. [ident] - single bracketed identifier (groups 13-14)
-/// 6. schema.table - unbracketed two-part reference (groups 15-16)
-/// 7. ident - unbracketed single identifier (group 17)
+/// 5. [alias].column - bracketed alias with unbracketed column (groups 13-15)
+/// 6. [ident] - single bracketed identifier (groups 16-17)
+/// 7. schema.table - unbracketed two-part reference (groups 18-19)
+/// 8. ident - unbracketed single identifier (group 20)
 ///
-/// NOTE: Patterns 4, 6, 7 use (?:^|[^@\w\]]) as boundary to prevent partial matches
+/// NOTE: Patterns 4, 7, 8 use (?:^|[^@\w\]]) as boundary to prevent partial matches
 static TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(@([A-Za-z_]\w*))|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(?:^|[^@\w\]])(([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\])|(\[([A-Za-z_][A-Za-z0-9_]*)\])|(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)|(?:^|[^@\w\.\]])([A-Za-z_][A-Za-z0-9_]*)",
-    )
+    Regex::new(concat!(
+        r"(@([A-Za-z_]\w*))",                                       // 1-2: @param
+        r"|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])", // 3-6: [a].[b].[c]
+        r"|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])",                     // 7-9: [a].[b]
+        r"|(?:^|[^@\w\]])(([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\])",     // 10-12: alias.[column]
+        r"|(\[([^\]]+)\]\s*\.([A-Za-z_][A-Za-z0-9_]*))",            // 13-15: [alias].column
+        r"|(\[([A-Za-z_][A-Za-z0-9_]*)\])",                         // 16-17: [ident]
+        r"|(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)", // 18-19: schema.table
+        r"|(?:^|[^@\w\.\]])([A-Za-z_][A-Za-z0-9_]*)",               // 20: ident
+    ))
     .unwrap()
 });
 
@@ -2925,9 +2933,10 @@ fn extract_body_dependencies(
     // 2. [a].[b].[c] - three-part bracketed reference (groups 3-6)
     // 3. [a].[b] - two-part bracketed reference (groups 7-9)
     // 4. alias.[column] - unbracketed alias with bracketed column (groups 10-12)
-    // 5. [ident] - single bracketed identifier (groups 13-14)
-    // 6. schema.table - unbracketed two-part reference (groups 15-16)
-    // 7. ident - unbracketed single identifier (group 17)
+    // 5. [alias].column - bracketed alias with unbracketed column (groups 13-15)
+    // 6. [ident] - single bracketed identifier (groups 16-17)
+    // 7. schema.table - unbracketed two-part reference (groups 18-19)
+    // 8. ident - unbracketed single identifier (group 20)
     for cap in TOKEN_RE.captures_iter(body) {
         if cap.get(1).is_some() {
             // Pattern 1: Parameter reference: @param
@@ -3038,8 +3047,42 @@ fn extract_body_dependencies(
                 }
             }
         } else if cap.get(13).is_some() {
-            // Pattern 5: Single bracketed identifier: [ident]
-            let ident = cap.get(14).map(|m| m.as_str()).unwrap_or("");
+            // Pattern 5: Bracketed alias with unbracketed column: [alias].column
+            let alias = cap.get(14).map(|m| m.as_str()).unwrap_or("");
+            let column = cap.get(15).map(|m| m.as_str()).unwrap_or("");
+            let alias_lower = alias.to_lowercase();
+
+            // Check if alias is a subquery/derived table alias - skip entirely
+            if subquery_aliases.contains(&alias_lower) {
+                continue;
+            }
+
+            // Check if alias is a table alias that should be resolved
+            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                // This is [alias].column - resolve to [schema].[table].[column]
+                // First emit the table reference if not seen
+                if !seen.contains(resolved_table) {
+                    seen.insert(resolved_table.clone());
+                    deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
+                }
+
+                // Then emit the column reference
+                let col_ref = format!("{}.[{}]", resolved_table, column);
+                if !seen.contains(&col_ref) {
+                    seen.insert(col_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(col_ref));
+                }
+            } else {
+                // Not a known alias - treat as [alias].[column] (might be schema.table)
+                let table_ref = format!("[{}].[{}]", alias, column);
+                if !seen.contains(&table_ref) {
+                    seen.insert(table_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(table_ref));
+                }
+            }
+        } else if cap.get(16).is_some() {
+            // Pattern 6: Single bracketed identifier: [ident]
+            let ident = cap.get(17).map(|m| m.as_str()).unwrap_or("");
             let ident_lower = ident.to_lowercase();
             let upper_ident = ident.to_uppercase();
 
@@ -3078,10 +3121,10 @@ fn extract_body_dependencies(
                     }
                 }
             }
-        } else if cap.get(15).is_some() {
-            // Pattern 6: Unbracketed two-part reference: schema.table or alias.column
-            let first_part = cap.get(15).map(|m| m.as_str()).unwrap_or("");
-            let second_part = cap.get(16).map(|m| m.as_str()).unwrap_or("");
+        } else if cap.get(18).is_some() {
+            // Pattern 7: Unbracketed two-part reference: schema.table or alias.column
+            let first_part = cap.get(18).map(|m| m.as_str()).unwrap_or("");
+            let second_part = cap.get(19).map(|m| m.as_str()).unwrap_or("");
             let first_lower = first_part.to_lowercase();
             let first_upper = first_part.to_uppercase();
 
@@ -3118,9 +3161,9 @@ fn extract_body_dependencies(
                     deps.push(BodyDependency::ObjectRef(table_ref));
                 }
             }
-        } else if cap.get(17).is_some() {
-            // Pattern 7: Unbracketed single identifier: might be a column name
-            let ident = cap.get(17).map(|m| m.as_str()).unwrap_or("");
+        } else if cap.get(20).is_some() {
+            // Pattern 8: Unbracketed single identifier: might be a column name
+            let ident = cap.get(20).map(|m| m.as_str()).unwrap_or("");
             let ident_lower = ident.to_lowercase();
             let upper_ident = ident.to_uppercase();
 
@@ -6436,6 +6479,185 @@ FROM AccountCte;
         assert!(
             !has_cte_as_schema,
             "Should NOT have [AccountCte].* as schema in body deps. Got: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn test_extract_table_aliases_nested_subquery() {
+        use std::collections::{HashMap, HashSet};
+
+        // Test double-nested subquery: LEFT JOIN subquery containing STUFF subquery
+        let sql = r#"
+SELECT A.Id AS AccountBusinessKey
+FROM [dbo].[Account] A
+LEFT JOIN (
+    SELECT AccountTags.AccountId,
+           STUFF((
+               SELECT ', ' + [ATTAG].[Name]
+               FROM [dbo].[AccountTag] [AT]
+               INNER JOIN [dbo].[Tag] [ATTAG] ON [AT].TagId = [ATTAG].Id
+               WHERE AccountTags.AccountId = [AT].AccountId
+               FOR XML PATH('')
+           ), 1, 1, '') AS TagList
+    FROM [dbo].[AccountTag] AccountTags
+    INNER JOIN [dbo].[Tag] [TAG] ON AccountTags.TagId = [TAG].Id
+    GROUP BY AccountTags.AccountId
+) AS TagDetails ON TagDetails.AccountId = A.Id
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        println!("Table aliases: {:?}", table_aliases);
+        println!("Subquery aliases: {:?}", subquery_aliases);
+
+        // 'A' should be a table alias for [dbo].[Account]
+        assert_eq!(
+            table_aliases.get("a"),
+            Some(&"[dbo].[Account]".to_string()),
+            "Expected 'A' -> [dbo].[Account]"
+        );
+
+        // 'AccountTags' should be a table alias for [dbo].[AccountTag] (first level nested)
+        assert_eq!(
+            table_aliases.get("accounttags"),
+            Some(&"[dbo].[AccountTag]".to_string()),
+            "Expected 'AccountTags' -> [dbo].[AccountTag]"
+        );
+
+        // '[AT]' should be a table alias for [dbo].[AccountTag] (second level nested)
+        assert_eq!(
+            table_aliases.get("at"),
+            Some(&"[dbo].[AccountTag]".to_string()),
+            "Expected 'AT' -> [dbo].[AccountTag]"
+        );
+
+        // '[ATTAG]' should be a table alias for [dbo].[Tag] (second level nested)
+        assert_eq!(
+            table_aliases.get("attag"),
+            Some(&"[dbo].[Tag]".to_string()),
+            "Expected 'ATTAG' -> [dbo].[Tag]"
+        );
+
+        // '[TAG]' should be a table alias for [dbo].[Tag] (first level nested)
+        assert_eq!(
+            table_aliases.get("tag"),
+            Some(&"[dbo].[Tag]".to_string()),
+            "Expected 'TAG' -> [dbo].[Tag]"
+        );
+
+        // 'TagDetails' should be recognized as a subquery alias
+        assert!(
+            subquery_aliases.contains("tagdetails"),
+            "Expected 'TagDetails' to be in subquery_aliases: {:?}",
+            subquery_aliases
+        );
+    }
+
+    #[test]
+    fn test_body_dependencies_nested_subquery_alias_resolution() {
+        // Test that nested subquery aliases are resolved correctly in body deps
+        // References like [ATTAG].[Name] inside STUFF should resolve to [dbo].[Tag].[Name]
+        // References to TagDetails.* should be skipped (subquery alias)
+        let sql = r#"
+SELECT A.Id AS AccountBusinessKey, TagDetails.TagList
+FROM [dbo].[Account] A
+LEFT JOIN (
+    SELECT AccountTags.AccountId,
+           STUFF((
+               SELECT ', ' + [ATTAG].[Name]
+               FROM [dbo].[AccountTag] [AT]
+               INNER JOIN [dbo].[Tag] [ATTAG] ON [AT].TagId = [ATTAG].Id
+               WHERE AccountTags.AccountId = [AT].AccountId
+               FOR XML PATH('')
+           ), 1, 1, '') AS TagList
+    FROM [dbo].[AccountTag] AccountTags
+    INNER JOIN [dbo].[Tag] [TAG] ON AccountTags.TagId = [TAG].Id
+) AS TagDetails ON TagDetails.AccountId = A.Id
+"#;
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+
+        println!("Body dependencies:");
+        for d in &deps {
+            println!("  {:?}", d);
+        }
+
+        // Should contain [dbo].[Account] (outer table)
+        let has_account = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Account]",
+            _ => false,
+        });
+        assert!(
+            has_account,
+            "Expected [dbo].[Account] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should contain [dbo].[AccountTag] (from nested subquery)
+        let has_account_tag = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[AccountTag]",
+            _ => false,
+        });
+        assert!(
+            has_account_tag,
+            "Expected [dbo].[AccountTag] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should contain [dbo].[Tag] (from doubly-nested STUFF subquery)
+        let has_tag = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Tag]",
+            _ => false,
+        });
+        assert!(
+            has_tag,
+            "Expected [dbo].[Tag] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should contain [dbo].[Tag].[Name] (resolved from [ATTAG].[Name])
+        let has_tag_name = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Tag].[Name]",
+            _ => false,
+        });
+        assert!(
+            has_tag_name,
+            "Expected [dbo].[Tag].[Name] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should contain [dbo].[Tag].[Id] (from INNER JOIN condition)
+        let has_tag_id = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Tag].[Id]",
+            _ => false,
+        });
+        assert!(
+            has_tag_id,
+            "Expected [dbo].[Tag].[Id] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should NOT contain [TagDetails].* as a schema reference
+        let has_tag_details = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r.starts_with("[TagDetails]"),
+            _ => false,
+        });
+        assert!(
+            !has_tag_details,
+            "Should NOT have [TagDetails].* in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should NOT contain [ATTAG].* as a schema reference (should be resolved)
+        let has_attag = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r.starts_with("[ATTAG]"),
+            _ => false,
+        });
+        assert!(
+            !has_attag,
+            "Should NOT have [ATTAG].* in body deps. Got: {:?}",
             deps
         );
     }

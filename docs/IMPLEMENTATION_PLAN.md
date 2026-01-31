@@ -5,7 +5,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-17 complete (203 tasks). Full parity achieved.**
-**Phase 18 in progress: BodyDependencies alias resolution (9/12 tasks complete).**
+**Phase 18 in progress: BodyDependencies alias resolution (10/12 tasks complete).**
 **Phase 19 pending: Whitespace-agnostic trim patterns (0/3 tasks, lower priority).**
 
 | Layer | Passing | Rate |
@@ -98,13 +98,13 @@ cargo bench -- --baseline before             # Compare against baseline
 | 18.2.3 | Skip subquery/derived table alias references | ✅ | Don't emit refs to `TagDetails.AccountId` |
 | 18.2.4 | Filter out SQL keywords from body dependencies | ✅ | Remove STUFF, FOR, PATH, XML, etc. |
 
-### Phase 18.3: Edge Cases (1/3)
+### Phase 18.3: Edge Cases (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 18.3.1 | Handle OUTER APPLY and CROSS APPLY aliases | ✅ | Subquery results used as table references |
 | 18.3.2 | Handle CTE (Common Table Expression) aliases | ✅ | WITH clause table expressions |
-| 18.3.3 | Handle nested subquery aliases | ⬜ | Multiple levels of aliasing |
+| 18.3.3 | Handle nested subquery aliases | ✅ | Multiple levels of aliasing |
 
 **Implementation Notes (18.3.1 - APPLY Aliases):**
 
@@ -135,6 +135,19 @@ The following changes were made to handle CTE (Common Table Expression) aliases:
 4. **Added `WITH` to `is_sql_keyword_not_column()`** - Added WITH keyword to the filter to prevent it from being treated as a column name.
 
 5. **Unit tests** - Added `test_extract_table_aliases_cte_single`, `test_extract_table_aliases_cte_multiple`, and `test_body_dependencies_cte_alias_resolution` tests.
+
+
+**Implementation Notes (18.3.3 - Nested Subquery Aliases):**
+
+The following changes were made to handle nested subquery aliases:
+
+1. **`[alias].column` pattern in TOKEN_RE** - Added pattern for `[alias].column` (bracketed alias with unbracketed column) to the TOKEN_RE regex to match cases like `[TAG].Id` which appear in nested subqueries.
+
+2. **Updated group numbers** - Adjusted capture group numbers to accommodate the new pattern (groups 13-15).
+
+3. **Handler in `extract_body_dependencies()`** - Added corresponding handler that resolves bracketed aliases to actual tables by looking up the alias in the alias map.
+
+4. **Unit tests** - Added `test_extract_table_aliases_nested_subquery` and `test_body_dependencies_nested_subquery_alias_resolution` tests to verify the behavior.
 
 ### Phase 18.4: DotNet Compatibility (0/2)
 
