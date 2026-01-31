@@ -16,6 +16,7 @@ use crate::model::{
     SchemaElement, SequenceElement, SortDirection, TableElement, TableTypeColumnElement,
     TableTypeConstraint, TriggerElement, UserDefinedTypeElement, ViewElement,
 };
+use crate::parser::identifier_utils::format_word;
 use crate::project::SqlProject;
 
 const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
@@ -1749,11 +1750,9 @@ fn reconstruct_tokens(tokens: &[Token]) -> String {
 
 /// Convert a token back to its SQL representation
 fn token_to_sql(token: &Token) -> String {
-    // Handle bracket-quoted identifiers specially (sqlparser Display doesn't preserve them)
+    // Handle Word tokens using centralized format_word to preserve bracket quoting
     if let Token::Word(w) = token {
-        if w.quote_style == Some('[') {
-            return format!("[{}]", w.value);
-        }
+        return format_word(w);
     }
     // For everything else, use the Display impl
     token.to_string()

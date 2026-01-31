@@ -22,6 +22,8 @@
 //! assert_eq!(normalize_object_name("[schema].[table]", "dbo"), "[schema].[table]");
 //! ```
 
+use std::borrow::Cow;
+
 use sqlparser::tokenizer::Token;
 
 /// Strips brackets `[]` and double quotes `""` from an identifier.
@@ -89,6 +91,27 @@ pub fn format_word(word: &sqlparser::tokenizer::Word) -> String {
     }
 }
 
+/// Converts a Word token to a bracketed string, regardless of original quote style.
+///
+/// This is useful when all quoted identifiers should be normalized to SQL Server's
+/// bracket syntax `[identifier]`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use sqlparser::tokenizer::Word;
+///
+/// let word = Word { value: "MyTable".to_string(), quote_style: Some('"'), keyword: Keyword::NoKeyword };
+/// assert_eq!(format_word_bracketed(&word), "[MyTable]");
+/// ```
+pub fn format_word_bracketed(word: &sqlparser::tokenizer::Word) -> String {
+    if word.quote_style.is_some() {
+        format!("[{}]", word.value)
+    } else {
+        word.value.clone()
+    }
+}
+
 /// Converts a sqlparser-rs Token to a string representation.
 ///
 /// This is useful for reconstructing SQL text from a token stream while
@@ -127,6 +150,146 @@ pub fn format_token(token: &Token) -> String {
         Token::GtEq => ">=".to_string(),
         Token::Whitespace(ws) => ws.to_string(),
         _ => format!("{:?}", token),
+    }
+}
+
+/// Converts a sqlparser-rs Token to a SQL-safe string representation.
+///
+/// Similar to `format_token`, but escapes single quotes inside string literals
+/// by doubling them (SQL standard escaping). This is useful when reconstructing
+/// SQL that will be re-parsed or executed.
+///
+/// # Examples
+///
+/// ```ignore
+/// let token = Token::SingleQuotedString("it's a test".to_string());
+/// assert_eq!(format_token_sql(&token), "'it''s a test'");
+/// ```
+pub fn format_token_sql(token: &Token) -> String {
+    match token {
+        Token::Word(w) => format_word(w),
+        Token::Number(n, _) => n.clone(),
+        Token::SingleQuotedString(s) => format!("'{}'", s.replace('\'', "''")),
+        Token::NationalStringLiteral(s) => format!("N'{}'", s.replace('\'', "''")),
+        Token::DoubleQuotedString(s) => format!("\"{}\"", s),
+        Token::HexStringLiteral(s) => format!("0x{}", s),
+        Token::LParen => "(".to_string(),
+        Token::RParen => ")".to_string(),
+        Token::Comma => ",".to_string(),
+        Token::Period => ".".to_string(),
+        Token::SemiColon => ";".to_string(),
+        Token::Colon => ":".to_string(),
+        Token::DoubleColon => "::".to_string(),
+        Token::Plus => "+".to_string(),
+        Token::Minus => "-".to_string(),
+        Token::Mul => "*".to_string(),
+        Token::Div => "/".to_string(),
+        Token::Mod => "%".to_string(),
+        Token::Eq => "=".to_string(),
+        Token::Neq => "<>".to_string(),
+        Token::Lt => "<".to_string(),
+        Token::Gt => ">".to_string(),
+        Token::LtEq => "<=".to_string(),
+        Token::GtEq => ">=".to_string(),
+        Token::Whitespace(ws) => ws.to_string(),
+        Token::AtSign => "@".to_string(),
+        Token::Sharp => "#".to_string(),
+        Token::Ampersand => "&".to_string(),
+        Token::Pipe => "|".to_string(),
+        Token::Caret => "^".to_string(),
+        Token::Tilde => "~".to_string(),
+        Token::ExclamationMark => "!".to_string(),
+        Token::LBracket => "[".to_string(),
+        Token::RBracket => "]".to_string(),
+        Token::LBrace => "{".to_string(),
+        Token::RBrace => "}".to_string(),
+        _ => format!("{}", token),
+    }
+}
+
+/// Converts a sqlparser-rs Token to a SQL-safe string with bracket normalization.
+///
+/// Similar to `format_token_sql`, but converts any quoted identifier (whether
+/// bracket or double-quoted) to bracket-quoted format `[identifier]`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let word = Word { value: "Table".to_string(), quote_style: Some('"'), .. };
+/// let token = Token::Word(word);
+/// assert_eq!(format_token_sql_bracketed(&token), "[Table]");
+/// ```
+pub fn format_token_sql_bracketed(token: &Token) -> String {
+    match token {
+        Token::Word(w) => format_word_bracketed(w),
+        _ => format_token_sql(token),
+    }
+}
+
+/// Converts a sqlparser-rs Token to a SQL-safe string, returning `Cow<'static, str>`.
+///
+/// This is a performance-optimized version of `format_token_sql` that returns
+/// `Cow::Borrowed` for static tokens (punctuation, operators) and `Cow::Owned`
+/// for dynamic content (identifiers, strings, numbers).
+///
+/// Use this version in hot paths where avoiding allocations for static tokens
+/// improves performance.
+///
+/// # Examples
+///
+/// ```ignore
+/// assert_eq!(format_token_sql_cow(&Token::LParen), Cow::Borrowed("("));
+/// ```
+pub fn format_token_sql_cow(token: &Token) -> Cow<'static, str> {
+    match token {
+        Token::Word(w) => Cow::Owned(format_word(w)),
+        Token::Number(n, _) => Cow::Owned(n.clone()),
+        Token::Char(c) => Cow::Owned(c.to_string()),
+        Token::SingleQuotedString(s) => Cow::Owned(format!("'{}'", s.replace('\'', "''"))),
+        Token::NationalStringLiteral(s) => Cow::Owned(format!("N'{}'", s.replace('\'', "''"))),
+        Token::HexStringLiteral(s) => Cow::Owned(format!("0x{}", s)),
+        Token::DoubleQuotedString(s) => Cow::Owned(format!("\"{}\"", s)),
+        Token::SingleQuotedByteStringLiteral(s) => Cow::Owned(format!("b'{}'", s)),
+        Token::DoubleQuotedByteStringLiteral(s) => Cow::Owned(format!("b\"{}\"", s)),
+        Token::DollarQuotedString(s) => Cow::Owned(s.to_string()),
+        Token::Whitespace(w) => Cow::Owned(w.to_string()),
+        // Static tokens - no allocation needed
+        Token::LParen => Cow::Borrowed("("),
+        Token::RParen => Cow::Borrowed(")"),
+        Token::LBrace => Cow::Borrowed("{"),
+        Token::RBrace => Cow::Borrowed("}"),
+        Token::LBracket => Cow::Borrowed("["),
+        Token::RBracket => Cow::Borrowed("]"),
+        Token::Comma => Cow::Borrowed(","),
+        Token::Period => Cow::Borrowed("."),
+        Token::Colon => Cow::Borrowed(":"),
+        Token::DoubleColon => Cow::Borrowed("::"),
+        Token::SemiColon => Cow::Borrowed(";"),
+        Token::Eq => Cow::Borrowed("="),
+        Token::Neq => Cow::Borrowed("<>"),
+        Token::Lt => Cow::Borrowed("<"),
+        Token::Gt => Cow::Borrowed(">"),
+        Token::LtEq => Cow::Borrowed("<="),
+        Token::GtEq => Cow::Borrowed(">="),
+        Token::Spaceship => Cow::Borrowed("<=>"),
+        Token::Plus => Cow::Borrowed("+"),
+        Token::Minus => Cow::Borrowed("-"),
+        Token::Mul => Cow::Borrowed("*"),
+        Token::Div => Cow::Borrowed("/"),
+        Token::Mod => Cow::Borrowed("%"),
+        Token::StringConcat => Cow::Borrowed("||"),
+        Token::LongArrow => Cow::Borrowed("->>"),
+        Token::Arrow => Cow::Borrowed("->"),
+        Token::HashArrow => Cow::Borrowed("#>"),
+        Token::HashLongArrow => Cow::Borrowed("#>>"),
+        Token::AtSign => Cow::Borrowed("@"),
+        Token::Sharp => Cow::Borrowed("#"),
+        Token::Ampersand => Cow::Borrowed("&"),
+        Token::Pipe => Cow::Borrowed("|"),
+        Token::Caret => Cow::Borrowed("^"),
+        Token::Tilde => Cow::Borrowed("~"),
+        Token::ExclamationMark => Cow::Borrowed("!"),
+        _ => Cow::Borrowed(""), // Handle unknown tokens gracefully
     }
 }
 
@@ -471,5 +634,77 @@ mod tests {
         let (schema2, name2) = split_qualified_name("schema.[table]", "dbo");
         assert_eq!(schema2, "schema");
         assert_eq!(name2, "table");
+    }
+
+    #[test]
+    fn test_format_word_bracketed_converts_double_quote() {
+        // Double-quoted should become bracketed
+        let word = Word {
+            value: "MyColumn".to_string(),
+            quote_style: Some('"'),
+            keyword: Keyword::NoKeyword,
+        };
+        assert_eq!(format_word_bracketed(&word), "[MyColumn]");
+    }
+
+    #[test]
+    fn test_format_word_bracketed_preserves_bracket() {
+        let word = Word {
+            value: "MyTable".to_string(),
+            quote_style: Some('['),
+            keyword: Keyword::NoKeyword,
+        };
+        assert_eq!(format_word_bracketed(&word), "[MyTable]");
+    }
+
+    #[test]
+    fn test_format_word_bracketed_unquoted() {
+        let word = Word {
+            value: "SELECT".to_string(),
+            quote_style: None,
+            keyword: Keyword::SELECT,
+        };
+        assert_eq!(format_word_bracketed(&word), "SELECT");
+    }
+
+    #[test]
+    fn test_format_token_sql_escapes_quotes() {
+        // Single quoted string with embedded quote
+        assert_eq!(
+            format_token_sql(&Token::SingleQuotedString("it's a test".to_string())),
+            "'it''s a test'"
+        );
+
+        // National string literal with embedded quote
+        assert_eq!(
+            format_token_sql(&Token::NationalStringLiteral("it's unicode".to_string())),
+            "N'it''s unicode'"
+        );
+    }
+
+    #[test]
+    fn test_format_token_sql_operators() {
+        assert_eq!(format_token_sql(&Token::AtSign), "@");
+        assert_eq!(format_token_sql(&Token::Sharp), "#");
+        assert_eq!(format_token_sql(&Token::DoubleColon), "::");
+        assert_eq!(format_token_sql(&Token::LBracket), "[");
+        assert_eq!(format_token_sql(&Token::RBracket), "]");
+    }
+
+    #[test]
+    fn test_format_token_sql_bracketed() {
+        // Double-quoted word becomes bracketed
+        let word = Word {
+            value: "MyColumn".to_string(),
+            quote_style: Some('"'),
+            keyword: Keyword::NoKeyword,
+        };
+        assert_eq!(format_token_sql_bracketed(&Token::Word(word)), "[MyColumn]");
+
+        // Regular tokens pass through unchanged
+        assert_eq!(
+            format_token_sql_bracketed(&Token::SingleQuotedString("it's".to_string())),
+            "'it''s'"
+        );
     }
 }

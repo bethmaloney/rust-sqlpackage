@@ -18,6 +18,7 @@
 //! [Name] AS (expression) [PERSISTED] [NOT NULL]
 //! ```
 
+use crate::parser::identifier_utils::format_token;
 use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
 use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
@@ -626,49 +627,7 @@ impl ColumnTokenParser {
     }
 
     fn token_to_string(&self, token: &Token) -> String {
-        match token {
-            Token::Word(w) => {
-                if w.quote_style == Some('[') {
-                    format!("[{}]", w.value)
-                } else if w.quote_style == Some('"') {
-                    format!("\"{}\"", w.value)
-                } else {
-                    w.value.clone()
-                }
-            }
-            Token::Number(n, _) => n.clone(),
-            Token::SingleQuotedString(s) => format!("'{}'", s),
-            Token::NationalStringLiteral(s) => format!("N'{}'", s),
-            Token::LParen => "(".to_string(),
-            Token::RParen => ")".to_string(),
-            Token::Comma => ",".to_string(),
-            Token::Period => ".".to_string(),
-            Token::SemiColon => ";".to_string(),
-            Token::Eq => "=".to_string(),
-            Token::Plus => "+".to_string(),
-            Token::Minus => "-".to_string(),
-            Token::Mul => "*".to_string(),
-            Token::Div => "/".to_string(),
-            Token::Whitespace(w) => w.to_string(),
-            Token::LBracket => "[".to_string(),
-            Token::RBracket => "]".to_string(),
-            // Comparison operators
-            Token::Lt => "<".to_string(),
-            Token::Gt => ">".to_string(),
-            Token::LtEq => "<=".to_string(),
-            Token::GtEq => ">=".to_string(),
-            Token::Neq => "<>".to_string(),
-            // Logical operators
-            Token::Ampersand => "&".to_string(),
-            Token::Pipe => "|".to_string(),
-            Token::Caret => "^".to_string(),
-            Token::Mod => "%".to_string(),
-            Token::Colon => ":".to_string(),
-            Token::ExclamationMark => "!".to_string(),
-            Token::AtSign => "@".to_string(),
-            // Fallback - use Debug representation for unhandled tokens
-            _ => format!("{:?}", token),
-        }
+        format_token(token)
     }
 }
 

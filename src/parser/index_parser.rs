@@ -13,6 +13,7 @@
 //! CREATE NONCLUSTERED INDEX [IX_Name] ON [dbo].[Table] ([Col]) WITH (FILLFACTOR = 80)
 //! ```
 
+use crate::parser::identifier_utils::format_word_bracketed;
 use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
 use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
@@ -303,11 +304,7 @@ impl IndexTokenParser {
             let token = &self.tokens[i];
             match &token.token {
                 Token::Word(w) => {
-                    if w.quote_style.is_some() {
-                        result.push_str(&format!("[{}]", w.value));
-                    } else {
-                        result.push_str(&w.value);
-                    }
+                    result.push_str(&format_word_bracketed(w));
                 }
                 Token::Number(n, _) => result.push_str(n),
                 Token::SingleQuotedString(s) => result.push_str(&format!("'{}'", s)),
@@ -328,7 +325,7 @@ impl IndexTokenParser {
                 Token::Mul => result.push('*'),
                 Token::Div => result.push('/'),
                 _ => {
-                    // For other tokens, use debug format and extract the value
+                    // For other tokens, use the Display impl
                     result.push_str(&format!("{}", token.token));
                 }
             }

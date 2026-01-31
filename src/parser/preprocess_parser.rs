@@ -31,6 +31,7 @@ use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
 use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 
+use super::identifier_utils::format_token_sql_cow;
 use super::tsql_parser::ExtractedDefaultConstraint;
 
 /// Sentinel value for BINARY(MAX) and VARBINARY(MAX) types
@@ -404,64 +405,7 @@ impl PreprocessTokenParser {
     /// punctuation and operators. Dynamic content (identifiers, strings) returns
     /// an owned String wrapped in Cow::Owned.
     fn token_to_string(&self, token: &Token) -> Cow<'static, str> {
-        match token {
-            Token::Word(w) => {
-                if w.quote_style == Some('[') {
-                    Cow::Owned(format!("[{}]", w.value))
-                } else if w.quote_style == Some('"') {
-                    Cow::Owned(format!("\"{}\"", w.value))
-                } else {
-                    Cow::Owned(w.value.clone())
-                }
-            }
-            Token::Number(n, _) => Cow::Owned(n.clone()),
-            Token::Char(c) => Cow::Owned(c.to_string()),
-            Token::SingleQuotedString(s) => Cow::Owned(format!("'{}'", s.replace('\'', "''"))),
-            Token::NationalStringLiteral(s) => Cow::Owned(format!("N'{}'", s.replace('\'', "''"))),
-            Token::HexStringLiteral(s) => Cow::Owned(format!("0x{}", s)),
-            Token::DoubleQuotedString(s) => Cow::Owned(format!("\"{}\"", s)),
-            Token::SingleQuotedByteStringLiteral(s) => Cow::Owned(format!("b'{}'", s)),
-            Token::DoubleQuotedByteStringLiteral(s) => Cow::Owned(format!("b\"{}\"", s)),
-            // Static tokens - no allocation needed
-            Token::LParen => Cow::Borrowed("("),
-            Token::RParen => Cow::Borrowed(")"),
-            Token::LBrace => Cow::Borrowed("{"),
-            Token::RBrace => Cow::Borrowed("}"),
-            Token::LBracket => Cow::Borrowed("["),
-            Token::RBracket => Cow::Borrowed("]"),
-            Token::Comma => Cow::Borrowed(","),
-            Token::Period => Cow::Borrowed("."),
-            Token::Colon => Cow::Borrowed(":"),
-            Token::DoubleColon => Cow::Borrowed("::"),
-            Token::SemiColon => Cow::Borrowed(";"),
-            Token::Whitespace(w) => Cow::Owned(w.to_string()),
-            Token::Eq => Cow::Borrowed("="),
-            Token::Neq => Cow::Borrowed("<>"),
-            Token::Lt => Cow::Borrowed("<"),
-            Token::Gt => Cow::Borrowed(">"),
-            Token::LtEq => Cow::Borrowed("<="),
-            Token::GtEq => Cow::Borrowed(">="),
-            Token::Spaceship => Cow::Borrowed("<=>"),
-            Token::Plus => Cow::Borrowed("+"),
-            Token::Minus => Cow::Borrowed("-"),
-            Token::Mul => Cow::Borrowed("*"),
-            Token::Div => Cow::Borrowed("/"),
-            Token::Mod => Cow::Borrowed("%"),
-            Token::StringConcat => Cow::Borrowed("||"),
-            Token::LongArrow => Cow::Borrowed("->>"),
-            Token::Arrow => Cow::Borrowed("->"),
-            Token::HashArrow => Cow::Borrowed("#>"),
-            Token::HashLongArrow => Cow::Borrowed("#>>"),
-            Token::AtSign => Cow::Borrowed("@"),
-            Token::Sharp => Cow::Borrowed("#"),
-            Token::Ampersand => Cow::Borrowed("&"),
-            Token::Pipe => Cow::Borrowed("|"),
-            Token::Caret => Cow::Borrowed("^"),
-            Token::Tilde => Cow::Borrowed("~"),
-            Token::ExclamationMark => Cow::Borrowed("!"),
-            Token::DollarQuotedString(s) => Cow::Owned(s.to_string()),
-            _ => Cow::Borrowed(""), // Handle unknown tokens gracefully
-        }
+        format_token_sql_cow(token)
     }
 }
 

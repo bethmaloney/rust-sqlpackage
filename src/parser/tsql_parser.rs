@@ -21,6 +21,7 @@ use super::function_parser::{
     detect_function_type_tokens, parse_alter_function_tokens, parse_create_function_full,
     parse_create_function_tokens, TokenParsedFunctionType,
 };
+use super::identifier_utils::format_token_sql;
 use super::index_parser::parse_create_index_tokens;
 use super::preprocess_parser::preprocess_tsql_tokens;
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
@@ -1788,53 +1789,7 @@ fn is_table_level_constraint_ahead(tokens: &[sqlparser::tokenizer::TokenWithSpan
 
 /// Convert a token back to its string representation
 fn token_to_string_simple(token: &sqlparser::tokenizer::Token) -> String {
-    use sqlparser::tokenizer::Token;
-
-    match token {
-        Token::Word(w) => {
-            if w.quote_style == Some('[') {
-                format!("[{}]", w.value)
-            } else if w.quote_style == Some('"') {
-                format!("\"{}\"", w.value)
-            } else {
-                w.value.clone()
-            }
-        }
-        Token::Number(n, _) => n.clone(),
-        Token::SingleQuotedString(s) => format!("'{}'", s.replace('\'', "''")),
-        Token::NationalStringLiteral(s) => format!("N'{}'", s.replace('\'', "''")),
-        Token::LParen => "(".to_string(),
-        Token::RParen => ")".to_string(),
-        Token::Comma => ",".to_string(),
-        Token::Period => ".".to_string(),
-        Token::Eq => "=".to_string(),
-        Token::Lt => "<".to_string(),
-        Token::Gt => ">".to_string(),
-        Token::LtEq => "<=".to_string(),
-        Token::GtEq => ">=".to_string(),
-        Token::Neq => "<>".to_string(),
-        Token::Plus => "+".to_string(),
-        Token::Minus => "-".to_string(),
-        Token::Mul => "*".to_string(),
-        Token::Div => "/".to_string(),
-        Token::Mod => "%".to_string(),
-        Token::Whitespace(ws) => ws.to_string(),
-        Token::SemiColon => ";".to_string(),
-        Token::Colon => ":".to_string(),
-        Token::DoubleColon => "::".to_string(),
-        Token::AtSign => "@".to_string(),
-        Token::LBracket => "[".to_string(),
-        Token::RBracket => "]".to_string(),
-        Token::LBrace => "{".to_string(),
-        Token::RBrace => "}".to_string(),
-        Token::Ampersand => "&".to_string(),
-        Token::Pipe => "|".to_string(),
-        Token::Caret => "^".to_string(),
-        Token::Tilde => "~".to_string(),
-        Token::ExclamationMark => "!".to_string(),
-        Token::Sharp => "#".to_string(),
-        _ => format!("{}", token),
-    }
+    format_token_sql(token)
 }
 
 /// Simple character-based splitting (fallback)

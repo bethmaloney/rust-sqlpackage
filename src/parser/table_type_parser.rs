@@ -17,6 +17,7 @@
 //! ```
 
 use crate::parser::column_parser::parse_column_definition_tokens;
+use crate::parser::identifier_utils::format_token_sql_bracketed;
 use crate::parser::tsql_parser::{
     ExtractedConstraintColumn, ExtractedTableTypeColumn, ExtractedTableTypeConstraint,
 };
@@ -563,44 +564,7 @@ impl TableTypeTokenParser {
 
     /// Convert a token to its string representation
     fn token_to_string(&self, token: &Token) -> String {
-        match token {
-            Token::Word(w) => {
-                if w.quote_style.is_some() {
-                    format!("[{}]", w.value)
-                } else {
-                    w.value.clone()
-                }
-            }
-            Token::Number(n, _) => n.clone(),
-            Token::SingleQuotedString(s) => format!("'{}'", s),
-            Token::NationalStringLiteral(s) => format!("N'{}'", s),
-            Token::DoubleQuotedString(s) => format!("\"{}\"", s),
-            Token::Whitespace(w) => w.to_string(),
-            Token::LParen => "(".to_string(),
-            Token::RParen => ")".to_string(),
-            Token::Comma => ",".to_string(),
-            Token::Period => ".".to_string(),
-            Token::Eq => "=".to_string(),
-            Token::Lt => "<".to_string(),
-            Token::Gt => ">".to_string(),
-            Token::LtEq => "<=".to_string(),
-            Token::GtEq => ">=".to_string(),
-            Token::Neq => "<>".to_string(),
-            Token::Plus => "+".to_string(),
-            Token::Minus => "-".to_string(),
-            Token::Mul => "*".to_string(),
-            Token::Div => "/".to_string(),
-            Token::Mod => "%".to_string(),
-            Token::Ampersand => "&".to_string(),
-            Token::Pipe => "|".to_string(),
-            Token::Caret => "^".to_string(),
-            Token::SemiColon => ";".to_string(),
-            Token::Colon => ":".to_string(),
-            Token::AtSign => "@".to_string(),
-            Token::LBracket => "[".to_string(),
-            Token::RBracket => "]".to_string(),
-            _ => String::new(),
-        }
+        format_token_sql_bracketed(token)
     }
 }
 

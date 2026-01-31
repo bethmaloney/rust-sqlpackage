@@ -189,7 +189,7 @@ The following changes were made to handle unqualified table names:
 
 5. **Unit tests** - Added `test_extract_table_aliases_unqualified_single`, `test_extract_table_aliases_unqualified_multiple_joins`, `test_extract_table_aliases_unqualified_bracketed`, `test_body_dependencies_unqualified_alias_resolution`, and `test_extract_table_aliases_qualified_takes_precedence` tests.
 
-### Phase 18.6: Identifier Utilities Refactoring (1/5)
+### Phase 18.6: Identifier Utilities Refactoring (4/5)
 
 **Goal:** Replace piecemeal bracket handling with centralized identifier utilities and migrate from regex to tokenizer-based parsing.
 
@@ -204,9 +204,9 @@ The following changes were made to handle unqualified table names:
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 18.6.1 | Create `src/parser/identifier_utils.rs` module | ✅ | Centralize bracket/identifier handling |
-| 18.6.2 | Add `format_identifier(word)` function | ⬜ | Convert Word to string with proper quoting |
-| 18.6.3 | Add `normalize_identifier(str)` function | ⬜ | Strip brackets/quotes from identifier |
-| 18.6.4 | Add `normalize_object_name(name, schema)` function | ⬜ | Reuse normalize_table_reference logic |
+| 18.6.2 | Add `format_identifier(word)` function | ✅ | Implemented as `format_word()` |
+| 18.6.3 | Add `normalize_identifier(str)` function | ✅ | Strip brackets/quotes from identifier |
+| 18.6.4 | Add `normalize_object_name(name, schema)` function | ✅ | Reuse normalize_table_reference logic |
 | 18.6.5 | Migrate alias resolution from regex to tokenizer | ⬜ | Replace 6 regex patterns with token-based parsing |
 
 **Implementation Approach:**
@@ -264,21 +264,34 @@ The following changes were made to handle unqualified table names:
 
 **Priority:** Lower (bug already fixed in 18.5), but high value for code quality
 
-**Implementation Notes (18.6.1 - Identifier Utils Module):**
+**Implementation Notes (18.6.1-4 - Identifier Utils Module):**
 
 The following functions were added to `src/parser/identifier_utils.rs`:
 
 1. **`normalize_identifier(ident)`** - Strips brackets `[]` and double quotes `""` from an identifier
 2. **`ensure_bracketed(ident)`** - Ensures an identifier is wrapped in brackets
 3. **`format_word(word)`** - Converts a sqlparser-rs Word token to a properly quoted string
-4. **`format_token(token)`** - Converts a sqlparser-rs Token to a string representation
-5. **`normalize_object_name(name, default_schema)`** - Normalizes an object name to `[schema].[name]` format
-6. **`is_bracketed(ident)`** - Checks if a string is a bracketed identifier
-7. **`is_double_quoted(ident)`** - Checks if a string is a double-quoted identifier
-8. **`is_qualified_name(name)`** - Checks if a string appears to be a qualified name
-9. **`split_qualified_name(name, default_schema)`** - Splits a qualified name into schema and object name parts
+4. **`format_word_bracketed(word)`** - Converts any quoted Word token to bracket format (normalizes `"` to `[]`)
+5. **`format_token(token)`** - Converts a sqlparser-rs Token to a string representation
+6. **`format_token_sql(token)`** - Like format_token but escapes single quotes in strings
+7. **`format_token_sql_bracketed(token)`** - Like format_token_sql but normalizes identifiers to brackets
+8. **`format_token_sql_cow(token)`** - Performance-optimized version returning `Cow<'static, str>`
+9. **`normalize_object_name(name, default_schema)`** - Normalizes an object name to `[schema].[name]` format
+10. **`is_bracketed(ident)`** - Checks if a string is a bracketed identifier
+11. **`is_double_quoted(ident)`** - Checks if a string is a double-quoted identifier
+12. **`is_qualified_name(name)`** - Checks if a string appears to be a qualified name
+13. **`split_qualified_name(name, default_schema)`** - Splits a qualified name into schema and object name parts
 
-The module includes 18 unit tests covering all functions.
+The module includes 24 unit tests covering all functions.
+
+**Consolidation Complete:** The following duplicate `token_to_string` implementations were migrated to use the centralized utilities:
+- `column_parser.rs` - Now uses `format_token()`
+- `constraint_parser.rs` - Now uses `format_token()`
+- `table_type_parser.rs` - Now uses `format_token_sql_bracketed()`
+- `tsql_parser.rs` - Now uses `format_token_sql()`
+- `preprocess_parser.rs` - Now uses `format_token_sql_cow()` (preserves Cow performance optimization)
+- `index_parser.rs` - Now uses `format_word_bracketed()` for Word tokens
+- `model_xml.rs` - Now uses `format_word()` for Word tokens
 
 ### Implementation Notes
 
