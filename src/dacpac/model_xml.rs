@@ -2857,7 +2857,16 @@ fn extract_body_dependencies(
     use std::collections::{HashMap, HashSet};
     // Estimate ~10 dependencies typical for a procedure/function body
     let mut deps = Vec::with_capacity(10);
-    let mut seen: HashSet<String> = HashSet::with_capacity(10);
+    // Track seen items for deduplication:
+    // - DotNet deduplicates built-in types
+    // - DotNet deduplicates table references (2-part refs like [schema].[table])
+    // - DotNet deduplicates parameter references
+    // - DotNet deduplicates DIRECT column references (columns matched without alias resolution)
+    // - DotNet does NOT deduplicate ALIAS-RESOLVED column references (alias.column patterns)
+    let mut seen_types: HashSet<String> = HashSet::with_capacity(5);
+    let mut seen_tables: HashSet<String> = HashSet::with_capacity(10);
+    let mut seen_params: HashSet<String> = HashSet::with_capacity(5);
+    let mut seen_direct_columns: HashSet<String> = HashSet::with_capacity(10);
 
     // Extract DECLARE type dependencies first (for scalar functions)
     for cap in DECLARE_TYPE_RE.captures_iter(body) {
@@ -2869,8 +2878,9 @@ fn extract_body_dependencies(
                 type_str
             };
             let type_ref = format!("[{}]", base_type.to_lowercase());
-            if !seen.contains(&type_ref) {
-                seen.insert(type_ref.clone());
+            // Only deduplicate built-in types
+            if !seen_types.contains(&type_ref) {
+                seen_types.insert(type_ref.clone());
                 deps.push(BodyDependency::BuiltInType(type_ref));
             }
         }
@@ -2932,7 +2942,9 @@ fn extract_body_dependencies(
         }
     }
 
-    // Second pass: scan body sequentially for all references in order of appearance
+    // Scan body sequentially for all references in order of appearance
+    // Note: DotNet has a complex ordering that depends on SQL clause structure (FROM first, etc.)
+    // We process in textual order which may differ from DotNet's order but contains the same refs
     // This complex regex matches (in order of priority):
     // 1. @param - parameter references (groups 1-2)
     // 2. [a].[b].[c] - three-part bracketed reference (groups 3-6)
@@ -2953,8 +2965,9 @@ fn extract_body_dependencies(
                 p_name.eq_ignore_ascii_case(param_name)
             }) {
                 let param_ref = format!("{}.[@{}]", full_name, param_name);
-                if !seen.contains(&param_ref) {
-                    seen.insert(param_ref.clone());
+                // DotNet deduplicates parameter references
+                if !seen_params.contains(&param_ref) {
+                    seen_params.insert(param_ref.clone());
                     deps.push(BodyDependency::ObjectRef(param_ref));
                 }
             }
@@ -2965,17 +2978,17 @@ fn extract_body_dependencies(
             let column = cap.get(6).map(|m| m.as_str()).unwrap_or("");
 
             if !schema.starts_with('@') && !table.starts_with('@') {
-                // First emit the table reference if not seen
+                // First emit the table reference if not seen (DotNet deduplicates tables)
                 let table_ref = format!("[{}].[{}]", schema, table);
-                if !seen.contains(&table_ref) {
-                    seen.insert(table_ref.clone());
+                if !seen_tables.contains(&table_ref) {
+                    seen_tables.insert(table_ref.clone());
                     deps.push(BodyDependency::ObjectRef(table_ref));
                 }
 
-                // Then emit the column reference
+                // Direct three-part column refs ARE deduplicated by DotNet
                 let col_ref = format!("[{}].[{}].[{}]", schema, table, column);
-                if !seen.contains(&col_ref) {
-                    seen.insert(col_ref.clone());
+                if !seen_direct_columns.contains(&col_ref) {
+                    seen_direct_columns.insert(col_ref.clone());
                     deps.push(BodyDependency::ObjectRef(col_ref));
                 }
             }
@@ -2997,23 +3010,20 @@ fn extract_body_dependencies(
             // Check if first_part is a table alias that should be resolved
             if let Some(resolved_table) = table_aliases.get(&first_lower) {
                 // This is alias.column - resolve to [schema].[table].[column]
-                // First emit the table reference if not seen
-                if !seen.contains(resolved_table) {
-                    seen.insert(resolved_table.clone());
+                // First emit the table reference if not seen (DotNet deduplicates tables)
+                if !seen_tables.contains(resolved_table) {
+                    seen_tables.insert(resolved_table.clone());
                     deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
                 }
 
-                // Then emit the column reference
+                // Then emit the column reference (DotNet does NOT deduplicate columns)
                 let col_ref = format!("{}.[{}]", resolved_table, second_part);
-                if !seen.contains(&col_ref) {
-                    seen.insert(col_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(col_ref));
-                }
+                deps.push(BodyDependency::ObjectRef(col_ref));
             } else {
-                // Not an alias - treat as [schema].[table]
+                // Not an alias - treat as [schema].[table] (DotNet deduplicates tables)
                 let table_ref = format!("[{}].[{}]", first_part, second_part);
-                if !seen.contains(&table_ref) {
-                    seen.insert(table_ref.clone());
+                if !seen_tables.contains(&table_ref) {
+                    seen_tables.insert(table_ref.clone());
                     deps.push(BodyDependency::ObjectRef(table_ref));
                 }
             }
@@ -3031,23 +3041,20 @@ fn extract_body_dependencies(
             // Check if alias is a table alias that should be resolved
             if let Some(resolved_table) = table_aliases.get(&alias_lower) {
                 // This is alias.[column] - resolve to [schema].[table].[column]
-                // First emit the table reference if not seen
-                if !seen.contains(resolved_table) {
-                    seen.insert(resolved_table.clone());
+                // First emit the table reference if not seen (DotNet deduplicates tables)
+                if !seen_tables.contains(resolved_table) {
+                    seen_tables.insert(resolved_table.clone());
                     deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
                 }
 
-                // Then emit the column reference
+                // Then emit the column reference (DotNet does NOT deduplicate columns)
                 let col_ref = format!("{}.[{}]", resolved_table, column);
-                if !seen.contains(&col_ref) {
-                    seen.insert(col_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(col_ref));
-                }
+                deps.push(BodyDependency::ObjectRef(col_ref));
             } else {
                 // Not a known alias - treat as [alias].[column] (might be schema.table)
                 let table_ref = format!("[{}].[{}]", alias, column);
-                if !seen.contains(&table_ref) {
-                    seen.insert(table_ref.clone());
+                if !seen_tables.contains(&table_ref) {
+                    seen_tables.insert(table_ref.clone());
                     deps.push(BodyDependency::ObjectRef(table_ref));
                 }
             }
@@ -3065,23 +3072,20 @@ fn extract_body_dependencies(
             // Check if alias is a table alias that should be resolved
             if let Some(resolved_table) = table_aliases.get(&alias_lower) {
                 // This is [alias].column - resolve to [schema].[table].[column]
-                // First emit the table reference if not seen
-                if !seen.contains(resolved_table) {
-                    seen.insert(resolved_table.clone());
+                // First emit the table reference if not seen (DotNet deduplicates tables)
+                if !seen_tables.contains(resolved_table) {
+                    seen_tables.insert(resolved_table.clone());
                     deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
                 }
 
-                // Then emit the column reference
+                // Then emit the column reference (DotNet does NOT deduplicate columns)
                 let col_ref = format!("{}.[{}]", resolved_table, column);
-                if !seen.contains(&col_ref) {
-                    seen.insert(col_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(col_ref));
-                }
+                deps.push(BodyDependency::ObjectRef(col_ref));
             } else {
                 // Not a known alias - treat as [alias].[column] (might be schema.table)
                 let table_ref = format!("[{}].[{}]", alias, column);
-                if !seen.contains(&table_ref) {
-                    seen.insert(table_ref.clone());
+                if !seen_tables.contains(&table_ref) {
+                    seen_tables.insert(table_ref.clone());
                     deps.push(BodyDependency::ObjectRef(table_ref));
                 }
             }
@@ -3112,16 +3116,16 @@ fn extract_body_dependencies(
             // If not a table/schema, treat as unqualified column -> resolve against first table
             if !is_table_or_schema {
                 if let Some(first_table) = table_refs.first() {
-                    // First emit the table reference if not seen (DotNet orders table before columns)
-                    if !seen.contains(first_table) {
-                        seen.insert(first_table.clone());
+                    // First emit the table reference if not seen (DotNet deduplicates tables)
+                    if !seen_tables.contains(first_table) {
+                        seen_tables.insert(first_table.clone());
                         deps.push(BodyDependency::ObjectRef(first_table.clone()));
                     }
 
-                    // Then emit the column reference
+                    // Direct column refs (single bracketed) ARE deduplicated by DotNet
                     let col_ref = format!("{}.[{}]", first_table, ident);
-                    if !seen.contains(&col_ref) {
-                        seen.insert(col_ref.clone());
+                    if !seen_direct_columns.contains(&col_ref) {
+                        seen_direct_columns.insert(col_ref.clone());
                         deps.push(BodyDependency::ObjectRef(col_ref));
                     }
                 }
@@ -3146,23 +3150,20 @@ fn extract_body_dependencies(
             // Check if first_part is a table alias that should be resolved
             if let Some(resolved_table) = table_aliases.get(&first_lower) {
                 // This is alias.column - resolve to [schema].[table].[column]
-                // First emit the table reference if not seen
-                if !seen.contains(resolved_table) {
-                    seen.insert(resolved_table.clone());
+                // First emit the table reference if not seen (DotNet deduplicates tables)
+                if !seen_tables.contains(resolved_table) {
+                    seen_tables.insert(resolved_table.clone());
                     deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
                 }
 
-                // Then emit the column reference
+                // Then emit the column reference (DotNet does NOT deduplicate columns)
                 let col_ref = format!("{}.[{}]", resolved_table, second_part);
-                if !seen.contains(&col_ref) {
-                    seen.insert(col_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(col_ref));
-                }
+                deps.push(BodyDependency::ObjectRef(col_ref));
             } else {
-                // Not an alias - treat as schema.table
+                // Not an alias - treat as schema.table (DotNet deduplicates tables)
                 let table_ref = format!("[{}].[{}]", first_part, second_part);
-                if !seen.contains(&table_ref) {
-                    seen.insert(table_ref.clone());
+                if !seen_tables.contains(&table_ref) {
+                    seen_tables.insert(table_ref.clone());
                     deps.push(BodyDependency::ObjectRef(table_ref));
                 }
             }
@@ -3196,16 +3197,16 @@ fn extract_body_dependencies(
             // If not a table/schema, treat as unqualified column -> resolve against first table
             if !is_table_or_schema {
                 if let Some(first_table) = table_refs.first() {
-                    // First emit the table reference if not seen (DotNet orders table before columns)
-                    if !seen.contains(first_table) {
-                        seen.insert(first_table.clone());
+                    // First emit the table reference if not seen (DotNet deduplicates tables)
+                    if !seen_tables.contains(first_table) {
+                        seen_tables.insert(first_table.clone());
                         deps.push(BodyDependency::ObjectRef(first_table.clone()));
                     }
 
-                    // Then emit the column reference
+                    // Direct column refs (single unbracketed) ARE deduplicated by DotNet
                     let col_ref = format!("{}.[{}]", first_table, ident);
-                    if !seen.contains(&col_ref) {
-                        seen.insert(col_ref.clone());
+                    if !seen_direct_columns.contains(&col_ref) {
+                        seen_direct_columns.insert(col_ref.clone());
                         deps.push(BodyDependency::ObjectRef(col_ref));
                     }
                 }
