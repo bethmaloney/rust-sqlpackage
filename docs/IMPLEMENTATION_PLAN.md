@@ -51,20 +51,6 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tests test_relationship -- --nocapture
 ```
 
----
-
-## Known Issues
-
-### Deploy Test [nvarchar] Reference Error
-**Test:** `test_e2e_deploy_comprehensive_with_post_deploy`
-**Status:** Known issue - works in CI, fails locally without SQL Server
-
-When deploying the e2e_comprehensive dacpac, SqlPackage may report "The reference to the element that has the name [nvarchar] could not be resolved". This is caused by type references (e.g., `[nvarchar]`) emitted in ExpressionDependencies for computed columns with CAST expressions.
-
-This does not affect Layer 3 parity testing (which compares dacpacs, not deployments) and the test passes in CI where SQL Server is available via Docker.
-
----
-
 ## Phase 15.8: Whitespace-Agnostic Keyword Matching
 
 **Goal:** Replace space-only string matching patterns (e.g., `find(" AS ")`) with token-based parsing to correctly handle tabs, multiple spaces, and mixed whitespace around SQL keywords.
