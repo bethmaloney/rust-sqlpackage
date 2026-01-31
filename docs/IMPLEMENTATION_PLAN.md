@@ -7,7 +7,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
 **Phase 15.1 complete: ExtendedTsqlDialect infrastructure created.**
 **Phase 15.2 complete: Column definition token parsing (D1, D2, D3, E1, E2 all complete).**
-**Phase 15.3 complete: DDL object extraction (B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅). Next: B7/B8 fulltext indexes, or Phase 15.4 constraints.**
+**Phase 15.3 complete: DDL object extraction (B1-B8 all complete). Next: Phase 15.4 constraints (C1-C4).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -115,8 +115,8 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 | B4 | CREATE/ALTER SEQUENCE (all options) | `extract_sequence_info` L1174-1260, `extract_alter_sequence_info` L1684-1766 | Medium | ✅ |
 | B5 | CREATE TYPE AS TABLE | `extract_table_type_info` L1262-1535 | High | ✅ |
 | B6 | CREATE INDEX (all options) | `extract_index_info` L1901-2018 | High | ✅ |
-| B7 | CREATE FULLTEXT INDEX | `extract_fulltext_index_info` L2675-2789 | Low | |
-| B8 | CREATE FULLTEXT CATALOG | `extract_fulltext_catalog_info` L2800-2815 | Low | |
+| B7 | CREATE FULLTEXT INDEX | `fulltext_parser.rs` (token-based) | Low | ✅ |
+| B8 | CREATE FULLTEXT CATALOG | `fulltext_parser.rs` (token-based) | Low | ✅ |
 
 #### Category C: Constraint Parsing (4 tasks)
 | # | Task | Regex Location | Priority |
@@ -151,7 +151,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 | # | Task | Regex Location | Priority |
 |---|------|----------------|----------|
 | G1 | sp_addextendedproperty parsing | `extract_extended_property` L1073-1113 | Medium |
-| G2 | Full-text index columns with LANGUAGE | `extract_fulltext_columns` L2745-2789 | Low |
+| G2 | Full-text index columns with LANGUAGE | `fulltext_parser.rs` (token-based, part of B7) | Low | ✅ |
 | G3 | Data type parsing | `parse_data_type` L1314-1395 | Medium |
 
 #### Category H: SQL Preprocessing (3 tasks)
@@ -171,8 +171,8 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 
 1. **Phase 15.1: Infrastructure** ✅ - Created `ExtendedTsqlDialect` wrapper with MsSqlDialect delegation
 2. **Phase 15.2: Critical Path** ✅ COMPLETE - D1, D2, D3, E1, E2 all complete (column definitions fully migrated to token-based parsing)
-3. **Phase 15.3: DDL Objects** ✅ COMPLETE - B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅ (all high-priority DDL objects migrated)
-4. **Phase 15.4: Constraints** - C1-C4, E2 (constraint parsing)
+3. **Phase 15.3: DDL Objects** ✅ COMPLETE - B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅, B7 ✅, B8 ✅ (all DDL objects migrated to token-based parsing)
+4. **Phase 15.4: Constraints** - C1-C4 (constraint parsing)
 5. **Phase 15.5: Statement Detection** - A1-A5 (fallback statement types)
 6. **Phase 15.6: Options & Misc** - F1-F4, G1-G3 (index options, extended properties)
 7. **Phase 15.7: Preprocessing** - H1-H3, I1-I2 (SQL preprocessing, SQLCMD)
