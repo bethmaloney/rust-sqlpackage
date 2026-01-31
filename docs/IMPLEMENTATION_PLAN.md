@@ -2,11 +2,12 @@
 
 This document tracks progress toward achieving exact 1-1 matching between rust-sqlpackage and DotNet DacFx dacpac output.
 
-## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
+## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
 **Phase 15 complete: Parser refactoring tasks finished (including whitespace-agnostic keyword matching).**
 **Phase 16 in progress: Performance tuning and benchmarking.**
+**Phase 17 in progress: Real-world SQL compatibility fixes.**
 - Phase 15.1: ExtendedTsqlDialect infrastructure ✅
 - Phase 15.2: Column definition token parsing (D1, D2, D3, E1, E2) ✅
 - Phase 15.3: DDL object extraction (B1-B8) ✅
@@ -15,6 +16,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Phase 15.6: Miscellaneous extraction (G1-G3) ✅
 - Phase 15.7: SQL preprocessing (H1-H3) ✅
 - Phase 15.8: Whitespace-agnostic keyword matching (J1-J7) ✅
+- Phase 17.1: Comma-less constraint parsing (0/3) 🔄
+- Phase 17.2: SQLCMD variable header format (0/2) 🔄
 - SQLCMD tasks I1-I2 remain regex-based by design (line-oriented preprocessing)
 
 | Layer | Passing | Rate |
@@ -289,6 +292,68 @@ cargo flamegraph --release -- build --project tests/fixtures/e2e_comprehensive/D
 
 ---
 
+## Phase 17: Real-World SQL Compatibility
+
+**Goal:** Fix parsing and format issues discovered when testing against real-world databases that use relaxed SQL syntax not covered by test fixtures.
+
+**Background:** Real-world SQL databases often use syntactic patterns that SQL Server accepts but are not strictly standard. These include:
+- Constraints without comma separators between column definitions and constraints
+- Different SQLCMD variable header formats
+
+### Phase 17.1: Comma-less Constraint Parsing (0/3)
+
+**Problem:** SQL Server accepts constraints without comma separators:
+```sql
+CREATE TABLE [dbo].[Example] (
+    [Id] INT NOT NULL,
+    [Name] NVARCHAR(100) NOT NULL
+    PRIMARY KEY ([Id])  -- No comma before PRIMARY KEY
+);
+```
+
+sqlparser-rs doesn't parse these constraints, causing them to be silently ignored.
+
+**Test:** `test_parity_commaless_constraints` in `tests/e2e/dotnet_comparison_tests.rs`
+**Fixture:** `tests/fixtures/commaless_constraints/`
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 17.1.1 | Investigate sqlparser-rs constraint parsing behavior | ⬜ | Determine if fixable in dialect or needs post-processing |
+| 17.1.2 | Implement comma-less constraint detection and parsing | ⬜ | Either extend dialect or add fallback parser |
+| 17.1.3 | Verify all constraint types work (PK, FK, CHECK, DEFAULT) | ⬜ | Update fixture to cover all cases |
+
+### Phase 17.2: SQLCMD Variable Header Format (0/2)
+
+**Problem:** SQLCMD variables in model.xml Header use different format than .NET DacFx.
+
+**Current Rust format:**
+```xml
+<CustomData Category="SqlCmdVariable">
+  <Metadata Name="SqlCmdVariable" Value="Environment"/>
+  <Metadata Name="DefaultValue" Value="Development"/>
+</CustomData>
+<!-- Repeated for each variable -->
+```
+
+**Expected .NET format:**
+```xml
+<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable">
+  <Metadata Name="Environment" Value="" />
+  <Metadata Name="ServerName" Value="" />
+</CustomData>
+<!-- Single element with all variables -->
+```
+
+**Test:** `test_sqlcmd_variables_header_format` in `tests/e2e/dotnet_comparison_tests.rs`
+**Fixture:** `tests/fixtures/sqlcmd_variables/`
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 17.2.1 | Update Header CustomData format for SQLCMD variables | ⬜ | Change Category to plural, add Type attribute |
+| 17.2.2 | Use variable name as Metadata Name attribute | ⬜ | Match .NET format exactly |
+
+---
+
 <details>
 <summary>Completed Phases Summary</summary>
 
@@ -304,6 +369,7 @@ cargo flamegraph --release -- build --project tests/fixtures/e2e_comprehensive/D
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 12/18 |
+| Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 0/5 |
 
 ### Key Implementation Details
 

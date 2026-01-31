@@ -115,6 +115,15 @@ These features are supported by .NET DacFx but not yet implemented:
 | Database-level Triggers | DDL triggers |
 | Partition Functions/Schemes | Table partitioning |
 
+### Known Limitations
+
+These are intentional differences from .NET DacFx output that don't affect deployment:
+
+| Limitation | Impact | Notes |
+|------------|--------|-------|
+| Internal procedure objects | None | DacFx tracks temp tables, CTEs, and table variables inside procedures as `SqlDynamicColumnSource` elements. These are for code analysis only and not required for deployment. |
+| Comma-less constraint syntax | Constraints ignored | SQL like `[Col] INT NOT NULL PRIMARY KEY` (no comma before PRIMARY KEY) may not parse the constraint. Use explicit commas between column definitions and constraints. |
+
 ### CLI Limitations vs SqlPackage
 
 This tool only supports the `build` action. The following SqlPackage actions are not implemented:

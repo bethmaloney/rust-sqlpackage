@@ -3109,6 +3109,72 @@ fn test_parity_sqlcmd_variables() {
     }
 }
 
+/// Test that SQLCMD variables in model.xml Header match .NET DacFx format.
+///
+/// .NET DacFx uses this format in the Header:
+/// ```xml
+/// <CustomData Category="SqlCmdVariables" Type="SqlCmdVariable">
+///   <Metadata Name="Environment" Value="" />
+///   <Metadata Name="ServerName" Value="" />
+/// </CustomData>
+/// ```
+///
+/// Known issue: Rust uses a different format with separate CustomData elements
+/// per variable and different attribute names.
+#[test]
+#[ignore] // TODO: Fix SQLCMD variable Header format to match .NET DacFx
+fn test_sqlcmd_variables_header_format() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let temp_dir = tempfile::TempDir::new().expect("Failed to create temp directory");
+    let fixture_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("sqlcmd_variables");
+
+    let (rust_dacpac, dotnet_dacpac) =
+        match build_both_dacpacs(&fixture_path.join("project.sqlproj"), &temp_dir) {
+            Ok(paths) => paths,
+            Err(e) => {
+                panic!("Build failed: {}", e);
+            }
+        };
+
+    // Extract raw model.xml from both dacpacs to check Header format
+    let rust_xml = extract_model_xml(&rust_dacpac).expect("Extract rust model.xml");
+    let dotnet_xml = extract_model_xml(&dotnet_dacpac).expect("Extract dotnet model.xml");
+
+    println!("\n=== SQLCMD Variables Header Format Test ===\n");
+
+    // Check for .NET format: Category="SqlCmdVariables" (plural) with Type attribute
+    let dotnet_has_correct_format = dotnet_xml.contains(r#"Category="SqlCmdVariables""#)
+        && dotnet_xml.contains(r#"Type="SqlCmdVariable""#);
+    let rust_has_correct_format = rust_xml.contains(r#"Category="SqlCmdVariables""#)
+        && rust_xml.contains(r#"Type="SqlCmdVariable""#);
+
+    println!(".NET has correct format: {}", dotnet_has_correct_format);
+    println!("Rust has correct format: {}", rust_has_correct_format);
+
+    // Show what Rust currently produces
+    if !rust_has_correct_format {
+        println!("\nRust Header contains:");
+        for line in rust_xml.lines() {
+            if line.contains("SqlCmdVariable") || line.contains("DefaultValue") {
+                println!("  {}", line.trim());
+            }
+        }
+    }
+
+    assert!(
+        rust_has_correct_format,
+        "Rust SQLCMD variables should use .NET format: \
+         Category=\"SqlCmdVariables\" Type=\"SqlCmdVariable\" with variable names as Metadata Name attributes"
+    );
+}
+
 // =============================================================================
 // Phase 6.5: Tests for all remaining fixtures
 // =============================================================================
@@ -3304,6 +3370,71 @@ fn test_parity_constraints() {
         "constraints",
         "Testing constraint generation",
         "Various constraint types and their properties",
+    );
+}
+
+/// Parity test for commaless_constraints fixture.
+/// Tests table and type definitions where constraints lack comma separators.
+///
+/// SQL Server accepts constraints without commas in certain positions:
+/// ```sql
+/// CREATE TABLE [dbo].[Example] (
+///     [Id] INT NOT NULL,
+///     [Name] NVARCHAR(100) NOT NULL
+///     PRIMARY KEY ([Id])  -- No comma before PRIMARY KEY
+/// );
+/// ```
+///
+/// This pattern is found in real-world databases but may not be parsed correctly
+/// by sqlparser-rs. This test validates that we handle this relaxed syntax.
+///
+/// Known issue: sqlparser-rs doesn't parse constraints that follow column
+/// definitions without a comma separator. These constraints are silently ignored.
+#[test]
+#[ignore] // TODO: Fix comma-less constraint parsing - constraints without comma separators are not parsed
+fn test_parity_commaless_constraints() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let options = ParityTestOptions::default();
+
+    let result = match run_parity_test("commaless_constraints", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            panic!("Parity test failed to run: {}", e);
+        }
+    };
+
+    println!("\n=== Parity Test: commaless_constraints ===\n");
+    println!("Testing comma-less constraint syntax parsing");
+    println!("Validates: Constraints without comma separators are correctly parsed");
+    println!();
+    println!("Layer 1 errors (inventory): {}", result.layer1_errors.len());
+    println!(
+        "Layer 2 errors (properties): {}",
+        result.layer2_errors.len()
+    );
+
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
+
+    // Assert that there are no inventory errors (all constraints should be found)
+    assert!(
+        result.layer1_errors.is_empty(),
+        "Comma-less constraints should be parsed correctly. Found {} inventory errors:\n{}",
+        result.layer1_errors.len(),
+        result
+            .layer1_errors
+            .iter()
+            .map(|e| format!("  - {}", e))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 

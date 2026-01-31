@@ -126,6 +126,16 @@ Test fixtures in `tests/fixtures/` are self-contained SQL projects used for test
 | `sqlcmd_variables/` | Tests SqlCmdVariable in project |
 | `header_section/` | Tests Header generation with options |
 | `database_options/` | Tests SqlDatabaseOptions element |
+| `commaless_constraints/` | Tests constraints without comma separators (known failing - see Known Limitations) |
+
+### Failing Fixtures (TDD)
+
+These fixtures have failing tests that document known issues pending fixes (see Phase 17 in IMPLEMENTATION_PLAN.md):
+
+| Fixture | Test | Issue |
+|---------|------|-------|
+| `commaless_constraints/` | `test_parity_commaless_constraints` | Constraints without comma separators are not parsed by sqlparser-rs |
+| `sqlcmd_variables/` | `test_sqlcmd_variables_header_format` | Header format differs from .NET (separate CustomData vs single with Type attribute) |
 
 ### Adding New Fixtures
 
