@@ -10,7 +10,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phase 15.3 complete: DDL object extraction (B1-B8 all complete).**
 **Phase 15.4 complete: Constraint parsing (C1-C4 all complete).**
 **Phase 15.5 complete: Statement detection (A1-A4 complete).**
-**Phase 15.6 complete: Miscellaneous extraction (G1-G3 complete). Next: Phase 15.7 preprocessing (H1-H3, I1-I2).**
+**Phase 15.6 complete: Miscellaneous extraction (G1-G3 complete).**
+**Phase 15.7 complete: SQL preprocessing (H1-H3 complete). SQLCMD tasks I1-I2 remain regex-based by design.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -141,6 +142,21 @@ Created token-based extended property parser in `src/parser/extended_property_pa
 - F1-F4 (index options) already implemented in IndexTokenParser, regex fallback kept for edge cases
 - All 345 tests pass
 
+### Phase 15.7: SQL Preprocessing (H1-H3) ✅ COMPLETE
+
+Created token-based preprocessing parser in `src/parser/preprocess_parser.rs`:
+
+- New `PreprocessTokenParser` struct for token-based SQL preprocessing
+- Token-based approach correctly handles content inside string literals (does not modify them)
+- `preprocess_tsql_tokens()` replaces regex-based preprocessing for H1-H3 tasks:
+  - H1: BINARY/VARBINARY(MAX) sentinel replacement - converts to INT placeholder for sqlparser compatibility
+  - H2: DEFAULT FOR constraint extraction - extracts and removes DEFAULT constraints with FOR keyword
+  - H3: Trailing comma cleanup - removes trailing commas before closing parentheses
+- The old `preprocess_tsql()` function now delegates to `preprocess_tsql_tokens()`
+- Key improvement: Patterns like `BINARY(MAX)` or `DEFAULT ... FOR` inside string literals are correctly preserved
+- I1-I2 (SQLCMD directives) intentionally remain regex-based - they are line-oriented preprocessing that works well with regex
+- All 491 tests pass
+
 ### Regex Inventory
 
 Current fallback parsing uses **75+ regex patterns** across two files:
@@ -206,18 +222,18 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 | G2 | Full-text index columns with LANGUAGE | `fulltext_parser.rs` (token-based, part of B7) | Low | ✅ |
 | G3 | Data type parsing | `parse_data_type` L1314-1395 | Medium | ✅ (already migrated in Phase 15.2) |
 
-#### Category H: SQL Preprocessing (3 tasks)
-| # | Task | Regex Location | Priority |
-|---|------|----------------|----------|
-| H1 | BINARY/VARBINARY(MAX) sentinel replacement | `preprocess_for_sqlparser` L2586-2590 | High |
-| H2 | DEFAULT FOR constraint extraction | `preprocess_for_sqlparser` L2597-2615 | High |
-| H3 | Trailing comma cleanup | `preprocess_for_sqlparser` L2615-2616 | Medium |
+#### Category H: SQL Preprocessing (3 tasks) ✅ COMPLETE
+| # | Task | Regex Location | Priority | Status |
+|---|------|----------------|----------|--------|
+| H1 | BINARY/VARBINARY(MAX) sentinel replacement | `preprocess_parser.rs` (token-based) | High | ✅ |
+| H2 | DEFAULT FOR constraint extraction | `preprocess_parser.rs` (token-based) | High | ✅ |
+| H3 | Trailing comma cleanup | `preprocess_parser.rs` (token-based) | Medium | ✅ |
 
-#### Category I: SQLCMD Preprocessing (2 tasks)
-| # | Task | Regex Location | Priority |
-|---|------|----------------|----------|
-| I1 | :setvar directive parsing | `sqlcmd.rs` L71-82 | Low |
-| I2 | :r include directive parsing | `sqlcmd.rs` L87-93 | Low |
+#### Category I: SQLCMD Preprocessing (2 tasks) - Intentionally Regex-Based
+| # | Task | Regex Location | Priority | Status |
+|---|------|----------------|----------|--------|
+| I1 | :setvar directive parsing | `sqlcmd.rs` L71-82 | Low | Regex (by design) |
+| I2 | :r include directive parsing | `sqlcmd.rs` L87-93 | Low | Regex (by design) |
 
 ### Implementation Strategy
 
@@ -227,7 +243,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 4. **Phase 15.4: Constraints** ✅ COMPLETE - C1 ✅, C2 ✅, C3 ✅, C4 ✅ (constraint parsing migrated to token-based parsing)
 5. **Phase 15.5: Statement Detection** ✅ COMPLETE - A1 ✅, A2 ✅, A3 ✅, A4 ✅ (statement detection migrated to token-based parsing; A5 generic fallback low priority)
 6. **Phase 15.6: Options & Misc** - G1 ✅, G2 ✅, G3 ✅ (extended properties complete); F1-F4 (index options - already token-based in IndexTokenParser, regex fallback remains for edge cases)
-7. **Phase 15.7: Preprocessing** - H1-H3, I1-I2 (SQL preprocessing, SQLCMD)
+7. **Phase 15.7: Preprocessing** ✅ COMPLETE - H1 ✅, H2 ✅, H3 ✅ (SQL preprocessing migrated to token-based in `preprocess_parser.rs`); I1-I2 (SQLCMD) remain regex-based by design
 
 ### Success Criteria
 

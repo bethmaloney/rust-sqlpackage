@@ -6,6 +6,7 @@ mod extended_property_parser;
 mod fulltext_parser;
 mod function_parser;
 mod index_parser;
+mod preprocess_parser;
 mod procedure_parser;
 mod sequence_parser;
 mod sqlcmd;

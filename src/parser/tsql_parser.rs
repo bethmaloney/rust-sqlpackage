@@ -18,6 +18,7 @@ use super::function_parser::{
     parse_create_function_tokens, TokenParsedFunctionType,
 };
 use super::index_parser::parse_create_index_tokens;
+use super::preprocess_parser::preprocess_tsql_tokens;
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
 use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
 use super::statement_parser::{
@@ -1513,47 +1514,17 @@ struct PreprocessResult {
 /// Preprocess T-SQL to handle syntax that sqlparser doesn't support:
 /// 1. Replace VARBINARY(MAX) and BINARY(MAX) with sentinel values
 /// 2. Extract and remove CONSTRAINT [name] DEFAULT (value) FOR [column] patterns
+/// 3. Clean up trailing commas before closing parentheses
+///
+/// Uses token-based parsing (Phase 15.7 H1-H3) which correctly handles string
+/// literals and comments - patterns inside strings are not modified.
 fn preprocess_tsql(sql: &str) -> PreprocessResult {
-    let mut result = sql.to_string();
-    let mut extracted_defaults = Vec::new();
-
-    // 1. Replace VARBINARY(MAX) and BINARY(MAX) with sentinel value
-    // sqlparser expects a numeric literal, not MAX for these types
-    let binary_max_re = Regex::new(r"(?i)\b(VARBINARY|BINARY)\s*\(\s*MAX\s*\)").unwrap();
-    result = binary_max_re
-        .replace_all(&result, |caps: &regex::Captures| {
-            format!("{}({})", &caps[1], BINARY_MAX_SENTINEL)
-        })
-        .to_string();
-
-    // 2. Extract and remove CONSTRAINT [name] DEFAULT (value) FOR [column] patterns
-    // This T-SQL syntax for named default constraints isn't supported by sqlparser
-    // Pattern: CONSTRAINT [name] DEFAULT (expression) FOR [column]
-    // The expression can contain nested parentheses, so we need careful matching
-    let default_for_re = Regex::new(
-        r"(?i),?\s*CONSTRAINT\s+\[?(\w+)\]?\s+DEFAULT\s+(\([^)]*(?:\([^)]*\)[^)]*)*\))\s+FOR\s+\[?(\w+)\]?"
-    ).unwrap();
-
-    // Extract all matches first
-    for caps in default_for_re.captures_iter(sql) {
-        extracted_defaults.push(ExtractedDefaultConstraint {
-            name: caps[1].to_string(),
-            column: caps[3].to_string(),
-            expression: caps[2].to_string(),
-        });
-    }
-
-    // Remove the DEFAULT FOR constraints from the SQL
-    result = default_for_re.replace_all(&result, "").to_string();
-
-    // Clean up any trailing commas before closing parenthesis that might result
-    // This handles commas followed by whitespace, comments (-- or /* */), and newlines
-    let trailing_comma_re = Regex::new(r",(\s*(--[^\n]*\n)?)*\s*\)").unwrap();
-    result = trailing_comma_re.replace_all(&result, ")").to_string();
+    // Use the new token-based preprocessor
+    let token_result = preprocess_tsql_tokens(sql);
 
     PreprocessResult {
-        sql: result,
-        extracted_defaults,
+        sql: token_result.sql,
+        extracted_defaults: token_result.extracted_defaults,
     }
 }
 
