@@ -8,6 +8,7 @@ use sqlparser::ast::Statement;
 use sqlparser::parser::Parser;
 
 use super::column_parser::{parse_column_definition_tokens, TokenParsedColumn};
+use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
 use super::tsql_dialect::ExtendedTsqlDialect;
 use crate::error::SqlPackageError;
 
@@ -1559,52 +1560,17 @@ fn extract_trigger_info(sql: &str) -> Option<FallbackStatementType> {
 }
 
 /// Extract schema and name from CREATE PROCEDURE statement
+///
+/// Uses token-based parsing (Phase 15.3) for improved maintainability and edge case handling.
 fn extract_procedure_name(sql: &str) -> Option<(String, String)> {
-    // Match patterns like:
-    // CREATE PROCEDURE [dbo].[ProcName]
-    // CREATE PROCEDURE dbo.ProcName
-    // CREATE OR ALTER PROCEDURE [schema].[name]
-    // CREATE PROC [dbo].[name]
-    // CREATE PROCEDURE [dbo].[Name&With&Special]
-    // Use [^\]]+ for bracketed identifiers to capture special characters like &
-    let re = regex::Regex::new(
-        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?(?:PROCEDURE|PROC)\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
-    )
-    .ok()?;
-
-    let caps = re.captures(sql)?;
-    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
-    let schema = caps
-        .get(1)
-        .or_else(|| caps.get(2))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "dbo".to_string());
-    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
-    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
-
-    Some((schema, name))
+    parse_create_procedure_tokens(sql)
 }
 
 /// Extract schema and name from ALTER PROCEDURE statement
+///
+/// Uses token-based parsing (Phase 15.3) for improved maintainability and edge case handling.
 fn extract_alter_procedure_name(sql: &str) -> Option<(String, String)> {
-    // Match patterns like:
-    // ALTER PROCEDURE [dbo].[ProcName]
-    // ALTER PROCEDURE dbo.ProcName
-    // ALTER PROC [dbo].[name]
-    let re = regex::Regex::new(
-        r"(?i)ALTER\s+(?:PROCEDURE|PROC)\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
-    )
-    .ok()?;
-
-    let caps = re.captures(sql)?;
-    let schema = caps
-        .get(1)
-        .or_else(|| caps.get(2))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
-
-    Some((schema, name))
+    parse_alter_procedure_tokens(sql)
 }
 
 /// Extract schema and name from ALTER FUNCTION statement
