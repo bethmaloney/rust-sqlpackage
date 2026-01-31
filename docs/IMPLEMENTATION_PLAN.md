@@ -5,10 +5,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-17 complete (203 tasks). Full parity achieved.**
-**Phase 18 in progress: BodyDependencies alias resolution (13/15 tasks complete).**
+**Phase 18 in progress: BodyDependencies alias resolution (13/20 tasks complete).**
 **Phase 19 pending: Whitespace-agnostic trim patterns (0/3 tasks, lower priority).**
 
-**⚠️ Critical:** Phase 18.5 blocks real-world deployment. Unqualified table names cause invalid alias references.
+**✅ Phase 18.5 complete:** Unqualified table names now work (regex-based fix).
+**🔧 Phase 18.6 planned:** Refactor to centralized identifier utilities (technical debt reduction).
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -180,6 +181,81 @@ The following changes were made to handle unqualified table names:
 
 5. **Unit tests** - Added `test_extract_table_aliases_unqualified_single`, `test_extract_table_aliases_unqualified_multiple_joins`, `test_extract_table_aliases_unqualified_bracketed`, `test_body_dependencies_unqualified_alias_resolution`, and `test_extract_table_aliases_qualified_takes_precedence` tests.
 
+### Phase 18.6: Identifier Utilities Refactoring (0/5)
+
+**Goal:** Replace piecemeal bracket handling with centralized identifier utilities and migrate from regex to tokenizer-based parsing.
+
+**Background:** Phase 18.5 fixed the immediate bug using regex (now 6 regex patterns total). This phase addresses the root cause by creating infrastructure for consistent identifier handling.
+
+**Motivation:**
+- Consolidates duplicate bracket handling code (5+ locations)
+- Replaces regex patterns with tokenizer for robustness
+- Aligns with Phase 15 (token-based parsing) and Phase 20 (regex elimination)
+- Reduces technical debt and improves maintainability
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 18.6.1 | Create `src/parser/identifier_utils.rs` module | ⬜ | Centralize bracket/identifier handling |
+| 18.6.2 | Add `format_identifier(word)` function | ⬜ | Convert Word to string with proper quoting |
+| 18.6.3 | Add `normalize_identifier(str)` function | ⬜ | Strip brackets/quotes from identifier |
+| 18.6.4 | Add `normalize_object_name(name, schema)` function | ⬜ | Reuse normalize_table_reference logic |
+| 18.6.5 | Migrate alias resolution from regex to tokenizer | ⬜ | Replace 6 regex patterns with token-based parsing |
+
+**Implementation Approach:**
+
+1. **Create identifier_utils.rs** with centralized functions:
+   ```rust
+   // Convert sqlparser Word to properly quoted string
+   pub fn format_identifier(word: &Word) -> String {
+       match word.quote_style {
+           Some('[') => format!("[{}]", word.value),
+           Some('"') => format!("\"{}\"", word.value),
+           _ => word.value.clone(),
+       }
+   }
+
+   // Strip brackets/quotes from identifier
+   pub fn normalize_identifier(ident: &str) -> String {
+       ident.trim_matches(|c| c == '[' || c == ']' || c == '"').to_string()
+   }
+
+   // Ensure identifier is bracketed
+   pub fn ensure_bracketed(ident: &str) -> String {
+       if ident.starts_with('[') { ident.to_string() }
+       else { format!("[{}]", ident) }
+   }
+
+   // Normalize object name with schema
+   pub fn normalize_object_name(name: &str, default_schema: &str) -> String {
+       // Reuse existing normalize_table_reference logic
+   }
+   ```
+
+2. **Consolidate duplicate code**:
+   - Replace 3 instances of `quote_style` pattern in parsers (table_type, column, constraint)
+   - Replace 2 instances of `trim_matches` pattern in model building
+   - Use identifier_utils consistently throughout codebase
+
+3. **Migrate alias resolution to tokenizer** (Phase 18.6.5):
+   - Parse FROM/JOIN clauses using sqlparser-rs tokenizer
+   - Extract table names and aliases as tokens (handles all whitespace variations)
+   - Use `normalize_object_name()` to handle all bracket combinations
+   - Replaces these regex patterns:
+     - BODY_TABLE_BRACKET_ALIAS_RE (bracketed table, bracketed alias)
+     - BODY_TABLE_ALIAS_RE (bracketed table, unbracketed alias)
+     - BODY_TABLE_ALIAS_UNBR_RE (unbracketed schema.table)
+     - BODY_TABLE_ALIAS_UNQUAL_BRACKET_RE (unqualified bracketed)
+     - BODY_TABLE_ALIAS_UNQUAL_RE (unqualified unbracketed)
+     - TABLE_ALIAS_RE (general purpose)
+
+**Benefits:**
+- Fewer lines of code (replace 6 regex patterns + handlers with unified tokenizer logic)
+- More robust (handles tabs, multiple spaces, edge cases)
+- Easier to maintain and extend
+- Completes Phase 20.4.1 (TABLE_ALIAS_RE migration) as a side effect
+
+**Priority:** Lower (bug already fixed in 18.5), but high value for code quality
+
 ### Implementation Notes
 
 The following changes were made to implement alias resolution:
@@ -268,9 +344,11 @@ The following changes were made to implement alias resolution:
 
 **Location:** `src/dacpac/model_xml.rs`
 
+**Note:** Phase 18.6 completes task 20.4.1 as part of refactoring alias resolution. The `identifier_utils.rs` module created in Phase 18.6 should be reused here.
+
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 20.4.1 | Replace TABLE_ALIAS_RE with tokenizer | ⬜ | Line 60-65: `FROM/JOIN table alias` extraction |
+| 20.4.1 | Replace TABLE_ALIAS_RE with tokenizer | ⬜ | Completed in Phase 18.6.5 - reuse that approach |
 | 20.4.2 | Replace TRIGGER_ALIAS_RE with tokenizer | ⬜ | Line 149-151: Trigger table aliases |
 | 20.4.3 | Replace BRACKETED_TABLE_RE with tokenizer | ⬜ | Line 110-111: `[schema].[table]` pattern |
 | 20.4.4 | Replace UNBRACKETED_TABLE_RE with tokenizer | ⬜ | Line 114-116: `schema.table` pattern |
@@ -354,7 +432,7 @@ The following changes were made to implement alias resolution:
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 18/18 |
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
-| Phase 18 | BodyDependencies alias resolution: fix table alias handling | 10/15 |
+| Phase 18 | BodyDependencies alias resolution: fix table alias handling | 13/20 |
 | Phase 19 | Whitespace-agnostic trim patterns (lower priority) | 0/3 |
 | Phase 20 | Replace remaining regex with tokenization/AST (cleanup) | 0/35 |
 
