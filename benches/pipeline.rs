@@ -30,7 +30,7 @@ fn bench_full_pipeline(c: &mut Criterion) {
     let mut group = c.benchmark_group("full_pipeline");
 
     // Test with e2e_comprehensive fixture (30 files)
-    let project_path = fixture_path("e2e_comprehensive").join("Database.sqlproj");
+    let project_path = fixture_path("e2e_comprehensive").join("project.sqlproj");
     if project_path.exists() {
         let temp_dir = TempDir::new().unwrap();
         let output_path = temp_dir.path().join("output.dacpac");
@@ -67,6 +67,25 @@ fn bench_full_pipeline(c: &mut Criterion) {
         });
     }
 
+    // Test with stress_test fixture (135 files) for high-volume benchmarking
+    let stress_project_path = fixture_path("stress_test").join("project.sqlproj");
+    if stress_project_path.exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let output_path = temp_dir.path().join("output.dacpac");
+
+        group.bench_function("stress_test", |b| {
+            b.iter(|| {
+                let options = BuildOptions {
+                    project_path: black_box(stress_project_path.clone()),
+                    output_path: Some(output_path.clone()),
+                    target_platform: "Sql160".to_string(),
+                    verbose: false,
+                };
+                rust_sqlpackage::build_dacpac(options).unwrap()
+            })
+        });
+    }
+
     group.finish();
 }
 
@@ -74,7 +93,7 @@ fn bench_full_pipeline(c: &mut Criterion) {
 fn bench_sqlproj_parsing(c: &mut Criterion) {
     let mut group = c.benchmark_group("sqlproj_parsing");
 
-    let project_path = fixture_path("e2e_comprehensive").join("Database.sqlproj");
+    let project_path = fixture_path("e2e_comprehensive").join("project.sqlproj");
     if project_path.exists() {
         group.bench_function("e2e_comprehensive", |b| {
             b.iter(|| project::parse_sqlproj(black_box(&project_path)).unwrap())
@@ -89,15 +108,23 @@ fn bench_sql_parsing(c: &mut Criterion) {
     let mut group = c.benchmark_group("sql_parsing");
 
     // Parse SQL files from e2e_comprehensive
-    let project_path = fixture_path("e2e_comprehensive").join("Database.sqlproj");
+    let project_path = fixture_path("e2e_comprehensive").join("project.sqlproj");
     if project_path.exists() {
         let project = project::parse_sqlproj(&project_path).unwrap();
 
-        // Set throughput based on number of files
-        group.throughput(Throughput::Elements(project.sql_files.len() as u64));
-
         group.bench_function(
             BenchmarkId::new("e2e_comprehensive", project.sql_files.len()),
+            |b| b.iter(|| parser::parse_sql_files(black_box(&project.sql_files)).unwrap()),
+        );
+    }
+
+    // Parse SQL files from stress_test (135 files)
+    let stress_project_path = fixture_path("stress_test").join("project.sqlproj");
+    if stress_project_path.exists() {
+        let project = project::parse_sqlproj(&stress_project_path).unwrap();
+
+        group.bench_function(
+            BenchmarkId::new("stress_test", project.sql_files.len()),
             |b| b.iter(|| parser::parse_sql_files(black_box(&project.sql_files)).unwrap()),
         );
     }
@@ -109,18 +136,26 @@ fn bench_sql_parsing(c: &mut Criterion) {
 fn bench_model_building(c: &mut Criterion) {
     let mut group = c.benchmark_group("model_building");
 
-    let project_path = fixture_path("e2e_comprehensive").join("Database.sqlproj");
+    let project_path = fixture_path("e2e_comprehensive").join("project.sqlproj");
     if project_path.exists() {
         let project = project::parse_sqlproj(&project_path).unwrap();
         let statements = parser::parse_sql_files(&project.sql_files).unwrap();
-
-        // Set throughput based on number of statements
-        group.throughput(Throughput::Elements(statements.len() as u64));
 
         group.bench_function(
             BenchmarkId::new("e2e_comprehensive", statements.len()),
             |b| b.iter(|| model::build_model(black_box(&statements), black_box(&project)).unwrap()),
         );
+    }
+
+    // Model building for stress_test (135 files)
+    let stress_project_path = fixture_path("stress_test").join("project.sqlproj");
+    if stress_project_path.exists() {
+        let project = project::parse_sqlproj(&stress_project_path).unwrap();
+        let statements = parser::parse_sql_files(&project.sql_files).unwrap();
+
+        group.bench_function(BenchmarkId::new("stress_test", statements.len()), |b| {
+            b.iter(|| model::build_model(black_box(&statements), black_box(&project)).unwrap())
+        });
     }
 
     group.finish();
@@ -130,7 +165,7 @@ fn bench_model_building(c: &mut Criterion) {
 fn bench_xml_generation(c: &mut Criterion) {
     let mut group = c.benchmark_group("xml_generation");
 
-    let project_path = fixture_path("e2e_comprehensive").join("Database.sqlproj");
+    let project_path = fixture_path("e2e_comprehensive").join("project.sqlproj");
     if project_path.exists() {
         let project = project::parse_sqlproj(&project_path).unwrap();
         let statements = parser::parse_sql_files(&project.sql_files).unwrap();
@@ -171,7 +206,7 @@ fn bench_xml_generation(c: &mut Criterion) {
 fn bench_dacpac_packaging(c: &mut Criterion) {
     let mut group = c.benchmark_group("dacpac_packaging");
 
-    let project_path = fixture_path("e2e_comprehensive").join("Database.sqlproj");
+    let project_path = fixture_path("e2e_comprehensive").join("project.sqlproj");
     if project_path.exists() {
         let project = project::parse_sqlproj(&project_path).unwrap();
         let statements = parser::parse_sql_files(&project.sql_files).unwrap();
