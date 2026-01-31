@@ -88,6 +88,7 @@ fn get_or_build_dotnet_dacpac(fixture_name: &str) -> Result<PathBuf, String> {
 
 /// Build all fixtures in parallel. Called once via Lazy initialization.
 fn prebuild_all_fixtures() -> HashMap<String, Result<PathBuf, String>> {
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
     let build_dir = get_dotnet_build_dir();
@@ -117,38 +118,65 @@ fn prebuild_all_fixtures() -> HashMap<String, Result<PathBuf, String>> {
         .collect();
 
     eprintln!(
-        "Pre-building {} dotnet fixtures in parallel...",
+        "Pre-building {} dotnet fixtures with limited concurrency...",
         fixtures.len()
     );
     let start = std::time::Instant::now();
 
-    // Build all fixtures in parallel using threads
-    let handles: Vec<_> = fixtures
-        .into_iter()
-        .map(|fixture_name| {
+    // Limit concurrent builds to prevent memory exhaustion
+    // Each dotnet build uses ~100MB, so 4 concurrent builds balances speed and memory usage
+    const MAX_CONCURRENT_BUILDS: usize = 4;
+
+    let cache = Arc::new(Mutex::new(HashMap::new()));
+    let fixtures_queue = Arc::new(Mutex::new(fixtures.into_iter()));
+
+    // Spawn worker threads (limited number)
+    let handles: Vec<_> = (0..MAX_CONCURRENT_BUILDS)
+        .map(|_| {
             let build_dir = build_dir.clone();
             let fixtures_dir = fixtures_dir.clone();
+            let queue = Arc::clone(&fixtures_queue);
+            let cache = Arc::clone(&cache);
+
             thread::spawn(move || {
-                let result = build_single_fixture(&fixture_name, &fixtures_dir, &build_dir);
-                (fixture_name, result)
+                loop {
+                    // Get next fixture from queue
+                    let fixture_name = {
+                        let mut q = queue.lock().unwrap();
+                        q.next()
+                    };
+
+                    let Some(fixture_name) = fixture_name else {
+                        break; // No more fixtures
+                    };
+
+                    // Build this fixture
+                    let result = build_single_fixture(&fixture_name, &fixtures_dir, &build_dir);
+
+                    // Store result
+                    cache.lock().unwrap().insert(fixture_name, result);
+                }
             })
         })
         .collect();
 
-    // Collect results
-    let mut cache = HashMap::new();
+    // Wait for all workers to finish
     for handle in handles {
-        let (name, result) = handle.join().expect("Build thread panicked");
-        cache.insert(name, result);
+        handle.join().expect("Build thread panicked");
     }
+
+    let final_cache = Arc::try_unwrap(cache)
+        .expect("Cache still has references")
+        .into_inner()
+        .unwrap();
 
     eprintln!(
         "Pre-built {} fixtures in {:.1}s",
-        cache.len(),
+        final_cache.len(),
         start.elapsed().as_secs_f64()
     );
 
-    cache
+    final_cache
 }
 
 /// Build a single fixture's dotnet dacpac.
