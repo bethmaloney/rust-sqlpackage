@@ -5,8 +5,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-17 complete (203 tasks). Full parity achieved.**
-**Phase 18 in progress: BodyDependencies alias resolution (10/12 tasks complete).**
+**Phase 18 in progress: BodyDependencies alias resolution (10/15 tasks complete).**
 **Phase 19 pending: Whitespace-agnostic trim patterns (0/3 tasks, lower priority).**
+
+**⚠️ Critical:** Phase 18.5 blocks real-world deployment. Unqualified table names cause invalid alias references.
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -155,6 +157,32 @@ The following changes were made to handle nested subquery aliases:
 |----|------|--------|-------|
 | 18.4.1 | Allow duplicate references like DotNet | ⬜ | Remove deduplication |
 | 18.4.2 | Match DotNet's ordering of references | ⬜ | Preserve reference order |
+
+### Phase 18.5: Unqualified Table Name Support (0/3)
+
+**Critical Bug:** Alias resolution fails when table names are not schema-qualified. This causes deployment failures in real-world projects.
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 18.5.1 | Fix TABLE_ALIAS_RE to match unqualified table names | ⬜ | `FROM Account A` not just `FROM [dbo].[Account] A` |
+| 18.5.2 | Update extract_table_aliases_for_body_deps() for unqualified names | ⬜ | Resolve `Account` to `[dbo].[Account]` using default schema |
+| 18.5.3 | Add schema inference for unqualified table references | ⬜ | Look up table in DatabaseModel or assume [dbo] schema |
+
+**Test Coverage:**
+- `GetAccountUnqualified.sql` - Procedure with `FROM Account A`
+- `AccountSummaryUnqualified.sql` - View with unqualified joins
+- `GetAccountCountUnqualified.sql` - Function with unqualified table
+
+**Current Failure:** Generates invalid references like `[A].[Id]` instead of `[dbo].[Account].[Id]`
+
+**Example:**
+```sql
+FROM Account A          -- Unqualified (broken)
+WHERE A.Id = @Id        -- Generates [A].[Id] ✗
+
+FROM [dbo].[Account] A  -- Qualified (works)
+WHERE A.Id = @Id        -- Generates [dbo].[Account].[Id] ✓
+```
 
 ### Implementation Notes
 
@@ -330,7 +358,7 @@ The following changes were made to implement alias resolution:
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 18/18 |
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
-| Phase 18 | BodyDependencies alias resolution: fix table alias handling | 8/12 |
+| Phase 18 | BodyDependencies alias resolution: fix table alias handling | 10/15 |
 | Phase 19 | Whitespace-agnostic trim patterns (lower priority) | 0/3 |
 | Phase 20 | Replace remaining regex with tokenization/AST (cleanup) | 0/35 |
 
