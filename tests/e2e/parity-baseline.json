@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-31T13:10:52.193755955+00:00",
-  "commit": "9e85119",
+  "updated": "2026-01-31T20:02:15.584371353+00:00",
+  "commit": "982805e",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -16,6 +16,14 @@
       "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
+      "layer4_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "body_dependencies_aliases",
+      "layer1_pass": true,
+      "layer2_pass": true,
+      "relationship_pass": false,
       "layer4_pass": true,
       "metadata_pass": true
     },

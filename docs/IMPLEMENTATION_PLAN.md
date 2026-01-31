@@ -8,6 +8,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phase 15 complete: Parser refactoring tasks finished (including whitespace-agnostic keyword matching).**
 **Phase 16 complete: Performance tuning and benchmarking (18/18 tasks).**
 **Phase 17 complete: Real-world SQL compatibility fixes.**
+**Phase 18 pending: BodyDependencies alias resolution (0/10 tasks).**
 - Phase 15.1: ExtendedTsqlDialect infrastructure ✅
 - Phase 15.2: Column definition token parsing (D1, D2, D3, E1, E2) ✅
 - Phase 15.3: DDL object extraction (B1-B8) ✅
@@ -428,6 +429,62 @@ The fix tracks a `constraint_immediately_precedes` flag that is set when a `CONS
 
 ---
 
+## Phase 18: BodyDependencies Alias Resolution
+
+**Goal:** Fix BodyDependencies extraction to correctly resolve table aliases instead of treating them as schema references.
+
+**Background:** When extracting BodyDependencies from procedures, views, and functions, the current implementation incorrectly includes table aliases (like `[A]`, `[ATTAG]`, `[TagDetails]`) as schema references instead of resolving them to actual table names. This causes deployment failures when SqlPackage tries to resolve non-existent objects.
+
+**Problem Examples:**
+
+1. **Table aliases treated as schemas:**
+   ```sql
+   FROM [dbo].[Account] A
+   WHERE A.Id = @AccountId  -- Generates [A].[Id] instead of [dbo].[Account].[Id]
+   ```
+
+2. **Subquery aliases treated as schemas:**
+   ```sql
+   LEFT JOIN (...) AS TagDetails ON TagDetails.AccountId = A.Id
+   -- Generates [TagDetails].[AccountId] instead of omitting subquery alias references
+   ```
+
+3. **SQL keywords incorrectly parsed:**
+   ```sql
+   STUFF((SELECT ... FOR XML PATH('')), 1, 1, '')
+   -- Generates [dbo].[Account].[STUFF], [dbo].[Account].[FOR], [dbo].[Account].[PATH]
+   ```
+
+**Test:** `test_parity_body_dependencies_aliases` in `tests/e2e/dotnet_comparison_tests.rs`
+**Fixture:** `tests/fixtures/body_dependencies_aliases/`
+
+### Phase 18.1: Alias Tracking Infrastructure (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 18.1.1 | Create alias tracking structure for FROM clause parsing | ⬜ | Track `alias -> schema.table` mappings |
+| 18.1.2 | Parse FROM clauses to extract table aliases | ⬜ | Handle JOIN, OUTER APPLY, subqueries |
+| 18.1.3 | Parse subquery aliases in JOIN expressions | ⬜ | Track derived table aliases |
+
+### Phase 18.2: Alias Resolution in Body Dependencies (0/4)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 18.2.1 | Resolve single-letter aliases (A, I, T) to actual tables | ⬜ | `[A].[Id]` → `[dbo].[Account].[Id]` |
+| 18.2.2 | Resolve multi-letter aliases (ATTAG, TagDetails) | ⬜ | Same resolution logic |
+| 18.2.3 | Skip subquery/derived table alias references | ⬜ | Don't emit refs to `TagDetails.AccountId` |
+| 18.2.4 | Filter out SQL keywords from body dependencies | ⬜ | Remove STUFF, FOR, PATH, XML, etc. |
+
+### Phase 18.3: Edge Cases (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 18.3.1 | Handle OUTER APPLY and CROSS APPLY aliases | ⬜ | Subquery results used as table references |
+| 18.3.2 | Handle CTE (Common Table Expression) aliases | ⬜ | WITH clause table expressions |
+| 18.3.3 | Handle nested subquery aliases | ⬜ | Multiple levels of aliasing |
+
+---
+
 <details>
 <summary>Completed Phases Summary</summary>
 
@@ -444,6 +501,7 @@ The fix tracks a `constraint_immediately_precedes` flag that is set when a `CONS
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 18/18 |
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
+| Phase 18 | BodyDependencies alias resolution: fix table alias handling | 0/10 |
 
 ### Key Implementation Details
 

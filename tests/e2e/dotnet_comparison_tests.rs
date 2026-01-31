@@ -3679,6 +3679,60 @@ fn test_parity_views() {
     );
 }
 
+/// Parity test for body_dependencies_aliases fixture.
+/// Tests that table aliases in procedure/view bodies are NOT included in BodyDependencies.
+/// Aliases like A, ATTAG, TagDetails should be resolved to actual table references,
+/// not treated as schema names.
+#[test]
+fn test_parity_body_dependencies_aliases() {
+    if !dotnet_available() {
+        println!("Skipping test: dotnet not available");
+        return;
+    }
+
+    let options = ParityTestOptions::default();
+
+    let result = match run_parity_test("body_dependencies_aliases", &options) {
+        Ok(r) => r,
+        Err(e) => {
+            panic!("Parity test failed to run: {}", e);
+        }
+    };
+
+    println!("\n=== Parity Test: body_dependencies_aliases ===\n");
+    println!("Testing BodyDependencies alias resolution");
+    println!(
+        "Validates: Table aliases are resolved to actual table names, not treated as schema refs"
+    );
+    println!();
+    println!("Layer 1 errors (inventory): {}", result.layer1_errors.len());
+    println!(
+        "Layer 2 errors (properties): {}",
+        result.layer2_errors.len()
+    );
+    println!("Relationship errors: {}", result.relationship_errors.len());
+
+    if !result.layer1_errors.is_empty() {
+        println!("\nLayer 1 errors:");
+        for err in &result.layer1_errors {
+            println!("  {}", err);
+        }
+    }
+
+    if !result.relationship_errors.is_empty() {
+        println!("\nRelationship errors (expected - alias resolution issue):");
+        for err in result.relationship_errors.iter().take(10) {
+            println!("  {}", err);
+        }
+        if result.relationship_errors.len() > 10 {
+            println!("  ... and {} more", result.relationship_errors.len() - 10);
+        }
+    }
+
+    // This test documents a known failing case - aliases in BodyDependencies
+    // Don't assert, just report - the baseline tracks this as expected to fail
+}
+
 /// Aggregate test that runs parity checks on all available fixtures.
 /// This test provides a comprehensive overview of parity status across all fixtures.
 #[test]
