@@ -2,7 +2,9 @@
 
 use quick_xml::events::{BytesCData, BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
+use regex::Regex;
 use std::io::Write;
+use std::sync::LazyLock;
 
 use crate::model::{
     ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType,
@@ -31,6 +33,143 @@ const BUILTIN_SCHEMAS: &[&str] = &[
     "db_denydatareader",
     "db_denydatawriter",
 ];
+
+// =============================================================================
+// Cached Regex Patterns
+// =============================================================================
+// These static patterns are compiled once and reused across all function calls,
+// providing significant performance improvement over repeated Regex::new() calls.
+
+/// Parse qualified table name: [schema].[table]
+static QUALIFIED_TABLE_NAME_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[([^\]]+)\]\.\[([^\]]+)\]$").unwrap());
+
+/// Multi-statement TVF detection: RETURNS @var TABLE (
+static MULTI_STMT_TVF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)RETURNS\s+@\w+\s+TABLE\s*\(").unwrap());
+
+/// Parse TVF column definition type with optional precision/scale
+static TVF_COL_TYPE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^\[?(\w+)\]?(?:\s*\(\s*(\d+)(?:\s*,\s*(\d+))?\s*\))?").unwrap()
+});
+
+/// Extract table aliases from FROM/JOIN clauses
+static TABLE_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+(\[?[^\]\s]+\]?\.\[?[^\]\s]+\]?|\[?[^\]\s;]+\]?)\s*(?:AS\s+)?(\w+)?",
+    )
+    .unwrap()
+});
+
+/// ON keyword pattern for join clause parsing
+static ON_KEYWORD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bON\s+").unwrap());
+
+/// Terminator pattern for ON clause (WHERE, GROUP, ORDER, etc.)
+static ON_TERMINATOR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:WHERE|GROUP|ORDER|HAVING|UNION|INNER|LEFT|RIGHT|OUTER|CROSS|JOIN)\b|;")
+        .unwrap()
+});
+
+/// Column reference pattern: alias.column or schema.table.column
+static COL_REF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\[?\w+\]?)\.(\[?\w+\]?)(?:\.(\[?\w+\]?))?").unwrap());
+
+/// GROUP BY keyword pattern
+static GROUP_BY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bGROUP\s+BY\s+").unwrap());
+
+/// Terminator pattern for GROUP BY clause
+static GROUP_TERMINATOR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b(?:HAVING|ORDER|UNION|;|$)").unwrap());
+
+/// Bare column pattern: [ColumnName] not preceded by dot
+static BARE_COL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:^|[^.\w])\[(\w+)\](?:[^.\w]|$)").unwrap());
+
+/// Procedure parameter pattern
+static PROC_PARAM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"@(\w+)\s+(\[[^\]]+\]\s*\.\s*\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*\s*\.\s*[A-Za-z_][A-Za-z0-9_]*|[A-Za-z0-9_]+(?:\s*\([^)]*\))?)(?:\s+(READONLY))?(?:\s*=\s*([^,@\n]+?))?(?:\s+(OUTPUT|OUT))?(?:\s*,|\s*$|\s*\n)",
+    )
+    .unwrap()
+});
+
+/// Function parameter pattern
+static FUNC_PARAM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:\s*=\s*([^,@]+?))?(?:,|$|\s*\n)").unwrap()
+});
+
+/// DECLARE statement pattern for type extraction
+static DECLARE_TYPE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)DECLARE\s+@\w+\s+([A-Za-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?)").unwrap()
+});
+
+/// Bracketed table reference: [schema].[table]
+static BRACKETED_TABLE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]").unwrap());
+
+/// Unbracketed table reference: schema.table
+static UNBRACKETED_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)").unwrap()
+});
+
+/// Token regex for body dependency scanning
+static TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(@([A-Za-z_]\w*))|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([A-Za-z_][A-Za-z0-9_]*)\])|(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)|(?:^|[^@\w\.\]])([A-Za-z_][A-Za-z0-9_]*)",
+    )
+    .unwrap()
+});
+
+/// Bracketed identifier pattern: [Name]
+static BRACKETED_IDENT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([A-Za-z_][A-Za-z0-9_]*)\]").unwrap());
+
+/// CAST expression pattern
+static CAST_EXPR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(CAST)\s*\([^)]+\s+AS\s+(\w+)").unwrap());
+
+/// AS keyword pattern for function body extraction
+static AS_KEYWORD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)[\s\n]AS[\s\n]").unwrap());
+
+/// AS keyword pattern for trigger body extraction
+static TRIGGER_AS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bAS\s+").unwrap());
+
+/// Trigger table alias pattern: FROM/JOIN [schema].[table] alias
+static TRIGGER_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:FROM|JOIN)\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+([A-Za-z_]\w*)").unwrap()
+});
+
+/// Single bracketed identifier: [name]
+static SINGLE_BRACKET_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]").unwrap());
+
+/// Alias.column pattern: alias.[column]
+static ALIAS_COL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap());
+
+/// INSERT SELECT pattern (without JOIN)
+static INSERT_SELECT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?is)INSERT\s+INTO\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*SELECT\s+(.+?)\s+FROM\s+(inserted|deleted)\s*;",
+    )
+    .unwrap()
+});
+
+/// INSERT SELECT with JOIN pattern
+static INSERT_SELECT_JOIN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?is)INSERT\s+INTO\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*SELECT\s+(.+?)\s+FROM\s+(inserted|deleted)\s+(\w+)\s+(?:INNER\s+)?JOIN\s+(inserted|deleted)\s+(\w+)\s+ON\s+(.+?);",
+    )
+    .unwrap()
+});
+
+/// UPDATE with alias pattern
+static UPDATE_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?is)UPDATE\s+(\w+)\s+SET\s+(.+?)\s+FROM\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+(\w+)\s+(?:INNER\s+)?JOIN\s+(inserted|deleted)\s+(\w+)\s+ON\s+(.+?)(?:;|$)",
+    )
+    .unwrap()
+});
 
 /// Check if a schema name is a built-in SQL Server schema
 fn is_builtin_schema(schema: &str) -> bool {
@@ -586,8 +725,7 @@ fn write_computed_column<W: Write>(
 /// Returns (schema, table) without brackets.
 fn parse_qualified_table_name(qualified_name: &str) -> Option<(String, String)> {
     // Match pattern: [schema].[table]
-    let re = regex::Regex::new(r"^\[([^\]]+)\]\.\[([^\]]+)\]$").ok()?;
-    let caps = re.captures(qualified_name)?;
+    let caps = QUALIFIED_TABLE_NAME_RE.captures(qualified_name)?;
     Some((caps[1].to_string(), caps[2].to_string()))
 }
 
@@ -1202,9 +1340,8 @@ fn extract_multi_statement_tvf_columns(definition: &str) -> Vec<TvfColumn> {
     // We need to handle nested parentheses in column types like NVARCHAR(100)
     // First find "RETURNS @name TABLE ("
     let def_upper = definition.to_uppercase();
-    let table_pattern = regex::Regex::new(r"(?i)RETURNS\s+@\w+\s+TABLE\s*\(").unwrap();
 
-    if let Some(table_match) = table_pattern.find(&def_upper) {
+    if let Some(table_match) = MULTI_STMT_TVF_RE.find(&def_upper) {
         let start_pos = table_match.end();
         // Now find the matching closing paren, accounting for nested parens
         if let Some(cols_str) = extract_balanced_parens(definition, start_pos) {
@@ -1302,10 +1439,8 @@ fn parse_tvf_column_definition(def: &str) -> Option<TvfColumn> {
 
     // Join remaining parts and parse type with optional length/precision/scale
     let type_part = parts[1..].join(" ");
-    let type_regex =
-        regex::Regex::new(r"(?i)^\[?(\w+)\]?(?:\s*\(\s*(\d+)(?:\s*,\s*(\d+))?\s*\))?").unwrap();
 
-    if let Some(cap) = type_regex.captures(&type_part) {
+    if let Some(cap) = TVF_COL_TYPE_RE.captures(&type_part) {
         let data_type = cap
             .get(1)
             .map(|m| m.as_str().to_lowercase())
@@ -1352,12 +1487,7 @@ fn extract_table_aliases(query: &str, default_schema: &str) -> Vec<(String, Stri
     // - JOIN [dbo].[Categories] c ON
     // - FROM Products (without schema)
     // - FROM [dbo].[Products]; (with trailing semicolon)
-    let table_pattern = regex::Regex::new(
-        r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+(\[?[^\]\s]+\]?\.\[?[^\]\s]+\]?|\[?[^\]\s;]+\]?)\s*(?:AS\s+)?(\w+)?",
-    )
-    .unwrap();
-
-    for cap in table_pattern.captures_iter(query) {
+    for cap in TABLE_ALIAS_RE.captures_iter(query) {
         let table_name = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let alias = cap.get(2).map(|m| m.as_str()).unwrap_or("");
 
@@ -1616,19 +1746,12 @@ fn extract_join_on_columns(
 
     // Find all ON clauses by matching "ON" followed by condition
     // We use a simpler approach: find each ON keyword and extract until we hit a terminating keyword
-    let on_keyword_pattern = regex::Regex::new(r"(?i)\bON\s+").unwrap();
-    let terminator_pattern = regex::Regex::new(
-        r"(?i)\b(?:WHERE|GROUP|ORDER|HAVING|UNION|INNER|LEFT|RIGHT|OUTER|CROSS|JOIN)\b|;",
-    )
-    .unwrap();
-    let col_pattern = regex::Regex::new(r"(\[?\w+\]?)\.(\[?\w+\]?)(?:\.(\[?\w+\]?))?").unwrap();
-
-    for on_match in on_keyword_pattern.find_iter(query) {
+    for on_match in ON_KEYWORD_RE.find_iter(query) {
         let start = on_match.end();
         let remaining = &query[start..];
 
         // Find where this ON clause ends
-        let end = terminator_pattern
+        let end = ON_TERMINATOR_RE
             .find(remaining)
             .map(|m| m.start())
             .unwrap_or(remaining.len());
@@ -1636,7 +1759,7 @@ fn extract_join_on_columns(
         let clause_text = &remaining[..end];
 
         // Extract column references from the ON clause
-        for col_cap in col_pattern.captures_iter(clause_text) {
+        for col_cap in COL_REF_RE.captures_iter(clause_text) {
             let full_match = col_cap.get(0).map(|m| m.as_str()).unwrap_or("");
 
             if let Some(resolved) =
@@ -1661,16 +1784,12 @@ fn extract_group_by_columns(
     let mut refs = Vec::new();
 
     // Find GROUP BY clause
-    let group_by_pattern = regex::Regex::new(r"(?i)\bGROUP\s+BY\s+").unwrap();
-    let terminator_pattern = regex::Regex::new(r"(?i)\b(?:HAVING|ORDER|UNION|;|$)").unwrap();
-    let col_pattern = regex::Regex::new(r"(\[?\w+\]?)\.(\[?\w+\]?)(?:\.(\[?\w+\]?))?").unwrap();
-
-    if let Some(group_match) = group_by_pattern.find(query) {
+    if let Some(group_match) = GROUP_BY_RE.find(query) {
         let start = group_match.end();
         let remaining = &query[start..];
 
         // Find where GROUP BY clause ends
-        let end = terminator_pattern
+        let end = GROUP_TERMINATOR_RE
             .find(remaining)
             .map(|m| m.start())
             .unwrap_or(remaining.len());
@@ -1678,7 +1797,7 @@ fn extract_group_by_columns(
         let clause_text = &remaining[..end];
 
         // Extract column references from the GROUP BY clause
-        for col_cap in col_pattern.captures_iter(clause_text) {
+        for col_cap in COL_REF_RE.captures_iter(clause_text) {
             let full_match = col_cap.get(0).map(|m| m.as_str()).unwrap_or("");
 
             if let Some(resolved) =
@@ -1703,9 +1822,7 @@ fn extract_all_column_references(
 
     // Find all column-like references: alias.column or [schema].[table].[column]
     // Pattern matches: word.word, [word].[word], word.[word], etc.
-    let col_pattern = regex::Regex::new(r"(\[?\w+\]?)\.(\[?\w+\]?)(?:\.(\[?\w+\]?))?").unwrap();
-
-    for cap in col_pattern.captures_iter(query) {
+    for cap in COL_REF_RE.captures_iter(query) {
         let full_match = cap.get(0).map(|m| m.as_str()).unwrap_or("");
 
         // Skip if it looks like a function call argument position
@@ -1724,8 +1841,7 @@ fn extract_all_column_references(
 
     // Also find bare bracketed column names (e.g., [IsActive] in WHERE clause)
     // that aren't part of a dotted reference
-    let bare_col_pattern = regex::Regex::new(r"(?:^|[^.\w])\[(\w+)\](?:[^.\w]|$)").unwrap();
-    for cap in bare_col_pattern.captures_iter(query) {
+    for cap in BARE_COL_RE.captures_iter(query) {
         if let Some(col_match) = cap.get(1) {
             let col_name = col_match.as_str();
             // Resolve using first table alias (for single-table queries)
@@ -2336,12 +2452,7 @@ fn extract_procedure_parameters(definition: &str) -> Vec<ProcedureParameter> {
     // 2. Schema-qualified types like [dbo].[TableType] or dbo.TableType
     // 3. READONLY keyword for table-valued parameters
     // 4. OUTPUT/OUT modifiers
-    let param_regex = regex::Regex::new(
-        r"@(\w+)\s+(\[[^\]]+\]\s*\.\s*\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*\s*\.\s*[A-Za-z_][A-Za-z0-9_]*|[A-Za-z0-9_]+(?:\s*\([^)]*\))?)(?:\s+(READONLY))?(?:\s*=\s*([^,@\n]+?))?(?:\s+(OUTPUT|OUT))?(?:\s*,|\s*$|\s*\n)",
-    )
-    .unwrap();
-
-    for cap in param_regex.captures_iter(header) {
+    for cap in PROC_PARAM_RE.captures_iter(header) {
         let name = cap
             .get(1)
             .map(|m| m.as_str().to_string())
@@ -2418,12 +2529,7 @@ fn extract_function_parameters(definition: &str) -> Vec<FunctionParameter> {
 
             // Extract parameters with full details - same regex as procedure parameters
             // but without OUTPUT since function parameters are always input
-            let param_regex = regex::Regex::new(
-                r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:\s*=\s*([^,@]+?))?(?:,|$|\s*\n)",
-            )
-            .unwrap();
-
-            for cap in param_regex.captures_iter(param_section) {
+            for cap in FUNC_PARAM_RE.captures_iter(param_section) {
                 let name = cap
                     .get(1)
                     .map(|m| m.as_str().to_string())
@@ -2563,13 +2669,8 @@ fn extract_body_dependencies(
     let mut deps = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    // Regex to match DECLARE @var type patterns for built-in types
-    let declare_regex =
-        regex::Regex::new(r"(?i)DECLARE\s+@\w+\s+([A-Za-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?)")
-            .unwrap();
-
     // Extract DECLARE type dependencies first (for scalar functions)
-    for cap in declare_regex.captures_iter(body) {
+    for cap in DECLARE_TYPE_RE.captures_iter(body) {
         if let Some(type_match) = cap.get(1) {
             let type_str = type_match.as_str().trim();
             let base_type = if let Some(paren_pos) = type_str.find('(') {
@@ -2591,8 +2692,7 @@ fn extract_body_dependencies(
     let mut table_refs: Vec<String> = Vec::new();
 
     // Match bracketed table refs: [schema].[table]
-    let bracketed_table_regex = regex::Regex::new(r"\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]").unwrap();
-    for cap in bracketed_table_regex.captures_iter(body) {
+    for cap in BRACKETED_TABLE_RE.captures_iter(body) {
         let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         if !schema.starts_with('@') && !name.starts_with('@') {
@@ -2605,10 +2705,7 @@ fn extract_body_dependencies(
 
     // Match unbracketed table refs: schema.table (identifier.identifier not preceded by @)
     // This must be a word boundary followed by identifier.identifier
-    let unbracketed_table_regex =
-        regex::Regex::new(r"(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)")
-            .unwrap();
-    for cap in unbracketed_table_regex.captures_iter(body) {
+    for cap in UNBRACKETED_TABLE_RE.captures_iter(body) {
         let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         // Skip if schema is a keyword (like FROM.something)
@@ -2629,12 +2726,7 @@ fn extract_body_dependencies(
     // 4. [ident] - single bracketed identifier
     // 5. schema.table - unbracketed two-part reference
     // 6. ident - unbracketed identifier (column name)
-    let token_regex = regex::Regex::new(
-        r"(@([A-Za-z_]\w*))|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([A-Za-z_][A-Za-z0-9_]*)\])|(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)|(?:^|[^@\w\.\]])([A-Za-z_][A-Za-z0-9_]*)",
-    )
-    .unwrap();
-
-    for cap in token_regex.captures_iter(body) {
+    for cap in TOKEN_RE.captures_iter(body) {
         if cap.get(1).is_some() {
             // Parameter reference: @param
             let param_name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
@@ -3078,9 +3170,7 @@ fn extract_filter_predicate_columns(predicate: &str, table_ref: &str) -> Vec<Str
 
     // Match bracketed identifiers: [ColumnName]
     // These are column references in the predicate
-    let column_regex = regex::Regex::new(r"\[([A-Za-z_][A-Za-z0-9_]*)\]").unwrap();
-
-    for cap in column_regex.captures_iter(predicate) {
+    for cap in BRACKETED_IDENT_RE.captures_iter(predicate) {
         if let Some(col_match) = cap.get(1) {
             let col_name = col_match.as_str();
             let upper_name = col_name.to_uppercase();
@@ -3139,15 +3229,6 @@ fn extract_expression_column_references(
     let mut refs = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    // Match bracketed identifiers: [ColumnName]
-    // These are column references in the expression
-    let column_regex = regex::Regex::new(r"\[([A-Za-z_][A-Za-z0-9_]*)\]").unwrap();
-
-    // Match CAST(... AS TYPE) or CAST(... AS TYPE(n)) patterns
-    // Capture the entire CAST expression to get the CAST keyword position, and the type name
-    // DotNet emits the type reference at the position of CAST (before inner column refs)
-    let cast_regex = regex::Regex::new(r"(?i)(CAST)\s*\([^)]+\s+AS\s+(\w+)").unwrap();
-
     // Process expression to preserve order of appearance
     // We need to track positions where each reference appears
     let mut position_refs: Vec<(usize, String)> = Vec::new();
@@ -3155,7 +3236,7 @@ fn extract_expression_column_references(
     // Track CAST ranges so we can skip column references inside CAST expressions
     // (they'll be processed separately after the CAST type ref)
     let mut cast_ranges: Vec<(usize, usize, usize)> = Vec::new(); // (cast_start, cast_end, type_pos)
-    for cap in cast_regex.captures_iter(expression) {
+    for cap in CAST_EXPR_RE.captures_iter(expression) {
         if let (Some(cast_match), Some(type_match)) = (cap.get(1), cap.get(2)) {
             let cast_start = cap.get(0).map(|m| m.start()).unwrap_or(0);
             let cast_end = cap.get(0).map(|m| m.end()).unwrap_or(0);
@@ -3169,7 +3250,8 @@ fn extract_expression_column_references(
     }
 
     // Collect column references with their positions
-    for cap in column_regex.captures_iter(expression) {
+    // Match bracketed identifiers: [ColumnName]
+    for cap in BRACKETED_IDENT_RE.captures_iter(expression) {
         if let Some(col_match) = cap.get(1) {
             let col_name = col_match.as_str();
             let upper_name = col_name.to_uppercase();
@@ -3614,8 +3696,7 @@ fn extract_function_body(definition: &str) -> String {
         let after_returns = &def_upper[returns_pos..];
         // Find AS (could be "\nAS" or " AS" - with word boundary)
         // We need to find " AS " or "\nAS" to avoid matching within a type like "ALIAS"
-        let as_regex = regex::Regex::new(r"(?i)[\s\n]AS[\s\n]").unwrap();
-        if let Some(m) = as_regex.find(after_returns) {
+        if let Some(m) = AS_KEYWORD_RE.find(after_returns) {
             // Calculate absolute position in original string
             let abs_as_pos = returns_pos + m.end();
             // Return everything after AS
@@ -3637,8 +3718,7 @@ fn extract_function_header(definition: &str) -> String {
     if let Some(returns_pos) = def_upper.find("RETURNS") {
         let after_returns = &def_upper[returns_pos..];
         // Find AS keyword
-        let as_regex = regex::Regex::new(r"(?i)[\s\n]AS[\s\n]").unwrap();
-        if let Some(m) = as_regex.find(after_returns) {
+        if let Some(m) = AS_KEYWORD_RE.find(after_returns) {
             // Calculate absolute position in original string (include the AS and trailing whitespace)
             let abs_as_end = returns_pos + m.end();
             // Return everything up to and including AS with trailing whitespace
@@ -4898,12 +4978,9 @@ fn extract_trigger_body(definition: &str) -> String {
     }
 
     // Try a more flexible pattern - AS followed by whitespace
-    let re = regex::Regex::new(r"(?i)\bAS\s+").ok();
-    if let Some(re) = re {
-        if let Some(m) = re.find(&definition[action_pos..]) {
-            let actual_pos = action_pos + m.end();
-            return definition[actual_pos..].trim().to_string();
-        }
+    if let Some(m) = TRIGGER_AS_RE.find(&definition[action_pos..]) {
+        let actual_pos = action_pos + m.end();
+        return definition[actual_pos..].trim().to_string();
     }
 
     // Fallback - return entire definition if we can't parse it
@@ -4933,10 +5010,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
 
     // First pass: find all table aliases
     // Pattern: FROM [schema].[table] alias or JOIN [schema].[table] alias
-    let alias_regex =
-        regex::Regex::new(r"(?i)(?:FROM|JOIN)\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+([A-Za-z_]\w*)")
-            .unwrap();
-    for cap in alias_regex.captures_iter(body) {
+    for cap in TRIGGER_ALIAS_RE.captures_iter(body) {
         let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         let alias = cap.get(3).map(|m| m.as_str()).unwrap_or("");
@@ -4944,21 +5018,10 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         table_aliases.insert(alias.to_lowercase(), table_ref);
     }
 
-    // Pattern: standalone [column] (unqualified)
-    let single_bracket_regex = regex::Regex::new(r"\[([^\]]+)\]").unwrap();
-
-    // Pattern: alias.[column] references (for resolving aliases)
-    let alias_col_regex = regex::Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap();
-
     // Process INSERT statements with SELECT FROM inserted/deleted (without JOIN)
     // Pattern: INSERT INTO [schema].[table] ([cols]) SELECT ... FROM inserted|deleted;
     // The negative lookahead (?!\s+\w+\s+(?:INNER\s+)?JOIN) ensures we don't match JOIN cases
-    let insert_select_regex = regex::Regex::new(
-        r"(?is)INSERT\s+INTO\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*SELECT\s+(.+?)\s+FROM\s+(inserted|deleted)\s*;",
-    )
-    .unwrap();
-
-    for cap in insert_select_regex.captures_iter(body) {
+    for cap in INSERT_SELECT_RE.captures_iter(body) {
         let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         let col_list = cap.get(3).map(|m| m.as_str()).unwrap_or("");
@@ -4973,7 +5036,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
 
         // Emit each column reference from the INSERT column list
-        for col_match in single_bracket_regex.captures_iter(col_list) {
+        for col_match in SINGLE_BRACKET_RE.captures_iter(col_list) {
             let col = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
             let col_ref = format!("{}.[{}]", table_ref, col);
             if !seen.contains(&col_ref) {
@@ -4983,7 +5046,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
 
         // Emit column references from SELECT clause - these come from inserted/deleted (parent)
-        for col_match in single_bracket_regex.captures_iter(select_cols) {
+        for col_match in SINGLE_BRACKET_RE.captures_iter(select_cols) {
             let col = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
             // These columns come from inserted/deleted, resolve to parent
             let col_ref = format!("{}.[{}]", parent_ref, col);
@@ -4997,12 +5060,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
 
     // Process INSERT statements with SELECT FROM inserted/deleted with JOIN
     // Pattern: INSERT INTO [schema].[table] ([cols]) SELECT expr FROM inserted alias JOIN deleted alias ON ...;
-    let insert_select_join_regex = regex::Regex::new(
-        r"(?is)INSERT\s+INTO\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*SELECT\s+(.+?)\s+FROM\s+(inserted|deleted)\s+(\w+)\s+(?:INNER\s+)?JOIN\s+(inserted|deleted)\s+(\w+)\s+ON\s+(.+?);",
-    )
-    .unwrap();
-
-    for cap in insert_select_join_regex.captures_iter(body) {
+    for cap in INSERT_SELECT_JOIN_RE.captures_iter(body) {
         let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         let col_list = cap.get(3).map(|m| m.as_str()).unwrap_or("");
@@ -5023,7 +5081,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         deps.push(BodyDependency::ObjectRef(table_ref.clone()));
 
         // Emit each column reference from the INSERT column list (no dedup - DotNet preserves order)
-        for col_match in single_bracket_regex.captures_iter(col_list) {
+        for col_match in SINGLE_BRACKET_RE.captures_iter(col_list) {
             let col = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
             let col_ref = format!("{}.[{}]", table_ref, col);
             deps.push(BodyDependency::ObjectRef(col_ref));
@@ -5039,7 +5097,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
             std::collections::HashSet::new();
 
         // 1. Emit column references from ON clause first (no dedup within ON)
-        for col_match in alias_col_regex.captures_iter(on_clause) {
+        for col_match in ALIAS_COL_RE.captures_iter(on_clause) {
             let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
             let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
             let alias_lower = alias.to_lowercase();
@@ -5052,7 +5110,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
 
         // 2. Emit column references from SELECT clause (skip if already in ON clause with same alias)
-        for col_match in alias_col_regex.captures_iter(select_expr) {
+        for col_match in ALIAS_COL_RE.captures_iter(select_expr) {
             let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
             let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
             let alias_lower = alias.to_lowercase();
@@ -5072,12 +5130,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
     }
 
     // Process UPDATE with alias pattern: UPDATE alias SET ... FROM [schema].[table] alias JOIN inserted/deleted ON ...
-    let update_alias_regex = regex::Regex::new(
-        r"(?is)UPDATE\s+(\w+)\s+SET\s+(.+?)\s+FROM\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+(\w+)\s+(?:INNER\s+)?JOIN\s+(inserted|deleted)\s+(\w+)\s+ON\s+(.+?)(?:;|$)",
-    )
-    .unwrap();
-
-    for cap in update_alias_regex.captures_iter(body) {
+    for cap in UPDATE_ALIAS_RE.captures_iter(body) {
         let update_alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let set_clause = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         let schema = cap.get(3).map(|m| m.as_str()).unwrap_or("");
@@ -5100,7 +5153,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
 
         // Process ON clause FIRST - extract alias.[col] patterns (these can be duplicated)
-        for col_match in alias_col_regex.captures_iter(on_clause) {
+        for col_match in ALIAS_COL_RE.captures_iter(on_clause) {
             let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
             let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
             let alias_lower = alias.to_lowercase();
@@ -5113,7 +5166,7 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
 
         // Process SET clause - extract alias.[col] = patterns
-        for col_match in alias_col_regex.captures_iter(set_clause) {
+        for col_match in ALIAS_COL_RE.captures_iter(set_clause) {
             let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
             let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
             let alias_lower = alias.to_lowercase();
