@@ -1059,25 +1059,38 @@ fn write_view<W: Write>(
 
 /// Extract the query part from a CREATE VIEW definition
 /// Strips the "CREATE VIEW [name] AS" prefix, leaving just the SELECT statement
+/// Uses token-based parsing to handle any whitespace (tabs, multiple spaces, newlines)
 fn extract_view_query(definition: &str) -> String {
-    // Find the AS keyword that separates the view header from the query
-    // Pattern: CREATE VIEW [schema].[name] AS SELECT ...
-    let def_upper = definition.to_uppercase();
-    if let Some(as_pos) = def_upper
-        .find("\nAS\n")
-        .or_else(|| def_upper.find("\nAS "))
-        .or_else(|| def_upper.find(" AS\n"))
-        .or_else(|| def_upper.find(" AS "))
-    {
-        // Find the "AS" in the original string and skip past it
-        let after_as = &definition[as_pos..];
-        // Skip whitespace and "AS"
-        let trimmed = after_as.trim_start();
-        if trimmed.to_uppercase().starts_with("AS") {
-            let query = trimmed[2..].trim_start();
-            return query.to_string();
+    // Tokenize the definition using sqlparser
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, definition).tokenize() {
+        Ok(t) => t,
+        Err(_) => {
+            // Fallback: return the original definition if tokenization fails
+            return definition.to_string();
+        }
+    };
+
+    // Find the first AS keyword at top level (after CREATE VIEW [name])
+    // We need to skip past the CREATE VIEW ... part and find the AS that starts the query
+    let mut paren_depth: i32 = 0;
+    let mut found_view = false;
+
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::LParen => paren_depth += 1,
+            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+            Token::Word(w) if w.keyword == Keyword::VIEW => {
+                found_view = true;
+            }
+            Token::Word(w) if w.keyword == Keyword::AS && paren_depth == 0 && found_view => {
+                // Found the AS keyword - return everything after it
+                return reconstruct_tokens(&tokens[i + 1..]);
+            }
+            _ => {}
         }
     }
+
     // Fallback: return the original definition if we can't find AS
     definition.to_string()
 }

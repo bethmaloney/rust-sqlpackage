@@ -59,13 +59,13 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 
 **Pattern:** Use `Tokenizer::new(&MsSqlDialect{}, sql).tokenize()` and search for `Token::Word` with the appropriate `Keyword` enum value, tracking parenthesis depth when needed.
 
-### Phase 15.8: Tasks (2/7)
+### Phase 15.8: Tasks (3/7)
 
 | ID | Task | File | Line | Current Pattern | Status |
 |----|------|------|------|-----------------|--------|
 | J1 | Fix AS alias in `parse_column_expression()` | `src/dacpac/model_xml.rs` | 1621+ | Token-based (fixed) | ✅ |
 | J2 | Fix AS alias in TVF parameter references | `src/dacpac/model_xml.rs` | 1307 | Token-based (fixed) | ✅ |
-| J3 | Fix AS keyword in `extract_view_query()` | `src/dacpac/model_xml.rs` | 1067-1070 | Chain of `find()` patterns | ⬜ |
+| J3 | Fix AS keyword in `extract_view_query()` | `src/dacpac/model_xml.rs` | 1062-1092 | Token-based (fixed) | ✅ |
 | J4 | Fix FOR keyword in trigger parsing | `src/dacpac/model_xml.rs` | 5050 | `find(" FOR ")` | ⬜ |
 | J5 | Fix AS keyword in trigger body extraction | `src/dacpac/model_xml.rs` | 5054-5069 | Chain of `find()` patterns | ⬜ |
 | J6 | Fix FROM/AS TABLE in type detection | `src/parser/tsql_parser.rs` | 633 | `contains(" FROM ")`, `contains(" AS TABLE")` | ⬜ |
@@ -75,7 +75,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 
 **J1 (Complete):** Demonstrates the pattern - tokenize expression, track paren depth, find last `Keyword::AS` at depth 0, extract alias from subsequent tokens.
 
-**J2-J5:** Similar to J1 - replace string matching with token iteration. Consider extracting shared helper functions:
+**J3 (Complete):** Uses token-based parsing to find the first AS keyword after VIEW keyword at paren depth 0. Returns everything after the AS as the query body. Unlike J1 which finds the last AS (for alias expressions), J3 finds the first AS (for view definitions).
+
+**J4-J5:** Similar to J1/J3 - replace string matching with token iteration. Consider extracting shared helper functions:
 - `find_keyword_at_depth(tokens, keyword, depth)` - find keyword position at specific paren depth
 - `find_keyword_after_position(tokens, keyword, start)` - find keyword after given token index
 
