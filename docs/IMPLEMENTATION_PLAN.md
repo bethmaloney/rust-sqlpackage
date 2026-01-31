@@ -5,7 +5,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-17 complete (203 tasks). Full parity achieved.**
-**Phase 18 pending: BodyDependencies alias resolution (0/10 tasks).**
+**Phase 18 in progress: BodyDependencies alias resolution (7/12 tasks complete).**
 **Phase 19 pending: Whitespace-agnostic trim patterns (0/3 tasks, lower priority).**
 
 | Layer | Passing | Rate |
@@ -81,22 +81,22 @@ cargo bench -- --baseline before             # Compare against baseline
 **Test:** `test_parity_body_dependencies_aliases` in `tests/e2e/dotnet_comparison_tests.rs`
 **Fixture:** `tests/fixtures/body_dependencies_aliases/`
 
-### Phase 18.1: Alias Tracking Infrastructure (0/3)
+### Phase 18.1: Alias Tracking Infrastructure (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 18.1.1 | Create alias tracking structure for FROM clause parsing | ⬜ | Track `alias -> schema.table` mappings |
-| 18.1.2 | Parse FROM clauses to extract table aliases | ⬜ | Handle JOIN, OUTER APPLY, subqueries |
-| 18.1.3 | Parse subquery aliases in JOIN expressions | ⬜ | Track derived table aliases |
+| 18.1.1 | Create alias tracking structure for FROM clause parsing | ✅ | Track `alias -> schema.table` mappings |
+| 18.1.2 | Parse FROM clauses to extract table aliases | ✅ | Handle JOIN, OUTER APPLY, subqueries |
+| 18.1.3 | Parse subquery aliases in JOIN expressions | ✅ | Track derived table aliases |
 
-### Phase 18.2: Alias Resolution in Body Dependencies (0/4)
+### Phase 18.2: Alias Resolution in Body Dependencies (4/4) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 18.2.1 | Resolve single-letter aliases (A, I, T) to actual tables | ⬜ | `[A].[Id]` → `[dbo].[Account].[Id]` |
-| 18.2.2 | Resolve multi-letter aliases (ATTAG, TagDetails) | ⬜ | Same resolution logic |
-| 18.2.3 | Skip subquery/derived table alias references | ⬜ | Don't emit refs to `TagDetails.AccountId` |
-| 18.2.4 | Filter out SQL keywords from body dependencies | ⬜ | Remove STUFF, FOR, PATH, XML, etc. |
+| 18.2.1 | Resolve single-letter aliases (A, I, T) to actual tables | ✅ | `[A].[Id]` → `[dbo].[Account].[Id]` |
+| 18.2.2 | Resolve multi-letter aliases (ATTAG, TagDetails) | ✅ | Same resolution logic |
+| 18.2.3 | Skip subquery/derived table alias references | ✅ | Don't emit refs to `TagDetails.AccountId` |
+| 18.2.4 | Filter out SQL keywords from body dependencies | ✅ | Remove STUFF, FOR, PATH, XML, etc. |
 
 ### Phase 18.3: Edge Cases (0/3)
 
@@ -105,6 +105,29 @@ cargo bench -- --baseline before             # Compare against baseline
 | 18.3.1 | Handle OUTER APPLY and CROSS APPLY aliases | ⬜ | Subquery results used as table references |
 | 18.3.2 | Handle CTE (Common Table Expression) aliases | ⬜ | WITH clause table expressions |
 | 18.3.3 | Handle nested subquery aliases | ⬜ | Multiple levels of aliasing |
+
+### Phase 18.4: DotNet Compatibility (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 18.4.1 | Allow duplicate references like DotNet | ⬜ | Remove deduplication |
+| 18.4.2 | Match DotNet's ordering of references | ⬜ | Preserve reference order |
+
+### Implementation Notes
+
+The following changes were made to implement alias resolution:
+
+1. **`extract_table_aliases_for_body_deps()` function** - Added to track table aliases from FROM clauses, mapping alias names to their `schema.table` targets.
+
+2. **`extract_column_aliases_for_body_deps()` function** - Added to track column aliases from AS patterns in SELECT lists, preventing these from being treated as table references.
+
+3. **Modified `extract_body_dependencies()`** - Updated to resolve aliases to actual tables instead of treating single-letter and multi-letter aliases as schema references.
+
+4. **Subquery alias filtering** - Added logic to identify and skip references to derived table aliases (e.g., `TagDetails`, `AccountTags`) which are subquery result sets, not actual tables.
+
+5. **Column alias filtering** - Added detection for `AS identifier` patterns to prevent column aliases from appearing as body dependencies.
+
+6. **SQL keyword filtering** - Extended the keyword filter to include `STUFF`, `FOR`, `PATH`, `STRING_AGG`, and other SQL functions/keywords that were incorrectly appearing as body dependencies.
 
 ---
 
@@ -142,7 +165,7 @@ cargo bench -- --baseline before             # Compare against baseline
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 18/18 |
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
-| Phase 18 | BodyDependencies alias resolution: fix table alias handling | 0/10 |
+| Phase 18 | BodyDependencies alias resolution: fix table alias handling | 7/12 |
 | Phase 19 | Whitespace-agnostic trim patterns (lower priority) | 0/3 |
 
 ## Performance Metrics
