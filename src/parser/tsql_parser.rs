@@ -13,6 +13,7 @@ use super::function_parser::{
     parse_create_function_tokens, TokenParsedFunctionType,
 };
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
+use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
 use super::trigger_parser::parse_create_trigger_tokens;
 use super::tsql_dialect::ExtendedTsqlDialect;
 use crate::error::SqlPackageError;
@@ -1179,88 +1180,22 @@ struct SequenceInfo {
 }
 
 /// Extract complete sequence information from CREATE SEQUENCE statement
+///
+/// Uses token-based parsing (Phase 15.3 B4) for improved maintainability and edge case handling.
 fn extract_sequence_info(sql: &str) -> Option<SequenceInfo> {
-    // First extract schema and name
-    let name_re = regex::Regex::new(
-        r"(?i)CREATE\s+SEQUENCE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
-    )
-    .ok()?;
-
-    let caps = name_re.captures(sql)?;
-    let schema = caps
-        .get(1)
-        .or_else(|| caps.get(2))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
-
-    let sql_upper = sql.to_uppercase();
-
-    // Extract AS <data_type>
-    let data_type = regex::Regex::new(r"(?i)\bAS\s+(\w+)")
-        .ok()
-        .and_then(|re| re.captures(sql))
-        .map(|caps| caps.get(1).unwrap().as_str().to_uppercase());
-
-    // Extract START WITH <value>
-    let start_value = regex::Regex::new(r"(?i)\bSTART\s+WITH\s+(-?\d+)")
-        .ok()
-        .and_then(|re| re.captures(sql))
-        .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok());
-
-    // Extract INCREMENT BY <value>
-    let increment_value = regex::Regex::new(r"(?i)\bINCREMENT\s+BY\s+(-?\d+)")
-        .ok()
-        .and_then(|re| re.captures(sql))
-        .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok());
-
-    // Extract MINVALUE <value> or NO MINVALUE
-    let has_no_min_value = sql_upper.contains("NO MINVALUE");
-    let min_value = if has_no_min_value {
-        None
-    } else {
-        regex::Regex::new(r"(?i)\bMINVALUE\s+(-?\d+)")
-            .ok()
-            .and_then(|re| re.captures(sql))
-            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
-    };
-
-    // Extract MAXVALUE <value> or NO MAXVALUE
-    let has_no_max_value = sql_upper.contains("NO MAXVALUE");
-    let max_value = if has_no_max_value {
-        None
-    } else {
-        regex::Regex::new(r"(?i)\bMAXVALUE\s+(-?\d+)")
-            .ok()
-            .and_then(|re| re.captures(sql))
-            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
-    };
-
-    // Extract CYCLE or NO CYCLE (default is NO CYCLE)
-    let is_cycling = sql_upper.contains("CYCLE") && !sql_upper.contains("NO CYCLE");
-
-    // Extract CACHE <size> or NO CACHE
-    let cache_size = if sql_upper.contains("NO CACHE") {
-        Some(0) // NO CACHE means cache size of 0
-    } else {
-        regex::Regex::new(r"(?i)\bCACHE\s+(\d+)")
-            .ok()
-            .and_then(|re| re.captures(sql))
-            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
-    };
-
+    let parsed = parse_create_sequence_tokens(sql)?;
     Some(SequenceInfo {
-        schema,
-        name,
-        data_type,
-        start_value,
-        increment_value,
-        min_value,
-        max_value,
-        is_cycling,
-        has_no_min_value,
-        has_no_max_value,
-        cache_size,
+        schema: parsed.schema,
+        name: parsed.name,
+        data_type: parsed.data_type,
+        start_value: parsed.start_value,
+        increment_value: parsed.increment_value,
+        min_value: parsed.min_value,
+        max_value: parsed.max_value,
+        is_cycling: parsed.is_cycling,
+        has_no_min_value: parsed.has_no_min_value,
+        has_no_max_value: parsed.has_no_max_value,
+        cache_size: parsed.cache_size,
     })
 }
 
@@ -1526,82 +1461,22 @@ fn extract_alter_function_name(sql: &str) -> Option<(String, String)> {
 }
 
 /// Extract complete sequence information from ALTER SEQUENCE statement
+///
+/// Uses token-based parsing (Phase 15.3 B4) for improved maintainability and edge case handling.
 fn extract_alter_sequence_info(sql: &str) -> Option<SequenceInfo> {
-    // First extract schema and name
-    let name_re = regex::Regex::new(
-        r"(?i)ALTER\s+SEQUENCE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
-    )
-    .ok()?;
-
-    let caps = name_re.captures(sql)?;
-    let schema = caps
-        .get(1)
-        .or_else(|| caps.get(2))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
-
-    let sql_upper = sql.to_uppercase();
-
-    // Extract RESTART WITH <value> (ALTER uses RESTART instead of START)
-    let start_value = regex::Regex::new(r"(?i)\bRESTART\s+WITH\s+(-?\d+)")
-        .ok()
-        .and_then(|re| re.captures(sql))
-        .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok());
-
-    // Extract INCREMENT BY <value>
-    let increment_value = regex::Regex::new(r"(?i)\bINCREMENT\s+BY\s+(-?\d+)")
-        .ok()
-        .and_then(|re| re.captures(sql))
-        .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok());
-
-    // Extract MINVALUE <value> or NO MINVALUE
-    let has_no_min_value = sql_upper.contains("NO MINVALUE");
-    let min_value = if has_no_min_value {
-        None
-    } else {
-        regex::Regex::new(r"(?i)\bMINVALUE\s+(-?\d+)")
-            .ok()
-            .and_then(|re| re.captures(sql))
-            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
-    };
-
-    // Extract MAXVALUE <value> or NO MAXVALUE
-    let has_no_max_value = sql_upper.contains("NO MAXVALUE");
-    let max_value = if has_no_max_value {
-        None
-    } else {
-        regex::Regex::new(r"(?i)\bMAXVALUE\s+(-?\d+)")
-            .ok()
-            .and_then(|re| re.captures(sql))
-            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
-    };
-
-    // Extract CYCLE or NO CYCLE (default is NO CYCLE)
-    let is_cycling = sql_upper.contains("CYCLE") && !sql_upper.contains("NO CYCLE");
-
-    // Extract CACHE <size> or NO CACHE
-    let cache_size = if sql_upper.contains("NO CACHE") {
-        Some(0)
-    } else {
-        regex::Regex::new(r"(?i)\bCACHE\s+(\d+)")
-            .ok()
-            .and_then(|re| re.captures(sql))
-            .and_then(|caps| caps.get(1).unwrap().as_str().parse().ok())
-    };
-
+    let parsed = parse_alter_sequence_tokens(sql)?;
     Some(SequenceInfo {
-        schema,
-        name,
+        schema: parsed.schema,
+        name: parsed.name,
         data_type: None, // ALTER SEQUENCE doesn't change the data type
-        start_value,
-        increment_value,
-        min_value,
-        max_value,
-        is_cycling,
-        has_no_min_value,
-        has_no_max_value,
-        cache_size,
+        start_value: parsed.start_value,
+        increment_value: parsed.increment_value,
+        min_value: parsed.min_value,
+        max_value: parsed.max_value,
+        is_cycling: parsed.is_cycling,
+        has_no_min_value: parsed.has_no_min_value,
+        has_no_max_value: parsed.has_no_max_value,
+        cache_size: parsed.cache_size,
     })
 }
 
