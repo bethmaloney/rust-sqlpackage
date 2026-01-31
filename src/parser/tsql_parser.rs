@@ -22,8 +22,8 @@ use super::preprocess_parser::preprocess_tsql_tokens;
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
 use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
 use super::statement_parser::{
-    try_parse_cte_dml_tokens, try_parse_drop_tokens, try_parse_merge_output_tokens,
-    try_parse_xml_update_tokens,
+    try_parse_cte_dml_tokens, try_parse_drop_tokens, try_parse_generic_create_tokens,
+    try_parse_merge_output_tokens, try_parse_xml_update_tokens,
 };
 use super::table_type_parser::parse_create_table_type_tokens;
 use super::trigger_parser::parse_create_trigger_tokens;
@@ -918,23 +918,13 @@ pub fn extract_extended_property_from_sql(sql: &str) -> Option<ExtractedExtended
 }
 
 /// Try to extract any CREATE statement as a generic fallback
+/// Phase 15.5: Uses token-based parsing (A5) instead of regex
 fn try_generic_create_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let re =
-        regex::Regex::new(r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?(\w+)\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?")
-            .ok()?;
-
-    let caps = re.captures(sql)?;
-    let object_type = caps.get(1)?.as_str().to_string();
-    let schema = caps
-        .get(2)
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(3)?.as_str().to_string();
-
+    let parsed = try_parse_generic_create_tokens(sql)?;
     Some(FallbackStatementType::RawStatement {
-        object_type,
-        schema,
-        name,
+        object_type: parsed.object_type,
+        schema: parsed.schema,
+        name: parsed.name,
     })
 }
 

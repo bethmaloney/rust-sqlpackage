@@ -92,6 +92,17 @@ pub struct TokenParsedDrop {
     pub name: String,
 }
 
+/// Result of parsing a generic CREATE statement (A5)
+#[derive(Debug, Clone)]
+pub struct TokenParsedGenericCreate {
+    /// Object type (e.g., "TABLE", "VIEW", "RULE", "SYNONYM")
+    pub object_type: String,
+    /// Schema of the object
+    pub schema: String,
+    /// Name of the object
+    pub name: String,
+}
+
 /// Type of object being dropped
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DropType {
@@ -378,6 +389,53 @@ impl StatementTokenParser {
         None
     }
 
+    /// Try to parse any CREATE statement as a generic fallback (A5)
+    ///
+    /// This is used as a last resort to extract object type, schema, and name
+    /// from CREATE statements that aren't handled by more specific parsers.
+    ///
+    /// Handles patterns like:
+    /// - CREATE RULE [schema].[name] ...
+    /// - CREATE OR ALTER TYPE [schema].[name] ...
+    /// - CREATE SYNONYM [schema].[name] ...
+    pub fn try_parse_generic_create(&mut self) -> Option<TokenParsedGenericCreate> {
+        self.skip_whitespace();
+
+        // Must start with CREATE keyword
+        if !self.check_keyword(Keyword::CREATE) {
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Handle optional "OR ALTER" clause
+        if self.check_keyword(Keyword::OR) {
+            self.advance();
+            self.skip_whitespace();
+
+            if self.check_word_ci("ALTER") {
+                self.advance();
+                self.skip_whitespace();
+            } else {
+                // "OR" without "ALTER" is not valid
+                return None;
+            }
+        }
+
+        // Extract the object type (e.g., TABLE, VIEW, PROCEDURE, RULE, SYNONYM)
+        let object_type = self.parse_identifier()?;
+        self.skip_whitespace();
+
+        // Parse the schema-qualified name
+        let (schema, name) = self.parse_schema_qualified_name()?;
+
+        Some(TokenParsedGenericCreate {
+            object_type,
+            schema,
+            name,
+        })
+    }
+
     // ========================================================================
     // Helper methods
     // ========================================================================
@@ -543,6 +601,16 @@ pub fn try_parse_xml_update_tokens(sql: &str) -> Option<TokenParsedXmlUpdate> {
 pub fn try_parse_drop_tokens(sql: &str) -> Option<TokenParsedDrop> {
     let mut parser = StatementTokenParser::new(sql)?;
     parser.try_parse_drop()
+}
+
+/// Try to parse any CREATE statement as a generic fallback (A5)
+///
+/// This is used as a last resort to extract object type, schema, and name
+/// from CREATE statements that aren't handled by more specific parsers.
+/// Returns Some(TokenParsedGenericCreate) with the object type, schema, and name.
+pub fn try_parse_generic_create_tokens(sql: &str) -> Option<TokenParsedGenericCreate> {
+    let mut parser = StatementTokenParser::new(sql)?;
+    parser.try_parse_generic_create()
 }
 
 #[cfg(test)]
@@ -854,5 +922,161 @@ mod tests {
         let sql = "DROP TABLE Products";
         let result = try_parse_drop_tokens(sql);
         assert!(result.is_none());
+    }
+
+    // ========================================================================
+    // Generic CREATE fallback tests (A5)
+    // ========================================================================
+
+    #[test]
+    fn test_generic_create_table() {
+        let sql = "CREATE TABLE [dbo].[Products] (Id INT)";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "TABLE");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "Products");
+    }
+
+    #[test]
+    fn test_generic_create_view() {
+        let sql = "CREATE VIEW [dbo].[vw_Products] AS SELECT * FROM Products";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "VIEW");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "vw_Products");
+    }
+
+    #[test]
+    fn test_generic_create_or_alter() {
+        let sql = "CREATE OR ALTER VIEW [dbo].[vw_Products] AS SELECT * FROM Products";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "VIEW");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "vw_Products");
+    }
+
+    #[test]
+    fn test_generic_create_rule() {
+        let sql = "CREATE RULE [dbo].[RuleTest] AS @value > 0";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "RULE");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "RuleTest");
+    }
+
+    #[test]
+    fn test_generic_create_synonym() {
+        let sql = "CREATE SYNONYM [dbo].[MySynonym] FOR [OtherDB].[dbo].[Table]";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "SYNONYM");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "MySynonym");
+    }
+
+    #[test]
+    fn test_generic_create_default_schema() {
+        let sql = "CREATE TABLE Products (Id INT)";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "TABLE");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "Products");
+    }
+
+    #[test]
+    fn test_generic_create_unbracketed() {
+        let sql = "CREATE TABLE dbo.Products (Id INT)";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "TABLE");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "Products");
+    }
+
+    #[test]
+    fn test_generic_create_procedure() {
+        let sql = "CREATE PROCEDURE [dbo].[usp_GetProducts] AS SELECT 1";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "PROCEDURE");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "usp_GetProducts");
+    }
+
+    #[test]
+    fn test_generic_create_function() {
+        let sql = "CREATE FUNCTION [dbo].[fn_GetValue] () RETURNS INT AS BEGIN RETURN 1 END";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "FUNCTION");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "fn_GetValue");
+    }
+
+    #[test]
+    fn test_generic_create_type() {
+        let sql = "CREATE TYPE [dbo].[MyTableType] AS TABLE (Id INT)";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "TYPE");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "MyTableType");
+    }
+
+    #[test]
+    fn test_not_a_create() {
+        let sql = "SELECT * FROM Products";
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_create_with_whitespace() {
+        let sql = "  CREATE   TABLE   [dbo].[Products]  (Id INT)";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "TABLE");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "Products");
+    }
+
+    #[test]
+    fn test_generic_create_lowercase() {
+        let sql = "create table dbo.products (id int)";
+
+        let result = try_parse_generic_create_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        // Object type is preserved as-is from SQL (lowercase)
+        assert_eq!(parsed.object_type, "table");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "products");
     }
 }
