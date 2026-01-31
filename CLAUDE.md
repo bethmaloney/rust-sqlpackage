@@ -46,6 +46,10 @@ The codebase follows a pipeline architecture:
 3. `build_model()` transforms AST statements into `ModelElement` variants (Table, View, Index, etc.)
 4. `create_dacpac()` generates XML files and packages into ZIP
 
+## Code Guidelines
+
+**Prefer parser over regex/string manipulation** when working with SQL text. Use sqlparser-rs tokenization or AST methods rather than regex patterns or string methods like `trim_end_matches`. See `docs/PARSER_REFACTORING_GUIDE.md` for patterns.
+
 ## Tests
 
 **Important:** This project follows a TDD approach. Any new feature or bug fix must first have either a unit, integration or e2e test created for it.
@@ -82,7 +86,3 @@ A `.dacpac` is a ZIP containing:
 - `DacMetadata.xml` - Package metadata
 - `Origin.xml` - Source/version info
 - `[Content_Types].xml` - MIME types
-
-Compatible with SSMS, Azure Data Studio, SqlPackage CLI, and DacFx API.
-
-See `docs/MS-DACPAC.md` for the complete XML schema specification (element structures, key patterns, data types, and examples).

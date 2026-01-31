@@ -1,32 +1,20 @@
-# Parser Refactoring Guide: Custom sqlparser-rs Dialect
+# Custom sqlparser-rs Dialect Guide
 
-This document provides guidance for implementing Phase 15 of the implementation plan: replacing regex-based fallback parsing with a custom sqlparser-rs dialect.
+This document provides guidance for extending sqlparser-rs with a custom T-SQL dialect to handle SQL Server-specific syntax.
 
 ## Table of Contents
 
-1. [Background](#background)
-2. [Current Architecture](#current-architecture)
-3. [sqlparser-rs Extension Points](#sqlparser-rs-extension-points)
-4. [Implementation Strategy](#implementation-strategy)
-5. [Detailed API Reference](#detailed-api-reference)
+1. [Overview](#overview)
+2. [The Dialect Trait](#the-dialect-trait)
+3. [Parser Methods](#parser-methods)
+4. [Token Types](#token-types)
+5. [Implementation Patterns](#implementation-patterns)
 6. [Code Examples](#code-examples)
-7. [Migration Path](#migration-path)
-8. [Testing Strategy](#testing-strategy)
+7. [Testing](#testing)
 
 ---
 
-## Background
-
-### Why Replace Regex?
-
-The current parser uses sqlparser-rs with the `MsSqlDialect`, falling back to regex patterns when parsing fails. This approach has several issues:
-
-1. **Brittleness**: Regex patterns fail on edge cases (nested parentheses, comments, special characters)
-2. **Maintainability**: 75+ regex patterns across 2800+ lines are hard to understand and modify
-3. **Error Messages**: Regex provides no context about where parsing failed
-4. **Performance**: Compiling regex at runtime adds overhead (though `lazy_static` mitigates this)
-
-### The sqlparser-rs Custom Dialect Pattern
+## Overview
 
 sqlparser-rs provides extension points through the `Dialect` trait. The pattern is:
 
@@ -35,66 +23,13 @@ sqlparser-rs provides extension points through the `Dialect` trait. The pattern 
 3. Delegate to base dialect for everything else
 4. Use the parser's tokenizer (not regex) to extract information
 
-This approach was recommended by the sqlparser-rs maintainers and is used by [DataFusion](https://github.com/apache/datafusion).
+This approach is recommended by the sqlparser-rs maintainers and is used by [DataFusion](https://github.com/apache/datafusion).
 
 ---
 
-## Current Architecture
+## The Dialect Trait
 
-### File Structure
-
-```
-src/parser/
-  mod.rs           # Module exports
-  tsql_parser.rs   # Main parser (2800+ lines, 70+ regex patterns)
-  sqlcmd.rs        # SQLCMD directive preprocessing (3 regex patterns)
-```
-
-### Current Parsing Flow
-
-```
-                                  ┌─────────────────────┐
-                                  │  preprocess_tsql()  │
-                                  │  (regex transforms) │
-                                  └──────────┬──────────┘
-                                             │
-┌─────────────┐    ┌─────────────┐    ┌──────▼──────┐    ┌─────────────┐
-│ SQL File    │───▶│split_batches│───▶│Parser::     │───▶│ ParsedStmt  │
-│ (.sql)      │    │ (on GO)     │    │parse_sql()  │    │             │
-└─────────────┘    └─────────────┘    └──────┬──────┘    └─────────────┘
-                                             │
-                                             │ Err
-                                             ▼
-                                  ┌─────────────────────┐
-                                  │ try_fallback_parse()│
-                                  │  (75+ regex fns)    │
-                                  └─────────────────────┘
-```
-
-### Key Data Structures
-
-```rust
-/// Statement types that require fallback parsing
-pub enum FallbackStatementType {
-    Procedure { schema: String, name: String },
-    Function { schema: String, name: String, function_type: FunctionType, ... },
-    Trigger { schema: String, name: String, parent_schema: String, ... },
-    Sequence { schema: String, name: String, info: SequenceInfo },
-    TableType { schema: String, name: String, columns: Vec<...>, ... },
-    Index { schema: String, name: String, table_schema: String, ... },
-    FullTextIndex { ... },
-    FullTextCatalog { name: String, is_default: bool },
-    RawStatement { object_type: String, schema: String, name: String },
-}
-```
-
----
-
-## sqlparser-rs Extension Points
-
-### The Dialect Trait
-
-The `Dialect` trait provides several override points. Key methods for our use case:
+The `Dialect` trait provides several override points:
 
 ```rust
 pub trait Dialect {
@@ -147,7 +82,66 @@ pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
 }
 ```
 
-### Parser Methods for Token Manipulation
+### Creating a Custom Dialect
+
+```rust
+use sqlparser::dialect::{Dialect, MsSqlDialect};
+use sqlparser::parser::Parser;
+use sqlparser::ast::Statement;
+
+/// Extended T-SQL dialect with full stored procedure/function support
+#[derive(Debug, Default)]
+pub struct ExtendedTsqlDialect {
+    base: MsSqlDialect,
+}
+
+impl Dialect for ExtendedTsqlDialect {
+    // Delegate identifier rules to base
+    fn is_identifier_start(&self, ch: char) -> bool {
+        self.base.is_identifier_start(ch)
+    }
+
+    fn is_identifier_part(&self, ch: char) -> bool {
+        self.base.is_identifier_part(ch)
+    }
+
+    // Custom statement parsing
+    fn parse_statement(&self, parser: &mut Parser<'_>)
+        -> Option<Result<Statement, ParserError>>
+    {
+        let token = parser.peek_token();
+
+        match &token.token {
+            Token::Word(w) if w.keyword == Keyword::CREATE => {
+                if self.is_create_procedure(parser) {
+                    return Some(self.parse_create_procedure(parser));
+                }
+                if self.is_create_function(parser) {
+                    return Some(self.parse_create_function(parser));
+                }
+            }
+            Token::Word(w) if w.keyword == Keyword::ALTER => {
+                // Handle ALTER statements
+            }
+            _ => {}
+        }
+
+        // Delegate to MsSqlDialect's parse_statement
+        self.base.parse_statement(parser)
+    }
+
+    // Delegate all feature flags to base
+    fn supports_outer_join_operator(&self) -> bool {
+        self.base.supports_outer_join_operator()
+    }
+}
+```
+
+---
+
+## Parser Methods
+
+### Token Manipulation
 
 ```rust
 impl Parser<'_> {
@@ -184,7 +178,11 @@ impl Parser<'_> {
 }
 ```
 
-### Token Enum (Key Variants)
+---
+
+## Token Types
+
+### Key Token Variants
 
 ```rust
 pub enum Token {
@@ -222,78 +220,16 @@ pub struct Word {
 
 ---
 
-## Implementation Strategy
+## Implementation Patterns
 
-### Phase 15.1: Infrastructure
+### Detecting Statement Types
 
-Create the custom dialect wrapper:
-
-```rust
-// src/parser/tsql_dialect.rs
-
-use sqlparser::dialect::{Dialect, MsSqlDialect};
-use sqlparser::parser::Parser;
-use sqlparser::ast::Statement;
-
-/// Extended T-SQL dialect with full stored procedure/function support
-#[derive(Debug, Default)]
-pub struct ExtendedTsqlDialect {
-    base: MsSqlDialect,
-}
-
-impl Dialect for ExtendedTsqlDialect {
-    // Delegate identifier rules to base
-    fn is_identifier_start(&self, ch: char) -> bool {
-        self.base.is_identifier_start(ch)
-    }
-
-    fn is_identifier_part(&self, ch: char) -> bool {
-        self.base.is_identifier_part(ch)
-    }
-
-    // Custom statement parsing
-    fn parse_statement(&self, parser: &mut Parser<'_>)
-        -> Option<Result<Statement, ParserError>>
-    {
-        // Check token patterns and dispatch to custom parsers
-        let token = parser.peek_token();
-
-        match &token.token {
-            Token::Word(w) if w.keyword == Keyword::CREATE => {
-                // Peek further to determine statement type
-                if self.is_create_procedure(parser) {
-                    return Some(self.parse_create_procedure(parser));
-                }
-                if self.is_create_function(parser) {
-                    return Some(self.parse_create_function(parser));
-                }
-                // ... more CREATE variants
-            }
-            Token::Word(w) if w.keyword == Keyword::ALTER => {
-                // Handle ALTER statements
-            }
-            _ => {}
-        }
-
-        // Delegate to MsSqlDialect's parse_statement
-        self.base.parse_statement(parser)
-    }
-
-    // Delegate all feature flags to base
-    fn supports_outer_join_operator(&self) -> bool {
-        self.base.supports_outer_join_operator()
-    }
-    // ... delegate all other methods
-}
-```
-
-### Detecting Statement Types (Without Regex)
+Use token peeking to identify statement types without consuming:
 
 ```rust
 impl ExtendedTsqlDialect {
     /// Check if this is CREATE [OR ALTER] PROCEDURE
     fn is_create_procedure(&self, parser: &Parser<'_>) -> bool {
-        // Peek at upcoming tokens without consuming
         let t0 = parser.peek_token();      // CREATE
         let t1 = parser.peek_nth_token(1); // OR | PROCEDURE | PROC
         let t2 = parser.peek_nth_token(2); // ALTER | name
@@ -320,7 +256,7 @@ impl ExtendedTsqlDialect {
 }
 ```
 
-### Parsing Object Names
+### Parsing Schema-Qualified Names
 
 ```rust
 impl ExtendedTsqlDialect {
@@ -397,14 +333,13 @@ impl ExtendedTsqlDialect {
 
 ### Handling Procedure/Function Bodies
 
-The main challenge is parsing the body, which can contain arbitrary T-SQL. Approach:
+The body can contain arbitrary T-SQL. Track BEGIN/END nesting:
 
 ```rust
 impl ExtendedTsqlDialect {
     /// Consume all tokens until we hit a batch terminator or EOF
-    /// Returns the raw SQL text of the body
     fn parse_body_as_raw_sql(&self, parser: &mut Parser<'_>) -> Result<String, ParserError> {
-        let start_pos = parser.get_current_position(); // Need to track position
+        let start_pos = parser.get_current_position();
         let mut depth = 0; // Track BEGIN/END nesting
 
         loop {
@@ -424,8 +359,7 @@ impl ExtendedTsqlDialect {
                     parser.advance_token();
                 }
                 Token::SemiColon if depth == 0 => {
-                    // Statement terminator at top level might end body
-                    break;
+                    break; // Statement terminator at top level
                 }
                 _ => {
                     parser.advance_token();
@@ -434,15 +368,13 @@ impl ExtendedTsqlDialect {
         }
 
         // Extract original SQL between start and current position
-        // (Need access to original input - may need custom approach)
         Ok(self.extract_sql_range(start_pos, parser.get_current_position()))
     }
 }
 ```
 
 **Note**: sqlparser doesn't expose the original SQL easily. Alternatives:
-
-1. Store original SQL alongside parsed AST (current approach)
+1. Store original SQL alongside parsed AST
 2. Reconstruct from tokens (lossy - loses formatting)
 3. Track token spans and slice original input
 4. Use a `Statement::RawSql(String)` variant for bodies
@@ -451,22 +383,19 @@ impl ExtendedTsqlDialect {
 
 ## Code Examples
 
-### Example: Parsing CREATE PROCEDURE
+### Parsing CREATE PROCEDURE
 
 ```rust
 impl ExtendedTsqlDialect {
     fn parse_create_procedure(&self, parser: &mut Parser<'_>)
         -> Result<Statement, ParserError>
     {
-        // Consume CREATE
         parser.expect_keyword(Keyword::CREATE)?;
 
-        // Check for OR ALTER
         let or_alter = parser.parse_keywords(&[Keyword::OR, Keyword::ALTER]);
 
         // Consume PROCEDURE or PROC
         if !parser.parse_keyword(Keyword::PROCEDURE) {
-            // Try PROC (not a standard keyword, so check as word)
             let token = parser.next_token();
             if !matches!(&token.token, Token::Word(w)
                 if w.value.eq_ignore_ascii_case("PROC"))
@@ -477,17 +406,11 @@ impl ExtendedTsqlDialect {
             }
         }
 
-        // Parse name
         let (schema, name) = self.parse_schema_qualified_name(parser)?;
-
-        // Parse parameters
         let params = self.parse_procedure_parameters(parser)?;
 
-        // Consume AS
         parser.expect_keyword(Keyword::AS)?;
 
-        // The body is everything until GO or EOF
-        // For now, we can use a custom statement type
         Ok(Statement::CreateProcedure {
             or_alter,
             name: ObjectName(vec![
@@ -501,7 +424,7 @@ impl ExtendedTsqlDialect {
 }
 ```
 
-### Example: Parsing CREATE INDEX with T-SQL Extensions
+### Parsing CREATE INDEX with T-SQL Extensions
 
 ```rust
 impl ExtendedTsqlDialect {
@@ -512,7 +435,7 @@ impl ExtendedTsqlDialect {
 
         let unique = parser.parse_keyword(Keyword::UNIQUE);
 
-        // T-SQL requires CLUSTERED or NONCLUSTERED before INDEX
+        // T-SQL: CLUSTERED or NONCLUSTERED before INDEX
         let clustered = if parser.parse_keyword(Keyword::CLUSTERED) {
             Some(true)
         } else if parser.parse_keyword(Keyword::NONCLUSTERED) {
@@ -522,11 +445,8 @@ impl ExtendedTsqlDialect {
         };
 
         parser.expect_keyword(Keyword::INDEX)?;
-
         let name = parser.parse_identifier()?;
-
         parser.expect_keyword(Keyword::ON)?;
-
         let table_name = parser.parse_object_name()?;
 
         // Parse column list
@@ -534,12 +454,12 @@ impl ExtendedTsqlDialect {
         let columns = parser.parse_comma_separated(|p| {
             let col = p.parse_identifier()?;
             let descending = p.parse_keyword(Keyword::DESC);
-            let _ascending = p.parse_keyword(Keyword::ASC); // consume if present
+            let _ascending = p.parse_keyword(Keyword::ASC);
             Ok(IndexColumn { name: col, descending })
         })?;
         parser.expect_token(&Token::RParen)?;
 
-        // Parse optional INCLUDE clause
+        // Optional INCLUDE clause
         let include = if parser.parse_keyword(Keyword::INCLUDE) {
             parser.expect_token(&Token::LParen)?;
             let cols = parser.parse_comma_separated(|p| p.parse_identifier())?;
@@ -549,14 +469,14 @@ impl ExtendedTsqlDialect {
             None
         };
 
-        // Parse optional WHERE clause (filtered index)
+        // Optional WHERE clause (filtered index)
         let filter = if parser.parse_keyword(Keyword::WHERE) {
             Some(parser.parse_expr()?)
         } else {
             None
         };
 
-        // Parse optional WITH clause
+        // Optional WITH clause
         let options = if parser.parse_keyword(Keyword::WITH) {
             parser.expect_token(&Token::LParen)?;
             let opts = self.parse_index_options(parser)?;
@@ -573,58 +493,9 @@ impl ExtendedTsqlDialect {
 
 ---
 
-## Migration Path
+## Testing
 
-### Step 1: Create Infrastructure (Week 1)
-
-1. Create `src/parser/tsql_dialect.rs` with `ExtendedTsqlDialect`
-2. Add helper methods for token pattern matching
-3. Add tests that verify delegation works correctly
-4. Switch `parse_sql_file()` to use `ExtendedTsqlDialect`
-
-### Step 2: Migrate One Statement Type (Week 2)
-
-Start with a simpler case like `CREATE SEQUENCE`:
-
-1. Implement `is_create_sequence()` detection
-2. Implement `parse_create_sequence()`
-3. Verify all sequence tests pass
-4. Remove corresponding regex functions
-
-### Step 3: Migrate Procedures/Functions (Weeks 3-4)
-
-These are the most common fallbacks:
-
-1. `CREATE/ALTER PROCEDURE`
-2. `CREATE/ALTER FUNCTION` (scalar, table-valued, inline)
-3. Verify with comprehensive tests
-
-### Step 4: Migrate Remaining Statement Types (Weeks 5-6)
-
-1. `CREATE TRIGGER`
-2. `CREATE TYPE AS TABLE`
-3. `CREATE INDEX` (already partially supported)
-4. `CREATE FULLTEXT INDEX/CATALOG`
-
-### Step 5: Migrate Column Definition Parsing (Weeks 7-8)
-
-This is the most complex area (inline constraints, defaults, etc.):
-
-1. May need to extend `parse_column_def()`
-2. Handle T-SQL-specific column options
-3. Migrate all default constraint regex patterns
-
-### Step 6: Cleanup (Week 9)
-
-1. Remove all unused regex functions
-2. Update documentation
-3. Performance benchmarking
-
----
-
-## Testing Strategy
-
-### Unit Tests for Dialect
+### Unit Tests
 
 ```rust
 #[cfg(test)]
@@ -642,7 +513,6 @@ mod tests {
         let sql = "CREATE PROCEDURE [dbo].[GetUsers] AS SELECT * FROM Users";
         let stmts = parse(sql);
         assert_eq!(stmts.len(), 1);
-        // Assert on statement structure
     }
 
     #[test]
@@ -662,9 +532,7 @@ mod tests {
 }
 ```
 
-### Integration Tests
-
-Use existing test fixtures to ensure parity:
+### Integration Tests with Fixtures
 
 ```rust
 #[test]
@@ -673,30 +541,6 @@ fn test_procedures_fixture_parses() {
     let dialect = ExtendedTsqlDialect::default();
     let result = Parser::parse_sql(&dialect, sql);
     assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-}
-```
-
-### Regression Tests
-
-Compare output before/after migration:
-
-```rust
-#[test]
-fn test_fallback_equivalence() {
-    let sql = "CREATE PROCEDURE dbo.Test AS SELECT 1";
-
-    // Old regex approach
-    let old_result = try_fallback_parse(sql);
-
-    // New dialect approach
-    let dialect = ExtendedTsqlDialect::default();
-    let new_result = Parser::parse_sql(&dialect, sql);
-
-    // Verify equivalent information extracted
-    assert_eq!(
-        extract_schema_name(&old_result),
-        extract_schema_name(&new_result)
-    );
 }
 ```
 
@@ -709,10 +553,3 @@ fn test_fallback_equivalence() {
 - [Dialect Trait Documentation](https://docs.rs/sqlparser/latest/sqlparser/dialect/trait.Dialect.html)
 - [Parser Struct Documentation](https://docs.rs/sqlparser/latest/sqlparser/parser/struct.Parser.html)
 - [MsSqlDialect Source](https://github.com/apache/datafusion-sqlparser-rs/blob/main/src/dialect/mssql.rs)
-- [Databend Parser Blog Post](https://www.databend.com/blog/category-engineering/2025-09-10-query-parser/)
-
----
-
-## Appendix: Current Regex Inventory
-
-See [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md#phase-15-parser-refactoring---replace-regex-fallbacks-with-custom-sqlparser-rs-dialect) for the complete list of 75+ regex patterns organized by category.

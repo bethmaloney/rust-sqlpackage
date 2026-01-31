@@ -55,6 +55,50 @@ while true; do
         exit 0
     fi
 
+    # Run clippy check and fix any errors
+    echo -e "\n------------------------ CLIPPY CHECK ------------------------"
+    CLIPPY_RETRIES=0
+    MAX_CLIPPY_RETRIES=3
+    CLIPPY_PASSED=false
+
+    if cargo clippy --all-targets --all-features -- -D warnings 2>&1; then
+        CLIPPY_PASSED=true
+    else
+        while [ $CLIPPY_RETRIES -lt $MAX_CLIPPY_RETRIES ]; do
+            CLIPPY_RETRIES=$((CLIPPY_RETRIES + 1))
+            echo -e "\nClippy failed (attempt $CLIPPY_RETRIES of $MAX_CLIPPY_RETRIES)"
+
+            # Capture clippy errors and send to Claude for fixing
+            CLIPPY_OUTPUT=$(cargo clippy --all-targets --all-features -- -D warnings 2>&1 || true)
+
+            echo -e "\nLaunching Claude to fix clippy errors..."
+            echo "Fix all clippy errors and warnings. Here is the clippy output:
+
+\`\`\`
+$CLIPPY_OUTPUT
+\`\`\`
+
+Run \`cargo clippy --all-targets --all-features -- -D warnings\` to verify fixes. Commit any changes with an appropriate message." | claude -p \
+                --dangerously-skip-permissions \
+                --output-format=stream-json \
+                --model sonnet \
+                --verbose \
+                2>&1 | tee >(claude-stream-format > /dev/stderr)
+
+            echo -e "\nRetrying clippy..."
+            if cargo clippy --all-targets --all-features -- -D warnings 2>&1; then
+                CLIPPY_PASSED=true
+                break
+            fi
+        done
+    fi
+
+    if [ "$CLIPPY_PASSED" = true ]; then
+        echo -e "------------------------ CLIPPY PASSED ------------------------\n"
+    else
+        echo -e "------------------------ CLIPPY FAILED (continuing anyway) ------------------------\n"
+    fi
+
     # Push changes after each iteration
     echo -e "\nPushing changes..."
     git push origin "$CURRENT_BRANCH" 2>/dev/null || {

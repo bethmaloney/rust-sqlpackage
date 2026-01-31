@@ -4,13 +4,13 @@ A fast Rust compiler for SQL Server database projects. Compiles `.sqlproj` files
 
 ## Performance
 
-Benchmarked on a 30-file SQL project (e2e_comprehensive fixture):
+Benchmarked on a 135-file SQL project (stress_test fixture):
 
 | Build Type | Time | vs rust-sqlpackage |
 |------------|------|-------------------|
-| .NET DacFx (cold build) | 5.85s | 25x slower |
-| .NET DacFx (warm/incremental) | 2.18s | 9.5x slower |
-| **rust-sqlpackage** | **0.23s** | - |
+| .NET DacFx (cold build) | 4.14s | 116x slower |
+| .NET DacFx (warm/incremental) | 1.51s | 42x slower |
+| **rust-sqlpackage** | **0.04s** | - |
 
 - **Cold build**: Full rebuild after cleaning bin/obj directories
 - **Warm build**: Incremental build with no source changes

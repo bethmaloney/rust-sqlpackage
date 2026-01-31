@@ -4,23 +4,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-14 complete (146 tasks). Full parity achieved.**
-**Phase 15 complete: Parser refactoring tasks finished (including whitespace-agnostic keyword matching).**
-**Phase 16 complete: Performance tuning and benchmarking (18/18 tasks).**
-**Phase 17 complete: Real-world SQL compatibility fixes.**
+**Phases 1-17 complete (203 tasks). Full parity achieved.**
 **Phase 18 pending: BodyDependencies alias resolution (0/10 tasks).**
-- Phase 15.1: ExtendedTsqlDialect infrastructure ✅
-- Phase 15.2: Column definition token parsing (D1, D2, D3, E1, E2) ✅
-- Phase 15.3: DDL object extraction (B1-B8) ✅
-- Phase 15.4: Constraint parsing (C1-C4) ✅
-- Phase 15.5: Statement detection (A1-A5) ✅
-- Phase 15.6: Miscellaneous extraction (G1-G3) ✅
-- Phase 15.7: SQL preprocessing (H1-H3) ✅
-- Phase 15.8: Whitespace-agnostic keyword matching (J1-J7) ✅
-- Phase 16.4: SQL parsing parallelization with rayon (2/2) ✅
-- Phase 17.1: Comma-less constraint parsing (3/3) ✅
-- Phase 17.2: SQLCMD variable header format (2/2) ✅
-- SQLCMD tasks I1-I2 remain regex-based by design (line-oriented preprocessing)
+**Phase 19 pending: Whitespace-agnostic trim patterns (0/3 tasks, lower priority).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -55,377 +41,14 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tests test_relationship -- --nocapture
 ```
 
-## Phase 15.8: Whitespace-Agnostic Keyword Matching
-
-**Goal:** Replace space-only string matching patterns (e.g., `find(" AS ")`) with token-based parsing to correctly handle tabs, multiple spaces, and mixed whitespace around SQL keywords.
-
-**Background:** Several locations use patterns like `find(" AS ")` or `contains(" FROM ")` which only match single spaces. SQL allows any whitespace (tabs, multiple spaces, newlines) between tokens. The fix uses sqlparser's tokenizer to find keywords regardless of surrounding whitespace.
-
-**Pattern:** Use `Tokenizer::new(&MsSqlDialect{}, sql).tokenize()` and search for `Token::Word` with the appropriate `Keyword` enum value, tracking parenthesis depth when needed.
-
-### Phase 15.8: Tasks (7/7) ✅
-
-| ID | Task | File | Line | Current Pattern | Status |
-|----|------|------|------|-----------------|--------|
-| J1 | Fix AS alias in `parse_column_expression()` | `src/dacpac/model_xml.rs` | 1621+ | Token-based (fixed) | ✅ |
-| J2 | Fix AS alias in TVF parameter references | `src/dacpac/model_xml.rs` | 1307 | Token-based (fixed) | ✅ |
-| J3 | Fix AS keyword in `extract_view_query()` | `src/dacpac/model_xml.rs` | 1062-1092 | Token-based (fixed) | ✅ |
-| J4 | Fix FOR keyword in trigger parsing | `src/dacpac/model_xml.rs` | 5050 | Token-based (fixed) | ✅ |
-| J5 | Fix AS keyword in trigger body extraction | `src/dacpac/model_xml.rs` | 5054-5069 | Token-based (fixed) | ✅ |
-| J6 | Fix FROM/AS TABLE in type detection | `src/parser/tsql_parser.rs` | 633 | Token-based (fixed) | ✅ |
-| J7 | Fix FROM/NOT NULL in scalar type parsing | `src/parser/tsql_parser.rs` | 1029, 1038 | Token-based (fixed) | ✅ |
-
-### Implementation Notes
-
-**J1 (Complete):** Demonstrates the pattern - tokenize expression, track paren depth, find last `Keyword::AS` at depth 0, extract alias from subsequent tokens.
-
-**J3 (Complete):** Uses token-based parsing to find the first AS keyword after VIEW keyword at paren depth 0. Returns everything after the AS as the query body. Unlike J1 which finds the last AS (for alias expressions), J3 finds the first AS (for view definitions).
-
-**J4-J5 (Complete):** Combined implementation in `extract_trigger_body()`. Uses tokenization to find FOR/AFTER/INSTEAD keywords followed by AS at top level (paren depth 0). Removed the TRIGGER_AS_RE regex which is no longer needed.
-
-**J6 (Complete):** Created `is_scalar_type_definition(sql: &str) -> Option<bool>` helper that uses tokenization to find FROM vs AS TABLE at paren depth 0. Returns `Some(true)` for scalar types (FROM keyword found), `Some(false)` for table types (AS TABLE found).
-
-**J7 (Complete):** Rewrote `extract_scalar_type_info()` to use tokenization: finds FROM keyword at paren depth 0, extracts tokens after FROM, checks for NOT NULL using token matching instead of string contains.
-
-### Lower Priority
-
-These patterns are less likely to cause issues but must be addressed for consistency:
-
-| Pattern | File | Line | Notes |
-|---------|------|------|-------|
-| `trim_end_matches(" READONLY")` | `src/dacpac/model_xml.rs` | 2728 | End-of-string, less likely tab-affected |
-| `trim_end_matches(" NULL")` | `src/dacpac/model_xml.rs` | 2729 | End-of-string, less likely tab-affected |
-| `trim_end_matches(" NOT")` | `src/dacpac/model_xml.rs` | 2730 | End-of-string, less likely tab-affected |
-
----
-
-## Phase 16: Performance Tuning
-
-**Goal:** Establish benchmarking infrastructure and optimize build performance.
-
-### Baseline Performance Metrics (Phase 16.1.7)
-
-Benchmarks run on criterion 0.5 with 100 samples per measurement.
-
-#### Full Pipeline (sqlproj → dacpac)
-
-| Fixture | Files | Mean Time | Notes |
-|---------|-------|-----------|-------|
-| e2e_simple | minimal | **19.4 ms** | Minimal project baseline |
-| e2e_comprehensive | 30 | **85.8 ms** | Production-realistic project |
-| stress_test | 135 | **462.1 ms** | High file count stress test |
-
-**Scaling:** ~3.4 ms/file for stress_test (135 files), ~2.9 ms/file for e2e_comprehensive (30 files).
-
-#### Pipeline Stage Breakdown (e2e_comprehensive)
-
-| Stage | Time | % of Total |
-|-------|------|------------|
-| sqlproj_parsing | 0.15 ms | 0.2% |
-| sql_parsing (28 stmts) | 5.25 ms | 6.1% |
-| model_building (34 stmts) | 8.18 ms | 9.5% |
-| xml_generation (85 elements) | 70.6 ms | **82.2%** |
-| dacpac_packaging | 73.5 ms | N/A (parallel) |
-
-**Key Finding:** XML generation dominates at 82% of pipeline time. This is the primary optimization target.
-
-#### Stress Test Stage Breakdown
-
-| Stage | Time | vs e2e_comprehensive |
-|-------|------|---------------------|
-| sql_parsing (135 stmts) | 12.0 ms | 2.3x |
-| model_building (135 stmts) | 38.2 ms | 4.7x |
-| Full pipeline | 462.1 ms | 5.4x |
-
-**Scaling Analysis:** Model building scales super-linearly (4.7x for 4.8x files), suggesting O(n log n) or relationship resolution overhead.
-
-#### Comparison with .NET DacFx
-
-| Metric | rust-sqlpackage | .NET DacFx | Speedup |
-|--------|-----------------|------------|---------|
-| e2e_comprehensive (30 files) | 85.8 ms | ~2.3s cold / ~800ms warm | **27x cold / 9x warm** |
-
-### Phase 16.1: Benchmark Infrastructure (7/7) ✅
-
-| ID | Task | Status | Blocked By |
-|----|------|--------|------------|
-| 16.1.1 | Add criterion benchmark infrastructure | ✅ | - |
-| 16.1.2 | Create full pipeline benchmark | ✅ | 16.1.1 |
-| 16.1.3 | Create SQL parsing benchmark | ✅ | 16.1.1 |
-| 16.1.4 | Create model building benchmark | ✅ | 16.1.1 |
-| 16.1.5 | Create XML generation benchmark | ✅ | 16.1.1 |
-| 16.1.6 | Create stress_test fixture (100+ SQL files) | ✅ | - |
-| 16.1.7 | Run initial profiling and document baseline | ✅ | 16.1.2-16.1.6 |
-
-### Phase 16.2: Quick Wins (5/5) ✅
-
-| ID | Task | Status | Blocked By | Expected Gain | Actual Gain |
-|----|------|--------|------------|---------------|-------------|
-| 16.2.1 | Add once_cell dependency | ✅ | - | - | - |
-| 16.2.2 | Cache regex compilations in model_xml.rs | ✅ | 16.1.7, 16.2.1 | 5-10% | **2-4% full pipeline** |
-| 16.2.3 | Optimize string joining in preprocess_parser.rs | ✅ | 16.1.7 | 1-3% | **5-9% SQL parsing** |
-| 16.2.4 | Cache uppercase SQL in fallback parsing | ✅ | 16.1.7 | 1-2% | **~1.5% SQL parsing** |
-| 16.2.5 | Add capacity hints to vector allocations | ✅ | 16.1.7 | <1% | **<1% full pipeline** |
-
-#### 16.2.2 Implementation Notes
-
-Replaced 30 `regex::Regex::new()` calls in `model_xml.rs` with static `LazyLock<Regex>` patterns that are compiled once and reused. Used `std::sync::LazyLock` (Rust 1.80+) instead of `once_cell::sync::Lazy`.
-
-**Benchmark Results (vs baseline):**
-- Full pipeline: 2-4% improvement (e2e_comprehensive: 18.7ms from 85.8ms baseline)
-- XML generation: **99% improvement** (708µs from ~70ms) - this was the primary hotspot
-- Model building: 5-6% improvement
-- Dacpac packaging: 92% improvement
-
-Note: The large improvements in xml_generation and dacpac_packaging are partially due to the benchmark measuring the cached regex benefit; the full pipeline shows more modest gains because other stages (SQL parsing, file I/O) dominate.
-
-#### 16.2.3 Implementation Notes
-
-Optimized string allocation patterns in `preprocess_parser.rs`:
-- Replaced `Vec<String>.join("")` with single `String` buffer using `with_capacity()` for pre-allocated output
-- Changed `token_to_string()` to return `Cow<'static, str>` for zero-allocation on static tokens (punctuation, operators)
-- Added capacity hints to `parse_parenthesized_expression()` and whitespace collection
-
-**Benchmark Results (vs baseline):**
-- SQL parsing: **5-9% improvement** (e2e_comprehensive: 4.9ms, stress_test: 10.5ms)
-- Full pipeline: No statistically significant change (within noise margin)
-
-Note: The improvement is concentrated in SQL parsing where preprocessing occurs, but the full pipeline has higher variance due to I/O and other factors.
-
-#### 16.2.4 Implementation Notes
-
-Modified `extract_scalar_type_info()` and `extract_table_structure()` functions in `src/parser/tsql_parser.rs` to accept a pre-computed uppercase SQL string parameter instead of calling `.to_uppercase()` internally. Updated call sites in `try_fallback_parse()` to pass the already-computed `sql_upper` variable, eliminating redundant uppercase conversions.
-
-**Benchmark Results (vs baseline):**
-- Full pipeline: No statistically significant change (within noise margin)
-- SQL parsing: ~1.5% improvement on e2e_comprehensive (within noise)
-
-Note: This optimization targets a narrow code path (fallback parsing for CREATE TYPE scalar and CREATE TABLE edge cases), so the measurable impact is minimal. The change eliminates unnecessary allocations but the affected code paths are infrequently executed.
-
-#### 16.2.5 Implementation Notes
-
-Added capacity hints to 9 key vector allocations in hot paths across `src/parser/tsql_parser.rs` and `src/dacpac/model_xml.rs`:
-
-**Parser hot paths (tsql_parser.rs):**
-- `parse_sql_files()`: `Vec::with_capacity(files.len() * 2)` - estimate 2 statements per file
-- `parse_sql_file()`: `Vec::with_capacity(batches.len())` - one statement per batch
-- `parse_table_body()`: `Vec::with_capacity(parts.len())` for columns, capacity 4 for constraints
-- `split_by_top_level_comma()`: `Vec::with_capacity(s.len() / 30)` - estimate column definition length
-- `split_batches()`: `Vec::with_capacity(line_count / 20)` - estimate GO separator frequency
-
-**Model XML generation (model_xml.rs):**
-- `expand_select_star()`: `Vec::with_capacity(table_aliases.len() * 5)` - estimate 5 columns per table
-- `extract_view_columns_and_deps()`: Pre-allocate based on `select_columns.len()` and `table_aliases`
-- `extract_multi_statement_tvf_columns()`: `Vec::with_capacity(col_defs.len())` - known size
-- `extract_body_dependencies()`: `Vec::with_capacity(10)` for deps and HashSet, `Vec::with_capacity(5)` for table_refs
-
-**Benchmark Results (vs baseline):**
-- Full pipeline: <1% improvement (within noise margin)
-
-Note: These are micro-optimizations that reduce allocations and potential reallocation overhead but don't significantly impact overall performance. The full pipeline is dominated by XML generation and I/O, so allocation efficiency has minimal measurable effect.
-
-### Phase 16.3: Medium Effort Optimizations (3/3) ✅
-
-| ID | Task | Status | Blocked By | Expected Gain | Actual Gain |
-|----|------|--------|------------|---------------|-------------|
-| 16.3.1 | Reduce cloning in model builder with Cow | ✅ | 16.2.2-16.2.5 | 3-5% | ~2-3% SQL parsing |
-| 16.3.2 | Pre-compute sort keys for XML elements | ✅ | 16.2.2-16.2.5 | 1-2% | ~2-4% full pipeline |
-| 16.3.3 | Batch string formatting in XML generation | ✅ | 16.2.2-16.2.5 | 2-5% | **4-7% full pipeline** |
-
-#### 16.3.1 Implementation Notes
-
-Introduced `track_schema()` helper function using `Cow<'static, str>` to reduce redundant cloning in schema tracking. Key changes:
-
-- Schema tracking now uses `BTreeSet<Cow<'static, str>>` instead of `BTreeSet<String>`
-- Static "dbo" schema uses borrowed reference (`Cow::Borrowed(DBO_SCHEMA)`) avoiding allocation
-- New `track_schema()` function checks if schema already exists before cloning, reducing duplicate allocations
-- All 14 `schemas.insert()` call sites updated to use the optimized pattern
-
-**Benchmark Results (vs baseline):**
-- Full pipeline: -7.3% improvement on first run (within noise on subsequent runs)
-- SQL parsing: -2.8% to -3.0% improvement
-- Dacpac packaging: -6.4% improvement
-- Model building: No statistically significant change (within noise margin)
-
-Note: The optimization reduces allocations for schema tracking but doesn't affect the model building stage significantly because struct fields still require owned Strings. The primary benefit is reduced memory churn from duplicate schema name allocations.
-
-#### 16.3.2 Implementation Notes
-
-Used `sort_by_cached_key` in `sort_elements()` function (`src/model/builder.rs`) to pre-compute sort keys once per element instead of recomputing on each comparison. Also optimized the `db_options_sort_key` in `generate_model_xml()` (`src/dacpac/model_xml.rs`) to use static string slices instead of owned Strings.
-
-**Changes:**
-- Replaced `sort_by()` with `sort_by_cached_key()` which computes `(xml_name_attr().to_lowercase(), type_name().to_lowercase())` once per element
-- Changed `db_options_sort_key` from `(String, String)` to `(&str, &str)` to avoid allocation
-
-**Benchmark Results (vs baseline):**
-- Full pipeline: **-4.5%** improvement (e2e_comprehensive: 18.0ms, stress_test: 57.1ms)
-- Model building: -2.7% improvement on stress_test
-- XML generation: -2.4% improvement
-
-Note: The improvement is more pronounced on larger datasets (stress_test) where sorting overhead becomes more significant.
-
-#### 16.3.3 Implementation Notes
-
-Converted 125 sequential `push_attribute()` calls to batched `with_attributes()` calls throughout `src/dacpac/model_xml.rs`. The quick-xml library's `BytesStart::with_attributes()` method allows setting multiple attributes in a single call, reducing method call overhead and improving cache locality.
-
-**Pattern before:**
-```rust
-let mut elem = BytesStart::new("Element");
-elem.push_attribute(("Type", "SqlTable"));
-elem.push_attribute(("Name", full_name.as_str()));
-writer.write_event(Event::Start(elem))?;
-```
-
-**Pattern after:**
-```rust
-let elem = BytesStart::new("Element")
-    .with_attributes([("Type", "SqlTable"), ("Name", full_name.as_str())]);
-writer.write_event(Event::Start(elem))?;
-```
-
-For conditional attributes (like Disambiguator), used if/else to create different elements with different attribute sets rather than conditional push_attribute calls.
-
-**Functions updated:** write_database_options, write_schema, write_view_columns, write_query_dependencies, write_tvf_columns, write_procedure, write_dynamic_objects, write_dynamic_columns, write_column_type_specifier, write_table_type_relationship, write_function_parameters, write_body_dependencies, write_data_type_relationship, write_function, write_function_body_with_annotation, write_function_return_type, write_index, write_index_column_specifications, write_data_compression_options, write_fulltext_index, write_fulltext_column_specifications, write_fulltext_catalog, write_constraint, write_script_property, write_scalar_type, write_user_defined_type, write_table_type_pk_constraint, write_table_type_unique_constraint, write_table_type_check_constraint, write_table_type_default_constraint, write_table_type_index, write_table_type_index_with_annotation, write_table_type_indexed_column_spec, write_trigger, write_raw, write_raw_view, write_extended_property.
-
-**Benchmark Results (vs baseline):**
-- XML generation (model_xml): **-5.6%** improvement (833µs from 882µs)
-- Full pipeline e2e_simple: **-6.5%** improvement (3.19ms from 3.42ms)
-- Full pipeline e2e_comprehensive: **-3.7%** improvement (17.8ms from 18.5ms)
-- Full pipeline stress_test: **-4.8%** improvement (56.1ms from 59.0ms)
-
-Note: The improvement exceeds the expected 2-5% gain, particularly on smaller projects where XML generation is a larger proportion of total time.
-
-### Phase 16.4: Parallelization (2/2) ✅
-
-| ID | Task | Status | Blocked By | Expected Gain | Actual Gain |
-|----|------|--------|------------|---------------|-------------|
-| 16.4.1 | Add rayon dependency | ✅ | - | - | - |
-| 16.4.2 | Parallelize SQL file parsing | ✅ | 16.1.6, 16.4.1 | 20-40% | **43-67% SQL parsing** |
-
-#### 16.4.1-16.4.2 Implementation Notes
-
-Added rayon for parallel SQL file parsing with an adaptive threshold:
-- Files >= 8: Uses `par_iter()` for parallel processing
-- Files < 8: Uses sequential processing to avoid rayon overhead
-
-**Changes:**
-- Added `rayon = "1"` to Cargo.toml dependencies
-- Modified `parse_sql_files()` in `src/parser/tsql_parser.rs` to use `par_iter().map().collect()`
-- Added `PARALLEL_THRESHOLD = 8` constant to balance overhead vs. parallelization benefit
-
-**Benchmark Results (vs baseline):**
-- SQL parsing (28 files): **-43%** improvement (2.95ms from 5.2ms baseline)
-- SQL parsing (135 files): **-67%** improvement (3.48ms from 10.5ms baseline)
-- Full pipeline e2e_simple: No regression (uses sequential path due to <8 files)
-- Full pipeline e2e_comprehensive: No change detected (30 files)
-- Full pipeline stress_test: Within noise threshold (135 files)
-
-Note: The massive SQL parsing improvement (up to 67%) exceeds the expected 20-40% gain. The full pipeline improvement is less visible because other stages (XML generation, I/O) now dominate the total time.
-
-### Phase 16.5: Documentation (1/1) ✅
-
-| ID | Task | Status | Blocked By | Notes |
-|----|------|--------|------------|-------|
-| 16.5.1 | Document performance improvements | ✅ | 16.3.1-16.3.3, 16.4.2 | Created docs/PERFORMANCE.md with benchmark methodology, pipeline breakdown, optimization history (16.2-16.4), .NET DacFx comparison, and future opportunities |
-
-### Identified Hotspots
-
-Based on code analysis:
-
-| Area | Location | Issue | Impact | Status |
-|------|----------|-------|--------|--------|
-| Regex compilation | `src/dacpac/model_xml.rs` | 32 uncached Regex::new() calls | HIGH | ✅ Fixed in 16.2.2 |
-| String joining | `src/parser/preprocess_parser.rs` | Vec<String>.join() inefficiency | MEDIUM | ✅ Fixed in 16.2.3 |
-| Cloning | `src/model/builder.rs` | 149 clone() calls | MEDIUM | ⬜ |
-| String conversion | `src/parser/tsql_parser.rs` | Multiple .to_uppercase() on same SQL | LOW | ✅ Fixed in 16.2.4 |
-| Sequential I/O | `src/parser/tsql_parser.rs` | Sequential file parsing | HIGH (large projects) | ✅ Fixed in 16.4.2 |
-
-### Benchmark Commands
+## Benchmark Commands
 
 ```bash
-# Run all benchmarks
-cargo bench
-
-# Run specific benchmark
-cargo bench --bench pipeline
-
-# Compare against baseline
-cargo bench -- --save-baseline before
-# ... make changes ...
-cargo bench -- --baseline before
-
-# Generate flamegraph
-cargo flamegraph --release -- build --project tests/fixtures/e2e_comprehensive/Database.sqlproj
+cargo bench                                  # Run all benchmarks
+cargo bench --bench pipeline                 # Run specific benchmark
+cargo bench -- --save-baseline before        # Save baseline for comparison
+cargo bench -- --baseline before             # Compare against baseline
 ```
-
----
-
-## Phase 17: Real-World SQL Compatibility
-
-**Goal:** Fix parsing and format issues discovered when testing against real-world databases that use relaxed SQL syntax not covered by test fixtures.
-
-**Background:** Real-world SQL databases often use syntactic patterns that SQL Server accepts but are not strictly standard. These include:
-- Constraints without comma separators between column definitions and constraints
-- Different SQLCMD variable header formats
-
-### Phase 17.1: Comma-less Constraint Parsing (3/3) ✅
-
-**Problem:** SQL Server accepts constraints without comma separators:
-```sql
-CREATE TABLE [dbo].[Example] (
-    [Id] INT NOT NULL,
-    [Name] NVARCHAR(100) NOT NULL
-    PRIMARY KEY ([Id])  -- No comma before PRIMARY KEY
-);
-```
-
-sqlparser-rs doesn't parse these constraints, causing them to be silently ignored.
-
-**Test:** `test_parity_commaless_constraints` in `tests/e2e/dotnet_comparison_tests.rs`
-**Fixture:** `tests/fixtures/commaless_constraints/`
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 17.1.1 | Investigate sqlparser-rs constraint parsing behavior | ✅ | sqlparser-rs fails on comma-less syntax, triggers fallback parser |
-| 17.1.2 | Implement comma-less constraint detection and parsing | ✅ | Fallback parser's `split_by_comma_or_constraint_tokens()` already handles this |
-| 17.1.3 | Verify all constraint types work (PK, FK, CHECK, DEFAULT) | ✅ | Fixed `emit_default_constraint_name` logic in column_parser.rs |
-
-**Implementation Notes:**
-
-The comma-less constraint syntax (e.g., `PRIMARY KEY ([Id])` without a preceding comma) causes sqlparser-rs to fail parsing, which triggers the fallback parser. The fallback parser's `split_by_comma_or_constraint_tokens()` function already handles comma-less constraints correctly by splitting on constraint keywords at the top level.
-
-The actual issue was in the `emit_default_constraint_name` logic in `src/parser/column_parser.rs`. The .NET DacFx only emits the `Name` attribute on default constraints when `CONSTRAINT` immediately precedes `DEFAULT` or `CHECK`:
-
-- Pattern `CONSTRAINT [name] NOT NULL DEFAULT ...` → Name **NOT** emitted (constraint keyword doesn't immediately precede DEFAULT)
-- Pattern `CONSTRAINT [name] DEFAULT ... NOT NULL` → Name **IS** emitted (constraint keyword immediately precedes DEFAULT)
-
-The fix tracks a `constraint_immediately_precedes` flag that is set when a `CONSTRAINT` keyword is encountered and cleared when any other keyword (like `NOT NULL`) intervenes before `DEFAULT` or `CHECK`.
-
-### Phase 17.2: SQLCMD Variable Header Format (2/2) ✅
-
-**Problem:** SQLCMD variables in model.xml Header use different format than .NET DacFx.
-
-**Solution:** Refactored `write_sqlcmd_variable()` → `write_sqlcmd_variables()` in `src/dacpac/model_xml.rs` to:
-- Consolidate all SQLCMD variables into a single `CustomData` element
-- Change `Category="SqlCmdVariable"` → `Category="SqlCmdVariables"` (plural)
-- Add `Type="SqlCmdVariable"` attribute
-- Use variable name as `Metadata Name` attribute with empty `Value`
-
-**Generated format now matches .NET DacFx:**
-```xml
-<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable">
-  <Metadata Name="Environment" Value="" />
-  <Metadata Name="ServerName" Value="" />
-  <Metadata Name="MaxConnections" Value="" />
-</CustomData>
-```
-
-**Test:** `test_sqlcmd_variables_header_format` in `tests/e2e/dotnet_comparison_tests.rs` - PASSING
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 17.2.1 | Update Header CustomData format for SQLCMD variables | ✅ | Changed Category to plural, added Type attribute |
-| 17.2.2 | Use variable name as Metadata Name attribute | ✅ | Matches .NET format exactly |
 
 ---
 
@@ -485,10 +108,28 @@ The fix tracks a `constraint_immediately_precedes` flag that is set when a `CONS
 
 ---
 
-<details>
-<summary>Completed Phases Summary</summary>
+## Phase 19: Whitespace-Agnostic Trim Patterns
 
-### Phase Overview
+**Goal:** Replace space-only `trim_end_matches()` patterns with token-based parsing to handle tabs and multiple spaces.
+
+**Location:** `src/dacpac/model_xml.rs` in TVP parameter parsing
+
+### Phase 19.1: TVP Parameter Whitespace Handling (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 19.1.1 | Fix `trim_end_matches(" READONLY")` | ⬜ | Line ~2728, use token-based detection |
+| 19.1.2 | Fix `trim_end_matches(" NULL")` | ⬜ | Line ~2729, use token-based detection |
+| 19.1.3 | Fix `trim_end_matches(" NOT")` | ⬜ | Line ~2730, use token-based detection |
+
+**Implementation Approach:** Tokenize the parameter string and check for trailing `READONLY`, `NULL`, or `NOT NULL` tokens rather than using string suffix matching.
+
+---
+
+<details>
+<summary>Completed Phases Summary (Phases 1-17)</summary>
+
+## Phase Overview
 
 | Phase | Description | Tasks |
 |-------|-------------|-------|
@@ -502,33 +143,46 @@ The fix tracks a `constraint_immediately_precedes` flag that is set when a `CONS
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 18/18 |
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
 | Phase 18 | BodyDependencies alias resolution: fix table alias handling | 0/10 |
+| Phase 19 | Whitespace-agnostic trim patterns (lower priority) | 0/3 |
 
-### Key Implementation Details
+## Performance Metrics
 
-#### Phase 11: Parity Failures & Error Fixtures
+Benchmarks run on criterion 0.5 with 100 samples per measurement.
+
+| Fixture | Files | Mean Time | Notes |
+|---------|-------|-----------|-------|
+| e2e_simple | minimal | **19.4 ms** | Minimal project baseline |
+| e2e_comprehensive | 30 | **85.8 ms** | Production-realistic project |
+| stress_test | 135 | **462.1 ms** | High file count stress test |
+
+**Comparison with .NET DacFx:** rust-sqlpackage is **27x faster cold / 9x faster warm** than .NET DacFx.
+
+## Key Implementation Details
+
+### Phase 11: Parity Failures & Error Fixtures
 - Fixed Layer 1-4 and relationship parity across all fixtures
 - Excluded `external_reference` and `unresolved_reference` from parity testing (DotNet cannot build them)
 - Fixed table type indexes, default constraints, and inline annotations
 - Removed all `#[ignore]` attributes from passing tests
 
-#### Phase 12: Relationship Parity
+### Phase 12: Relationship Parity
 - **SELECT * expansion**: Added `expand_select_star()` function to look up table columns from DatabaseModel
 - **Duplicate references**: Removed deduplication in triggers and views to preserve duplicates in GROUP BY
 - **CAST type references**: Added extraction of type references from CAST expressions in computed columns
 - **TVF Columns**: Added `Columns` relationship for inline and multi-statement table-valued functions
 
-#### Phase 13: TVP Support
+### Phase 13: TVP Support
 - Full table-valued parameter (TVP) support for procedures
 - DynamicObjects relationship with SqlDynamicColumnSource elements
 - Parameter parsing for `[schema].[type]` format and READONLY keyword
 - TVP column reference extraction for BodyDependencies
 
-#### Phase 14: Layer 3 SqlPackage Parity
+### Phase 14: Layer 3 SqlPackage Parity
 - Fixed DefaultFilegroup relationship in SqlDatabaseOptions
 - Added missing database options properties (Collation, IsTornPageProtectionOn, DefaultLanguage, etc.)
 - Changed IsFullTextEnabled default from False to True to match DotNet
 
-#### Phase 15: Parser Refactoring
+### Phase 15: Parser Refactoring
 Replaced regex-based fallback parsing with token-based parsing using sqlparser-rs custom dialect:
 - **15.1**: Created `ExtendedTsqlDialect` wrapper in `src/parser/tsql_dialect.rs`
 - **15.2**: Token-based column parsing in `src/parser/column_parser.rs` (D1-D3, E1-E2)
@@ -541,5 +195,61 @@ Replaced regex-based fallback parsing with token-based parsing using sqlparser-r
 - SQLCMD (I1-I2) intentionally remain regex-based for line-oriented preprocessing
 
 See [PARSER_REFACTORING_GUIDE.md](./PARSER_REFACTORING_GUIDE.md) for implementation details.
+
+### Phase 16: Performance Tuning
+
+**16.1: Benchmark Infrastructure (7/7)**
+- Added criterion benchmark infrastructure
+- Created benchmarks for full pipeline, SQL parsing, model building, XML generation
+- Created stress_test fixture with 135 SQL files
+
+**16.2: Quick Wins (5/5)**
+- Cached 30 regex compilations using `LazyLock<Regex>` (2-4% full pipeline improvement)
+- Optimized string joining with `Cow<'static, str>` (5-9% SQL parsing improvement)
+- Cached uppercase SQL in fallback parsing (~1.5% SQL parsing improvement)
+- Added capacity hints to 9 key vector allocations
+
+**16.3: Medium Effort Optimizations (3/3)**
+- Reduced cloning with `Cow` for schema tracking (~2-3% SQL parsing improvement)
+- Pre-computed sort keys with `sort_by_cached_key()` (~2-4% full pipeline improvement)
+- Batched 125 `push_attribute()` calls to `with_attributes()` (4-7% full pipeline improvement)
+
+**16.4: Parallelization (2/2)**
+- Added rayon for parallel SQL file parsing (43-67% SQL parsing improvement)
+- Adaptive threshold: parallel for ≥8 files, sequential for <8 files
+
+**16.5: Documentation (1/1)**
+- Created docs/PERFORMANCE.md with full benchmark methodology and optimization history
+
+### Phase 17: Real-World SQL Compatibility
+
+**17.1: Comma-less Constraint Parsing (3/3)**
+
+SQL Server accepts constraints without comma separators:
+```sql
+CREATE TABLE [dbo].[Example] (
+    [Id] INT NOT NULL,
+    [Name] NVARCHAR(100) NOT NULL
+    PRIMARY KEY ([Id])  -- No comma before PRIMARY KEY
+);
+```
+
+Fixed by improving fallback parser's `split_by_comma_or_constraint_tokens()` and fixing `emit_default_constraint_name` logic in `column_parser.rs`.
+
+**17.2: SQLCMD Variable Header Format (2/2)**
+
+Refactored to match .NET DacFx format:
+```xml
+<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable">
+  <Metadata Name="Environment" Value="" />
+  <Metadata Name="ServerName" Value="" />
+</CustomData>
+```
+
+### Remaining Hotspots
+
+| Area | Location | Issue | Impact | Status |
+|------|----------|-------|--------|--------|
+| Cloning | `src/model/builder.rs` | 149 clone() calls | MEDIUM | ⬜ |
 
 </details>

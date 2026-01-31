@@ -90,3 +90,15 @@ doc:
 
 # Run CI checks (what CI should run)
 ci: fmt-check lint test
+
+# ============================================================================
+# Benchmarking
+# ============================================================================
+
+# Run comparison benchmark (rust-sqlpackage vs DacFx)
+benchmark FIXTURE="stress_test" ITERATIONS="10":
+    ./benchmark.sh {{FIXTURE}} {{ITERATIONS}}
+
+# Run Criterion benchmarks
+bench:
+    cargo bench
