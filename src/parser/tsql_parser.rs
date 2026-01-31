@@ -8,6 +8,10 @@ use sqlparser::ast::Statement;
 use sqlparser::parser::Parser;
 
 use super::column_parser::{parse_column_definition_tokens, TokenParsedColumn};
+use super::function_parser::{
+    detect_function_type_tokens, parse_alter_function_tokens, parse_create_function_full,
+    parse_create_function_tokens, TokenParsedFunctionType,
+};
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
 use super::tsql_dialect::ExtendedTsqlDialect;
 use crate::error::SqlPackageError;
@@ -1574,27 +1578,10 @@ fn extract_alter_procedure_name(sql: &str) -> Option<(String, String)> {
 }
 
 /// Extract schema and name from ALTER FUNCTION statement
+///
+/// Uses token-based parsing (Phase 15.3 B2) for improved maintainability and edge case handling.
 fn extract_alter_function_name(sql: &str) -> Option<(String, String)> {
-    // Match patterns like:
-    // ALTER FUNCTION [dbo].[FuncName]
-    // ALTER FUNCTION dbo.FuncName
-    // Use [^\]]+ for bracketed identifiers to capture special characters like &
-    let re = regex::Regex::new(
-        r"(?i)ALTER\s+FUNCTION\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
-    )
-    .ok()?;
-
-    let caps = re.captures(sql)?;
-    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
-    let schema = caps
-        .get(1)
-        .or_else(|| caps.get(2))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "dbo".to_string());
-    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
-    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
-
-    Some((schema, name))
+    parse_alter_function_tokens(sql)
 }
 
 /// Extract complete sequence information from ALTER SEQUENCE statement
@@ -1678,137 +1665,45 @@ fn extract_alter_sequence_info(sql: &str) -> Option<SequenceInfo> {
 }
 
 /// Extract schema and name from CREATE FUNCTION statement
+///
+/// Uses token-based parsing (Phase 15.3 B2) for improved maintainability and edge case handling.
 fn extract_function_name(sql: &str) -> Option<(String, String)> {
-    // Match patterns like:
-    // CREATE FUNCTION [dbo].[FuncName]
-    // CREATE FUNCTION dbo.FuncName
-    // CREATE OR ALTER FUNCTION [schema].[name]
-    // Use [^\]]+ for bracketed identifiers to capture special characters like &
-    let re = regex::Regex::new(
-        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?FUNCTION\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
-    )
-    .ok()?;
-
-    let caps = re.captures(sql)?;
-    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
-    let schema = caps
-        .get(1)
-        .or_else(|| caps.get(2))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "dbo".to_string());
-    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
-    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
-
-    Some((schema, name))
+    parse_create_function_tokens(sql)
 }
 
 /// Detect function type from SQL definition
+///
+/// Uses token-based parsing (Phase 15.3 B2) for improved maintainability and edge case handling.
 fn detect_function_type(sql: &str) -> FallbackFunctionType {
-    let sql_upper = sql.to_uppercase();
-
-    // Table-valued functions return TABLE
-    if sql_upper.contains("RETURNS TABLE") {
-        // Inline TVF: "RETURNS TABLE" without a table variable declaration
-        // Has a direct RETURN (SELECT ...) without BEGIN/END block
-        FallbackFunctionType::InlineTableValued
-    } else if sql_upper.contains("RETURNS @") {
-        // Multi-statement TVF: "RETURNS @variable TABLE (...)"
-        // Has BEGIN/END block with INSERT statements
-        FallbackFunctionType::TableValued
-    } else {
-        FallbackFunctionType::Scalar
+    match detect_function_type_tokens(sql) {
+        TokenParsedFunctionType::Scalar => FallbackFunctionType::Scalar,
+        TokenParsedFunctionType::TableValued => FallbackFunctionType::TableValued,
+        TokenParsedFunctionType::InlineTableValued => FallbackFunctionType::InlineTableValued,
     }
 }
 
 /// Extract parameters from a function definition
+///
+/// Uses token-based parsing (Phase 15.3 B2) for improved maintainability and edge case handling.
 fn extract_function_parameters(sql: &str) -> Vec<ExtractedFunctionParameter> {
-    let mut params = Vec::new();
-
-    // Find the function name and the parameters that follow
-    // Pattern: CREATE FUNCTION [schema].[name](@param1 TYPE, @param2 TYPE) RETURNS ...
-    let sql_upper = sql.to_uppercase();
-
-    // Find opening paren after function name
-    let func_name_end = sql_upper
-        .find("CREATE FUNCTION")
-        .or_else(|| sql_upper.find("ALTER FUNCTION"))
-        .and_then(|start| {
-            // Skip past CREATE/ALTER FUNCTION and the name
-            let after_keyword = &sql_upper[start..];
-            after_keyword.find('(').map(|idx| start + idx)
-        });
-
-    if func_name_end.is_none() {
-        return params;
+    if let Some(func) = parse_create_function_full(sql) {
+        func.parameters
+            .into_iter()
+            .map(|p| ExtractedFunctionParameter {
+                name: p.name,
+                data_type: p.data_type,
+            })
+            .collect()
+    } else {
+        Vec::new()
     }
-
-    let paren_start = func_name_end.unwrap();
-
-    // Find RETURNS to know where parameters end
-    let returns_pos = sql_upper.find("RETURNS");
-    if returns_pos.is_none() || returns_pos.unwrap() < paren_start {
-        return params;
-    }
-
-    // Extract the content between first ( and the ) before RETURNS
-    let param_section = &sql[paren_start..returns_pos.unwrap()];
-
-    // Find the closing paren
-    if let Some(close_paren) = param_section.rfind(')') {
-        let param_content = &param_section[1..close_paren];
-
-        // Parse parameters - they start with @
-        let param_regex = regex::Regex::new(r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:,|$)").unwrap();
-
-        for cap in param_regex.captures_iter(param_content) {
-            let name = cap
-                .get(1)
-                .map(|m| format!("@{}", m.as_str()))
-                .unwrap_or_default();
-            let data_type = cap
-                .get(2)
-                .map(|m| m.as_str().trim().to_string())
-                .unwrap_or_default();
-
-            if !name.is_empty() && !data_type.is_empty() {
-                params.push(ExtractedFunctionParameter {
-                    name,
-                    data_type: data_type.to_uppercase(),
-                });
-            }
-        }
-    }
-
-    params
 }
 
 /// Extract the return type from a function definition
+///
+/// Uses token-based parsing (Phase 15.3 B2) for improved maintainability and edge case handling.
 fn extract_function_return_type(sql: &str) -> Option<String> {
-    let sql_upper = sql.to_uppercase();
-
-    // Find RETURNS keyword
-    let returns_pos = sql_upper.find("RETURNS")?;
-    let after_returns = &sql[returns_pos + 7..]; // Skip "RETURNS"
-    let after_returns_upper = after_returns.trim_start().to_uppercase();
-
-    // Handle TABLE return type (inline table-valued function)
-    if after_returns_upper.starts_with("TABLE") {
-        return Some("TABLE".to_string());
-    }
-
-    // Handle @var TABLE return type (multi-statement table-valued function)
-    if after_returns_upper.starts_with("@") {
-        return Some("TABLE".to_string());
-    }
-
-    // For scalar functions, extract the type before AS
-    // Pattern: RETURNS INT AS, RETURNS DECIMAL(18, 2) AS
-    let re = regex::Regex::new(r"(?i)RETURNS\s+([A-Za-z0-9_\(\),\s]+?)\s+(?:AS|WITH)").ok()?;
-
-    let caps = re.captures(sql)?;
-    let return_type = caps.get(1)?.as_str().trim().to_uppercase();
-
-    Some(return_type)
+    parse_create_function_full(sql).and_then(|f| f.return_type)
 }
 
 /// Extract index information from CREATE CLUSTERED/NONCLUSTERED INDEX statement
