@@ -69,15 +69,15 @@ This does not affect Layer 3 parity testing (which compares dacpacs, not deploym
 
 **Current baseline:** 0.23s for e2e_comprehensive (30 files) - already 25x faster than .NET DacFx cold, 9.5x faster warm.
 
-### Phase 16.1: Benchmark Infrastructure (0/7)
+### Phase 16.1: Benchmark Infrastructure (5/7)
 
 | ID | Task | Status | Blocked By |
 |----|------|--------|------------|
-| 16.1.1 | Add criterion benchmark infrastructure | ⬜ | - |
-| 16.1.2 | Create full pipeline benchmark | ⬜ | 16.1.1 |
-| 16.1.3 | Create SQL parsing benchmark | ⬜ | 16.1.1 |
-| 16.1.4 | Create model building benchmark | ⬜ | 16.1.1 |
-| 16.1.5 | Create XML generation benchmark | ⬜ | 16.1.1 |
+| 16.1.1 | Add criterion benchmark infrastructure | ✅ | - |
+| 16.1.2 | Create full pipeline benchmark | ✅ | 16.1.1 |
+| 16.1.3 | Create SQL parsing benchmark | ✅ | 16.1.1 |
+| 16.1.4 | Create model building benchmark | ✅ | 16.1.1 |
+| 16.1.5 | Create XML generation benchmark | ✅ | 16.1.1 |
 | 16.1.6 | Create stress_test fixture (100+ SQL files) | ⬜ | - |
 | 16.1.7 | Run initial profiling and document baseline | ⬜ | 16.1.2-16.1.6 |
 
