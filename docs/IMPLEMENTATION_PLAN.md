@@ -121,13 +121,13 @@ Benchmarks run on criterion 0.5 with 100 samples per measurement.
 | 16.1.6 | Create stress_test fixture (100+ SQL files) | ✅ | - |
 | 16.1.7 | Run initial profiling and document baseline | ✅ | 16.1.2-16.1.6 |
 
-### Phase 16.2: Quick Wins (2/5)
+### Phase 16.2: Quick Wins (3/5)
 
 | ID | Task | Status | Blocked By | Expected Gain | Actual Gain |
 |----|------|--------|------------|---------------|-------------|
 | 16.2.1 | Add once_cell dependency | ✅ | - | - | - |
 | 16.2.2 | Cache regex compilations in model_xml.rs | ✅ | 16.1.7, 16.2.1 | 5-10% | **2-4% full pipeline** |
-| 16.2.3 | Optimize string joining in preprocess_parser.rs | ⬜ | 16.1.7 | 1-3% | |
+| 16.2.3 | Optimize string joining in preprocess_parser.rs | ✅ | 16.1.7 | 1-3% | **5-9% SQL parsing** |
 | 16.2.4 | Cache uppercase SQL in fallback parsing | ⬜ | 16.1.7 | 1-2% | |
 | 16.2.5 | Add capacity hints to vector allocations | ⬜ | 16.1.7 | <1% | |
 
@@ -142,6 +142,19 @@ Replaced 30 `regex::Regex::new()` calls in `model_xml.rs` with static `LazyLock<
 - Dacpac packaging: 92% improvement
 
 Note: The large improvements in xml_generation and dacpac_packaging are partially due to the benchmark measuring the cached regex benefit; the full pipeline shows more modest gains because other stages (SQL parsing, file I/O) dominate.
+
+#### 16.2.3 Implementation Notes
+
+Optimized string allocation patterns in `preprocess_parser.rs`:
+- Replaced `Vec<String>.join("")` with single `String` buffer using `with_capacity()` for pre-allocated output
+- Changed `token_to_string()` to return `Cow<'static, str>` for zero-allocation on static tokens (punctuation, operators)
+- Added capacity hints to `parse_parenthesized_expression()` and whitespace collection
+
+**Benchmark Results (vs baseline):**
+- SQL parsing: **5-9% improvement** (e2e_comprehensive: 4.9ms, stress_test: 10.5ms)
+- Full pipeline: No statistically significant change (within noise margin)
+
+Note: The improvement is concentrated in SQL parsing where preprocessing occurs, but the full pipeline has higher variance due to I/O and other factors.
 
 ### Phase 16.3: Medium Effort Optimizations (0/3)
 
@@ -171,7 +184,7 @@ Based on code analysis:
 | Area | Location | Issue | Impact | Status |
 |------|----------|-------|--------|--------|
 | Regex compilation | `src/dacpac/model_xml.rs` | 32 uncached Regex::new() calls | HIGH | ✅ Fixed in 16.2.2 |
-| String joining | `src/parser/preprocess_parser.rs` | Vec<String>.join() inefficiency | MEDIUM | ⬜ |
+| String joining | `src/parser/preprocess_parser.rs` | Vec<String>.join() inefficiency | MEDIUM | ✅ Fixed in 16.2.3 |
 | Cloning | `src/model/builder.rs` | 149 clone() calls | MEDIUM | ⬜ |
 | String conversion | `src/parser/tsql_parser.rs` | Multiple .to_uppercase() on same SQL | LOW | ⬜ |
 | Sequential I/O | `src/parser/tsql_parser.rs` | Sequential file parsing | HIGH (large projects) | ⬜ |

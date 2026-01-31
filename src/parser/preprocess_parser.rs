@@ -19,6 +19,13 @@
 //! 3. **H3: Trailing Comma Cleanup**
 //!    - Removes trailing commas before closing parentheses
 //!    - Handles commas followed by whitespace or comments
+//!
+//! ## Performance Optimizations (Phase 16.2.3)
+//!
+//! - Uses single `String` buffer with pre-allocated capacity instead of `Vec<String>.join()`
+//! - Returns `Cow<'static, str>` from `token_to_string()` to avoid allocations for static tokens
+
+use std::borrow::Cow;
 
 use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
@@ -61,15 +68,21 @@ impl PreprocessTokenParser {
     }
 
     /// Preprocess the SQL and return the result
+    ///
+    /// Optimized to use a single String buffer with pre-allocated capacity
+    /// instead of Vec<String>.join("") to reduce allocations.
     pub fn preprocess(&mut self) -> TokenPreprocessResult {
         let mut extracted_defaults = Vec::new();
-        let mut output_tokens: Vec<String> = Vec::new();
+        // Pre-allocate output buffer - estimate roughly same size as input
+        // The actual capacity is based on token count * average token size
+        let estimated_capacity = self.tokens.len() * 4; // Average ~4 chars per token
+        let mut output = String::with_capacity(estimated_capacity);
 
         self.pos = 0;
         while !self.is_at_end() {
             // Check for BINARY(MAX) or VARBINARY(MAX)
             if let Some(replacement) = self.try_parse_binary_max() {
-                output_tokens.push(replacement);
+                output.push_str(&replacement);
                 continue;
             }
 
@@ -87,13 +100,13 @@ impl PreprocessTokenParser {
                 continue;
             }
 
-            // Output the token unchanged
-            output_tokens.push(self.token_to_string(&self.tokens[self.pos].token));
+            // Output the token unchanged - uses Cow to avoid allocations for static tokens
+            output.push_str(&self.token_to_string(&self.tokens[self.pos].token));
             self.advance();
         }
 
         TokenPreprocessResult {
-            sql: output_tokens.join(""),
+            sql: output,
             extracted_defaults,
         }
     }
@@ -115,8 +128,8 @@ impl PreprocessTokenParser {
         let type_name = self.get_word_value()?.to_uppercase();
         self.advance();
 
-        // Collect any whitespace
-        let mut whitespace = String::new();
+        // Collect any whitespace - pre-allocate with small capacity since whitespace is typically short
+        let mut whitespace = String::with_capacity(4);
         while !self.is_at_end() && matches!(&self.tokens[self.pos].token, Token::Whitespace(_)) {
             whitespace.push_str(&self.token_to_string(&self.tokens[self.pos].token));
             self.advance();
@@ -344,6 +357,8 @@ impl PreprocessTokenParser {
 
     /// Parse a parenthesized expression, handling nested parentheses
     /// Returns the expression content (without outer parentheses)
+    ///
+    /// Pre-allocates result buffer based on remaining tokens to reduce reallocations.
     fn parse_parenthesized_expression(&mut self) -> Option<String> {
         if !self.check_token(&Token::LParen) {
             return None;
@@ -351,7 +366,10 @@ impl PreprocessTokenParser {
 
         self.advance(); // Skip opening paren
 
-        let mut result = String::new();
+        // Estimate capacity based on remaining tokens (average ~4 chars per token)
+        let remaining_tokens = self.tokens.len().saturating_sub(self.pos);
+        let estimated_capacity = remaining_tokens.min(64) * 4; // Cap at 256 bytes initial
+        let mut result = String::with_capacity(estimated_capacity);
         let mut depth = 1;
 
         while !self.is_at_end() && depth > 0 {
@@ -381,63 +399,68 @@ impl PreprocessTokenParser {
     }
 
     /// Convert a token back to its string representation
-    fn token_to_string(&self, token: &Token) -> String {
+    ///
+    /// Returns `Cow<'static, str>` to avoid allocations for static tokens like
+    /// punctuation and operators. Dynamic content (identifiers, strings) returns
+    /// an owned String wrapped in Cow::Owned.
+    fn token_to_string(&self, token: &Token) -> Cow<'static, str> {
         match token {
             Token::Word(w) => {
                 if w.quote_style == Some('[') {
-                    format!("[{}]", w.value)
+                    Cow::Owned(format!("[{}]", w.value))
                 } else if w.quote_style == Some('"') {
-                    format!("\"{}\"", w.value)
+                    Cow::Owned(format!("\"{}\"", w.value))
                 } else {
-                    w.value.clone()
+                    Cow::Owned(w.value.clone())
                 }
             }
-            Token::Number(n, _) => n.clone(),
-            Token::Char(c) => c.to_string(),
-            Token::SingleQuotedString(s) => format!("'{}'", s.replace('\'', "''")),
-            Token::NationalStringLiteral(s) => format!("N'{}'", s.replace('\'', "''")),
-            Token::HexStringLiteral(s) => format!("0x{}", s),
-            Token::DoubleQuotedString(s) => format!("\"{}\"", s),
-            Token::SingleQuotedByteStringLiteral(s) => format!("b'{}'", s),
-            Token::DoubleQuotedByteStringLiteral(s) => format!("b\"{}\"", s),
-            Token::LParen => "(".to_string(),
-            Token::RParen => ")".to_string(),
-            Token::LBrace => "{".to_string(),
-            Token::RBrace => "}".to_string(),
-            Token::LBracket => "[".to_string(),
-            Token::RBracket => "]".to_string(),
-            Token::Comma => ",".to_string(),
-            Token::Period => ".".to_string(),
-            Token::Colon => ":".to_string(),
-            Token::DoubleColon => "::".to_string(),
-            Token::SemiColon => ";".to_string(),
-            Token::Whitespace(w) => w.to_string(),
-            Token::Eq => "=".to_string(),
-            Token::Neq => "<>".to_string(),
-            Token::Lt => "<".to_string(),
-            Token::Gt => ">".to_string(),
-            Token::LtEq => "<=".to_string(),
-            Token::GtEq => ">=".to_string(),
-            Token::Spaceship => "<=>".to_string(),
-            Token::Plus => "+".to_string(),
-            Token::Minus => "-".to_string(),
-            Token::Mul => "*".to_string(),
-            Token::Div => "/".to_string(),
-            Token::Mod => "%".to_string(),
-            Token::StringConcat => "||".to_string(),
-            Token::LongArrow => "->>".to_string(),
-            Token::Arrow => "->".to_string(),
-            Token::HashArrow => "#>".to_string(),
-            Token::HashLongArrow => "#>>".to_string(),
-            Token::AtSign => "@".to_string(),
-            Token::Sharp => "#".to_string(),
-            Token::Ampersand => "&".to_string(),
-            Token::Pipe => "|".to_string(),
-            Token::Caret => "^".to_string(),
-            Token::Tilde => "~".to_string(),
-            Token::ExclamationMark => "!".to_string(),
-            Token::DollarQuotedString(s) => s.to_string(),
-            _ => String::new(), // Handle unknown tokens gracefully
+            Token::Number(n, _) => Cow::Owned(n.clone()),
+            Token::Char(c) => Cow::Owned(c.to_string()),
+            Token::SingleQuotedString(s) => Cow::Owned(format!("'{}'", s.replace('\'', "''"))),
+            Token::NationalStringLiteral(s) => Cow::Owned(format!("N'{}'", s.replace('\'', "''"))),
+            Token::HexStringLiteral(s) => Cow::Owned(format!("0x{}", s)),
+            Token::DoubleQuotedString(s) => Cow::Owned(format!("\"{}\"", s)),
+            Token::SingleQuotedByteStringLiteral(s) => Cow::Owned(format!("b'{}'", s)),
+            Token::DoubleQuotedByteStringLiteral(s) => Cow::Owned(format!("b\"{}\"", s)),
+            // Static tokens - no allocation needed
+            Token::LParen => Cow::Borrowed("("),
+            Token::RParen => Cow::Borrowed(")"),
+            Token::LBrace => Cow::Borrowed("{"),
+            Token::RBrace => Cow::Borrowed("}"),
+            Token::LBracket => Cow::Borrowed("["),
+            Token::RBracket => Cow::Borrowed("]"),
+            Token::Comma => Cow::Borrowed(","),
+            Token::Period => Cow::Borrowed("."),
+            Token::Colon => Cow::Borrowed(":"),
+            Token::DoubleColon => Cow::Borrowed("::"),
+            Token::SemiColon => Cow::Borrowed(";"),
+            Token::Whitespace(w) => Cow::Owned(w.to_string()),
+            Token::Eq => Cow::Borrowed("="),
+            Token::Neq => Cow::Borrowed("<>"),
+            Token::Lt => Cow::Borrowed("<"),
+            Token::Gt => Cow::Borrowed(">"),
+            Token::LtEq => Cow::Borrowed("<="),
+            Token::GtEq => Cow::Borrowed(">="),
+            Token::Spaceship => Cow::Borrowed("<=>"),
+            Token::Plus => Cow::Borrowed("+"),
+            Token::Minus => Cow::Borrowed("-"),
+            Token::Mul => Cow::Borrowed("*"),
+            Token::Div => Cow::Borrowed("/"),
+            Token::Mod => Cow::Borrowed("%"),
+            Token::StringConcat => Cow::Borrowed("||"),
+            Token::LongArrow => Cow::Borrowed("->>"),
+            Token::Arrow => Cow::Borrowed("->"),
+            Token::HashArrow => Cow::Borrowed("#>"),
+            Token::HashLongArrow => Cow::Borrowed("#>>"),
+            Token::AtSign => Cow::Borrowed("@"),
+            Token::Sharp => Cow::Borrowed("#"),
+            Token::Ampersand => Cow::Borrowed("&"),
+            Token::Pipe => Cow::Borrowed("|"),
+            Token::Caret => Cow::Borrowed("^"),
+            Token::Tilde => Cow::Borrowed("~"),
+            Token::ExclamationMark => Cow::Borrowed("!"),
+            Token::DollarQuotedString(s) => Cow::Owned(s.to_string()),
+            _ => Cow::Borrowed(""), // Handle unknown tokens gracefully
         }
     }
 }
