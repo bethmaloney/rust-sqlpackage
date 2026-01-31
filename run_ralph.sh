@@ -61,7 +61,7 @@ while true; do
     MAX_CLIPPY_RETRIES=3
     CLIPPY_PASSED=false
 
-    if cargo clippy --all-targets --all-features -- -D warnings 2>&1; then
+    if cargo clippy --all-targets -- -D warnings 2>&1; then
         CLIPPY_PASSED=true
     else
         while [ $CLIPPY_RETRIES -lt $MAX_CLIPPY_RETRIES ]; do
@@ -69,7 +69,7 @@ while true; do
             echo -e "\nClippy failed (attempt $CLIPPY_RETRIES of $MAX_CLIPPY_RETRIES)"
 
             # Capture clippy errors and send to Claude for fixing
-            CLIPPY_OUTPUT=$(cargo clippy --all-targets --all-features -- -D warnings 2>&1 || true)
+            CLIPPY_OUTPUT=$(cargo clippy --all-targets -- -D warnings 2>&1 || true)
 
             echo -e "\nLaunching Claude to fix clippy errors..."
             echo "Fix all clippy errors and warnings. Here is the clippy output:
@@ -78,7 +78,7 @@ while true; do
 $CLIPPY_OUTPUT
 \`\`\`
 
-Run \`cargo clippy --all-targets --all-features -- -D warnings\` to verify fixes. Commit any changes with an appropriate message." | claude -p \
+Run \`cargo clippy --all-targets -- -D warnings\` to verify fixes. Commit any changes with an appropriate message." | claude -p \
                 --dangerously-skip-permissions \
                 --output-format=stream-json \
                 --model sonnet \
@@ -86,7 +86,7 @@ Run \`cargo clippy --all-targets --all-features -- -D warnings\` to verify fixes
                 2>&1 | tee >(claude-stream-format > /dev/stderr)
 
             echo -e "\nRetrying clippy..."
-            if cargo clippy --all-targets --all-features -- -D warnings 2>&1; then
+            if cargo clippy --all-targets -- -D warnings 2>&1; then
                 CLIPPY_PASSED=true
                 break
             fi
