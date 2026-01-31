@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use regex::Regex;
 use sqlparser::ast::Statement;
+use sqlparser::dialect::MsSqlDialect;
+use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer};
 
 use super::column_parser::{parse_column_definition_tokens, TokenParsedColumn};
 use super::constraint_parser::{
@@ -630,33 +633,37 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for CREATE TYPE (user-defined types)
     // Scalar types use: CREATE TYPE x FROM basetype
     // Table types use: CREATE TYPE x AS TABLE
+    // Uses token-based parsing (Phase 15.8 J6) to handle any whitespace between keywords
     if sql_upper.contains("CREATE TYPE") {
         // Check if this is a scalar type (FROM basetype) or table type (AS TABLE)
-        if sql_upper.contains(" FROM ") && !sql_upper.contains(" AS TABLE") {
-            // Scalar type - CREATE TYPE [dbo].[TypeName] FROM basetype [NULL|NOT NULL]
-            if let Some((schema, name)) = extract_type_name(sql) {
-                if let Some(scalar_info) = extract_scalar_type_info(sql, &sql_upper) {
-                    return Some(FallbackStatementType::ScalarType {
-                        schema,
-                        name,
-                        base_type: scalar_info.base_type,
-                        is_nullable: scalar_info.is_nullable,
-                        length: scalar_info.length,
-                        precision: scalar_info.precision,
-                        scale: scalar_info.scale,
-                    });
+        match is_scalar_type_definition(sql) {
+            Some(true) => {
+                // Scalar type - CREATE TYPE [dbo].[TypeName] FROM basetype [NULL|NOT NULL]
+                if let Some((schema, name)) = extract_type_name(sql) {
+                    if let Some(scalar_info) = extract_scalar_type_info(sql, &sql_upper) {
+                        return Some(FallbackStatementType::ScalarType {
+                            schema,
+                            name,
+                            base_type: scalar_info.base_type,
+                            is_nullable: scalar_info.is_nullable,
+                            length: scalar_info.length,
+                            precision: scalar_info.precision,
+                            scale: scalar_info.scale,
+                        });
+                    }
                 }
             }
-        } else {
-            // Table type - CREATE TYPE x AS TABLE (...)
-            // Uses token-based parsing (Phase 15.3) for improved maintainability and edge case handling.
-            if let Some(parsed) = parse_create_table_type_tokens(sql) {
-                return Some(FallbackStatementType::UserDefinedType {
-                    schema: parsed.schema,
-                    name: parsed.name,
-                    columns: parsed.columns,
-                    constraints: parsed.constraints,
-                });
+            Some(false) | None => {
+                // Table type - CREATE TYPE x AS TABLE (...)
+                // Uses token-based parsing (Phase 15.3) for improved maintainability and edge case handling.
+                if let Some(parsed) = parse_create_table_type_tokens(sql) {
+                    return Some(FallbackStatementType::UserDefinedType {
+                        schema: parsed.schema,
+                        name: parsed.name,
+                        columns: parsed.columns,
+                        constraints: parsed.constraints,
+                    });
+                }
             }
         }
     }
@@ -1022,48 +1029,173 @@ struct ScalarTypeInfo {
     scale: Option<u8>,
 }
 
+/// Determine if a CREATE TYPE statement is a scalar type (FROM) or table type (AS TABLE)
+/// Uses token-based parsing to handle any whitespace between keywords (Phase 15.8 J6)
+///
+/// Returns Some(true) for scalar types (has FROM, no AS TABLE)
+/// Returns Some(false) for table types (has AS TABLE)
+/// Returns None if neither pattern is found
+fn is_scalar_type_definition(sql: &str) -> Option<bool> {
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, sql).tokenize() {
+        Ok(t) => t,
+        Err(_) => return None,
+    };
+
+    let mut paren_depth: i32 = 0;
+    let mut found_type = false;
+    let mut has_from = false;
+    let mut has_as_table = false;
+
+    let mut i = 0;
+    while i < tokens.len() {
+        match &tokens[i] {
+            Token::LParen => paren_depth += 1,
+            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+            Token::Word(w) if w.keyword == Keyword::TYPE && paren_depth == 0 => {
+                found_type = true;
+            }
+            Token::Word(w) if w.keyword == Keyword::FROM && paren_depth == 0 && found_type => {
+                has_from = true;
+            }
+            Token::Word(w) if w.keyword == Keyword::AS && paren_depth == 0 && found_type => {
+                // Check if next non-whitespace token is TABLE
+                let mut j = i + 1;
+                while j < tokens.len() {
+                    match &tokens[j] {
+                        Token::Whitespace(_) => j += 1,
+                        Token::Word(w2) if w2.keyword == Keyword::TABLE => {
+                            has_as_table = true;
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if !found_type {
+        return None;
+    }
+
+    // Scalar type: has FROM but not AS TABLE
+    // Table type: has AS TABLE
+    if has_from && !has_as_table {
+        Some(true)
+    } else if has_as_table {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// Extract scalar type information from CREATE TYPE ... FROM basetype
 /// e.g., CREATE TYPE [dbo].[PhoneNumber] FROM VARCHAR(20) NOT NULL
 ///
-/// Takes a pre-computed uppercase SQL string to avoid redundant `.to_uppercase()` calls
-/// when called from `try_fallback_parse()` which already has the uppercase version.
-fn extract_scalar_type_info(sql: &str, sql_upper: &str) -> Option<ScalarTypeInfo> {
-    // Find the FROM keyword position
-    let from_idx = sql_upper.find(" FROM ")?;
-    let after_from = &sql[from_idx + 6..]; // Skip " FROM "
+/// Uses token-based parsing to handle any whitespace between keywords (Phase 15.8 J7)
+fn extract_scalar_type_info(sql: &str, _sql_upper: &str) -> Option<ScalarTypeInfo> {
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, sql).tokenize() {
+        Ok(t) => t,
+        Err(_) => return None,
+    };
 
-    // Parse the base type and modifiers
-    // Pattern: basetype[(length|precision,scale)] [NULL|NOT NULL]
-    // Examples: VARCHAR(20), DECIMAL(18,4), CHAR(11), NVARCHAR(255)
-    let trimmed = after_from.trim();
+    // Find the FROM keyword at top level (paren depth 0)
+    let mut paren_depth: i32 = 0;
+    let mut from_token_idx = None;
 
-    // Check for NOT NULL or NULL at the end
-    let is_nullable = if sql_upper.contains(" NOT NULL") {
-        false
-    } else {
-        true // NULL is the default for scalar types
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::LParen => paren_depth += 1,
+            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+            Token::Word(w) if w.keyword == Keyword::FROM && paren_depth == 0 => {
+                from_token_idx = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let from_idx = from_token_idx?;
+
+    // Extract tokens after FROM (the base type and modifiers)
+    let after_from_tokens: Vec<_> = tokens[from_idx + 1..]
+        .iter()
+        .filter(|t| !matches!(t, Token::Whitespace(_) | Token::EOF))
+        .collect();
+
+    if after_from_tokens.is_empty() {
+        return None;
+    }
+
+    // Check for NOT NULL at the end of the tokens (at top level, paren depth 0)
+    // Look for NOT followed by NULL at the end
+    let is_nullable = {
+        let mut not_null_found = false;
+        let mut pd: i32 = 0;
+        let mut i = 0;
+        while i < after_from_tokens.len() {
+            match after_from_tokens[i] {
+                Token::LParen => pd += 1,
+                Token::RParen => pd = pd.saturating_sub(1),
+                Token::Word(w) if w.keyword == Keyword::NOT && pd == 0 => {
+                    // Check if next token is NULL
+                    if i + 1 < after_from_tokens.len() {
+                        if let Token::Word(w2) = after_from_tokens[i + 1] {
+                            if w2.keyword == Keyword::NULL {
+                                not_null_found = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        !not_null_found // NULL is the default for scalar types
     };
 
     // Extract the base type and optional size specification
-    // Match: WORD optionally followed by (number) or (number,number)
-    let type_re = regex::Regex::new(r"(?i)^(\w+)(?:\s*\(\s*(\d+)(?:\s*,\s*(\d+))?\s*\))?").ok()?;
+    // The first token after FROM should be the type name
+    let base_type = match &after_from_tokens[0] {
+        Token::Word(w) => w.value.to_lowercase(),
+        _ => return None,
+    };
 
-    let caps = type_re.captures(trimmed)?;
-    let base_type = caps.get(1)?.as_str().to_lowercase();
-
-    // Get length/precision/scale based on type
-    let (length, precision, scale) = if let Some(first_num) = caps.get(2) {
-        let first: i32 = first_num.as_str().parse().ok()?;
-        if let Some(second_num) = caps.get(3) {
-            // Two numbers: precision and scale (e.g., DECIMAL(18,4))
-            let second: u8 = second_num.as_str().parse().ok()?;
-            (None, Some(first as u8), Some(second))
-        } else {
-            // One number: could be length or precision depending on type
-            match base_type.as_str() {
-                "decimal" | "numeric" => (None, Some(first as u8), Some(0)),
-                _ => (Some(first), None, None),
+    // Check for size specification: (length) or (precision, scale)
+    let (length, precision, scale) = if after_from_tokens.len() > 1 {
+        if matches!(after_from_tokens.get(1), Some(Token::LParen)) {
+            // Parse numbers inside parentheses
+            let mut numbers: Vec<i32> = Vec::new();
+            for token in after_from_tokens.iter().skip(2) {
+                match token {
+                    Token::Number(n, _) => {
+                        if let Ok(num) = n.parse::<i32>() {
+                            numbers.push(num);
+                        }
+                    }
+                    Token::RParen => break,
+                    _ => {}
+                }
             }
+
+            if numbers.len() == 2 {
+                // Two numbers: precision and scale (e.g., DECIMAL(18,4))
+                (None, Some(numbers[0] as u8), Some(numbers[1] as u8))
+            } else if numbers.len() == 1 {
+                // One number: could be length or precision depending on type
+                match base_type.as_str() {
+                    "decimal" | "numeric" => (None, Some(numbers[0] as u8), Some(0)),
+                    _ => (Some(numbers[0]), None, None),
+                }
+            } else {
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
         }
     } else {
         (None, None, None)

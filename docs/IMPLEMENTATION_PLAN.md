@@ -5,8 +5,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
-**Phase 15.1-15.7 complete: Parser refactoring tasks finished.**
-**Phase 15.8 in progress: Whitespace-agnostic keyword matching.**
+**Phase 15 complete: Parser refactoring tasks finished (including whitespace-agnostic keyword matching).**
 **Phase 16 in progress: Performance tuning and benchmarking.**
 - Phase 15.1: ExtendedTsqlDialect infrastructure ✅
 - Phase 15.2: Column definition token parsing (D1, D2, D3, E1, E2) ✅
@@ -15,7 +14,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Phase 15.5: Statement detection (A1-A5) ✅
 - Phase 15.6: Miscellaneous extraction (G1-G3) ✅
 - Phase 15.7: SQL preprocessing (H1-H3) ✅
-- Phase 15.8: Whitespace-agnostic keyword matching (J1-J7) 🔄
+- Phase 15.8: Whitespace-agnostic keyword matching (J1-J7) ✅
 - SQLCMD tasks I1-I2 remain regex-based by design (line-oriented preprocessing)
 
 | Layer | Passing | Rate |
@@ -59,7 +58,7 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 
 **Pattern:** Use `Tokenizer::new(&MsSqlDialect{}, sql).tokenize()` and search for `Token::Word` with the appropriate `Keyword` enum value, tracking parenthesis depth when needed.
 
-### Phase 15.8: Tasks (5/7)
+### Phase 15.8: Tasks (7/7) ✅
 
 | ID | Task | File | Line | Current Pattern | Status |
 |----|------|------|------|-----------------|--------|
@@ -68,8 +67,8 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 | J3 | Fix AS keyword in `extract_view_query()` | `src/dacpac/model_xml.rs` | 1062-1092 | Token-based (fixed) | ✅ |
 | J4 | Fix FOR keyword in trigger parsing | `src/dacpac/model_xml.rs` | 5050 | Token-based (fixed) | ✅ |
 | J5 | Fix AS keyword in trigger body extraction | `src/dacpac/model_xml.rs` | 5054-5069 | Token-based (fixed) | ✅ |
-| J6 | Fix FROM/AS TABLE in type detection | `src/parser/tsql_parser.rs` | 633 | `contains(" FROM ")`, `contains(" AS TABLE")` | ⬜ |
-| J7 | Fix FROM/NOT NULL in scalar type parsing | `src/parser/tsql_parser.rs` | 1029, 1038 | `find(" FROM ")`, `contains(" NOT NULL")` | ⬜ |
+| J6 | Fix FROM/AS TABLE in type detection | `src/parser/tsql_parser.rs` | 633 | Token-based (fixed) | ✅ |
+| J7 | Fix FROM/NOT NULL in scalar type parsing | `src/parser/tsql_parser.rs` | 1029, 1038 | Token-based (fixed) | ✅ |
 
 ### Implementation Notes
 
@@ -79,7 +78,9 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 
 **J4-J5 (Complete):** Combined implementation in `extract_trigger_body()`. Uses tokenization to find FOR/AFTER/INSTEAD keywords followed by AS at top level (paren depth 0). Removed the TRIGGER_AS_RE regex which is no longer needed.
 
-**J6-J7:** These are in tsql_parser.rs which already uses tokenizer in other places. Can reuse existing token infrastructure.
+**J6 (Complete):** Created `is_scalar_type_definition(sql: &str) -> Option<bool>` helper that uses tokenization to find FROM vs AS TABLE at paren depth 0. Returns `Some(true)` for scalar types (FROM keyword found), `Some(false)` for table types (AS TABLE found).
+
+**J7 (Complete):** Rewrote `extract_scalar_type_info()` to use tokenization: finds FROM keyword at paren depth 0, extracts tokens after FROM, checks for NOT NULL using token matching instead of string contains.
 
 ### Lower Priority
 
