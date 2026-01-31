@@ -188,15 +188,16 @@ pub fn generate_model_xml<W: Write>(
     // XML declaration
     xml_writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;
 
-    // Root element
-    let mut root = BytesStart::new("DataSchemaModel");
-    root.push_attribute(("FileFormatVersion", model.file_format_version.as_str()));
-    root.push_attribute(("SchemaVersion", model.schema_version.as_str()));
-    root.push_attribute(("DspName", project.target_platform.dsp_name()));
+    // Root element - pre-compute collation_lcid before batching attributes (Phase 16.3.3 optimization)
     let collation_lcid = project.collation_lcid.to_string();
-    root.push_attribute(("CollationLcid", collation_lcid.as_str()));
-    root.push_attribute(("CollationCaseSensitive", "False"));
-    root.push_attribute(("xmlns", NAMESPACE));
+    let root = BytesStart::new("DataSchemaModel").with_attributes([
+        ("FileFormatVersion", model.file_format_version.as_str()),
+        ("SchemaVersion", model.schema_version.as_str()),
+        ("DspName", project.target_platform.dsp_name()),
+        ("CollationLcid", collation_lcid.as_str()),
+        ("CollationCaseSensitive", "False"),
+        ("xmlns", NAMESPACE),
+    ]);
     xml_writer.write_event(Event::Start(root))?;
 
     // Header element with CustomData entries
@@ -308,27 +309,26 @@ fn write_package_reference<W: Write>(
     // e.g., "Microsoft.SqlServer.Dacpacs.Master" -> "master.dacpac"
     let dacpac_name = extract_dacpac_name(&pkg_ref.name);
 
-    let mut custom_data = BytesStart::new("CustomData");
-    custom_data.push_attribute(("Category", "Reference"));
-    custom_data.push_attribute(("Type", "SqlSchema"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let custom_data = BytesStart::new("CustomData")
+        .with_attributes([("Category", "Reference"), ("Type", "SqlSchema")]);
     writer.write_event(Event::Start(custom_data))?;
 
-    // FileName metadata
-    let mut filename = BytesStart::new("Metadata");
-    filename.push_attribute(("Name", "FileName"));
-    filename.push_attribute(("Value", dacpac_name.as_str()));
+    // FileName metadata - batch attributes
+    let filename = BytesStart::new("Metadata")
+        .with_attributes([("Name", "FileName"), ("Value", dacpac_name.as_str())]);
     writer.write_event(Event::Empty(filename))?;
 
-    // LogicalName metadata
-    let mut logical_name = BytesStart::new("Metadata");
-    logical_name.push_attribute(("Name", "LogicalName"));
-    logical_name.push_attribute(("Value", dacpac_name.as_str()));
+    // LogicalName metadata - batch attributes
+    let logical_name = BytesStart::new("Metadata")
+        .with_attributes([("Name", "LogicalName"), ("Value", dacpac_name.as_str())]);
     writer.write_event(Event::Empty(logical_name))?;
 
-    // SuppressMissingDependenciesErrors metadata
-    let mut suppress = BytesStart::new("Metadata");
-    suppress.push_attribute(("Name", "SuppressMissingDependenciesErrors"));
-    suppress.push_attribute(("Value", "False"));
+    // SuppressMissingDependenciesErrors metadata - batch attributes
+    let suppress = BytesStart::new("Metadata").with_attributes([
+        ("Name", "SuppressMissingDependenciesErrors"),
+        ("Value", "False"),
+    ]);
     writer.write_event(Event::Empty(suppress))?;
 
     writer.write_event(Event::End(BytesEnd::new("CustomData")))?;
@@ -348,16 +348,15 @@ fn write_sqlcmd_variables<W: Write>(
     writer: &mut Writer<W>,
     sqlcmd_vars: &[crate::project::SqlCmdVariable],
 ) -> anyhow::Result<()> {
-    let mut custom_data = BytesStart::new("CustomData");
-    custom_data.push_attribute(("Category", "SqlCmdVariables"));
-    custom_data.push_attribute(("Type", "SqlCmdVariable"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let custom_data = BytesStart::new("CustomData")
+        .with_attributes([("Category", "SqlCmdVariables"), ("Type", "SqlCmdVariable")]);
     writer.write_event(Event::Start(custom_data))?;
 
     // Write each variable as a Metadata element with the variable name as Name attribute
     for sqlcmd_var in sqlcmd_vars {
-        let mut metadata = BytesStart::new("Metadata");
-        metadata.push_attribute(("Name", sqlcmd_var.name.as_str()));
-        metadata.push_attribute(("Value", ""));
+        let metadata = BytesStart::new("Metadata")
+            .with_attributes([("Name", sqlcmd_var.name.as_str()), ("Value", "")]);
         writer.write_event(Event::Empty(metadata))?;
     }
 
@@ -385,13 +384,11 @@ fn write_custom_data<W: Write>(
     name: &str,
     value: &str,
 ) -> anyhow::Result<()> {
-    let mut custom_data = BytesStart::new("CustomData");
-    custom_data.push_attribute(("Category", category));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let custom_data = BytesStart::new("CustomData").with_attributes([("Category", category)]);
     writer.write_event(Event::Start(custom_data))?;
 
-    let mut metadata = BytesStart::new("Metadata");
-    metadata.push_attribute(("Name", name));
-    metadata.push_attribute(("Value", value));
+    let metadata = BytesStart::new("Metadata").with_attributes([("Name", name), ("Value", value)]);
     writer.write_event(Event::Empty(metadata))?;
 
     writer.write_event(Event::End(BytesEnd::new("CustomData")))?;
@@ -416,8 +413,8 @@ fn write_database_options<W: Write>(
     writer: &mut Writer<W>,
     project: &SqlProject,
 ) -> anyhow::Result<()> {
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlDatabaseOptions"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlDatabaseOptions")]);
     writer.write_event(Event::Start(elem))?;
 
     let db_options = &project.database_options;
@@ -541,9 +538,11 @@ fn write_database_options<W: Write>(
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
         let filegroup_name = format!("[{}]", filegroup);
-        let mut refs = BytesStart::new("References");
-        refs.push_attribute(("ExternalSource", "BuiltIns"));
-        refs.push_attribute(("Name", filegroup_name.as_str()));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let refs = BytesStart::new("References").with_attributes([
+            ("ExternalSource", "BuiltIns"),
+            ("Name", filegroup_name.as_str()),
+        ]);
         writer.write_event(Event::Empty(refs))?;
 
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -585,10 +584,10 @@ fn write_schema<W: Write>(writer: &mut Writer<W>, schema: &SchemaElement) -> any
         return Ok(());
     }
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlSchema"));
-    elem.push_attribute(("Name", format!("[{}]", schema.name).as_str()));
-
+    // Pre-compute schema name before attribute batching (Phase 16.3.3 optimization)
+    let schema_name = format!("[{}]", schema.name);
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlSchema"), ("Name", schema_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Write Authorizer relationship - DotNet always emits this, defaulting to dbo
@@ -604,19 +603,20 @@ fn write_authorizer_relationship<W: Write>(
     writer: &mut Writer<W>,
     owner: &str,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Authorizer"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Authorizer")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let owner_ref = format!("[{}]", owner);
-    let mut refs = BytesStart::new("References");
-    // Built-in principals (like dbo) use ExternalSource="BuiltIns"
-    if is_builtin_schema(owner) {
-        refs.push_attribute(("ExternalSource", "BuiltIns"));
-    }
-    refs.push_attribute(("Name", owner_ref.as_str()));
+    // Conditional attribute - use with_attributes with appropriate attributes
+    let refs = if is_builtin_schema(owner) {
+        BytesStart::new("References")
+            .with_attributes([("ExternalSource", "BuiltIns"), ("Name", owner_ref.as_str())])
+    } else {
+        BytesStart::new("References").with_attributes([("Name", owner_ref.as_str())])
+    };
     writer.write_event(Event::Empty(refs))?;
 
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -628,9 +628,9 @@ fn write_authorizer_relationship<W: Write>(
 fn write_table<W: Write>(writer: &mut Writer<W>, table: &TableElement) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", table.schema, table.name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTable"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlTable"), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Write IsAnsiNullsOn property (always true for tables - ANSI_NULLS ON is default)
@@ -638,8 +638,7 @@ fn write_table<W: Write>(writer: &mut Writer<W>, table: &TableElement) -> anyhow
 
     // Relationship to columns
     if !table.columns.is_empty() {
-        let mut rel = BytesStart::new("Relationship");
-        rel.push_attribute(("Name", "Columns"));
+        let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
         writer.write_event(Event::Start(rel))?;
 
         for col in &table.columns {
@@ -655,9 +654,11 @@ fn write_table<W: Write>(writer: &mut Writer<W>, table: &TableElement) -> anyhow
     // Write SqlInlineConstraintAnnotation if table has inline constraints
     // DotNet assigns a disambiguator to tables with inline constraints
     if let Some(disambiguator) = table.inline_constraint_disambiguator {
-        let mut annotation = BytesStart::new("Annotation");
-        annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
-        annotation.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
+        let disamb_str = disambiguator.to_string();
+        let annotation = BytesStart::new("Annotation").with_attributes([
+            ("Type", "SqlInlineConstraintAnnotation"),
+            ("Disambiguator", disamb_str.as_str()),
+        ]);
         writer.write_event(Event::Empty(annotation))?;
     }
 
@@ -688,9 +689,9 @@ fn write_computed_column<W: Write>(
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlComputedColumn"));
-    elem.push_attribute(("Name", col_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlComputedColumn"), ("Name", col_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // SqlComputedColumn does NOT support IsNullable property (unlike SqlSimpleColumn)
@@ -791,19 +792,20 @@ fn write_expression_dependencies<W: Write>(
         return Ok(());
     }
 
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "ExpressionDependencies"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "ExpressionDependencies")]);
     writer.write_event(Event::Start(rel))?;
 
     for dep in dependencies {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-        let mut refs = BytesStart::new("References");
-        // Built-in types need ExternalSource="BuiltIns" attribute
-        if is_builtin_type_reference(dep) {
-            refs.push_attribute(("ExternalSource", "BuiltIns"));
-        }
-        refs.push_attribute(("Name", dep.as_str()));
+        // Conditional attribute - use with_attributes with appropriate attributes
+        let refs = if is_builtin_type_reference(dep) {
+            BytesStart::new("References")
+                .with_attributes([("ExternalSource", "BuiltIns"), ("Name", dep.as_str())])
+        } else {
+            BytesStart::new("References").with_attributes([("Name", dep.as_str())])
+        };
         writer.write_event(Event::Empty(refs))?;
 
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -826,9 +828,11 @@ fn write_table_type_column_with_annotation<W: Write>(
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTableTypeSimpleColumn"));
-    elem.push_attribute(("Name", col_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element").with_attributes([
+        ("Type", "SqlTableTypeSimpleColumn"),
+        ("Name", col_name.as_str()),
+    ]);
     writer.write_event(Event::Start(elem))?;
 
     // Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn
@@ -845,9 +849,11 @@ fn write_table_type_column_with_annotation<W: Write>(
 
     // SqlInlineConstraintAnnotation for columns with default values
     if let Some(disam) = disambiguator {
-        let mut annotation = BytesStart::new("Annotation");
-        annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
-        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        let disamb_str = disam.to_string();
+        let annotation = BytesStart::new("Annotation").with_attributes([
+            ("Type", "SqlInlineConstraintAnnotation"),
+            ("Disambiguator", disamb_str.as_str()),
+        ]);
         writer.write_event(Event::Empty(annotation))?;
     }
 
@@ -866,9 +872,9 @@ fn write_column_with_type<W: Write>(
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", column_type));
-    elem.push_attribute(("Name", col_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", column_type), ("Name", col_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Properties - only emit IsNullable="False" for NOT NULL columns
@@ -897,8 +903,9 @@ fn write_column_with_type<W: Write>(
     // Write AttachedAnnotation elements linking column to inline constraints
     // DotNet uses <AttachedAnnotation Disambiguator="X" /> (no Type attribute)
     for disambiguator in &column.attached_annotations {
-        let mut annotation = BytesStart::new("AttachedAnnotation");
-        annotation.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
+        let disamb_str = disambiguator.to_string();
+        let annotation = BytesStart::new("AttachedAnnotation")
+            .with_attributes([("Disambiguator", disamb_str.as_str())]);
         writer.write_event(Event::Empty(annotation))?;
     }
 
@@ -914,14 +921,13 @@ fn write_type_specifier<W: Write>(
     precision: Option<u8>,
     scale: Option<u8>,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "TypeSpecifier"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "TypeSpecifier")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTypeSpecifier"));
+    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
     writer.write_event(Event::Start(elem))?;
 
     // DotNet order: Properties first, then Type relationship
@@ -1001,9 +1007,9 @@ fn write_view<W: Write>(
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", view.schema, view.name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlView"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlView"), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Write properties in DotNet order:
@@ -2008,29 +2014,33 @@ fn write_view_columns<W: Write>(
     view_full_name: &str,
     columns: &[ViewColumn],
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Columns"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
     writer.write_event(Event::Start(rel))?;
 
     for col in columns {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
         let col_full_name = format!("{}.[{}]", view_full_name, col.name);
-        let mut elem = BytesStart::new("Element");
-        elem.push_attribute(("Type", "SqlComputedColumn"));
-        elem.push_attribute(("Name", col_full_name.as_str()));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlComputedColumn"),
+            ("Name", col_full_name.as_str()),
+        ]);
         writer.write_event(Event::Start(elem))?;
 
         // Write ExpressionDependencies if this column has a source reference
         if let Some(source_ref) = &col.source_ref {
-            let mut dep_rel = BytesStart::new("Relationship");
-            dep_rel.push_attribute(("Name", "ExpressionDependencies"));
+            // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+            let dep_rel = BytesStart::new("Relationship")
+                .with_attributes([("Name", "ExpressionDependencies")]);
             writer.write_event(Event::Start(dep_rel))?;
 
             writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-            let mut refs = BytesStart::new("References");
-            refs.push_attribute(("Name", source_ref.as_str()));
+            // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+            let refs =
+                BytesStart::new("References").with_attributes([("Name", source_ref.as_str())]);
             writer.write_event(Event::Empty(refs))?;
 
             writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -2050,15 +2060,15 @@ fn write_query_dependencies<W: Write>(
     writer: &mut Writer<W>,
     deps: &[String],
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "QueryDependencies"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "QueryDependencies")]);
     writer.write_event(Event::Start(rel))?;
 
     for dep in deps {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-        let mut refs = BytesStart::new("References");
-        refs.push_attribute(("Name", dep.as_str()));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let refs = BytesStart::new("References").with_attributes([("Name", dep.as_str())]);
         writer.write_event(Event::Empty(refs))?;
 
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -2075,28 +2085,30 @@ fn write_tvf_columns<W: Write>(
     func_full_name: &str,
     columns: &[TvfColumn],
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Columns"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
     writer.write_event(Event::Start(rel))?;
 
     for col in columns {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
         let col_full_name = format!("{}.[{}]", func_full_name, col.name);
-        let mut elem = BytesStart::new("Element");
-        elem.push_attribute(("Type", "SqlSimpleColumn"));
-        elem.push_attribute(("Name", col_full_name.as_str()));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlSimpleColumn"),
+            ("Name", col_full_name.as_str()),
+        ]);
         writer.write_event(Event::Start(elem))?;
 
         // Write TypeSpecifier relationship
-        let mut type_rel = BytesStart::new("Relationship");
-        type_rel.push_attribute(("Name", "TypeSpecifier"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let type_rel = BytesStart::new("Relationship").with_attributes([("Name", "TypeSpecifier")]);
         writer.write_event(Event::Start(type_rel))?;
 
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-        let mut spec_elem = BytesStart::new("Element");
-        spec_elem.push_attribute(("Type", "SqlTypeSpecifier"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let spec_elem = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
         writer.write_event(Event::Start(spec_elem))?;
 
         // Write Length or Precision/Scale properties if present
@@ -2111,16 +2123,16 @@ fn write_tvf_columns<W: Write>(
         }
 
         // Write Type reference to built-in type
-        let mut inner_type_rel = BytesStart::new("Relationship");
-        inner_type_rel.push_attribute(("Name", "Type"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let inner_type_rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
         writer.write_event(Event::Start(inner_type_rel))?;
 
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
         let type_ref = format!("[{}]", col.data_type);
-        let mut refs = BytesStart::new("References");
-        refs.push_attribute(("ExternalSource", "BuiltIns"));
-        refs.push_attribute(("Name", type_ref.as_str()));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let refs = BytesStart::new("References")
+            .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_ref.as_str())]);
         writer.write_event(Event::Empty(refs))?;
 
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -2145,9 +2157,9 @@ fn write_procedure<W: Write>(
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", proc.schema, proc.name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlProcedure"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlProcedure"), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Extract parameters for both writing and dependency extraction
@@ -2205,8 +2217,8 @@ fn write_procedure<W: Write>(
 
     // Write Parameters relationship
     if !params.is_empty() {
-        let mut param_rel = BytesStart::new("Relationship");
-        param_rel.push_attribute(("Name", "Parameters"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let param_rel = BytesStart::new("Relationship").with_attributes([("Name", "Parameters")]);
         writer.write_event(Event::Start(param_rel))?;
 
         for param in params.iter() {
@@ -2225,12 +2237,21 @@ fn write_procedure<W: Write>(
             let is_tvp = tvp_idx.is_some();
             let disambiguator = tvp_idx.map(|i| tvp_disambiguator_base + i as u32);
 
-            let mut param_elem = BytesStart::new("Element");
-            param_elem.push_attribute(("Type", "SqlSubroutineParameter"));
-            param_elem.push_attribute(("Name", param_name.as_str()));
-            if let Some(disamb) = disambiguator {
-                param_elem.push_attribute(("Disambiguator", disamb.to_string().as_str()));
-            }
+            // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+            // Conditional Disambiguator attribute requires separate handling
+            let param_elem = if let Some(disamb) = disambiguator {
+                let disamb_str = disamb.to_string();
+                BytesStart::new("Element").with_attributes([
+                    ("Type", "SqlSubroutineParameter"),
+                    ("Name", param_name.as_str()),
+                    ("Disambiguator", disamb_str.as_str()),
+                ])
+            } else {
+                BytesStart::new("Element").with_attributes([
+                    ("Type", "SqlSubroutineParameter"),
+                    ("Name", param_name.as_str()),
+                ])
+            };
             writer.write_event(Event::Start(param_elem))?;
 
             // Write default value if present
@@ -2315,8 +2336,8 @@ fn write_dynamic_objects<W: Write>(
     proc_full_name: &str,
     tvp_params: &[(&ProcedureParameter, Option<&UserDefinedTypeElement>)],
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "DynamicObjects"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "DynamicObjects")]);
     writer.write_event(Event::Start(rel))?;
 
     for (param, table_type_opt) in tvp_params {
@@ -2329,9 +2350,11 @@ fn write_dynamic_objects<W: Write>(
         };
         let dynamic_source_name = format!("{}.[{}]", proc_full_name, param_name_with_at);
 
-        let mut elem = BytesStart::new("Element");
-        elem.push_attribute(("Type", "SqlDynamicColumnSource"));
-        elem.push_attribute(("Name", dynamic_source_name.as_str()));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlDynamicColumnSource"),
+            ("Name", dynamic_source_name.as_str()),
+        ]);
         writer.write_event(Event::Start(elem))?;
 
         // Write Columns relationship if we have the table type definition
@@ -2357,17 +2380,19 @@ fn write_dynamic_columns<W: Write>(
         return Ok(());
     }
 
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Columns"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
     writer.write_event(Event::Start(rel))?;
 
     for col in &table_type.columns {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
         let col_full_name = format!("{}.[{}]", dynamic_source_name, col.name);
-        let mut col_elem = BytesStart::new("Element");
-        col_elem.push_attribute(("Type", "SqlSimpleColumn"));
-        col_elem.push_attribute(("Name", col_full_name.as_str()));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let col_elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlSimpleColumn"),
+            ("Name", col_full_name.as_str()),
+        ]);
         writer.write_event(Event::Start(col_elem))?;
 
         // Write IsNullable property - in DynamicObjects columns, IsNullable is based on
@@ -2395,14 +2420,14 @@ fn write_column_type_specifier<W: Write>(
     precision: Option<u8>,
     scale: Option<u8>,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "TypeSpecifier"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "TypeSpecifier")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut type_spec = BytesStart::new("Element");
-    type_spec.push_attribute(("Type", "SqlTypeSpecifier"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let type_spec = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
     writer.write_event(Event::Start(type_spec))?;
 
     // Write Scale before Precision (DotNet order)
@@ -2417,14 +2442,14 @@ fn write_column_type_specifier<W: Write>(
     let (base_type, _, _, _) = parse_data_type(data_type);
     let type_ref = format!("[{}]", base_type.to_lowercase());
 
-    let mut type_rel = BytesStart::new("Relationship");
-    type_rel.push_attribute(("Name", "Type"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let type_rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
     writer.write_event(Event::Start(type_rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-    let mut refs = BytesStart::new("References");
-    refs.push_attribute(("ExternalSource", "BuiltIns"));
-    refs.push_attribute(("Name", type_ref.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let refs = BytesStart::new("References")
+        .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_ref.as_str())]);
     writer.write_event(Event::Empty(refs))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
 
@@ -2442,26 +2467,26 @@ fn write_table_type_relationship<W: Write>(
     writer: &mut Writer<W>,
     data_type: &str,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Type"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTypeSpecifier"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
     writer.write_event(Event::Start(elem))?;
 
     // Write the type reference (no ExternalSource for user-defined types)
     let type_ref = normalize_type_name(data_type);
-    let mut type_rel = BytesStart::new("Relationship");
-    type_rel.push_attribute(("Name", "Type"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let type_rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
     writer.write_event(Event::Start(type_rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-    let mut refs = BytesStart::new("References");
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
     // No ExternalSource for user-defined table types
-    refs.push_attribute(("Name", type_ref.as_str()));
+    let refs = BytesStart::new("References").with_attributes([("Name", type_ref.as_str())]);
     writer.write_event(Event::Empty(refs))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
 
@@ -2710,8 +2735,8 @@ fn write_function_parameters<W: Write>(
         return Ok(());
     }
 
-    let mut param_rel = BytesStart::new("Relationship");
-    param_rel.push_attribute(("Name", "Parameters"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let param_rel = BytesStart::new("Relationship").with_attributes([("Name", "Parameters")]);
     writer.write_event(Event::Start(param_rel))?;
 
     for param in params.iter() {
@@ -2724,9 +2749,11 @@ fn write_function_parameters<W: Write>(
             format!("@{}", param.name)
         };
         let param_name = format!("{}.[{}]", full_name, param_name_with_at);
-        let mut param_elem = BytesStart::new("Element");
-        param_elem.push_attribute(("Type", "SqlSubroutineParameter"));
-        param_elem.push_attribute(("Name", param_name.as_str()));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let param_elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlSubroutineParameter"),
+            ("Name", param_name.as_str()),
+        ]);
         writer.write_event(Event::Start(param_elem))?;
 
         // Write default value if present
@@ -3447,29 +3474,31 @@ fn write_body_dependencies<W: Write>(
         return Ok(());
     }
 
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "BodyDependencies"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "BodyDependencies")]);
     writer.write_event(Event::Start(rel))?;
 
     for dep in deps {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
         match dep {
             BodyDependency::BuiltInType(type_ref) => {
-                let mut refs = BytesStart::new("References");
-                refs.push_attribute(("ExternalSource", "BuiltIns"));
-                refs.push_attribute(("Name", type_ref.as_str()));
+                let refs = BytesStart::new("References")
+                    .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_ref.as_str())]);
                 writer.write_event(Event::Empty(refs))?;
             }
             BodyDependency::ObjectRef(obj_ref) => {
-                let mut refs = BytesStart::new("References");
-                refs.push_attribute(("Name", obj_ref.as_str()));
+                let refs =
+                    BytesStart::new("References").with_attributes([("Name", obj_ref.as_str())]);
                 writer.write_event(Event::Empty(refs))?;
             }
             BodyDependency::TvpParameter(param_ref, disambiguator) => {
-                let mut refs = BytesStart::new("References");
-                refs.push_attribute(("Name", param_ref.as_str()));
-                refs.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
+                let disamb_str = disambiguator.to_string();
+                let refs = BytesStart::new("References").with_attributes([
+                    ("Name", param_ref.as_str()),
+                    ("Disambiguator", disamb_str.as_str()),
+                ]);
                 writer.write_event(Event::Empty(refs))?;
             }
         }
@@ -3568,8 +3597,8 @@ fn write_data_type_relationship<W: Write>(
     writer: &mut Writer<W>,
     data_type: &str,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Type"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
@@ -3577,8 +3606,8 @@ fn write_data_type_relationship<W: Write>(
     // Parse the data type and write an inline SqlTypeSpecifier element
     let (base_type, length, precision, scale) = parse_data_type(data_type);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTypeSpecifier"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
     writer.write_event(Event::Start(elem))?;
 
     // Write length/precision/scale if applicable
@@ -3598,14 +3627,14 @@ fn write_data_type_relationship<W: Write>(
 
     // Write the base type as a reference
     let type_ref = format!("[{}]", base_type.to_lowercase());
-    let mut type_rel = BytesStart::new("Relationship");
-    type_rel.push_attribute(("Name", "Type"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let type_rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
     writer.write_event(Event::Start(type_rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-    let mut refs = BytesStart::new("References");
-    refs.push_attribute(("ExternalSource", "BuiltIns"));
-    refs.push_attribute(("Name", type_ref.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let refs = BytesStart::new("References")
+        .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_ref.as_str())]);
     writer.write_event(Event::Empty(refs))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
 
@@ -3667,9 +3696,9 @@ fn write_function<W: Write>(
         crate::model::FunctionType::InlineTableValued => "SqlInlineTableValuedFunction",
     };
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", type_name));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", type_name), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Write IsAnsiNullsOn property (always true for functions)
@@ -3738,22 +3767,24 @@ fn write_function_body_with_annotation<W: Write>(
     body: &str,
     header: &str,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "FunctionBody"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "FunctionBody")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlScriptFunctionImplementation"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem =
+        BytesStart::new("Element").with_attributes([("Type", "SqlScriptFunctionImplementation")]);
     writer.write_event(Event::Start(elem))?;
 
     // Write BodyScript property with the function body only (BEGIN...END)
     write_script_property(writer, "BodyScript", body)?;
 
     // Write SysCommentsObjectAnnotation with HeaderContents
-    let mut annotation = BytesStart::new("Annotation");
-    annotation.push_attribute(("Type", "SysCommentsObjectAnnotation"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let annotation =
+        BytesStart::new("Annotation").with_attributes([("Type", "SysCommentsObjectAnnotation")]);
     writer.write_event(Event::Start(annotation))?;
 
     // Calculate length (header + body)
@@ -3786,26 +3817,26 @@ fn write_function_return_type<W: Write>(
     let base_type = extract_base_type_name(return_type);
     let type_ref = format!("[{}]", base_type.to_lowercase());
 
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Type"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTypeSpecifier"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
     writer.write_event(Event::Start(elem))?;
 
     // Nested Type relationship referencing the built-in type
-    let mut inner_rel = BytesStart::new("Relationship");
-    inner_rel.push_attribute(("Name", "Type"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let inner_rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
     writer.write_event(Event::Start(inner_rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut refs = BytesStart::new("References");
-    refs.push_attribute(("ExternalSource", "BuiltIns"));
-    refs.push_attribute(("Name", type_ref.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let refs = BytesStart::new("References")
+        .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_ref.as_str())]);
     writer.write_event(Event::Empty(refs))?;
 
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -3883,9 +3914,9 @@ fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow
         index.table_schema, index.table_name, index.name
     );
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlIndex"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlIndex"), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     if index.is_unique {
@@ -3955,8 +3986,8 @@ fn write_index_column_specifications<W: Write>(
     index: &IndexElement,
     table_ref: &str,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "ColumnSpecifications"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "ColumnSpecifications")]);
     writer.write_event(Event::Start(rel))?;
 
     for (i, col) in index.columns.iter().enumerate() {
@@ -3967,9 +3998,11 @@ fn write_index_column_specifications<W: Write>(
             index.table_schema, index.table_name, index.name, i
         );
 
-        let mut elem = BytesStart::new("Element");
-        elem.push_attribute(("Type", "SqlIndexedColumnSpecification"));
-        elem.push_attribute(("Name", spec_name.as_str()));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlIndexedColumnSpecification"),
+            ("Name", spec_name.as_str()),
+        ]);
         writer.write_event(Event::Start(elem))?;
 
         // Reference to the column
@@ -3989,14 +4022,14 @@ fn write_data_compression_options<W: Write>(
     writer: &mut Writer<W>,
     compression: &DataCompressionType,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "DataCompressionOptions"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "DataCompressionOptions")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlDataCompressionOption"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlDataCompressionOption")]);
     writer.write_event(Event::Start(elem))?;
 
     // Write CompressionLevel property
@@ -4022,13 +4055,19 @@ fn write_fulltext_index<W: Write>(
     // Full-text index name format: [schema].[table] (same as table name)
     let full_name = format!("[{}].[{}]", fulltext.table_schema, fulltext.table_name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlFullTextIndex"));
-    elem.push_attribute(("Name", full_name.as_str()));
-    // Disambiguator needed since fulltext index shares name with table
-    if let Some(disambiguator) = fulltext.disambiguator {
-        elem.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
-    }
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    // Conditional Disambiguator attribute requires separate handling
+    let elem = if let Some(disambiguator) = fulltext.disambiguator {
+        let disamb_str = disambiguator.to_string();
+        BytesStart::new("Element").with_attributes([
+            ("Type", "SqlFullTextIndex"),
+            ("Name", full_name.as_str()),
+            ("Disambiguator", disamb_str.as_str()),
+        ])
+    } else {
+        BytesStart::new("Element")
+            .with_attributes([("Type", "SqlFullTextIndex"), ("Name", full_name.as_str())])
+    };
     writer.write_event(Event::Start(elem))?;
 
     // Reference to full-text catalog if specified
@@ -4060,16 +4099,17 @@ fn write_fulltext_column_specifications<W: Write>(
     fulltext: &FullTextIndexElement,
     table_ref: &str,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Columns"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
     writer.write_event(Event::Start(rel))?;
 
     for col in fulltext.columns.iter() {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
         // DotNet uses anonymous elements (no Name attribute) for column specifiers
-        let mut elem = BytesStart::new("Element");
-        elem.push_attribute(("Type", "SqlFullTextIndexColumnSpecifier"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let elem = BytesStart::new("Element")
+            .with_attributes([("Type", "SqlFullTextIndexColumnSpecifier")]);
         writer.write_event(Event::Start(elem))?;
 
         // Add LanguageId property if specified
@@ -4095,9 +4135,9 @@ fn write_fulltext_catalog<W: Write>(
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}]", catalog.name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlFullTextCatalog"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlFullTextCatalog"), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Add IsDefault property if this is the default catalog
@@ -4128,15 +4168,14 @@ fn write_constraint<W: Write>(
         ConstraintType::Default => "SqlDefaultConstraint",
     };
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", type_name));
-    // Emit Name attribute based on emit_name flag:
-    // - True for table-level constraints (always named)
-    // - True for inline constraints when table has a named table-level PK
-    // - False for inline constraints when table has no named table-level PK
-    if constraint.emit_name {
-        elem.push_attribute(("Name", full_name.as_str()));
-    }
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    // Conditional Name attribute requires separate handling
+    let elem = if constraint.emit_name {
+        BytesStart::new("Element")
+            .with_attributes([("Type", type_name), ("Name", full_name.as_str())])
+    } else {
+        BytesStart::new("Element").with_attributes([("Type", type_name)])
+    };
     writer.write_event(Event::Start(elem))?;
 
     // Write IsClustered property for primary keys and unique constraints
@@ -4194,15 +4233,17 @@ fn write_constraint<W: Write>(
                     write_relationship(writer, "DefiningTable", &[&table_ref])?;
 
                     // Primary keys and unique constraints use ColumnSpecifications with inline elements
-                    let mut rel = BytesStart::new("Relationship");
-                    rel.push_attribute(("Name", "ColumnSpecifications"));
+                    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+                    let rel = BytesStart::new("Relationship")
+                        .with_attributes([("Name", "ColumnSpecifications")]);
                     writer.write_event(Event::Start(rel))?;
 
                     for col in &constraint.columns {
                         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-                        let mut col_elem = BytesStart::new("Element");
-                        col_elem.push_attribute(("Type", "SqlIndexedColumnSpecification"));
+                        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+                        let col_elem = BytesStart::new("Element")
+                            .with_attributes([("Type", "SqlIndexedColumnSpecification")]);
                         writer.write_event(Event::Start(col_elem))?;
 
                         // Note: DacFx SqlIndexedColumnSpecification doesn't have a property for
@@ -4281,17 +4322,20 @@ fn write_constraint<W: Write>(
     // Write annotation at the end of the constraint element
     // - Inline constraints: <Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="X" />
     // - Named constraints: <AttachedAnnotation Disambiguator="X" /> (referencing table's disambiguator)
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
     if let Some(disambiguator) = constraint.inline_constraint_disambiguator {
+        let disamb_str = disambiguator.to_string();
         if constraint.is_inline {
             // Inline constraint gets its own SqlInlineConstraintAnnotation
-            let mut annotation = BytesStart::new("Annotation");
-            annotation.push_attribute(("Type", "SqlInlineConstraintAnnotation"));
-            annotation.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
+            let annotation = BytesStart::new("Annotation").with_attributes([
+                ("Type", "SqlInlineConstraintAnnotation"),
+                ("Disambiguator", disamb_str.as_str()),
+            ]);
             writer.write_event(Event::Empty(annotation))?;
         } else {
             // Named constraint references the table's disambiguator via AttachedAnnotation
-            let mut annotation = BytesStart::new("AttachedAnnotation");
-            annotation.push_attribute(("Disambiguator", disambiguator.to_string().as_str()));
+            let annotation = BytesStart::new("AttachedAnnotation")
+                .with_attributes([("Disambiguator", disamb_str.as_str())]);
             writer.write_event(Event::Empty(annotation))?;
         }
     }
@@ -4301,9 +4345,8 @@ fn write_constraint<W: Write>(
 }
 
 fn write_property<W: Write>(writer: &mut Writer<W>, name: &str, value: &str) -> anyhow::Result<()> {
-    let mut prop = BytesStart::new("Property");
-    prop.push_attribute(("Name", name));
-    prop.push_attribute(("Value", value));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let prop = BytesStart::new("Property").with_attributes([("Name", name), ("Value", value)]);
     writer.write_event(Event::Empty(prop))?;
     Ok(())
 }
@@ -4323,8 +4366,8 @@ fn write_script_property<W: Write>(
     name: &str,
     script: &str,
 ) -> anyhow::Result<()> {
-    let mut prop = BytesStart::new("Property");
-    prop.push_attribute(("Name", name));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let prop = BytesStart::new("Property").with_attributes([("Name", name)]);
     writer.write_event(Event::Start(prop))?;
 
     // Normalize line endings before writing
@@ -4344,15 +4387,14 @@ fn write_relationship<W: Write>(
     name: &str,
     references: &[&str],
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", name));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", name)]);
     writer.write_event(Event::Start(rel))?;
 
     for reference in references {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-        let mut refs = BytesStart::new("References");
-        refs.push_attribute(("Name", *reference));
+        let refs = BytesStart::new("References").with_attributes([("Name", *reference)]);
         writer.write_event(Event::Empty(refs))?;
 
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -4367,15 +4409,15 @@ fn write_builtin_type_relationship<W: Write>(
     name: &str,
     type_ref: &str,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", name));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", name)]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut refs = BytesStart::new("References");
-    refs.push_attribute(("ExternalSource", "BuiltIns"));
-    refs.push_attribute(("Name", type_ref));
+    // Batch both attributes in a single with_attributes call
+    let refs = BytesStart::new("References")
+        .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_ref)]);
     writer.write_event(Event::Empty(refs))?;
 
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -4386,18 +4428,22 @@ fn write_builtin_type_relationship<W: Write>(
 
 /// Write a Schema relationship, using ExternalSource="BuiltIns" for built-in schemas
 fn write_schema_relationship<W: Write>(writer: &mut Writer<W>, schema: &str) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Schema"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Schema")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let schema_ref = format!("[{}]", schema);
-    let mut refs = BytesStart::new("References");
-    if is_builtin_schema(schema) {
-        refs.push_attribute(("ExternalSource", "BuiltIns"));
-    }
-    refs.push_attribute(("Name", schema_ref.as_str()));
+    // Conditional attribute - use with_attributes with appropriate attributes
+    let refs = if is_builtin_schema(schema) {
+        BytesStart::new("References").with_attributes([
+            ("ExternalSource", "BuiltIns"),
+            ("Name", schema_ref.as_str()),
+        ])
+    } else {
+        BytesStart::new("References").with_attributes([("Name", schema_ref.as_str())])
+    };
     writer.write_event(Event::Empty(refs))?;
 
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -4414,26 +4460,23 @@ fn write_type_specifier_builtin<W: Write>(
     writer: &mut Writer<W>,
     type_name: &str,
 ) -> anyhow::Result<()> {
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "TypeSpecifier"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "TypeSpecifier")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTypeSpecifier"));
+    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
     writer.write_event(Event::Start(elem))?;
 
     // Nested Type relationship referencing the built-in type
-    let mut inner_rel = BytesStart::new("Relationship");
-    inner_rel.push_attribute(("Name", "Type"));
+    let inner_rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
     writer.write_event(Event::Start(inner_rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut refs = BytesStart::new("References");
-    refs.push_attribute(("ExternalSource", "BuiltIns"));
-    refs.push_attribute(("Name", type_name));
+    let refs = BytesStart::new("References")
+        .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_name)]);
     writer.write_event(Event::Empty(refs))?;
 
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -4449,9 +4492,9 @@ fn write_type_specifier_builtin<W: Write>(
 fn write_sequence<W: Write>(writer: &mut Writer<W>, seq: &SequenceElement) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", seq.schema, seq.name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlSequence"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlSequence"), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Properties in DotNet order: IsCycling, HasNoMaxValue, HasNoMinValue, MinValue, MaxValue, Increment, StartValue
@@ -4512,9 +4555,11 @@ fn write_scalar_type<W: Write>(
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", scalar.schema, scalar.name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlUserDefinedDataType"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element").with_attributes([
+        ("Type", "SqlUserDefinedDataType"),
+        ("Name", full_name.as_str()),
+    ]);
     writer.write_event(Event::Start(elem))?;
 
     // Properties - IsNullable only if explicitly false (NOT NULL)
@@ -4541,16 +4586,16 @@ fn write_scalar_type<W: Write>(
     write_schema_relationship(writer, &scalar.schema)?;
 
     // Relationship to base type (Type relationship points to built-in type)
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "Type"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
     writer.write_event(Event::Start(rel))?;
 
-    let entry = BytesStart::new("Entry");
-    writer.write_event(Event::Start(entry.clone()))?;
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut refs = BytesStart::new("References");
-    refs.push_attribute(("ExternalSource", "BuiltIns"));
-    refs.push_attribute(("Name", format!("[{}]", scalar.base_type).as_str()));
+    let type_ref = format!("[{}]", scalar.base_type);
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let refs = BytesStart::new("References")
+        .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_ref.as_str())]);
     writer.write_event(Event::Empty(refs))?;
 
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -4566,9 +4611,9 @@ fn write_user_defined_type<W: Write>(
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", udt.schema, udt.name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTableType"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlTableType"), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Calculate disambiguators:
@@ -4607,8 +4652,8 @@ fn write_user_defined_type<W: Write>(
 
     // Relationship to columns (table types use SqlTableTypeColumn instead of SqlSimpleColumn)
     if !udt.columns.is_empty() {
-        let mut rel = BytesStart::new("Relationship");
-        rel.push_attribute(("Name", "Columns"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
         writer.write_event(Event::Start(rel))?;
 
         for col in &udt.columns {
@@ -4648,8 +4693,8 @@ fn write_user_defined_type<W: Write>(
 
     // Write Constraints relationship (non-index constraints + default constraints)
     if !non_index_constraints.is_empty() || !columns_with_defaults.is_empty() {
-        let mut rel = BytesStart::new("Relationship");
-        rel.push_attribute(("Name", "Constraints"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let rel = BytesStart::new("Relationship").with_attributes([("Name", "Constraints")]);
         writer.write_event(Event::Start(rel))?;
 
         // Write default constraints first (DotNet order)
@@ -4676,8 +4721,8 @@ fn write_user_defined_type<W: Write>(
 
     // Write Indexes relationship separately
     if !index_constraints.is_empty() {
-        let mut rel = BytesStart::new("Relationship");
-        rel.push_attribute(("Name", "Indexes"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let rel = BytesStart::new("Relationship").with_attributes([("Name", "Indexes")]);
         writer.write_event(Event::Start(rel))?;
 
         for (i, (name, columns, is_unique, is_clustered)) in index_constraints.iter().enumerate() {
@@ -4697,9 +4742,11 @@ fn write_user_defined_type<W: Write>(
     }
 
     // Type-level AttachedAnnotation (if we have indexes)
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
     if let Some(disam) = type_disambiguator {
-        let mut annotation = BytesStart::new("AttachedAnnotation");
-        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        let disamb_str = disam.to_string();
+        let annotation = BytesStart::new("AttachedAnnotation")
+            .with_attributes([("Disambiguator", disamb_str.as_str())]);
         writer.write_event(Event::Empty(annotation))?;
     }
 
@@ -4761,8 +4808,9 @@ fn write_table_type_pk_constraint<W: Write>(
     // Entry for this constraint (parent Constraints relationship is written by caller)
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTableTypePrimaryKeyConstraint"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem =
+        BytesStart::new("Element").with_attributes([("Type", "SqlTableTypePrimaryKeyConstraint")]);
     writer.write_event(Event::Start(elem))?;
 
     // IsClustered property
@@ -4772,8 +4820,9 @@ fn write_table_type_pk_constraint<W: Write>(
 
     // ColumnSpecifications relationship
     if !pk_columns.is_empty() {
-        let mut col_rel = BytesStart::new("Relationship");
-        col_rel.push_attribute(("Name", "ColumnSpecifications"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let col_rel =
+            BytesStart::new("Relationship").with_attributes([("Name", "ColumnSpecifications")]);
         writer.write_event(Event::Start(col_rel))?;
 
         for pk_col in pk_columns {
@@ -4807,8 +4856,9 @@ fn write_table_type_unique_constraint<W: Write>(
     // Entry for this constraint (parent Constraints relationship is written by caller)
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTableTypeUniqueConstraint"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem =
+        BytesStart::new("Element").with_attributes([("Type", "SqlTableTypeUniqueConstraint")]);
     writer.write_event(Event::Start(elem))?;
 
     // IsClustered property
@@ -4818,8 +4868,9 @@ fn write_table_type_unique_constraint<W: Write>(
 
     // ColumnSpecifications relationship
     if !uq_columns.is_empty() {
-        let mut col_rel = BytesStart::new("Relationship");
-        col_rel.push_attribute(("Name", "ColumnSpecifications"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let col_rel =
+            BytesStart::new("Relationship").with_attributes([("Name", "ColumnSpecifications")]);
         writer.write_event(Event::Start(col_rel))?;
 
         for uq_col in uq_columns {
@@ -4854,9 +4905,11 @@ fn write_table_type_check_constraint<W: Write>(
     // Generate a disambiguator for unnamed check constraints
     let disambiguator = format!("{}_CK{}", type_name, idx);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTableTypeCheckConstraint"));
-    elem.push_attribute(("Disambiguator", disambiguator.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element").with_attributes([
+        ("Type", "SqlTableTypeCheckConstraint"),
+        ("Disambiguator", disambiguator.as_str()),
+    ]);
     writer.write_event(Event::Start(elem))?;
 
     // Expression property
@@ -4877,8 +4930,9 @@ fn write_table_type_default_constraint<W: Write>(
 ) -> anyhow::Result<()> {
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTableTypeDefaultConstraint"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem =
+        BytesStart::new("Element").with_attributes([("Type", "SqlTableTypeDefaultConstraint")]);
     writer.write_event(Event::Start(elem))?;
 
     // DefaultExpressionScript property
@@ -4886,22 +4940,24 @@ fn write_table_type_default_constraint<W: Write>(
 
     // ForColumn relationship
     let col_ref = format!("{}.[{}]", type_name, column_name);
-    let mut rel = BytesStart::new("Relationship");
-    rel.push_attribute(("Name", "ForColumn"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "ForColumn")]);
     writer.write_event(Event::Start(rel))?;
 
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-    let mut refs = BytesStart::new("References");
-    refs.push_attribute(("Name", col_ref.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let refs = BytesStart::new("References").with_attributes([("Name", col_ref.as_str())]);
     writer.write_event(Event::Empty(refs))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
 
     writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
 
     // AttachedAnnotation linking to the column's SqlInlineConstraintAnnotation
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
     if let Some(disam) = disambiguator {
-        let mut annotation = BytesStart::new("AttachedAnnotation");
-        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        let disamb_str = disam.to_string();
+        let annotation = BytesStart::new("AttachedAnnotation")
+            .with_attributes([("Disambiguator", disamb_str.as_str())]);
         writer.write_event(Event::Empty(annotation))?;
     }
 
@@ -4923,9 +4979,9 @@ fn write_table_type_index<W: Write>(
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let idx_name = format!("{}.[{}]", type_name, name);
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTableTypeIndex"));
-    elem.push_attribute(("Name", idx_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlTableTypeIndex"), ("Name", idx_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Properties
@@ -4938,8 +4994,9 @@ fn write_table_type_index<W: Write>(
 
     // ColumnSpecifications relationship (DotNet uses ColumnSpecifications, not Columns)
     if !idx_columns.is_empty() {
-        let mut col_rel = BytesStart::new("Relationship");
-        col_rel.push_attribute(("Name", "ColumnSpecifications"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let col_rel =
+            BytesStart::new("Relationship").with_attributes([("Name", "ColumnSpecifications")]);
         writer.write_event(Event::Start(col_rel))?;
 
         for col_name in idx_columns {
@@ -4968,9 +5025,9 @@ fn write_table_type_index_with_annotation<W: Write>(
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
     let idx_name = format!("{}.[{}]", type_name, name);
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTableTypeIndex"));
-    elem.push_attribute(("Name", idx_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlTableTypeIndex"), ("Name", idx_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Properties
@@ -4983,8 +5040,9 @@ fn write_table_type_index_with_annotation<W: Write>(
 
     // ColumnSpecifications relationship
     if !idx_columns.is_empty() {
-        let mut col_rel = BytesStart::new("Relationship");
-        col_rel.push_attribute(("Name", "ColumnSpecifications"));
+        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+        let col_rel =
+            BytesStart::new("Relationship").with_attributes([("Name", "ColumnSpecifications")]);
         writer.write_event(Event::Start(col_rel))?;
 
         for col_name in idx_columns {
@@ -4995,10 +5053,13 @@ fn write_table_type_index_with_annotation<W: Write>(
     }
 
     // SqlInlineIndexAnnotation
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
     if let Some(disam) = disambiguator {
-        let mut annotation = BytesStart::new("Annotation");
-        annotation.push_attribute(("Type", "SqlInlineIndexAnnotation"));
-        annotation.push_attribute(("Disambiguator", disam.to_string().as_str()));
+        let disamb_str = disam.to_string();
+        let annotation = BytesStart::new("Annotation").with_attributes([
+            ("Type", "SqlInlineIndexAnnotation"),
+            ("Disambiguator", disamb_str.as_str()),
+        ]);
         writer.write_event(Event::Empty(annotation))?;
     }
 
@@ -5017,8 +5078,9 @@ fn write_table_type_indexed_column_spec<W: Write>(
 ) -> anyhow::Result<()> {
     writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlTableTypeIndexedColumnSpecification"));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlTableTypeIndexedColumnSpecification")]);
     writer.write_event(Event::Start(elem))?;
 
     // IsAscending property (true by default, false if descending)
@@ -5042,9 +5104,9 @@ fn write_table_type_indexed_column_spec<W: Write>(
 fn write_trigger<W: Write>(writer: &mut Writer<W>, trigger: &TriggerElement) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", trigger.schema, trigger.name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlDmlTrigger"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlDmlTrigger"), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Write properties in DotNet order:
@@ -5343,9 +5405,11 @@ fn write_raw<W: Write>(
 
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", raw.sql_type.as_str()));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element").with_attributes([
+        ("Type", raw.sql_type.as_str()),
+        ("Name", full_name.as_str()),
+    ]);
     writer.write_event(Event::Start(elem))?;
 
     // Write BodyScript property with CDATA containing the definition
@@ -5367,9 +5431,9 @@ fn write_raw_view<W: Write>(
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlView"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlView"), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
     // Extract view options from raw SQL text
@@ -5453,9 +5517,11 @@ fn write_extended_property<W: Write>(
 ) -> anyhow::Result<()> {
     let full_name = ext_prop.full_name();
 
-    let mut elem = BytesStart::new("Element");
-    elem.push_attribute(("Type", "SqlExtendedProperty"));
-    elem.push_attribute(("Name", full_name.as_str()));
+    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
+    let elem = BytesStart::new("Element").with_attributes([
+        ("Type", "SqlExtendedProperty"),
+        ("Name", full_name.as_str()),
+    ]);
     writer.write_event(Event::Start(elem))?;
 
     // Write Value property with CDATA (SqlScriptProperty format)

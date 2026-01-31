@@ -222,13 +222,13 @@ Added capacity hints to 9 key vector allocations in hot paths across `src/parser
 
 Note: These are micro-optimizations that reduce allocations and potential reallocation overhead but don't significantly impact overall performance. The full pipeline is dominated by XML generation and I/O, so allocation efficiency has minimal measurable effect.
 
-### Phase 16.3: Medium Effort Optimizations (2/3)
+### Phase 16.3: Medium Effort Optimizations (3/3) ✅
 
 | ID | Task | Status | Blocked By | Expected Gain | Actual Gain |
 |----|------|--------|------------|---------------|-------------|
 | 16.3.1 | Reduce cloning in model builder with Cow | ✅ | 16.2.2-16.2.5 | 3-5% | ~2-3% SQL parsing |
 | 16.3.2 | Pre-compute sort keys for XML elements | ✅ | 16.2.2-16.2.5 | 1-2% | ~2-4% full pipeline |
-| 16.3.3 | Batch string formatting in XML generation | ⬜ | 16.2.2-16.2.5 | 2-5% | |
+| 16.3.3 | Batch string formatting in XML generation | ✅ | 16.2.2-16.2.5 | 2-5% | **4-7% full pipeline** |
 
 #### 16.3.1 Implementation Notes
 
@@ -261,6 +261,37 @@ Used `sort_by_cached_key` in `sort_elements()` function (`src/model/builder.rs`)
 - XML generation: -2.4% improvement
 
 Note: The improvement is more pronounced on larger datasets (stress_test) where sorting overhead becomes more significant.
+
+#### 16.3.3 Implementation Notes
+
+Converted 125 sequential `push_attribute()` calls to batched `with_attributes()` calls throughout `src/dacpac/model_xml.rs`. The quick-xml library's `BytesStart::with_attributes()` method allows setting multiple attributes in a single call, reducing method call overhead and improving cache locality.
+
+**Pattern before:**
+```rust
+let mut elem = BytesStart::new("Element");
+elem.push_attribute(("Type", "SqlTable"));
+elem.push_attribute(("Name", full_name.as_str()));
+writer.write_event(Event::Start(elem))?;
+```
+
+**Pattern after:**
+```rust
+let elem = BytesStart::new("Element")
+    .with_attributes([("Type", "SqlTable"), ("Name", full_name.as_str())]);
+writer.write_event(Event::Start(elem))?;
+```
+
+For conditional attributes (like Disambiguator), used if/else to create different elements with different attribute sets rather than conditional push_attribute calls.
+
+**Functions updated:** write_database_options, write_schema, write_view_columns, write_query_dependencies, write_tvf_columns, write_procedure, write_dynamic_objects, write_dynamic_columns, write_column_type_specifier, write_table_type_relationship, write_function_parameters, write_body_dependencies, write_data_type_relationship, write_function, write_function_body_with_annotation, write_function_return_type, write_index, write_index_column_specifications, write_data_compression_options, write_fulltext_index, write_fulltext_column_specifications, write_fulltext_catalog, write_constraint, write_script_property, write_scalar_type, write_user_defined_type, write_table_type_pk_constraint, write_table_type_unique_constraint, write_table_type_check_constraint, write_table_type_default_constraint, write_table_type_index, write_table_type_index_with_annotation, write_table_type_indexed_column_spec, write_trigger, write_raw, write_raw_view, write_extended_property.
+
+**Benchmark Results (vs baseline):**
+- XML generation (model_xml): **-5.6%** improvement (833µs from 882µs)
+- Full pipeline e2e_simple: **-6.5%** improvement (3.19ms from 3.42ms)
+- Full pipeline e2e_comprehensive: **-3.7%** improvement (17.8ms from 18.5ms)
+- Full pipeline stress_test: **-4.8%** improvement (56.1ms from 59.0ms)
+
+Note: The improvement exceeds the expected 2-5% gain, particularly on smaller projects where XML generation is a larger proportion of total time.
 
 ### Phase 16.4: Parallelization (0/2)
 
