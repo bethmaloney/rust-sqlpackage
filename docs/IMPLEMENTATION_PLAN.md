@@ -7,7 +7,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
 **Phase 15.1 complete: ExtendedTsqlDialect infrastructure created.**
 **Phase 15.2 complete: Column definition token parsing (D1, D2, D3, E1, E2 all complete).**
-**Phase 15.3 complete: DDL object extraction (B1-B8 all complete). Next: Phase 15.4 constraints (C1-C4).**
+**Phase 15.3 complete: DDL object extraction (B1-B8 all complete).**
+**Phase 15.4 complete: Constraint parsing (C1-C4 all complete).**
+**Phase 15.5 complete: Statement detection (A1-A4 complete).**
+**Phase 15.6 complete: Miscellaneous extraction (G1-G3 complete). Next: Phase 15.7 preprocessing (H1-H3, I1-I2).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -123,6 +126,21 @@ Created token-based statement parser in `src/parser/statement_parser.rs`:
 - Tasks A1, A2, A3, A4 completed; A5 remains (generic CREATE fallback, low priority)
 - All 491 tests pass
 
+### Phase 15.6: Miscellaneous Extraction (G1-G3) ✅ COMPLETE
+
+Created token-based extended property parser in `src/parser/extended_property_parser.rs`:
+
+- New `ExtendedPropertyTokenParser` struct for token-based sp_addextendedproperty parsing
+- `TokenParsedExtendedProperty` struct representing parsed property with all levels
+- `parse_extended_property_tokens()` replaces regex-based `extract_extended_property_from_sql()`
+- Handles EXEC/EXECUTE keyword, schema-qualified procedure names, N'string' literals
+- Properly handles @parameter = value syntax (MsSqlDialect tokenizes @name as single Word)
+- Added 20 unit tests covering various extended property patterns
+- Updated `tsql_parser.rs` to use the new token parser with regex fallback
+- G1 complete; G2 and G3 were already complete (G2 in fulltext_parser.rs, G3 in column_parser.rs)
+- F1-F4 (index options) already implemented in IndexTokenParser, regex fallback kept for edge cases
+- All 345 tests pass
+
 ### Regex Inventory
 
 Current fallback parsing uses **75+ regex patterns** across two files:
@@ -182,11 +200,11 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 | F4 | WHERE filter predicate | `extract_filter_predicate` L2003-2018 | Medium |
 
 #### Category G: Miscellaneous Extraction (3 tasks)
-| # | Task | Regex Location | Priority |
-|---|------|----------------|----------|
-| G1 | sp_addextendedproperty parsing | `extract_extended_property` L1073-1113 | Medium |
+| # | Task | Regex Location | Priority | Status |
+|---|------|----------------|----------|--------|
+| G1 | sp_addextendedproperty parsing | `extended_property_parser.rs` (token-based) | Medium | ✅ |
 | G2 | Full-text index columns with LANGUAGE | `fulltext_parser.rs` (token-based, part of B7) | Low | ✅ |
-| G3 | Data type parsing | `parse_data_type` L1314-1395 | Medium |
+| G3 | Data type parsing | `parse_data_type` L1314-1395 | Medium | ✅ (already migrated in Phase 15.2) |
 
 #### Category H: SQL Preprocessing (3 tasks)
 | # | Task | Regex Location | Priority |
@@ -208,7 +226,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 3. **Phase 15.3: DDL Objects** ✅ COMPLETE - B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅, B7 ✅, B8 ✅ (all DDL objects migrated to token-based parsing)
 4. **Phase 15.4: Constraints** ✅ COMPLETE - C1 ✅, C2 ✅, C3 ✅, C4 ✅ (constraint parsing migrated to token-based parsing)
 5. **Phase 15.5: Statement Detection** ✅ COMPLETE - A1 ✅, A2 ✅, A3 ✅, A4 ✅ (statement detection migrated to token-based parsing; A5 generic fallback low priority)
-6. **Phase 15.6: Options & Misc** - F1-F4, G1-G3 (index options, extended properties)
+6. **Phase 15.6: Options & Misc** - G1 ✅, G2 ✅, G3 ✅ (extended properties complete); F1-F4 (index options - already token-based in IndexTokenParser, regex fallback remains for edge cases)
 7. **Phase 15.7: Preprocessing** - H1-H3, I1-I2 (SQL preprocessing, SQLCMD)
 
 ### Success Criteria

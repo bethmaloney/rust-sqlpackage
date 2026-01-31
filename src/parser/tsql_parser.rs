@@ -853,6 +853,9 @@ fn convert_token_parsed_constraint(parsed: TokenParsedConstraint) -> ExtractedTa
 }
 
 /// Extract extended property from sp_addextendedproperty call
+///
+/// Uses token-based parsing (Phase 15.6 G1) for improved maintainability and edge case handling.
+///
 /// Handles multiline syntax like:
 /// ```sql
 /// EXEC sp_addextendedproperty
@@ -863,7 +866,22 @@ fn convert_token_parsed_constraint(parsed: TokenParsedConstraint) -> ExtractedTa
 ///     @level2type = N'COLUMN', @level2name = N'ColumnName';
 /// ```
 pub fn extract_extended_property_from_sql(sql: &str) -> Option<ExtractedExtendedProperty> {
-    // Helper to extract a parameter value from @paramname = N'value' pattern
+    use crate::parser::extended_property_parser::parse_extended_property_tokens;
+
+    // Try token-based parsing first (Phase 15.6 G1)
+    if let Some(parsed) = parse_extended_property_tokens(sql) {
+        return Some(ExtractedExtendedProperty {
+            property_name: parsed.property_name,
+            property_value: parsed.property_value,
+            level0name: parsed.level0name,
+            level1type: parsed.level1type,
+            level1name: parsed.level1name,
+            level2type: parsed.level2type,
+            level2name: parsed.level2name,
+        });
+    }
+
+    // Fallback to regex for edge cases not yet covered by token parser
     fn extract_param(sql: &str, param_name: &str) -> Option<String> {
         // Match @paramname = N'value' or @paramname = 'value'
         let pattern = format!(r"(?i)@{}\s*=\s*N?'([^']*)'", param_name);
