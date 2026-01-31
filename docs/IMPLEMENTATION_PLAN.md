@@ -165,15 +165,15 @@ Benchmarks run on criterion 0.5 with 100 samples per measurement.
 | 16.1.6 | Create stress_test fixture (100+ SQL files) | ✅ | - |
 | 16.1.7 | Run initial profiling and document baseline | ✅ | 16.1.2-16.1.6 |
 
-### Phase 16.2: Quick Wins (3/5)
+### Phase 16.2: Quick Wins (5/5) ✅
 
 | ID | Task | Status | Blocked By | Expected Gain | Actual Gain |
 |----|------|--------|------------|---------------|-------------|
 | 16.2.1 | Add once_cell dependency | ✅ | - | - | - |
 | 16.2.2 | Cache regex compilations in model_xml.rs | ✅ | 16.1.7, 16.2.1 | 5-10% | **2-4% full pipeline** |
 | 16.2.3 | Optimize string joining in preprocess_parser.rs | ✅ | 16.1.7 | 1-3% | **5-9% SQL parsing** |
-| 16.2.4 | Cache uppercase SQL in fallback parsing | ⬜ | 16.1.7 | 1-2% | |
-| 16.2.5 | Add capacity hints to vector allocations | ⬜ | 16.1.7 | <1% | |
+| 16.2.4 | Cache uppercase SQL in fallback parsing | ✅ | 16.1.7 | 1-2% | **~1.5% SQL parsing** |
+| 16.2.5 | Add capacity hints to vector allocations | ✅ | 16.1.7 | <1% | **<1% full pipeline** |
 
 #### 16.2.2 Implementation Notes
 
@@ -199,6 +199,38 @@ Optimized string allocation patterns in `preprocess_parser.rs`:
 - Full pipeline: No statistically significant change (within noise margin)
 
 Note: The improvement is concentrated in SQL parsing where preprocessing occurs, but the full pipeline has higher variance due to I/O and other factors.
+
+#### 16.2.4 Implementation Notes
+
+Modified `extract_scalar_type_info()` and `extract_table_structure()` functions in `src/parser/tsql_parser.rs` to accept a pre-computed uppercase SQL string parameter instead of calling `.to_uppercase()` internally. Updated call sites in `try_fallback_parse()` to pass the already-computed `sql_upper` variable, eliminating redundant uppercase conversions.
+
+**Benchmark Results (vs baseline):**
+- Full pipeline: No statistically significant change (within noise margin)
+- SQL parsing: ~1.5% improvement on e2e_comprehensive (within noise)
+
+Note: This optimization targets a narrow code path (fallback parsing for CREATE TYPE scalar and CREATE TABLE edge cases), so the measurable impact is minimal. The change eliminates unnecessary allocations but the affected code paths are infrequently executed.
+
+#### 16.2.5 Implementation Notes
+
+Added capacity hints to 9 key vector allocations in hot paths across `src/parser/tsql_parser.rs` and `src/dacpac/model_xml.rs`:
+
+**Parser hot paths (tsql_parser.rs):**
+- `parse_sql_files()`: `Vec::with_capacity(files.len() * 2)` - estimate 2 statements per file
+- `parse_sql_file()`: `Vec::with_capacity(batches.len())` - one statement per batch
+- `parse_table_body()`: `Vec::with_capacity(parts.len())` for columns, capacity 4 for constraints
+- `split_by_top_level_comma()`: `Vec::with_capacity(s.len() / 30)` - estimate column definition length
+- `split_batches()`: `Vec::with_capacity(line_count / 20)` - estimate GO separator frequency
+
+**Model XML generation (model_xml.rs):**
+- `expand_select_star()`: `Vec::with_capacity(table_aliases.len() * 5)` - estimate 5 columns per table
+- `extract_view_columns_and_deps()`: Pre-allocate based on `select_columns.len()` and `table_aliases`
+- `extract_multi_statement_tvf_columns()`: `Vec::with_capacity(col_defs.len())` - known size
+- `extract_body_dependencies()`: `Vec::with_capacity(10)` for deps and HashSet, `Vec::with_capacity(5)` for table_refs
+
+**Benchmark Results (vs baseline):**
+- Full pipeline: <1% improvement (within noise margin)
+
+Note: These are micro-optimizations that reduce allocations and potential reallocation overhead but don't significantly impact overall performance. The full pipeline is dominated by XML generation and I/O, so allocation efficiency has minimal measurable effect.
 
 ### Phase 16.3: Medium Effort Optimizations (0/3)
 
@@ -230,7 +262,7 @@ Based on code analysis:
 | Regex compilation | `src/dacpac/model_xml.rs` | 32 uncached Regex::new() calls | HIGH | ✅ Fixed in 16.2.2 |
 | String joining | `src/parser/preprocess_parser.rs` | Vec<String>.join() inefficiency | MEDIUM | ✅ Fixed in 16.2.3 |
 | Cloning | `src/model/builder.rs` | 149 clone() calls | MEDIUM | ⬜ |
-| String conversion | `src/parser/tsql_parser.rs` | Multiple .to_uppercase() on same SQL | LOW | ⬜ |
+| String conversion | `src/parser/tsql_parser.rs` | Multiple .to_uppercase() on same SQL | LOW | ✅ Fixed in 16.2.4 |
 | Sequential I/O | `src/parser/tsql_parser.rs` | Sequential file parsing | HIGH (large projects) | ⬜ |
 
 ### Benchmark Commands
@@ -267,7 +299,7 @@ cargo flamegraph --release -- build --project tests/fixtures/e2e_comprehensive/D
 | Phase 13 | Fix remaining relationship parity issues (TVP support) | 4/4 |
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 35/41 |
-| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 9/18 |
+| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 10/18 |
 
 ### Key Implementation Details
 
