@@ -2921,6 +2921,11 @@ fn extract_body_dependencies(
         if is_sql_keyword(&schema.to_uppercase()) {
             continue;
         }
+        // Skip if the "schema" is actually a table alias (e.g., A.Id where A is an alias)
+        // This prevents alias.column references from being treated as schema.table
+        if table_aliases.contains_key(&schema.to_lowercase()) {
+            continue;
+        }
         let table_ref = format!("[{}].[{}]", schema, name);
         if !table_refs.contains(&table_ref) {
             table_refs.push(table_ref);
@@ -3249,6 +3254,23 @@ fn extract_table_aliases_for_body_deps(
         ).unwrap()
     });
 
+    // Regex for unqualified bracketed table with alias: FROM [Table] alias or FROM [Table] [alias]
+    // No schema prefix - assumes [dbo] schema
+    static BODY_TABLE_ALIAS_UNQUAL_BRACKET_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+\[([^\]\.]+)\]\s+(?:AS\s+)?(\[?[A-Za-z_]\w*\]?)"
+        ).unwrap()
+    });
+
+    // Regex for unqualified unbracketed table with alias: FROM Table alias
+    // No schema prefix - assumes [dbo] schema
+    // Matches table followed by whitespace and alias (not a dot for schema.table pattern)
+    static BODY_TABLE_ALIAS_UNQUAL_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+([A-Za-z_]\w*)\s+(?:AS\s+)?([A-Za-z_]\w*)"
+        ).unwrap()
+    });
+
     // Regex for subquery with alias using AS: (...) AS alias
     // This matches parentheses followed by AS and an alias
     static SUBQUERY_ALIAS_RE: LazyLock<Regex> =
@@ -3339,6 +3361,73 @@ fn extract_table_aliases_for_body_deps(
 
         if !alias.is_empty() {
             let table_ref = format!("[{}].[{}]", schema, table);
+            table_aliases.insert(alias.to_lowercase(), table_ref);
+        }
+    }
+
+    // Extract unqualified bracketed table aliases: [Table] alias (no schema)
+    // Default to [dbo] schema for unqualified table references
+    for cap in BODY_TABLE_ALIAS_UNQUAL_BRACKET_RE.captures_iter(body) {
+        let table = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let alias = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
+        let alias_upper = alias_clean.to_uppercase();
+
+        // Skip if table name is a keyword (like SELECT, FROM, WHERE, etc.)
+        if is_sql_keyword(&table.to_uppercase()) {
+            continue;
+        }
+
+        // Skip if alias is a keyword
+        if alias_keywords.iter().any(|&k| k == alias_upper) {
+            continue;
+        }
+
+        // Skip if alias is same as table (no alias was specified)
+        if alias_clean.eq_ignore_ascii_case(table) {
+            continue;
+        }
+
+        // Skip if this alias was already captured by a more specific pattern (schema.table)
+        if table_aliases.contains_key(&alias_clean.to_lowercase()) {
+            continue;
+        }
+
+        if !alias_clean.is_empty() {
+            let table_ref = format!("[dbo].[{}]", table);
+            table_aliases.insert(alias_clean.to_lowercase(), table_ref);
+        }
+    }
+
+    // Extract unqualified unbracketed table aliases: Table alias (no schema, no brackets)
+    // Default to [dbo] schema for unqualified table references
+    for cap in BODY_TABLE_ALIAS_UNQUAL_RE.captures_iter(body) {
+        let table = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let alias = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let alias_upper = alias.to_uppercase();
+
+        // Skip if table name is a keyword (like SELECT, FROM, WHERE, etc.)
+        if is_sql_keyword(&table.to_uppercase()) {
+            continue;
+        }
+
+        // Skip if alias is a keyword
+        if alias_keywords.iter().any(|&k| k == alias_upper) {
+            continue;
+        }
+
+        // Skip if alias is same as table (no alias was specified)
+        if alias.eq_ignore_ascii_case(table) {
+            continue;
+        }
+
+        // Skip if this alias was already captured by a more specific pattern (schema.table)
+        if table_aliases.contains_key(&alias.to_lowercase()) {
+            continue;
+        }
+
+        if !alias.is_empty() {
+            let table_ref = format!("[dbo].[{}]", table);
             table_aliases.insert(alias.to_lowercase(), table_ref);
         }
     }
@@ -6659,6 +6748,193 @@ LEFT JOIN (
             !has_attag,
             "Should NOT have [ATTAG].* in body deps. Got: {:?}",
             deps
+        );
+    }
+
+    #[test]
+    fn test_extract_table_aliases_unqualified_single() {
+        use std::collections::{HashMap, HashSet};
+
+        // Test unqualified table name with alias: FROM Account A
+        let sql = r#"
+SELECT A.Id, A.AccountNumber
+FROM Account A
+WHERE A.Id = @AccountId
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        println!("Table aliases: {:?}", table_aliases);
+
+        // 'A' should be a table alias for [dbo].[Account] (default schema)
+        assert_eq!(
+            table_aliases.get("a"),
+            Some(&"[dbo].[Account]".to_string()),
+            "Expected 'A' -> [dbo].[Account]"
+        );
+    }
+
+    #[test]
+    fn test_extract_table_aliases_unqualified_multiple_joins() {
+        use std::collections::{HashMap, HashSet};
+
+        // Test unqualified table names with multiple joins
+        let sql = r#"
+SELECT A.Id, T.Name
+FROM Account A
+INNER JOIN AccountTag AT ON AT.AccountId = A.Id
+INNER JOIN Tag T ON T.Id = AT.TagId
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        println!("Table aliases: {:?}", table_aliases);
+
+        // 'A' should be a table alias for [dbo].[Account]
+        assert_eq!(
+            table_aliases.get("a"),
+            Some(&"[dbo].[Account]".to_string()),
+            "Expected 'A' -> [dbo].[Account]"
+        );
+
+        // 'AT' should be a table alias for [dbo].[AccountTag]
+        assert_eq!(
+            table_aliases.get("at"),
+            Some(&"[dbo].[AccountTag]".to_string()),
+            "Expected 'AT' -> [dbo].[AccountTag]"
+        );
+
+        // 'T' should be a table alias for [dbo].[Tag]
+        assert_eq!(
+            table_aliases.get("t"),
+            Some(&"[dbo].[Tag]".to_string()),
+            "Expected 'T' -> [dbo].[Tag]"
+        );
+    }
+
+    #[test]
+    fn test_extract_table_aliases_unqualified_bracketed() {
+        use std::collections::{HashMap, HashSet};
+
+        // Test unqualified bracketed table name: FROM [Account] A
+        let sql = r#"
+SELECT A.Id, A.AccountNumber
+FROM [Account] A
+WHERE A.Id = @AccountId
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        println!("Table aliases: {:?}", table_aliases);
+
+        // 'A' should be a table alias for [dbo].[Account] (default schema)
+        assert_eq!(
+            table_aliases.get("a"),
+            Some(&"[dbo].[Account]".to_string()),
+            "Expected 'A' -> [dbo].[Account]"
+        );
+    }
+
+    #[test]
+    fn test_body_dependencies_unqualified_alias_resolution() {
+        // Test that unqualified table aliases are resolved correctly in body deps
+        // FROM Account A should resolve A.Id to [dbo].[Account].[Id]
+        let sql = r#"
+SELECT A.Id AS AccountId, A.AccountNumber, T.Name AS TagName
+FROM Account A
+INNER JOIN AccountTag AT ON AT.AccountId = A.Id
+INNER JOIN Tag T ON T.Id = AT.TagId
+WHERE A.Id = @AccountId
+"#;
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+
+        println!("Body dependencies:");
+        for d in &deps {
+            println!("  {:?}", d);
+        }
+
+        // Should contain [dbo].[Account] (resolved from 'Account')
+        let has_account = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Account]",
+            _ => false,
+        });
+        assert!(
+            has_account,
+            "Expected [dbo].[Account] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should contain [dbo].[Account].[Id] (resolved from A.Id)
+        let has_account_id = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Account].[Id]",
+            _ => false,
+        });
+        assert!(
+            has_account_id,
+            "Expected [dbo].[Account].[Id] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should NOT contain [A].* as a schema reference
+        let has_a_as_schema = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r.starts_with("[A]"),
+            _ => false,
+        });
+        assert!(
+            !has_a_as_schema,
+            "Should NOT have [A].* in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should NOT contain [AT].* as a schema reference
+        let has_at_as_schema = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r.starts_with("[AT]"),
+            _ => false,
+        });
+        assert!(
+            !has_at_as_schema,
+            "Should NOT have [AT].* in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should NOT contain [T].* as a schema reference
+        let has_t_as_schema = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r.starts_with("[T]"),
+            _ => false,
+        });
+        assert!(
+            !has_t_as_schema,
+            "Should NOT have [T].* in body deps. Got: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn test_extract_table_aliases_qualified_takes_precedence() {
+        use std::collections::{HashMap, HashSet};
+
+        // When both qualified and unqualified patterns could match,
+        // the qualified pattern should take precedence
+        let sql = r#"
+SELECT A.Id
+FROM [dbo].[Account] A
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        // Should use the qualified version from [dbo].[Account]
+        assert_eq!(
+            table_aliases.get("a"),
+            Some(&"[dbo].[Account]".to_string()),
+            "Expected 'A' -> [dbo].[Account]"
         );
     }
 }

@@ -5,7 +5,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-17 complete (203 tasks). Full parity achieved.**
-**Phase 18 in progress: BodyDependencies alias resolution (10/15 tasks complete).**
+**Phase 18 in progress: BodyDependencies alias resolution (13/15 tasks complete).**
 **Phase 19 pending: Whitespace-agnostic trim patterns (0/3 tasks, lower priority).**
 
 **⚠️ Critical:** Phase 18.5 blocks real-world deployment. Unqualified table names cause invalid alias references.
@@ -158,31 +158,27 @@ The following changes were made to handle nested subquery aliases:
 | 18.4.1 | Allow duplicate references like DotNet | ⬜ | Remove deduplication |
 | 18.4.2 | Match DotNet's ordering of references | ⬜ | Preserve reference order |
 
-### Phase 18.5: Unqualified Table Name Support (0/3)
-
-**Critical Bug:** Alias resolution fails when table names are not schema-qualified. This causes deployment failures in real-world projects.
+### Phase 18.5: Unqualified Table Name Support (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 18.5.1 | Fix TABLE_ALIAS_RE to match unqualified table names | ⬜ | `FROM Account A` not just `FROM [dbo].[Account] A` |
-| 18.5.2 | Update extract_table_aliases_for_body_deps() for unqualified names | ⬜ | Resolve `Account` to `[dbo].[Account]` using default schema |
-| 18.5.3 | Add schema inference for unqualified table references | ⬜ | Look up table in DatabaseModel or assume [dbo] schema |
+| 18.5.1 | Fix TABLE_ALIAS_RE to match unqualified table names | ✅ | Added BODY_TABLE_ALIAS_UNQUAL_BRACKET_RE and BODY_TABLE_ALIAS_UNQUAL_RE |
+| 18.5.2 | Update extract_table_aliases_for_body_deps() for unqualified names | ✅ | Added handlers for unqualified bracketed and unbracketed tables |
+| 18.5.3 | Add schema inference for unqualified table references | ✅ | Defaults to [dbo] schema; filters aliases from UNBRACKETED_TABLE_RE |
 
-**Test Coverage:**
-- `GetAccountUnqualified.sql` - Procedure with `FROM Account A`
-- `AccountSummaryUnqualified.sql` - View with unqualified joins
-- `GetAccountCountUnqualified.sql` - Function with unqualified table
+**Implementation Notes (18.5 - Unqualified Table Names):**
 
-**Current Failure:** Generates invalid references like `[A].[Id]` instead of `[dbo].[Account].[Id]`
+The following changes were made to handle unqualified table names:
 
-**Example:**
-```sql
-FROM Account A          -- Unqualified (broken)
-WHERE A.Id = @Id        -- Generates [A].[Id] ✗
+1. **`BODY_TABLE_ALIAS_UNQUAL_BRACKET_RE` pattern** - Added regex to match `FROM [Table] alias` (bracketed single table, no schema).
 
-FROM [dbo].[Account] A  -- Qualified (works)
-WHERE A.Id = @Id        -- Generates [dbo].[Account].[Id] ✓
-```
+2. **`BODY_TABLE_ALIAS_UNQUAL_RE` pattern** - Added regex to match `FROM Table alias` (unbracketed single table, no schema).
+
+3. **Default schema inference** - Unqualified table references are resolved to `[dbo].[tablename]` using the default dbo schema.
+
+4. **Alias filtering in table_refs population** - Added check in `extract_body_dependencies()` to skip patterns where the "schema" part is actually a known table alias, preventing `A.Id` from being added as `[A].[Id]` to table_refs.
+
+5. **Unit tests** - Added `test_extract_table_aliases_unqualified_single`, `test_extract_table_aliases_unqualified_multiple_joins`, `test_extract_table_aliases_unqualified_bracketed`, `test_body_dependencies_unqualified_alias_resolution`, and `test_extract_table_aliases_qualified_takes_precedence` tests.
 
 ### Implementation Notes
 
