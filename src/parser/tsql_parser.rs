@@ -12,6 +12,7 @@ use super::function_parser::{
     detect_function_type_tokens, parse_alter_function_tokens, parse_create_function_full,
     parse_create_function_tokens, TokenParsedFunctionType,
 };
+use super::index_parser::parse_create_index_tokens;
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
 use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
 use super::table_type_parser::parse_create_table_type_tokens;
@@ -1394,7 +1395,26 @@ fn extract_function_return_type(sql: &str) -> Option<String> {
 }
 
 /// Extract index information from CREATE CLUSTERED/NONCLUSTERED INDEX statement
+///
+/// Uses token-based parsing (Phase 15.3 B6) for improved maintainability and edge case handling.
 fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
+    // Try token-based parsing first (Phase 15.3 B6)
+    if let Some(parsed) = parse_create_index_tokens(sql) {
+        return Some(FallbackStatementType::Index {
+            name: parsed.name,
+            table_schema: parsed.table_schema,
+            table_name: parsed.table_name,
+            columns: parsed.columns,
+            include_columns: parsed.include_columns,
+            is_unique: parsed.is_unique,
+            is_clustered: parsed.is_clustered,
+            fill_factor: parsed.fill_factor,
+            filter_predicate: parsed.filter_predicate,
+            data_compression: parsed.data_compression,
+        });
+    }
+
+    // Fallback to regex for edge cases not yet covered by token parser
     // Match patterns like:
     // CREATE CLUSTERED INDEX [IX_Name] ON [dbo].[Table] ([Col1], [Col2] DESC)
     // CREATE NONCLUSTERED INDEX [IX_Name] ON [schema].[Table] ([Col]) INCLUDE ([Col2])

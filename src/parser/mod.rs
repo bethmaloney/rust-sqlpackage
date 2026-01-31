@@ -2,6 +2,7 @@
 
 mod column_parser;
 mod function_parser;
+mod index_parser;
 mod procedure_parser;
 mod sequence_parser;
 mod sqlcmd;
