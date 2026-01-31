@@ -32,9 +32,11 @@
 //!   let result = run_parity_test("ampersand_encoding", &ParityTestOptions::default())?;
 //!   assert!(result.is_success(), "Fixture should have full parity");
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use once_cell::sync::Lazy;
 use tempfile::TempDir;
 
 use crate::dacpac_compare::{
@@ -45,6 +47,162 @@ use crate::dacpac_compare::{
     generate_diff, sqlpackage_available, CanonicalXmlError, ComparisonOptions, ComparisonResult,
     DacpacModel, FixtureBaseline, Layer1Error, ParityBaseline, ParityMetrics,
 };
+
+// =============================================================================
+// DotNet Dacpac Pre-Build Cache
+// =============================================================================
+// All fixtures are built in parallel at the start of the first parity test.
+// Subsequent tests simply look up the pre-built dacpac path.
+// The build directory is cleared at the start of each test run to avoid stale artifacts.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Directory where pre-built dotnet dacpacs are stored.
+/// Located in target/ so it's ignored by git and cleaned by cargo clean.
+fn get_dotnet_build_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("dotnet-fixtures")
+}
+
+/// Map of fixture_name -> dacpac_path, populated by prebuild_all_fixtures()
+static DOTNET_DACPAC_CACHE: Lazy<HashMap<String, Result<PathBuf, String>>> =
+    Lazy::new(prebuild_all_fixtures);
+
+/// Flag to track if we've already cleaned the build directory this run
+static BUILD_DIR_CLEANED: AtomicBool = AtomicBool::new(false);
+
+/// Get the pre-built dotnet dacpac for a fixture.
+/// On first call, triggers parallel build of ALL fixtures.
+fn get_or_build_dotnet_dacpac(fixture_name: &str) -> Result<PathBuf, String> {
+    // Access the cache, which triggers prebuild_all_fixtures() on first access
+    match DOTNET_DACPAC_CACHE.get(fixture_name) {
+        Some(Ok(path)) => Ok(path.clone()),
+        Some(Err(e)) => Err(e.clone()),
+        None => Err(format!(
+            "Fixture '{}' not found in pre-built cache",
+            fixture_name
+        )),
+    }
+}
+
+/// Build all fixtures in parallel. Called once via Lazy initialization.
+fn prebuild_all_fixtures() -> HashMap<String, Result<PathBuf, String>> {
+    use std::thread;
+
+    let build_dir = get_dotnet_build_dir();
+
+    // Clean and recreate build directory (once per test run)
+    if !BUILD_DIR_CLEANED.swap(true, Ordering::SeqCst) {
+        let _ = std::fs::remove_dir_all(&build_dir);
+        std::fs::create_dir_all(&build_dir).expect("Failed to create dotnet build directory");
+    }
+
+    // Get list of all fixtures
+    let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures");
+
+    let fixtures: Vec<String> = std::fs::read_dir(&fixtures_dir)
+        .expect("Failed to read fixtures directory")
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_dir() && path.join("project.sqlproj").exists() {
+                entry.file_name().to_str().map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    eprintln!(
+        "Pre-building {} dotnet fixtures in parallel...",
+        fixtures.len()
+    );
+    let start = std::time::Instant::now();
+
+    // Build all fixtures in parallel using threads
+    let handles: Vec<_> = fixtures
+        .into_iter()
+        .map(|fixture_name| {
+            let build_dir = build_dir.clone();
+            let fixtures_dir = fixtures_dir.clone();
+            thread::spawn(move || {
+                let result = build_single_fixture(&fixture_name, &fixtures_dir, &build_dir);
+                (fixture_name, result)
+            })
+        })
+        .collect();
+
+    // Collect results
+    let mut cache = HashMap::new();
+    for handle in handles {
+        let (name, result) = handle.join().expect("Build thread panicked");
+        cache.insert(name, result);
+    }
+
+    eprintln!(
+        "Pre-built {} fixtures in {:.1}s",
+        cache.len(),
+        start.elapsed().as_secs_f64()
+    );
+
+    cache
+}
+
+/// Build a single fixture's dotnet dacpac.
+fn build_single_fixture(
+    fixture_name: &str,
+    fixtures_dir: &Path,
+    build_dir: &Path,
+) -> Result<PathBuf, String> {
+    let fixture_src = fixtures_dir.join(fixture_name);
+    let fixture_build_dir = build_dir.join(fixture_name);
+
+    // Create build directory for this fixture
+    std::fs::create_dir_all(&fixture_build_dir)
+        .map_err(|e| format!("Failed to create build dir: {}", e))?;
+
+    // Copy fixture to build directory (excluding bin/obj)
+    copy_dir_recursive(&fixture_src, &fixture_build_dir)
+        .map_err(|e| format!("Failed to copy fixture: {}", e))?;
+
+    // Find the sqlproj file
+    let project_path = fixture_build_dir.join("project.sqlproj");
+    if !project_path.exists() {
+        return Err(format!(
+            "project.sqlproj not found in fixture: {}",
+            fixture_name
+        ));
+    }
+
+    // Build with dotnet
+    let dotnet_output = Command::new("dotnet")
+        .arg("build")
+        .arg(&project_path)
+        .output()
+        .map_err(|e| format!("Failed to run dotnet: {}", e))?;
+
+    if !dotnet_output.status.success() {
+        return Err(format!(
+            "DotNet build failed for {}: {}",
+            fixture_name,
+            String::from_utf8_lossy(&dotnet_output.stderr)
+        ));
+    }
+
+    // Get dacpac path
+    let dacpac_path = get_dotnet_dacpac_path(&project_path);
+    if !dacpac_path.exists() {
+        return Err(format!(
+            "DotNet dacpac not found at {:?} for fixture {}",
+            dacpac_path, fixture_name
+        ));
+    }
+
+    Ok(dacpac_path)
+}
 
 // =============================================================================
 // Phase 6: Per-Feature Parity Test Infrastructure
@@ -260,35 +418,9 @@ pub fn run_parity_test(
         message: e.to_string(),
     })?;
 
-    // Copy fixture to temp directory for isolated dotnet build
-    // This prevents race conditions when multiple tests run in parallel
-    let temp_project_path = copy_fixture_to_temp(&fixture_path, &temp_dir).map_err(|e| {
-        ParityTestError::DotNetBuildFailed {
-            message: format!("Failed to copy fixture: {}", e),
-        }
-    })?;
-
-    // Build DotNet dacpac in isolated temp directory
-    let dotnet_output = Command::new("dotnet")
-        .arg("build")
-        .arg(&temp_project_path)
-        .output()
-        .map_err(|e| ParityTestError::DotNetBuildFailed {
-            message: format!("Failed to run dotnet: {}", e),
-        })?;
-
-    if !dotnet_output.status.success() {
-        return Err(ParityTestError::DotNetBuildFailed {
-            message: String::from_utf8_lossy(&dotnet_output.stderr).to_string(),
-        });
-    }
-
-    let dotnet_dacpac = get_dotnet_dacpac_path(&temp_project_path);
-    if !dotnet_dacpac.exists() {
-        return Err(ParityTestError::DotNetBuildFailed {
-            message: format!("DotNet dacpac not found at {:?}", dotnet_dacpac),
-        });
-    }
+    // Get or build dotnet dacpac (cached per test run)
+    let dotnet_dacpac = get_or_build_dotnet_dacpac(fixture_name)
+        .map_err(|e| ParityTestError::DotNetBuildFailed { message: e })?;
 
     // Run comparison with options
     let comparison_options = ComparisonOptions {

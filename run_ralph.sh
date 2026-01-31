@@ -10,6 +10,83 @@ MAX_ITERATIONS=20
 ITERATION=0
 CURRENT_BRANCH=$(git branch --show-current)
 
+# Function to push with rebase and conflict resolution
+push_with_rebase() {
+    local max_rebase_retries=3
+    local rebase_retry=0
+
+    while [ $rebase_retry -lt $max_rebase_retries ]; do
+        # Try to push
+        if git push origin "$CURRENT_BRANCH" 2>/dev/null; then
+            return 0
+        fi
+
+        # Push failed, try to set upstream if needed
+        if git push -u origin "$CURRENT_BRANCH" 2>/dev/null; then
+            return 0
+        fi
+
+        rebase_retry=$((rebase_retry + 1))
+        echo -e "\nPush failed (attempt $rebase_retry of $max_rebase_retries). Trying pull --rebase..."
+
+        # Fetch latest
+        git fetch origin "$CURRENT_BRANCH"
+
+        # Try rebase
+        if git pull --rebase origin "$CURRENT_BRANCH" 2>&1; then
+            echo "Rebase successful, retrying push..."
+            continue
+        fi
+
+        # Check if there are conflicts
+        if git status | grep -q "Unmerged paths\|both modified\|both added"; then
+            echo -e "\nMerge conflicts detected. Launching Claude to resolve..."
+
+            CONFLICT_FILES=$(git diff --name-only --diff-filter=U)
+            CONFLICT_STATUS=$(git status)
+
+            echo "Resolve all merge conflicts in the following files. The rebase is in progress.
+
+Git status:
+\`\`\`
+$CONFLICT_STATUS
+\`\`\`
+
+Conflicting files:
+$CONFLICT_FILES
+
+For each file:
+1. Read the file to see the conflict markers (<<<<<<<, =======, >>>>>>>)
+2. Resolve the conflict by choosing the correct code or merging both changes
+3. Remove all conflict markers
+4. Stage the resolved file with \`git add <file>\`
+
+After resolving ALL conflicts, run \`git rebase --continue\` to complete the rebase.
+Do NOT commit directly - the rebase will create the commit." | claude -p \
+                --dangerously-skip-permissions \
+                --output-format=stream-json \
+                --model sonnet \
+                --verbose \
+                2>&1 | tee >(claude-stream-format > /dev/stderr)
+
+            # Check if rebase completed
+            if git status | grep -q "rebase in progress"; then
+                echo "Rebase still in progress after conflict resolution attempt. Aborting rebase..."
+                git rebase --abort
+                return 1
+            fi
+        else
+            # Some other rebase error
+            echo "Rebase failed with non-conflict error. Aborting..."
+            git rebase --abort 2>/dev/null || true
+            return 1
+        fi
+    done
+
+    echo "Failed to push after $max_rebase_retries attempts"
+    return 1
+}
+
 # Ensure prompt file exists
 if [ ! -f "$PROMPT_FILE" ]; then
     echo "Error: Prompt file not found: $PROMPT_FILE"
@@ -49,7 +126,7 @@ while true; do
         echo "Detected 'ALL TODO ITEMS COMPLETE' - exiting loop"
 
         # Final push
-        git push origin "$CURRENT_BRANCH" 2>/dev/null || git push -u origin "$CURRENT_BRANCH"
+        push_with_rebase
 
         echo "All done!"
         exit 0
@@ -101,10 +178,7 @@ Run \`cargo clippy --all-targets -- -D warnings\` to verify fixes. Commit any ch
 
     # Push changes after each iteration
     echo -e "\nPushing changes..."
-    git push origin "$CURRENT_BRANCH" 2>/dev/null || {
-        echo "Creating remote branch..."
-        git push -u origin "$CURRENT_BRANCH"
-    }
+    push_with_rebase
 
     echo -e "\nIteration $ITERATION complete. Continuing..."
 done

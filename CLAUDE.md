@@ -30,6 +30,12 @@ The codebase follows a pipeline architecture:
 .sqlproj (XML) → SqlProject → SQL Files → AST → DatabaseModel → XML → .dacpac (ZIP)
 ```
 
+## Code Guidelines
+
+**Prefer parser over regex/string manipulation** when working with SQL text. Use sqlparser-rs tokenization or AST methods rather than regex patterns or string methods like `trim_end_matches`. See `docs/PARSER_REFACTORING_GUIDE.md` for patterns.
+
+**Important:** Instead of using regex use the AST/Tokenization approach instead.
+
 ### Module Responsibilities
 
 | Module | Path | Purpose |
@@ -45,10 +51,6 @@ The codebase follows a pipeline architecture:
 2. `parse_sql_file()` splits on GO, parses with sqlparser-rs or falls back to regex for procedures/functions
 3. `build_model()` transforms AST statements into `ModelElement` variants (Table, View, Index, etc.)
 4. `create_dacpac()` generates XML files and packages into ZIP
-
-## Code Guidelines
-
-**Prefer parser over regex/string manipulation** when working with SQL text. Use sqlparser-rs tokenization or AST methods rather than regex patterns or string methods like `trim_end_matches`. See `docs/PARSER_REFACTORING_GUIDE.md` for patterns. **Important:** Always use an AST/Token approach over regex whenever possible.
 
 ## Tests
 
