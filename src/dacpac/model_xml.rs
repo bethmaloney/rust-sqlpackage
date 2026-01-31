@@ -282,9 +282,9 @@ fn write_header<W: Write>(writer: &mut Writer<W>, project: &SqlProject) -> anyho
         write_package_reference(writer, pkg_ref)?;
     }
 
-    // SQLCMD variables
-    for sqlcmd_var in &project.sqlcmd_variables {
-        write_sqlcmd_variable(writer, sqlcmd_var)?;
+    // SQLCMD variables (all in one CustomData element)
+    if !project.sqlcmd_variables.is_empty() {
+        write_sqlcmd_variables(writer, &project.sqlcmd_variables)?;
     }
 
     writer.write_event(Event::End(BytesEnd::new("Header")))?;
@@ -335,33 +335,31 @@ fn write_package_reference<W: Write>(
     Ok(())
 }
 
-/// Write a CustomData element for a SQLCMD variable
-/// Format:
+/// Write a CustomData element for all SQLCMD variables
+/// Format (matches .NET DacFx):
 /// ```xml
-/// <CustomData Category="SqlCmdVariable">
-///   <Metadata Name="SqlCmdVariable" Value="Environment" />
-///   <Metadata Name="DefaultValue" Value="Development" />
+/// <CustomData Category="SqlCmdVariables" Type="SqlCmdVariable">
+///   <Metadata Name="Environment" Value="" />
+///   <Metadata Name="ServerName" Value="" />
+///   <Metadata Name="MaxConnections" Value="" />
 /// </CustomData>
 /// ```
-fn write_sqlcmd_variable<W: Write>(
+fn write_sqlcmd_variables<W: Write>(
     writer: &mut Writer<W>,
-    sqlcmd_var: &crate::project::SqlCmdVariable,
+    sqlcmd_vars: &[crate::project::SqlCmdVariable],
 ) -> anyhow::Result<()> {
     let mut custom_data = BytesStart::new("CustomData");
-    custom_data.push_attribute(("Category", "SqlCmdVariable"));
+    custom_data.push_attribute(("Category", "SqlCmdVariables"));
+    custom_data.push_attribute(("Type", "SqlCmdVariable"));
     writer.write_event(Event::Start(custom_data))?;
 
-    // SqlCmdVariable metadata (the variable name)
-    let mut var_name = BytesStart::new("Metadata");
-    var_name.push_attribute(("Name", "SqlCmdVariable"));
-    var_name.push_attribute(("Value", sqlcmd_var.name.as_str()));
-    writer.write_event(Event::Empty(var_name))?;
-
-    // DefaultValue metadata
-    let mut default_val = BytesStart::new("Metadata");
-    default_val.push_attribute(("Name", "DefaultValue"));
-    default_val.push_attribute(("Value", sqlcmd_var.default_value.as_str()));
-    writer.write_event(Event::Empty(default_val))?;
+    // Write each variable as a Metadata element with the variable name as Name attribute
+    for sqlcmd_var in sqlcmd_vars {
+        let mut metadata = BytesStart::new("Metadata");
+        metadata.push_attribute(("Name", sqlcmd_var.name.as_str()));
+        metadata.push_attribute(("Value", ""));
+        writer.write_event(Event::Empty(metadata))?;
+    }
 
     writer.write_event(Event::End(BytesEnd::new("CustomData")))?;
     Ok(())

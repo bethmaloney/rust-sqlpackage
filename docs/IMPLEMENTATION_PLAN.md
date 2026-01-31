@@ -17,7 +17,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Phase 15.7: SQL preprocessing (H1-H3) ✅
 - Phase 15.8: Whitespace-agnostic keyword matching (J1-J7) ✅
 - Phase 17.1: Comma-less constraint parsing (0/3) 🔄
-- Phase 17.2: SQLCMD variable header format (0/2) 🔄
+- Phase 17.2: SQLCMD variable header format (2/2) ✅
 - SQLCMD tasks I1-I2 remain regex-based by design (line-oriented preprocessing)
 
 | Layer | Passing | Rate |
@@ -337,35 +337,31 @@ sqlparser-rs doesn't parse these constraints, causing them to be silently ignore
 | 17.1.2 | Implement comma-less constraint detection and parsing | ⬜ | Either extend dialect or add fallback parser |
 | 17.1.3 | Verify all constraint types work (PK, FK, CHECK, DEFAULT) | ⬜ | Update fixture to cover all cases |
 
-### Phase 17.2: SQLCMD Variable Header Format (0/2)
+### Phase 17.2: SQLCMD Variable Header Format (2/2) ✅
 
 **Problem:** SQLCMD variables in model.xml Header use different format than .NET DacFx.
 
-**Current Rust format:**
-```xml
-<CustomData Category="SqlCmdVariable">
-  <Metadata Name="SqlCmdVariable" Value="Environment"/>
-  <Metadata Name="DefaultValue" Value="Development"/>
-</CustomData>
-<!-- Repeated for each variable -->
-```
+**Solution:** Refactored `write_sqlcmd_variable()` → `write_sqlcmd_variables()` in `src/dacpac/model_xml.rs` to:
+- Consolidate all SQLCMD variables into a single `CustomData` element
+- Change `Category="SqlCmdVariable"` → `Category="SqlCmdVariables"` (plural)
+- Add `Type="SqlCmdVariable"` attribute
+- Use variable name as `Metadata Name` attribute with empty `Value`
 
-**Expected .NET format:**
+**Generated format now matches .NET DacFx:**
 ```xml
 <CustomData Category="SqlCmdVariables" Type="SqlCmdVariable">
   <Metadata Name="Environment" Value="" />
   <Metadata Name="ServerName" Value="" />
+  <Metadata Name="MaxConnections" Value="" />
 </CustomData>
-<!-- Single element with all variables -->
 ```
 
-**Test:** `test_sqlcmd_variables_header_format` in `tests/e2e/dotnet_comparison_tests.rs`
-**Fixture:** `tests/fixtures/sqlcmd_variables/`
+**Test:** `test_sqlcmd_variables_header_format` in `tests/e2e/dotnet_comparison_tests.rs` - PASSING
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 17.2.1 | Update Header CustomData format for SQLCMD variables | ⬜ | Change Category to plural, add Type attribute |
-| 17.2.2 | Use variable name as Metadata Name attribute | ⬜ | Match .NET format exactly |
+| 17.2.1 | Update Header CustomData format for SQLCMD variables | ✅ | Changed Category to plural, added Type attribute |
+| 17.2.2 | Use variable name as Metadata Name attribute | ✅ | Matches .NET format exactly |
 
 ---
 
@@ -384,7 +380,7 @@ sqlparser-rs doesn't parse these constraints, causing them to be silently ignore
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 12/18 |
-| Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 0/5 |
+| Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 2/5 |
 
 ### Key Implementation Details
 

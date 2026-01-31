@@ -3122,7 +3122,6 @@ fn test_parity_sqlcmd_variables() {
 /// Known issue: Rust uses a different format with separate CustomData elements
 /// per variable and different attribute names.
 #[test]
-#[ignore] // TODO: Fix SQLCMD variable Header format to match .NET DacFx
 fn test_sqlcmd_variables_header_format() {
     if !dotnet_available() {
         println!("Skipping test: dotnet not available");
