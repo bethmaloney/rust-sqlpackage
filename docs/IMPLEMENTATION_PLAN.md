@@ -2,10 +2,11 @@
 
 This document tracks progress toward achieving exact 1-1 matching between rust-sqlpackage and DotNet DacFx dacpac output.
 
-## Status: PARITY COMPLETE | PARSER REFACTORING COMPLETE
+## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
 **Phase 15 complete: All parser refactoring tasks finished.**
+**Phase 16 in progress: Performance tuning and benchmarking.**
 - Phase 15.1: ExtendedTsqlDialect infrastructure ✅
 - Phase 15.2: Column definition token parsing (D1, D2, D3, E1, E2) ✅
 - Phase 15.3: DDL object extraction (B1-B8) ✅
@@ -62,210 +63,84 @@ This does not affect Layer 3 parity testing (which compares dacpacs, not deploym
 
 ---
 
-## Phase 15: Parser Refactoring - Replace Regex Fallbacks with Custom sqlparser-rs Dialect
+## Phase 16: Performance Tuning
 
-**Status:** ✅ COMPLETE
+**Goal:** Establish benchmarking infrastructure and optimize build performance.
 
-**Goal:** Replace brittle regex-based fallback parsing with proper token-based parsing using sqlparser-rs custom dialect extension. This improves maintainability, error messages, and handles edge cases better.
+**Current baseline:** 0.23s for e2e_comprehensive (30 files) - already 25x faster than .NET DacFx cold, 9.5x faster warm.
 
-**Approach:** Create a custom `ExtendedTsqlDialect` that intercepts specific token sequences before delegating to the base MsSqlDialect.
+### Phase 16.1: Benchmark Infrastructure (0/7)
 
-**Documentation:** See **[PARSER_REFACTORING_GUIDE.md](./PARSER_REFACTORING_GUIDE.md)** for detailed implementation guidance, API reference, code examples, and migration path.
+| ID | Task | Status | Blocked By |
+|----|------|--------|------------|
+| 16.1.1 | Add criterion benchmark infrastructure | ⬜ | - |
+| 16.1.2 | Create full pipeline benchmark | ⬜ | 16.1.1 |
+| 16.1.3 | Create SQL parsing benchmark | ⬜ | 16.1.1 |
+| 16.1.4 | Create model building benchmark | ⬜ | 16.1.1 |
+| 16.1.5 | Create XML generation benchmark | ⬜ | 16.1.1 |
+| 16.1.6 | Create stress_test fixture (100+ SQL files) | ⬜ | - |
+| 16.1.7 | Run initial profiling and document baseline | ⬜ | 16.1.2-16.1.6 |
 
-### Phase 15.1: Infrastructure ✅ COMPLETE
+### Phase 16.2: Quick Wins (0/5)
 
-Created `ExtendedTsqlDialect` wrapper in `src/parser/tsql_dialect.rs`:
+| ID | Task | Status | Blocked By | Expected Gain |
+|----|------|--------|------------|---------------|
+| 16.2.1 | Add once_cell dependency | ⬜ | - | - |
+| 16.2.2 | Cache regex compilations in model_xml.rs | ⬜ | 16.1.7, 16.2.1 | 5-10% |
+| 16.2.3 | Optimize string joining in preprocess_parser.rs | ⬜ | 16.1.7 | 1-3% |
+| 16.2.4 | Cache uppercase SQL in fallback parsing | ⬜ | 16.1.7 | 1-2% |
+| 16.2.5 | Add capacity hints to vector allocations | ⬜ | 16.1.7 | <1% |
 
-- Wraps `MsSqlDialect` and delegates all parsing to it
-- Overrides `dialect()` method to return `MsSqlDialect`'s TypeId, ensuring `dialect_of!(self is MsSqlDialect)` checks pass
-- This is critical because sqlparser uses these checks internally for T-SQL-specific parsing (e.g., IDENTITY columns)
-- Added comprehensive tests for dialect behavior and MsSqlDialect equivalence
-- Updated `parse_sql_file()` to use the new dialect
-- All 250+ existing tests pass
+### Phase 16.3: Medium Effort Optimizations (0/3)
 
-### Phase 15.4: Constraints ✅ COMPLETE
+| ID | Task | Status | Blocked By | Expected Gain |
+|----|------|--------|------------|---------------|
+| 16.3.1 | Reduce cloning in model builder with Cow | ⬜ | 16.2.2-16.2.5 | 3-5% |
+| 16.3.2 | Pre-compute sort keys for XML elements | ⬜ | 16.2.2-16.2.5 | 1-2% |
+| 16.3.3 | Batch string formatting in XML generation | ⬜ | 16.2.2-16.2.5 | 2-5% |
 
-Created token-based constraint parser in `src/parser/constraint_parser.rs`:
+### Phase 16.4: Parallelization (0/2)
 
-- New `ConstraintTokenParser` struct for token-based constraint parsing
-- `TokenParsedConstraint` enum representing all constraint types (PrimaryKey, Unique, ForeignKey, Check)
-- `TokenParsedConstraintColumn` struct for columns with sort order (ASC/DESC)
-- `parse_alter_table_add_constraint_tokens()` replaces regex-based `extract_alter_table_add_constraint()`
-- `parse_table_constraint_tokens()` replaces regex-based `parse_table_constraint()`
-- `parse_alter_table_name_tokens()` replaces regex-based `extract_alter_table_name()`
-- Handles WITH CHECK/WITH NOCHECK variants, schema-qualified names, CLUSTERED/NONCLUSTERED
-- Added 40 unit tests covering various constraint patterns
-- Updated `tsql_parser.rs` to use the new token parsers
-- Removed obsolete regex helper functions (`extract_constraint_columns`, `extract_fk_columns`, `extract_fk_references`)
-- All 491 tests pass
+| ID | Task | Status | Blocked By | Expected Gain |
+|----|------|--------|------------|---------------|
+| 16.4.1 | Add rayon dependency | ⬜ | - | - |
+| 16.4.2 | Parallelize SQL file parsing | ⬜ | 16.1.6, 16.4.1 | 20-40% |
 
-### Phase 15.2: Critical Path (Column Definitions) ✅ COMPLETE
+### Phase 16.5: Documentation (0/1)
 
-Created token-based column definition parser in `src/parser/column_parser.rs`:
+| ID | Task | Status | Blocked By |
+|----|------|--------|------------|
+| 16.5.1 | Document performance improvements | ⬜ | 16.3.1-16.3.3, 16.4.2 |
 
-- New `ColumnTokenParser` struct for token-based column parsing
-- `TokenParsedColumn` struct representing parsed column with all attributes (name, type, nullability, identity, default, collation, constraints)
-- `parse_column_definition_tokens()` function that replaces 15+ regex patterns for column parsing
-- Handles column name/type extraction, IDENTITY specifications, NULL/NOT NULL, COLLATE, DEFAULT constraints (named and unnamed), and inline PRIMARY KEY/UNIQUE constraints
-- Updated `parse_column_definition()` in `tsql_parser.rs` to use the new token parser as primary method
-- Added 22 unit tests covering various column definition patterns
-- Tasks D1 (column name, type, options) and E1 (default constraint variants) completed
+### Identified Hotspots
 
-### Phase 15.5: Statement Detection ✅ COMPLETE
+Based on code analysis:
 
-Created token-based statement parser in `src/parser/statement_parser.rs`:
+| Area | Location | Issue | Impact |
+|------|----------|-------|--------|
+| Regex compilation | `src/dacpac/model_xml.rs` | 32 uncached Regex::new() calls | HIGH |
+| String joining | `src/parser/preprocess_parser.rs` | Vec<String>.join() inefficiency | MEDIUM |
+| Cloning | `src/model/builder.rs` | 149 clone() calls | MEDIUM |
+| String conversion | `src/parser/tsql_parser.rs` | Multiple .to_uppercase() on same SQL | LOW |
+| Sequential I/O | `src/parser/tsql_parser.rs` | Sequential file parsing | HIGH (large projects) |
 
-- New `StatementTokenParser` struct for token-based statement detection
-- `TokenParsedCteDml` struct for CTE with DML patterns (DELETE, UPDATE, INSERT, MERGE)
-- `TokenParsedMergeOutput` struct for MERGE with OUTPUT clause
-- `TokenParsedXmlUpdate` struct for UPDATE with XML methods (.modify, .value)
-- `TokenParsedDrop` struct for DROP statements (SYNONYM, TRIGGER, INDEX, PROC)
-- `TokenParsedGenericCreate` struct for generic CREATE statement fallback (A5)
-- `try_parse_cte_dml_tokens()` replaces regex-based `try_cte_dml_fallback()`
-- `try_parse_merge_output_tokens()` replaces regex-based `try_merge_output_fallback()`
-- `try_parse_xml_update_tokens()` replaces regex-based `try_xml_method_fallback()`
-- `try_parse_drop_tokens()` replaces regex-based `try_drop_fallback()`
-- `try_parse_generic_create_tokens()` replaces regex-based `try_generic_create_fallback()` (A5)
-- Added 35 unit tests covering various statement patterns (including 14 for generic CREATE)
-- Updated `tsql_parser.rs` to use the new token parsers
-- Tasks A1, A2, A3, A4, A5 all complete
-- All 491 tests pass
+### Benchmark Commands
 
-### Phase 15.6: Miscellaneous Extraction (G1-G3) ✅ COMPLETE
+```bash
+# Run all benchmarks
+cargo bench
 
-Created token-based extended property parser in `src/parser/extended_property_parser.rs`:
+# Run specific benchmark
+cargo bench --bench pipeline
 
-- New `ExtendedPropertyTokenParser` struct for token-based sp_addextendedproperty parsing
-- `TokenParsedExtendedProperty` struct representing parsed property with all levels
-- `parse_extended_property_tokens()` replaces regex-based `extract_extended_property_from_sql()`
-- Handles EXEC/EXECUTE keyword, schema-qualified procedure names, N'string' literals
-- Properly handles @parameter = value syntax (MsSqlDialect tokenizes @name as single Word)
-- Added 20 unit tests covering various extended property patterns
-- Updated `tsql_parser.rs` to use the new token parser with regex fallback
-- G1 complete; G2 and G3 were already complete (G2 in fulltext_parser.rs, G3 in column_parser.rs)
-- F1-F4 (index options) already implemented in IndexTokenParser, regex fallback kept for edge cases
-- All 345 tests pass
+# Compare against baseline
+cargo bench -- --save-baseline before
+# ... make changes ...
+cargo bench -- --baseline before
 
-### Phase 15.7: SQL Preprocessing (H1-H3) ✅ COMPLETE
-
-Created token-based preprocessing parser in `src/parser/preprocess_parser.rs`:
-
-- New `PreprocessTokenParser` struct for token-based SQL preprocessing
-- Token-based approach correctly handles content inside string literals (does not modify them)
-- `preprocess_tsql_tokens()` replaces regex-based preprocessing for H1-H3 tasks:
-  - H1: BINARY/VARBINARY(MAX) sentinel replacement - converts to INT placeholder for sqlparser compatibility
-  - H2: DEFAULT FOR constraint extraction - extracts and removes DEFAULT constraints with FOR keyword
-  - H3: Trailing comma cleanup - removes trailing commas before closing parentheses
-- The old `preprocess_tsql()` function now delegates to `preprocess_tsql_tokens()`
-- Key improvement: Patterns like `BINARY(MAX)` or `DEFAULT ... FOR` inside string literals are correctly preserved
-- I1-I2 (SQLCMD directives) intentionally remain regex-based - they are line-oriented preprocessing that works well with regex
-- All 485 tests pass
-
-### Maintenance: Dead Code Cleanup
-
-- Removed unused `parse_alter_trigger` and `parse_alter_trigger_tokens` functions and related tests from `trigger_parser.rs`
-- Fixed clippy warnings: `if_same_then_else` for AFTER/FOR handling, `unnecessary_unwrap` in `tsql_dialect.rs`
-
-### Regex Inventory
-
-Current fallback parsing uses **75+ regex patterns** across two files:
-- `src/parser/tsql_parser.rs` - Main T-SQL parsing (70+ patterns)
-- `src/parser/sqlcmd.rs` - SQLCMD directives (3 patterns)
-
-### Tasks by Category
-
-#### Category A: Statement Type Detection Fallbacks (5 tasks)
-| # | Task | Regex Location | Priority | Status |
-|---|------|----------------|----------|--------|
-| A1 | DROP SYNONYM/TRIGGER/INDEX/PROC detection | `try_drop_fallback` | Medium | ✅ |
-| A2 | CTE with DML (DELETE/UPDATE/INSERT/MERGE) | `try_cte_dml_fallback` | High | ✅ |
-| A3 | MERGE with OUTPUT clause | `try_merge_output_fallback` | Medium | ✅ |
-| A4 | UPDATE with XML methods (.MODIFY/.VALUE) | `try_xml_method_fallback` | Low | ✅ |
-| A5 | Generic CREATE fallback | `try_generic_create_fallback` (token-based) | Low | ✅ |
-
-#### Category B: DDL Object Extraction (8 tasks)
-| # | Task | Regex Location | Priority | Status |
-|---|------|----------------|----------|--------|
-| B1 | CREATE/ALTER PROCEDURE name | `extract_procedure_name`, `extract_alter_procedure_name` | High | ✅ |
-| B2 | CREATE/ALTER FUNCTION name, params, return type | `extract_function_info` L1768-1899, `extract_alter_function_info` L1663-1682 | High | ✅ |
-| B3 | CREATE TRIGGER (name, parent, events) | `extract_trigger_info` L1536-1614 | High | ✅ |
-| B4 | CREATE/ALTER SEQUENCE (all options) | `extract_sequence_info` L1174-1260, `extract_alter_sequence_info` L1684-1766 | Medium | ✅ |
-| B5 | CREATE TYPE AS TABLE | `extract_table_type_info` L1262-1535 | High | ✅ |
-| B6 | CREATE INDEX (all options) | `extract_index_info` L1901-2018 | High | ✅ |
-| B7 | CREATE FULLTEXT INDEX | `fulltext_parser.rs` (token-based) | Low | ✅ |
-| B8 | CREATE FULLTEXT CATALOG | `fulltext_parser.rs` (token-based) | Low | ✅ |
-
-#### Category C: Constraint Parsing (4 tasks)
-| # | Task | Regex Location | Priority | Status |
-|---|------|----------------|----------|--------|
-| C1 | ALTER TABLE ADD CONSTRAINT (FK) | `extract_alter_table_add_constraint` L887-992 | High | ✅ |
-| C2 | ALTER TABLE ADD CONSTRAINT (PK/UNIQUE) | `extract_alter_table_add_constraint` L993-1072 | High | ✅ |
-| C3 | Table constraint extraction | `extract_table_constraint` L2424-2540 | High | ✅ |
-| C4 | ALTER TABLE name extraction | `extract_alter_table_name` L857-876 | Medium | ✅ |
-
-#### Category D: Column Definition Parsing (3 tasks)
-| # | Task | Regex Location | Priority | Status |
-|---|------|----------------|----------|--------|
-| D1 | Column name, type, and options | `extract_column_definition` L2181-2420 (15+ regex) | Critical | ✅ |
-| D2 | Computed column detection | `extract_column_definition` L2187-2230 | High | ✅ |
-| D3 | Table type column parsing | `parse_table_type_body` L1397-1535 | High | ✅ |
-
-#### Category E: Inline Constraint Parsing (2 tasks)
-| # | Task | Regex Location | Priority | Status |
-|---|------|----------------|----------|--------|
-| E1 | Default constraint variants (8 regex patterns) | `extract_column_definition` L2270-2380 | Critical | ✅ |
-| E2 | Check constraint (named/unnamed) | `extract_column_definition` L2382-2420 | High | ✅ |
-
-#### Category F: Index & Option Extraction (4 tasks)
-| # | Task | Regex Location | Priority |
-|---|------|----------------|----------|
-| F1 | INCLUDE columns | `extract_include_columns` L1971-1979 | Medium |
-| F2 | FILLFACTOR option | `extract_index_fill_factor` L1982-1989 | Medium |
-| F3 | DATA_COMPRESSION option | `extract_index_data_compression` L1992-2001 | Medium |
-| F4 | WHERE filter predicate | `extract_filter_predicate` L2003-2018 | Medium |
-
-#### Category G: Miscellaneous Extraction (3 tasks)
-| # | Task | Regex Location | Priority | Status |
-|---|------|----------------|----------|--------|
-| G1 | sp_addextendedproperty parsing | `extended_property_parser.rs` (token-based) | Medium | ✅ |
-| G2 | Full-text index columns with LANGUAGE | `fulltext_parser.rs` (token-based, part of B7) | Low | ✅ |
-| G3 | Data type parsing | `parse_data_type` L1314-1395 | Medium | ✅ (already migrated in Phase 15.2) |
-
-#### Category H: SQL Preprocessing (3 tasks) ✅ COMPLETE
-| # | Task | Regex Location | Priority | Status |
-|---|------|----------------|----------|--------|
-| H1 | BINARY/VARBINARY(MAX) sentinel replacement | `preprocess_parser.rs` (token-based) | High | ✅ |
-| H2 | DEFAULT FOR constraint extraction | `preprocess_parser.rs` (token-based) | High | ✅ |
-| H3 | Trailing comma cleanup | `preprocess_parser.rs` (token-based) | Medium | ✅ |
-
-#### Category I: SQLCMD Preprocessing (2 tasks) - Intentionally Regex-Based
-| # | Task | Regex Location | Priority | Status |
-|---|------|----------------|----------|--------|
-| I1 | :setvar directive parsing | `sqlcmd.rs` L71-82 | Low | Regex (by design) |
-| I2 | :r include directive parsing | `sqlcmd.rs` L87-93 | Low | Regex (by design) |
-
-### Implementation Strategy (All Complete)
-
-1. **Phase 15.1: Infrastructure** ✅ - ExtendedTsqlDialect wrapper with MsSqlDialect delegation
-2. **Phase 15.2: Critical Path** ✅ - Column definitions (D1-D3, E1-E2) migrated to token-based parsing
-3. **Phase 15.3: DDL Objects** ✅ - All DDL objects (B1-B8) migrated to token-based parsing
-4. **Phase 15.4: Constraints** ✅ - Constraint parsing (C1-C4) migrated to token-based parsing
-5. **Phase 15.5: Statement Detection** ✅ - All statement detection (A1-A5) migrated to token-based parsing
-6. **Phase 15.6: Options & Misc** ✅ - Extended properties (G1-G3) complete; index options (F1-F4) token-based with regex fallback for edge cases
-7. **Phase 15.7: Preprocessing** ✅ - SQL preprocessing (H1-H3) token-based; SQLCMD (I1-I2) intentionally regex-based
-
-### Success Criteria
-
-- [x] All existing tests pass (492 tests)
-- [x] No regex patterns in hot parsing paths (SQLCMD regexes are intentionally regex-based for line-oriented preprocessing; remaining regexes are edge-case fallbacks only invoked when token parsing fails)
-- [ ] Improved error messages with line/column info (future enhancement)
-- [ ] Reduced parsing time for large SQL files (future benchmark)
-
-### Resources
-
-- [sqlparser-rs custom dialect docs](https://github.com/apache/datafusion-sqlparser-rs/blob/main/docs/custom_sql_parser.md)
-- [Databend custom parser blog](https://www.databend.com/blog/category-engineering/2025-09-10-query-parser/)
-- [antlr4rust](https://github.com/rrevenantt/antlr4rust) (alternative approach)
+# Generate flamegraph
+cargo flamegraph --release -- build --project tests/fixtures/e2e_comprehensive/Database.sqlproj
+```
 
 ---
 
@@ -282,6 +157,8 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 | Phase 12 | SELECT * expansion, TVF columns, duplicate refs | 6/6 |
 | Phase 13 | Fix remaining relationship parity issues (TVP support) | 4/4 |
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
+| Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
+| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 0/18 |
 
 ### Key Implementation Details
 
@@ -307,5 +184,18 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 - Fixed DefaultFilegroup relationship in SqlDatabaseOptions
 - Added missing database options properties (Collation, IsTornPageProtectionOn, DefaultLanguage, etc.)
 - Changed IsFullTextEnabled default from False to True to match DotNet
+
+#### Phase 15: Parser Refactoring
+Replaced regex-based fallback parsing with token-based parsing using sqlparser-rs custom dialect:
+- **15.1**: Created `ExtendedTsqlDialect` wrapper in `src/parser/tsql_dialect.rs`
+- **15.2**: Token-based column parsing in `src/parser/column_parser.rs` (D1-D3, E1-E2)
+- **15.3**: Token-based DDL object extraction (B1-B8) - procedures, functions, triggers, sequences, types, indexes, fulltext
+- **15.4**: Token-based constraint parsing in `src/parser/constraint_parser.rs` (C1-C4)
+- **15.5**: Token-based statement detection in `src/parser/statement_parser.rs` (A1-A5)
+- **15.6**: Token-based extended property parsing in `src/parser/extended_property_parser.rs` (G1-G3)
+- **15.7**: Token-based SQL preprocessing in `src/parser/preprocess_parser.rs` (H1-H3)
+- SQLCMD (I1-I2) intentionally remain regex-based for line-oriented preprocessing
+
+See [PARSER_REFACTORING_GUIDE.md](./PARSER_REFACTORING_GUIDE.md) for implementation details.
 
 </details>
