@@ -8,6 +8,10 @@ use sqlparser::ast::Statement;
 use sqlparser::parser::Parser;
 
 use super::column_parser::{parse_column_definition_tokens, TokenParsedColumn};
+use super::constraint_parser::{
+    parse_alter_table_add_constraint_tokens, parse_alter_table_name_tokens,
+    parse_table_constraint_tokens, TokenParsedConstraint,
+};
 use super::fulltext_parser::{parse_fulltext_catalog_tokens, parse_fulltext_index_tokens};
 use super::function_parser::{
     detect_function_type_tokens, parse_alter_function_tokens, parse_create_function_full,
@@ -889,23 +893,8 @@ fn try_xml_method_fallback(sql: &str) -> Option<FallbackStatementType> {
 
 /// Extract schema and name from ALTER TABLE statement
 fn extract_alter_table_name(sql: &str) -> Option<(String, String)> {
-    // Use [^\]]+ for bracketed identifiers to capture special characters like &
-    let re = regex::Regex::new(
-        r"(?i)ALTER\s+TABLE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
-    )
-    .ok()?;
-
-    let caps = re.captures(sql)?;
-    // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
-    let schema = caps
-        .get(1)
-        .or_else(|| caps.get(2))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "dbo".to_string());
-    // Name can be in group 3 (bracketed) or group 4 (unbracketed)
-    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
-
-    Some((schema, name))
+    // Use token-based parser for better accuracy
+    parse_alter_table_name_tokens(sql)
 }
 
 /// Extract ALTER TABLE ... ADD CONSTRAINT statement
@@ -918,185 +907,67 @@ fn extract_alter_table_name(sql: &str) -> Option<(String, String)> {
 /// ADD CONSTRAINT [CK_Name] CHECK ([Col] > 0);
 /// ```
 fn extract_alter_table_add_constraint(sql: &str) -> Option<FallbackStatementType> {
-    let sql_upper = sql.to_uppercase();
+    // Use token-based parser for better accuracy
+    let parsed = parse_alter_table_add_constraint_tokens(sql)?;
 
-    // Extract table schema and name
-    let (table_schema, table_name) = extract_alter_table_name(sql)?;
+    // Convert token-parsed constraint to ExtractedTableConstraint
+    let constraint = convert_token_parsed_constraint(parsed.constraint);
 
-    // Extract constraint name
-    // Pattern: ADD CONSTRAINT [name] or ADD CONSTRAINT name
-    let constraint_name_re =
-        regex::Regex::new(r"(?i)ADD\s+CONSTRAINT\s+(?:\[([^\]]+)\]|(\w+))").ok()?;
-    let caps = constraint_name_re.captures(sql)?;
-    let constraint_name = caps.get(1).or_else(|| caps.get(2))?.as_str().to_string();
+    Some(FallbackStatementType::AlterTableAddConstraint {
+        table_schema: parsed.table_schema,
+        table_name: parsed.table_name,
+        constraint,
+    })
+}
 
-    // Determine constraint type and extract details
-    if sql_upper.contains("FOREIGN KEY") {
-        // Parse FOREIGN KEY constraint
-        // Pattern: FOREIGN KEY ([col1], [col2]) REFERENCES [schema].[table]([col1], [col2])
-        let fk_re = regex::Regex::new(
-            r"(?i)FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))\s*\(([^)]+)\)"
-        ).ok()?;
-
-        let fk_caps = fk_re.captures(sql)?;
-
-        // Extract FK columns
-        let columns_str = fk_caps.get(1)?.as_str();
-        let columns: Vec<String> = columns_str
-            .split(',')
-            .map(|c| {
-                c.trim()
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .to_string()
-            })
-            .collect();
-
-        // Extract referenced table (schema.name)
-        let ref_schema = fk_caps
-            .get(2)
-            .or_else(|| fk_caps.get(3))
-            .map(|m| m.as_str())
-            .unwrap_or("dbo");
-        let ref_table = fk_caps.get(4).or_else(|| fk_caps.get(5))?.as_str();
-        let referenced_table = format!("[{}].[{}]", ref_schema, ref_table);
-
-        // Extract referenced columns
-        let ref_columns_str = fk_caps.get(6)?.as_str();
-        let referenced_columns: Vec<String> = ref_columns_str
-            .split(',')
-            .map(|c| {
-                c.trim()
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .to_string()
-            })
-            .collect();
-
-        return Some(FallbackStatementType::AlterTableAddConstraint {
-            table_schema,
-            table_name,
-            constraint: ExtractedTableConstraint::ForeignKey {
-                name: constraint_name,
-                columns,
-                referenced_table,
-                referenced_columns,
-            },
-        });
-    } else if sql_upper.contains("CHECK") && !sql_upper.contains("WITH CHECK")
-        || sql_upper.contains("CHECK (")
-        || sql_upper.contains("CHECK(")
-    {
-        // Parse CHECK constraint
-        // Pattern: CHECK ([expression])
-        // Need to handle nested parentheses in the expression
-        let check_pos = sql_upper.find("CHECK")?;
-        // Find the CHECK keyword that's not part of WITH CHECK
-        let actual_check_pos = sql[check_pos..].find('(').map(|p| check_pos + p)?;
-
-        // Extract the expression inside the parentheses (handling nesting)
-        let expr_start = actual_check_pos + 1;
-        let mut depth = 1;
-        let mut expr_end = expr_start;
-
-        for (i, c) in sql[expr_start..].char_indices() {
-            match c {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        expr_end = expr_start + i;
-                        break;
-                    }
-                }
-                _ => {}
-            }
+/// Convert TokenParsedConstraint to ExtractedTableConstraint
+fn convert_token_parsed_constraint(parsed: TokenParsedConstraint) -> ExtractedTableConstraint {
+    match parsed {
+        TokenParsedConstraint::PrimaryKey {
+            name,
+            columns,
+            is_clustered,
+        } => ExtractedTableConstraint::PrimaryKey {
+            name,
+            columns: columns
+                .into_iter()
+                .map(|c| ExtractedConstraintColumn {
+                    name: c.name,
+                    descending: c.descending,
+                })
+                .collect(),
+            is_clustered,
+        },
+        TokenParsedConstraint::Unique {
+            name,
+            columns,
+            is_clustered,
+        } => ExtractedTableConstraint::Unique {
+            name,
+            columns: columns
+                .into_iter()
+                .map(|c| ExtractedConstraintColumn {
+                    name: c.name,
+                    descending: c.descending,
+                })
+                .collect(),
+            is_clustered,
+        },
+        TokenParsedConstraint::ForeignKey {
+            name,
+            columns,
+            referenced_table,
+            referenced_columns,
+        } => ExtractedTableConstraint::ForeignKey {
+            name,
+            columns,
+            referenced_table,
+            referenced_columns,
+        },
+        TokenParsedConstraint::Check { name, expression } => {
+            ExtractedTableConstraint::Check { name, expression }
         }
-
-        let expression = sql[expr_start..expr_end].trim().to_string();
-
-        return Some(FallbackStatementType::AlterTableAddConstraint {
-            table_schema,
-            table_name,
-            constraint: ExtractedTableConstraint::Check {
-                name: constraint_name,
-                expression,
-            },
-        });
-    } else if sql_upper.contains("PRIMARY KEY") {
-        // Parse PRIMARY KEY constraint
-        let pk_re =
-            regex::Regex::new(r"(?i)PRIMARY\s+KEY\s*(?:CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)")
-                .ok()?;
-
-        let pk_caps = pk_re.captures(sql)?;
-        let columns_str = pk_caps.get(1)?.as_str();
-
-        let columns: Vec<ExtractedConstraintColumn> = columns_str
-            .split(',')
-            .map(|c| {
-                let col = c.trim();
-                let descending = col.to_uppercase().contains(" DESC");
-                let name = col
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or(col)
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .to_string();
-                ExtractedConstraintColumn { name, descending }
-            })
-            .collect();
-
-        let is_clustered = !sql_upper.contains("NONCLUSTERED");
-
-        return Some(FallbackStatementType::AlterTableAddConstraint {
-            table_schema,
-            table_name,
-            constraint: ExtractedTableConstraint::PrimaryKey {
-                name: constraint_name,
-                columns,
-                is_clustered,
-            },
-        });
-    } else if sql_upper.contains("UNIQUE") {
-        // Parse UNIQUE constraint
-        let unique_re =
-            regex::Regex::new(r"(?i)UNIQUE\s*(?:CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)").ok()?;
-
-        let unique_caps = unique_re.captures(sql)?;
-        let columns_str = unique_caps.get(1)?.as_str();
-
-        let columns: Vec<ExtractedConstraintColumn> = columns_str
-            .split(',')
-            .map(|c| {
-                let col = c.trim();
-                let descending = col.to_uppercase().contains(" DESC");
-                let name = col
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or(col)
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .to_string();
-                ExtractedConstraintColumn { name, descending }
-            })
-            .collect();
-
-        let is_clustered = sql_upper.contains("CLUSTERED") && !sql_upper.contains("NONCLUSTERED");
-
-        return Some(FallbackStatementType::AlterTableAddConstraint {
-            table_schema,
-            table_name,
-            constraint: ExtractedTableConstraint::Unique {
-                name: constraint_name,
-                columns,
-                is_clustered,
-            },
-        });
     }
-
-    None
 }
 
 /// Extract extended property from sp_addextendedproperty call
@@ -1726,147 +1597,9 @@ fn parse_table_constraint(
     constraint_def: &str,
     table_name: &str,
 ) -> Option<ExtractedTableConstraint> {
-    let upper = constraint_def.to_uppercase();
-
-    // Extract constraint name if present
-    let name_re = Regex::new(r"(?i)CONSTRAINT\s+\[?(\w+)\]?").ok()?;
-    let constraint_name = name_re
-        .captures(constraint_def)
-        .and_then(|caps| caps.get(1))
-        .map(|m| m.as_str().to_string());
-
-    if upper.contains("PRIMARY KEY") {
-        let is_clustered = !upper.contains("NONCLUSTERED");
-        let columns = extract_constraint_columns(constraint_def);
-        let name = constraint_name.unwrap_or_else(|| format!("PK_{}", table_name));
-
-        Some(ExtractedTableConstraint::PrimaryKey {
-            name,
-            columns,
-            is_clustered,
-        })
-    } else if upper.contains("FOREIGN KEY") {
-        let columns = extract_fk_columns(constraint_def);
-        let (referenced_table, referenced_columns) = extract_fk_references(constraint_def)?;
-        let name = constraint_name.unwrap_or_else(|| format!("FK_{}", table_name));
-
-        Some(ExtractedTableConstraint::ForeignKey {
-            name,
-            columns,
-            referenced_table,
-            referenced_columns,
-        })
-    } else if upper.contains("UNIQUE") {
-        let is_clustered = upper.contains("CLUSTERED") && !upper.contains("NONCLUSTERED");
-        let columns = extract_constraint_columns(constraint_def);
-        let name = constraint_name.unwrap_or_else(|| format!("UQ_{}", table_name));
-
-        Some(ExtractedTableConstraint::Unique {
-            name,
-            columns,
-            is_clustered,
-        })
-    } else if upper.contains("CHECK") {
-        // Extract CHECK expression
-        let check_re = Regex::new(r"(?i)CHECK\s*\((.+)\)\s*$").ok()?;
-        let expression = check_re
-            .captures(constraint_def)
-            .and_then(|caps| caps.get(1))
-            .map(|m| m.as_str().to_string())?;
-        let name = constraint_name.unwrap_or_else(|| format!("CK_{}", table_name));
-
-        Some(ExtractedTableConstraint::Check { name, expression })
-    } else {
-        None
-    }
-}
-
-/// Extract columns from PRIMARY KEY or UNIQUE constraint with ASC/DESC info
-fn extract_constraint_columns(constraint_def: &str) -> Vec<ExtractedConstraintColumn> {
-    // Find the column list in parentheses after PRIMARY KEY or UNIQUE
-    // Pattern: PRIMARY KEY [CLUSTERED|NONCLUSTERED] ([Col1] [ASC|DESC], [Col2] [ASC|DESC])
-    let pk_re =
-        Regex::new(r"(?i)(?:PRIMARY\s+KEY|UNIQUE)\s*(?:CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)")
-            .unwrap();
-
-    pk_re
-        .captures(constraint_def)
-        .and_then(|caps| caps.get(1))
-        .map(|m| {
-            let cols_str = m.as_str();
-            cols_str
-                .split(',')
-                .filter_map(|col| {
-                    let col = col.trim();
-                    if col.is_empty() {
-                        return None;
-                    }
-
-                    // Parse column name and optional ASC/DESC
-                    let col_upper = col.to_uppercase();
-                    let descending = col_upper.contains("DESC");
-
-                    // Extract just the column name (remove brackets and ASC/DESC)
-                    let name_re = Regex::new(r"(?i)\[?(\w+)\]?").unwrap();
-                    name_re.captures(col).and_then(|caps| caps.get(1)).map(|m| {
-                        ExtractedConstraintColumn {
-                            name: m.as_str().to_string(),
-                            descending,
-                        }
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Extract column names from FOREIGN KEY constraint
-fn extract_fk_columns(constraint_def: &str) -> Vec<String> {
-    // Pattern: FOREIGN KEY ([Col1], [Col2])
-    let fk_re = Regex::new(r"(?i)FOREIGN\s+KEY\s*\(([^)]+)\)").unwrap();
-
-    fk_re
-        .captures(constraint_def)
-        .and_then(|caps| caps.get(1))
-        .map(|m| parse_column_list(m.as_str()))
-        .unwrap_or_default()
-}
-
-/// Extract REFERENCES table and columns from FOREIGN KEY constraint
-fn extract_fk_references(constraint_def: &str) -> Option<(String, Vec<String>)> {
-    // Pattern: REFERENCES [schema].[table] ([Col1], [Col2]) or REFERENCES [table] ([Col1])
-    let ref_re = Regex::new(r"(?i)REFERENCES\s+(\[?\w+\]?(?:\.\[?\w+\]?)?)\s*\(([^)]+)\)").ok()?;
-
-    let caps = ref_re.captures(constraint_def)?;
-    let raw_table = caps.get(1)?.as_str();
-    let columns = caps
-        .get(2)
-        .map(|m| parse_column_list(m.as_str()))
-        .unwrap_or_default();
-
-    // Normalize the table reference to [schema].[table] format
-    let table = normalize_table_reference(raw_table);
-
-    Some((table, columns))
-}
-
-/// Normalize a table reference to [schema].[table] format
-/// Handles: Table, [Table], dbo.Table, [dbo].[Table], etc.
-fn normalize_table_reference(raw: &str) -> String {
-    // Check if it already has a schema (contains a dot)
-    if raw.contains('.') {
-        // Split by dot and normalize each part
-        let parts: Vec<&str> = raw.split('.').collect();
-        if parts.len() == 2 {
-            let schema = parts[0].trim_matches(|c| c == '[' || c == ']');
-            let table = parts[1].trim_matches(|c| c == '[' || c == ']');
-            return format!("[{}].[{}]", schema, table);
-        }
-    }
-
-    // No schema - assume dbo
-    let table = raw.trim_matches(|c| c == '[' || c == ']');
-    format!("[dbo].[{}]", table)
+    // Use token-based parser for better accuracy
+    let parsed = parse_table_constraint_tokens(constraint_def, table_name)?;
+    Some(convert_token_parsed_constraint(parsed))
 }
 
 /// Result of preprocessing T-SQL for sqlparser compatibility

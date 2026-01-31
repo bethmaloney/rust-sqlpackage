@@ -1,6 +1,7 @@
 //! T-SQL parsing
 
 mod column_parser;
+mod constraint_parser;
 mod fulltext_parser;
 mod function_parser;
 mod index_parser;

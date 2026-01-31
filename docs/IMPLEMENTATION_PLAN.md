@@ -58,7 +58,7 @@ This does not affect Layer 3 parity testing (which compares dacpacs, not deploym
 
 ## Phase 15: Parser Refactoring - Replace Regex Fallbacks with Custom sqlparser-rs Dialect
 
-**Status:** IN PROGRESS (Phase 15.1 complete)
+**Status:** IN PROGRESS (Phase 15.4 complete)
 
 **Goal:** Replace brittle regex-based fallback parsing with proper token-based parsing using sqlparser-rs custom dialect extension. This improves maintainability, error messages, and handles edge cases better.
 
@@ -77,7 +77,23 @@ Created `ExtendedTsqlDialect` wrapper in `src/parser/tsql_dialect.rs`:
 - Updated `parse_sql_file()` to use the new dialect
 - All 250+ existing tests pass
 
-### Phase 15.2: Critical Path (Column Definitions) 🔄 IN PROGRESS
+### Phase 15.4: Constraints ✅ COMPLETE
+
+Created token-based constraint parser in `src/parser/constraint_parser.rs`:
+
+- New `ConstraintTokenParser` struct for token-based constraint parsing
+- `TokenParsedConstraint` enum representing all constraint types (PrimaryKey, Unique, ForeignKey, Check)
+- `TokenParsedConstraintColumn` struct for columns with sort order (ASC/DESC)
+- `parse_alter_table_add_constraint_tokens()` replaces regex-based `extract_alter_table_add_constraint()`
+- `parse_table_constraint_tokens()` replaces regex-based `parse_table_constraint()`
+- `parse_alter_table_name_tokens()` replaces regex-based `extract_alter_table_name()`
+- Handles WITH CHECK/WITH NOCHECK variants, schema-qualified names, CLUSTERED/NONCLUSTERED
+- Added 40 unit tests covering various constraint patterns
+- Updated `tsql_parser.rs` to use the new token parsers
+- Removed obsolete regex helper functions (`extract_constraint_columns`, `extract_fk_columns`, `extract_fk_references`)
+- All 491 tests pass
+
+### Phase 15.2: Critical Path (Column Definitions) ✅ COMPLETE
 
 Created token-based column definition parser in `src/parser/column_parser.rs`:
 
@@ -119,12 +135,12 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 | B8 | CREATE FULLTEXT CATALOG | `fulltext_parser.rs` (token-based) | Low | ✅ |
 
 #### Category C: Constraint Parsing (4 tasks)
-| # | Task | Regex Location | Priority |
-|---|------|----------------|----------|
-| C1 | ALTER TABLE ADD CONSTRAINT (FK) | `extract_alter_table_add_constraint` L887-992 | High |
-| C2 | ALTER TABLE ADD CONSTRAINT (PK/UNIQUE) | `extract_alter_table_add_constraint` L993-1072 | High |
-| C3 | Table constraint extraction | `extract_table_constraint` L2424-2540 | High |
-| C4 | ALTER TABLE name extraction | `extract_alter_table_name` L857-876 | Medium |
+| # | Task | Regex Location | Priority | Status |
+|---|------|----------------|----------|--------|
+| C1 | ALTER TABLE ADD CONSTRAINT (FK) | `extract_alter_table_add_constraint` L887-992 | High | ✅ |
+| C2 | ALTER TABLE ADD CONSTRAINT (PK/UNIQUE) | `extract_alter_table_add_constraint` L993-1072 | High | ✅ |
+| C3 | Table constraint extraction | `extract_table_constraint` L2424-2540 | High | ✅ |
+| C4 | ALTER TABLE name extraction | `extract_alter_table_name` L857-876 | Medium | ✅ |
 
 #### Category D: Column Definition Parsing (3 tasks)
 | # | Task | Regex Location | Priority | Status |
@@ -172,7 +188,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 1. **Phase 15.1: Infrastructure** ✅ - Created `ExtendedTsqlDialect` wrapper with MsSqlDialect delegation
 2. **Phase 15.2: Critical Path** ✅ COMPLETE - D1, D2, D3, E1, E2 all complete (column definitions fully migrated to token-based parsing)
 3. **Phase 15.3: DDL Objects** ✅ COMPLETE - B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅, B7 ✅, B8 ✅ (all DDL objects migrated to token-based parsing)
-4. **Phase 15.4: Constraints** - C1-C4 (constraint parsing)
+4. **Phase 15.4: Constraints** ✅ COMPLETE - C1 ✅, C2 ✅, C3 ✅, C4 ✅ (constraint parsing migrated to token-based parsing)
 5. **Phase 15.5: Statement Detection** - A1-A5 (fallback statement types)
 6. **Phase 15.6: Options & Misc** - F1-F4, G1-G3 (index options, extended properties)
 7. **Phase 15.7: Preprocessing** - H1-H3, I1-I2 (SQL preprocessing, SQLCMD)
