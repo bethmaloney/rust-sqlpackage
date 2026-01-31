@@ -5,6 +5,7 @@ mod function_parser;
 mod procedure_parser;
 mod sequence_parser;
 mod sqlcmd;
+mod table_type_parser;
 mod trigger_parser;
 mod tsql_dialect;
 mod tsql_parser;

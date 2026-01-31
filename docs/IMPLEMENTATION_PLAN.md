@@ -7,7 +7,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
 **Phase 15.1 complete: ExtendedTsqlDialect infrastructure created.**
 **Phase 15.2 complete: Column definition token parsing (D1, D2, D3, E1, E2 all complete).**
-**Phase 15.3 in progress: DDL object extraction (B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5-B6 remaining). Next: B5 table type extraction.**
+**Phase 15.3 in progress: DDL object extraction (B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 remaining). Next: B6 index extraction.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -113,7 +113,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 | B2 | CREATE/ALTER FUNCTION name, params, return type | `extract_function_info` L1768-1899, `extract_alter_function_info` L1663-1682 | High | ✅ |
 | B3 | CREATE TRIGGER (name, parent, events) | `extract_trigger_info` L1536-1614 | High | ✅ |
 | B4 | CREATE/ALTER SEQUENCE (all options) | `extract_sequence_info` L1174-1260, `extract_alter_sequence_info` L1684-1766 | Medium | ✅ |
-| B5 | CREATE TYPE AS TABLE | `extract_table_type_info` L1262-1535 | High | |
+| B5 | CREATE TYPE AS TABLE | `extract_table_type_info` L1262-1535 | High | ✅ |
 | B6 | CREATE INDEX (all options) | `extract_index_info` L1901-2018 | High | |
 | B7 | CREATE FULLTEXT INDEX | `extract_fulltext_index_info` L2675-2789 | Low | |
 | B8 | CREATE FULLTEXT CATALOG | `extract_fulltext_catalog_info` L2800-2815 | Low | |
@@ -171,7 +171,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 
 1. **Phase 15.1: Infrastructure** ✅ - Created `ExtendedTsqlDialect` wrapper with MsSqlDialect delegation
 2. **Phase 15.2: Critical Path** ✅ COMPLETE - D1, D2, D3, E1, E2 all complete (column definitions fully migrated to token-based parsing)
-3. **Phase 15.3: DDL Objects** 🔄 IN PROGRESS - B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5-B6 remaining (types, indexes)
+3. **Phase 15.3: DDL Objects** 🔄 IN PROGRESS - B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 remaining (indexes)
 4. **Phase 15.4: Constraints** - C1-C4, E2 (constraint parsing)
 5. **Phase 15.5: Statement Detection** - A1-A5 (fallback statement types)
 6. **Phase 15.6: Options & Misc** - F1-F4, G1-G3 (index options, extended properties)

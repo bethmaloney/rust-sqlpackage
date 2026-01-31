@@ -14,6 +14,7 @@ use super::function_parser::{
 };
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
 use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
+use super::table_type_parser::parse_create_table_type_tokens;
 use super::trigger_parser::parse_create_trigger_tokens;
 use super::tsql_dialect::ExtendedTsqlDialect;
 use crate::error::SqlPackageError;
@@ -597,10 +598,10 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Scalar types use: CREATE TYPE x FROM basetype
     // Table types use: CREATE TYPE x AS TABLE
     if sql_upper.contains("CREATE TYPE") {
-        if let Some((schema, name)) = extract_type_name(sql) {
-            // Check if this is a scalar type (FROM basetype) or table type (AS TABLE)
-            if sql_upper.contains(" FROM ") && !sql_upper.contains(" AS TABLE") {
-                // Scalar type - CREATE TYPE [dbo].[TypeName] FROM basetype [NULL|NOT NULL]
+        // Check if this is a scalar type (FROM basetype) or table type (AS TABLE)
+        if sql_upper.contains(" FROM ") && !sql_upper.contains(" AS TABLE") {
+            // Scalar type - CREATE TYPE [dbo].[TypeName] FROM basetype [NULL|NOT NULL]
+            if let Some((schema, name)) = extract_type_name(sql) {
                 if let Some(scalar_info) = extract_scalar_type_info(sql) {
                     return Some(FallbackStatementType::ScalarType {
                         schema,
@@ -612,14 +613,16 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
                         scale: scalar_info.scale,
                     });
                 }
-            } else {
-                // Table type - CREATE TYPE x AS TABLE (...)
-                let (columns, constraints) = extract_table_type_structure(sql);
+            }
+        } else {
+            // Table type - CREATE TYPE x AS TABLE (...)
+            // Uses token-based parsing (Phase 15.3) for improved maintainability and edge case handling.
+            if let Some(parsed) = parse_create_table_type_tokens(sql) {
                 return Some(FallbackStatementType::UserDefinedType {
-                    schema,
-                    name,
-                    columns,
-                    constraints,
+                    schema: parsed.schema,
+                    name: parsed.name,
+                    columns: parsed.columns,
+                    constraints: parsed.constraints,
                 });
             }
         }
@@ -1288,138 +1291,6 @@ fn extract_scalar_type_info(sql: &str) -> Option<ScalarTypeInfo> {
     })
 }
 
-/// Extract columns and constraints from a table type definition
-fn extract_table_type_structure(
-    sql: &str,
-) -> (
-    Vec<ExtractedTableTypeColumn>,
-    Vec<ExtractedTableTypeConstraint>,
-) {
-    let mut columns = Vec::new();
-    let mut constraints = Vec::new();
-
-    // Find the content between AS TABLE ( and the closing )
-    let sql_upper = sql.to_uppercase();
-    let start = match sql_upper.find("AS TABLE") {
-        Some(idx) => idx + "AS TABLE".len(),
-        None => return (columns, constraints),
-    };
-
-    // Find the opening paren after AS TABLE
-    let remaining = &sql[start..];
-    let paren_start = match remaining.find('(') {
-        Some(idx) => start + idx + 1,
-        None => return (columns, constraints),
-    };
-
-    // Find the matching closing paren (handle nested parens for types like DECIMAL(18,2))
-    let mut depth = 1;
-    let mut paren_end = paren_start;
-    for (i, c) in sql[paren_start..].char_indices() {
-        match c {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    paren_end = paren_start + i;
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if paren_end <= paren_start {
-        return (columns, constraints);
-    }
-
-    let body_str = &sql[paren_start..paren_end];
-
-    // Split by commas, handling nested parens
-    let parts = split_by_top_level_comma(body_str);
-
-    // Compile regexes outside the loop to avoid recompiling on each iteration
-    let check_re = Regex::new(r"(?i)CHECK\s*\((.+)\)\s*$").unwrap();
-    let idx_re = Regex::new(
-        r"(?i)INDEX\s+\[?(\w+)\]?\s*(UNIQUE)?\s*(CLUSTERED|NONCLUSTERED)?\s*\(([^)]+)\)",
-    )
-    .unwrap();
-
-    for part in parts {
-        let trimmed = part.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let upper = trimmed.to_uppercase();
-
-        // Check if this is a constraint
-        if upper.starts_with("PRIMARY KEY") {
-            // PRIMARY KEY CLUSTERED ([Col1], [Col2])
-            let is_clustered = !upper.contains("NONCLUSTERED");
-            let pk_columns = extract_constraint_columns(trimmed);
-            constraints.push(ExtractedTableTypeConstraint::PrimaryKey {
-                columns: pk_columns,
-                is_clustered,
-            });
-        } else if upper.starts_with("UNIQUE") {
-            // UNIQUE [CLUSTERED|NONCLUSTERED] ([Col])
-            let is_clustered = upper.contains("CLUSTERED") && !upper.contains("NONCLUSTERED");
-            let uq_columns = extract_constraint_columns(trimmed);
-            constraints.push(ExtractedTableTypeConstraint::Unique {
-                columns: uq_columns,
-                is_clustered,
-            });
-        } else if upper.starts_with("CHECK") {
-            // CHECK (expression)
-            if let Some(caps) = check_re.captures(trimmed) {
-                if let Some(expr) = caps.get(1) {
-                    constraints.push(ExtractedTableTypeConstraint::Check {
-                        expression: expr.as_str().to_string(),
-                    });
-                }
-            }
-        } else if upper.starts_with("INDEX") {
-            // INDEX [IX_Name] [UNIQUE] [CLUSTERED|NONCLUSTERED] ([Col])
-            if let Some(caps) = idx_re.captures(trimmed) {
-                let name = caps
-                    .get(1)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default();
-                let is_unique = caps.get(2).is_some();
-                let is_clustered = caps
-                    .get(3)
-                    .map(|m| m.as_str().to_uppercase() == "CLUSTERED")
-                    .unwrap_or(false);
-                let idx_columns = caps
-                    .get(4)
-                    .map(|m| parse_column_list(m.as_str()))
-                    .unwrap_or_default();
-                constraints.push(ExtractedTableTypeConstraint::Index {
-                    name,
-                    columns: idx_columns,
-                    is_unique,
-                    is_clustered,
-                });
-            }
-        } else {
-            // This is a column definition - use token-based parser
-            if let Some(parsed) = parse_column_definition_tokens(trimmed) {
-                // Skip computed columns - table types don't support them
-                if parsed.computed_expression.is_some() {
-                    continue;
-                }
-                // Only add if we have a valid column name and data type
-                if !parsed.name.is_empty() && !parsed.data_type.is_empty() {
-                    columns.push(convert_token_parsed_column_to_table_type(parsed));
-                }
-            }
-        }
-    }
-
-    (columns, constraints)
-}
-
 /// Extract trigger information from CREATE TRIGGER statement
 /// Parses trigger name, parent table/view, events (INSERT/UPDATE/DELETE), and type (AFTER/INSTEAD OF)
 ///
@@ -1806,19 +1677,6 @@ fn convert_token_parsed_column(parsed: TokenParsedColumn) -> ExtractedTableColum
         check_expression: parsed.check_expression,
         computed_expression: parsed.computed_expression,
         is_persisted: parsed.is_persisted,
-    }
-}
-
-/// Convert a TokenParsedColumn to ExtractedTableTypeColumn
-/// Table types support fewer features than regular tables (no IDENTITY, ROWGUIDCOL, etc.)
-fn convert_token_parsed_column_to_table_type(
-    parsed: TokenParsedColumn,
-) -> ExtractedTableTypeColumn {
-    ExtractedTableTypeColumn {
-        name: parsed.name,
-        data_type: parsed.data_type,
-        nullability: parsed.nullability,
-        default_value: parsed.default_value,
     }
 }
 
