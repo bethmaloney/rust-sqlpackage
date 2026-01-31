@@ -633,7 +633,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         if sql_upper.contains(" FROM ") && !sql_upper.contains(" AS TABLE") {
             // Scalar type - CREATE TYPE [dbo].[TypeName] FROM basetype [NULL|NOT NULL]
             if let Some((schema, name)) = extract_type_name(sql) {
-                if let Some(scalar_info) = extract_scalar_type_info(sql) {
+                if let Some(scalar_info) = extract_scalar_type_info(sql, &sql_upper) {
                     return Some(FallbackStatementType::ScalarType {
                         schema,
                         name,
@@ -661,7 +661,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Fallback for CREATE TABLE statements that fail parsing
     if sql_upper.contains("CREATE TABLE") {
-        if let Some(table_info) = extract_table_structure(sql) {
+        if let Some(table_info) = extract_table_structure(sql, &sql_upper) {
             return Some(table_info);
         }
     }
@@ -1022,9 +1022,10 @@ struct ScalarTypeInfo {
 
 /// Extract scalar type information from CREATE TYPE ... FROM basetype
 /// e.g., CREATE TYPE [dbo].[PhoneNumber] FROM VARCHAR(20) NOT NULL
-fn extract_scalar_type_info(sql: &str) -> Option<ScalarTypeInfo> {
-    let sql_upper = sql.to_uppercase();
-
+///
+/// Takes a pre-computed uppercase SQL string to avoid redundant `.to_uppercase()` calls
+/// when called from `try_fallback_parse()` which already has the uppercase version.
+fn extract_scalar_type_info(sql: &str, sql_upper: &str) -> Option<ScalarTypeInfo> {
     // Find the FROM keyword position
     let from_idx = sql_upper.find(" FROM ")?;
     let after_from = &sql[from_idx + 6..]; // Skip " FROM "
@@ -1317,11 +1318,13 @@ fn extract_index_filter_predicate(sql: &str) -> Option<String> {
 }
 
 /// Extract full table structure from CREATE TABLE statement
-fn extract_table_structure(sql: &str) -> Option<FallbackStatementType> {
+///
+/// Takes a pre-computed uppercase SQL string to avoid redundant `.to_uppercase()` calls
+/// when called from `try_fallback_parse()` which already has the uppercase version.
+fn extract_table_structure(sql: &str, sql_upper: &str) -> Option<FallbackStatementType> {
     let (schema, name) = extract_generic_object_name(sql, "TABLE")?;
 
     // Check for graph table syntax (AS NODE or AS EDGE)
-    let sql_upper = sql.to_uppercase();
     let is_node = sql_upper.contains("AS NODE");
     let is_edge = sql_upper.contains("AS EDGE");
 
