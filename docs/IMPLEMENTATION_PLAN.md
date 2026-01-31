@@ -5,7 +5,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-17 complete (203 tasks). Full parity achieved.**
-**Phase 18 in progress: BodyDependencies alias resolution (8/12 tasks complete).**
+**Phase 18 in progress: BodyDependencies alias resolution (9/12 tasks complete).**
 **Phase 19 pending: Whitespace-agnostic trim patterns (0/3 tasks, lower priority).**
 
 | Layer | Passing | Rate |
@@ -103,7 +103,7 @@ cargo bench -- --baseline before             # Compare against baseline
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 18.3.1 | Handle OUTER APPLY and CROSS APPLY aliases | ✅ | Subquery results used as table references |
-| 18.3.2 | Handle CTE (Common Table Expression) aliases | ⬜ | WITH clause table expressions |
+| 18.3.2 | Handle CTE (Common Table Expression) aliases | ✅ | WITH clause table expressions |
 | 18.3.3 | Handle nested subquery aliases | ⬜ | Multiple levels of aliasing |
 
 **Implementation Notes (18.3.1 - APPLY Aliases):**
@@ -121,6 +121,20 @@ The following changes were made to handle CROSS APPLY and OUTER APPLY subquery a
 5. **Parenthesis counting logic** - Added logic to find the matching closing parenthesis for APPLY subqueries by counting open/close parens.
 
 6. **`ALIAS_AFTER_PAREN_RE` pattern** - Added regex to extract the alias that appears after balanced parentheses in APPLY expressions.
+
+**Implementation Notes (18.3.2 - CTE Aliases):**
+
+The following changes were made to handle CTE (Common Table Expression) aliases:
+
+1. **`CTE_ALIAS_RE` pattern** - Added regex to extract CTE aliases from WITH clauses: `WITH CteName AS (` and `, NextCte AS (`.
+
+2. **CTE alias extraction in `extract_table_aliases_for_body_deps()`** - Added loop to extract CTE names and add them to `subquery_aliases` set so references like `[AccountCte].[Id]` are skipped rather than treated as schema.table references.
+
+3. **`strip_sql_comments_for_body_deps()` function** - Added function to strip SQL comments (both `--` line comments and `/* */` block comments) from body text before dependency extraction. This prevents words in comments from being treated as column/table references.
+
+4. **Added `WITH` to `is_sql_keyword_not_column()`** - Added WITH keyword to the filter to prevent it from being treated as a column name.
+
+5. **Unit tests** - Added `test_extract_table_aliases_cte_single`, `test_extract_table_aliases_cte_multiple`, and `test_body_dependencies_cte_alias_resolution` tests.
 
 ### Phase 18.4: DotNet Compatibility (0/2)
 

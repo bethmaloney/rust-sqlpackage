@@ -2868,6 +2868,10 @@ fn extract_body_dependencies(
         }
     }
 
+    // Strip SQL comments from body to prevent words in comments being treated as references
+    let body_no_comments = strip_sql_comments_for_body_deps(body);
+    let body = body_no_comments.as_str();
+
     // Phase 18: Extract table aliases for resolution
     // Maps alias (lowercase) -> table reference (e.g., "a" -> "[dbo].[Account]")
     let mut table_aliases: HashMap<String, String> = HashMap::new();
@@ -3225,6 +3229,12 @@ fn extract_table_aliases_for_body_deps(
     static ALIAS_AFTER_PAREN_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^\s*(\[?[A-Za-z_]\w*\]?)").unwrap());
 
+    // Regex to extract CTE (Common Table Expression) aliases from WITH clause
+    // Matches: WITH CteName AS ( or , CteName AS (
+    // CTE names should be treated as subquery aliases (derived tables)
+    static CTE_ALIAS_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)(?:WITH|,)\s+(\[?[A-Za-z_]\w*\]?)\s+AS\s*\(").unwrap());
+
     // SQL keywords that should not be treated as aliases
     let alias_keywords = [
         "ON", "WHERE", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "JOIN", "GROUP", "ORDER",
@@ -3367,6 +3377,85 @@ fn extract_table_aliases_for_body_deps(
             }
         }
     }
+
+    // Extract CTE (Common Table Expression) aliases from WITH clauses
+    // CTEs are derived tables - references to them should be skipped, not resolved as schema.table
+    // Matches: WITH CteName AS ( and , NextCte AS (
+    for cap in CTE_ALIAS_RE.captures_iter(body) {
+        let alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
+        let alias_upper = alias_clean.to_uppercase();
+
+        // Skip if alias is a keyword
+        if alias_keywords.iter().any(|&k| k == alias_upper) {
+            continue;
+        }
+
+        if !alias_clean.is_empty() {
+            subquery_aliases.insert(alias_clean.to_lowercase());
+        }
+    }
+}
+
+/// Strip SQL comments from body text for dependency extraction.
+/// Removes both line comments (-- ...) and block comments (/* ... */).
+/// This prevents words in comments from being treated as column/table references.
+fn strip_sql_comments_for_body_deps(body: &str) -> String {
+    let mut result = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
+    let mut in_string = false;
+    let mut string_delimiter = ' ';
+
+    while let Some(c) = chars.next() {
+        // Handle string literals - don't strip comments inside strings
+        if (c == '\'' || c == '"') && !in_string {
+            in_string = true;
+            string_delimiter = c;
+            result.push(c);
+            continue;
+        }
+        if c == string_delimiter && in_string {
+            in_string = false;
+            result.push(c);
+            continue;
+        }
+        if in_string {
+            result.push(c);
+            continue;
+        }
+
+        // Check for line comment: --
+        if c == '-' && chars.peek() == Some(&'-') {
+            chars.next(); // consume second -
+                          // Skip until end of line
+            while let Some(&ch) = chars.peek() {
+                chars.next();
+                if ch == '\n' {
+                    result.push('\n'); // preserve line structure
+                    break;
+                }
+            }
+            continue;
+        }
+
+        // Check for block comment: /* ... */
+        if c == '/' && chars.peek() == Some(&'*') {
+            chars.next(); // consume *
+                          // Skip until */
+            while let Some(ch) = chars.next() {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next(); // consume /
+                    result.push(' '); // replace comment with space to preserve word boundaries
+                    break;
+                }
+            }
+            continue;
+        }
+
+        result.push(c);
+    }
+
+    result
 }
 
 /// Extract column aliases from SELECT expressions (expr AS alias patterns).
@@ -3703,6 +3792,7 @@ fn is_sql_keyword_not_column(word: &str) -> bool {
             | "MINUTE"
             | "SECOND"
             | "APPLY"
+            | "WITH"
     )
     // Intentionally excludes: TIMESTAMP, ACTION, ID, TEXT, IMAGE, DATE, TIME, etc.
     // as these are commonly used as column names
@@ -6237,6 +6327,115 @@ OUTER APPLY (
         assert!(
             !has_account_name,
             "Should NOT have [dbo].[Account].[Name] in body deps. Got: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn test_extract_table_aliases_cte_single() {
+        use std::collections::{HashMap, HashSet};
+
+        let sql = r#"
+WITH AccountCte AS (
+    SELECT A.Id, A.AccountNumber, A.Status
+    FROM [dbo].[Account] A
+    WHERE A.Id = @AccountId
+)
+SELECT AccountCte.Id, AccountCte.AccountNumber, AccountCte.Status
+FROM AccountCte;
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        // 'A' should be a table alias for [dbo].[Account]
+        assert_eq!(table_aliases.get("a"), Some(&"[dbo].[Account]".to_string()));
+
+        // 'AccountCte' should be recognized as a CTE/subquery alias (not a table)
+        assert!(
+            subquery_aliases.contains("accountcte"),
+            "Expected 'accountcte' to be in subquery_aliases: {:?}",
+            subquery_aliases
+        );
+    }
+
+    #[test]
+    fn test_extract_table_aliases_cte_multiple() {
+        use std::collections::{HashMap, HashSet};
+
+        let sql = r#"
+WITH TagCte AS (
+    SELECT T.Id, T.Name
+    FROM [dbo].[Tag] T
+),
+AccountTagCte AS (
+    SELECT AT.AccountId, AT.TagId
+    FROM [dbo].[AccountTag] AT
+)
+SELECT TagCte.Id AS TagId, TagCte.Name AS TagName, AccountTagCte.AccountId
+FROM TagCte
+INNER JOIN AccountTagCte ON AccountTagCte.TagId = TagCte.Id
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        // 'T' should be a table alias for [dbo].[Tag]
+        assert_eq!(table_aliases.get("t"), Some(&"[dbo].[Tag]".to_string()));
+
+        // 'AT' should be a table alias for [dbo].[AccountTag]
+        assert_eq!(
+            table_aliases.get("at"),
+            Some(&"[dbo].[AccountTag]".to_string())
+        );
+
+        // Both CTE names should be recognized as subquery aliases
+        assert!(
+            subquery_aliases.contains("tagcte"),
+            "Expected 'tagcte' to be in subquery_aliases: {:?}",
+            subquery_aliases
+        );
+        assert!(
+            subquery_aliases.contains("accounttagcte"),
+            "Expected 'accounttagcte' to be in subquery_aliases: {:?}",
+            subquery_aliases
+        );
+    }
+
+    #[test]
+    fn test_body_dependencies_cte_alias_resolution() {
+        // Test that CTE aliases are NOT included as schema references in body deps
+        let sql = r#"
+WITH AccountCte AS (
+    SELECT A.Id, A.AccountNumber
+    FROM [dbo].[Account] A
+)
+SELECT AccountCte.Id, AccountCte.AccountNumber
+FROM AccountCte;
+"#;
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+
+        // Should contain [dbo].[Account] (the actual table)
+        let has_account = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Account]",
+            _ => false,
+        });
+        assert!(
+            has_account,
+            "Expected [dbo].[Account] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should NOT contain [AccountCte].* as a schema reference
+        let has_cte_as_schema = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r.starts_with("[AccountCte]"),
+            _ => false,
+        });
+        assert!(
+            !has_cte_as_schema,
+            "Should NOT have [AccountCte].* as schema in body deps. Got: {:?}",
             deps
         );
     }
