@@ -6,7 +6,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
 **Phase 15 complete: Parser refactoring tasks finished (including whitespace-agnostic keyword matching).**
-**Phase 16 in progress: Performance tuning and benchmarking (16/18 tasks).**
+**Phase 16 complete: Performance tuning and benchmarking (18/18 tasks).**
 **Phase 17 complete: Real-world SQL compatibility fixes.**
 - Phase 15.1: ExtendedTsqlDialect infrastructure ✅
 - Phase 15.2: Column definition token parsing (D1, D2, D3, E1, E2) ✅
@@ -321,11 +321,11 @@ Added rayon for parallel SQL file parsing with an adaptive threshold:
 
 Note: The massive SQL parsing improvement (up to 67%) exceeds the expected 20-40% gain. The full pipeline improvement is less visible because other stages (XML generation, I/O) now dominate the total time.
 
-### Phase 16.5: Documentation (0/1)
+### Phase 16.5: Documentation (1/1) ✅
 
-| ID | Task | Status | Blocked By |
-|----|------|--------|------------|
-| 16.5.1 | Document performance improvements | ⬜ | 16.3.1-16.3.3, 16.4.2 |
+| ID | Task | Status | Blocked By | Notes |
+|----|------|--------|------------|-------|
+| 16.5.1 | Document performance improvements | ✅ | 16.3.1-16.3.3, 16.4.2 | Created docs/PERFORMANCE.md with benchmark methodology, pipeline breakdown, optimization history (16.2-16.4), .NET DacFx comparison, and future opportunities |
 
 ### Identified Hotspots
 
@@ -442,7 +442,7 @@ The fix tracks a `constraint_immediately_precedes` flag that is set when a `CONS
 | Phase 13 | Fix remaining relationship parity issues (TVP support) | 4/4 |
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
-| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 16/18 |
+| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 18/18 |
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
 
 ### Key Implementation Details

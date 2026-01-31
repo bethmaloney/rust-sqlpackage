@@ -36,7 +36,7 @@ const DBO_SCHEMA: &str = "dbo";
 /// Track a schema name, avoiding allocation if it already exists in the set.
 /// Returns a clone of the schema name for use in struct fields.
 #[inline]
-fn track_schema<'a>(schemas: &mut BTreeSet<Cow<'static, str>>, schema: &'a str) -> String {
+fn track_schema(schemas: &mut BTreeSet<Cow<'static, str>>, schema: &str) -> String {
     // Check if schema is the common "dbo" case - use static reference
     if schema.eq_ignore_ascii_case(DBO_SCHEMA) {
         if !schemas.contains(DBO_SCHEMA) {
