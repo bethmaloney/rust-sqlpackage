@@ -121,11 +121,11 @@ Benchmarks run on criterion 0.5 with 100 samples per measurement.
 | 16.1.6 | Create stress_test fixture (100+ SQL files) | ✅ | - |
 | 16.1.7 | Run initial profiling and document baseline | ✅ | 16.1.2-16.1.6 |
 
-### Phase 16.2: Quick Wins (0/5)
+### Phase 16.2: Quick Wins (1/5)
 
 | ID | Task | Status | Blocked By | Expected Gain |
 |----|------|--------|------------|---------------|
-| 16.2.1 | Add once_cell dependency | ⬜ | - | - |
+| 16.2.1 | Add once_cell dependency | ✅ | - | - |
 | 16.2.2 | Cache regex compilations in model_xml.rs | ⬜ | 16.1.7, 16.2.1 | 5-10% |
 | 16.2.3 | Optimize string joining in preprocess_parser.rs | ⬜ | 16.1.7 | 1-3% |
 | 16.2.4 | Cache uppercase SQL in fallback parsing | ⬜ | 16.1.7 | 1-2% |
@@ -198,7 +198,7 @@ cargo flamegraph --release -- build --project tests/fixtures/e2e_comprehensive/D
 | Phase 13 | Fix remaining relationship parity issues (TVP support) | 4/4 |
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
-| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 7/18 |
+| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 8/18 |
 
 ### Key Implementation Details
 
