@@ -5,7 +5,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-17 complete (203 tasks). Full parity achieved.**
-**Phase 18 in progress: BodyDependencies alias resolution (7/12 tasks complete).**
+**Phase 18 in progress: BodyDependencies alias resolution (8/12 tasks complete).**
 **Phase 19 pending: Whitespace-agnostic trim patterns (0/3 tasks, lower priority).**
 
 | Layer | Passing | Rate |
@@ -98,13 +98,29 @@ cargo bench -- --baseline before             # Compare against baseline
 | 18.2.3 | Skip subquery/derived table alias references | ✅ | Don't emit refs to `TagDetails.AccountId` |
 | 18.2.4 | Filter out SQL keywords from body dependencies | ✅ | Remove STUFF, FOR, PATH, XML, etc. |
 
-### Phase 18.3: Edge Cases (0/3)
+### Phase 18.3: Edge Cases (1/3)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 18.3.1 | Handle OUTER APPLY and CROSS APPLY aliases | ⬜ | Subquery results used as table references |
+| 18.3.1 | Handle OUTER APPLY and CROSS APPLY aliases | ✅ | Subquery results used as table references |
 | 18.3.2 | Handle CTE (Common Table Expression) aliases | ⬜ | WITH clause table expressions |
 | 18.3.3 | Handle nested subquery aliases | ⬜ | Multiple levels of aliasing |
+
+**Implementation Notes (18.3.1 - APPLY Aliases):**
+
+The following changes were made to handle CROSS APPLY and OUTER APPLY subquery aliases:
+
+1. **`alias.[column]` pattern in TOKEN_RE** - Added pattern to match cases like `tag.[Name]` where the alias is unbracketed but the column is bracketed.
+
+2. **Boundary handling for `alias.[column]`** - Added boundary `(?:^|[^@\w\]])` to the pattern to prevent partial matches (e.g., avoiding matching `@tag` as `tag`).
+
+3. **`APPLY_KEYWORD_RE` pattern** - Added regex to detect CROSS APPLY and OUTER APPLY keywords in SQL text.
+
+4. **`APPLY_SUBQUERY_ALIAS_RE` pattern** - Added regex to extract aliases from APPLY subqueries, including aliases without the AS keyword (e.g., `CROSS APPLY (...) d`).
+
+5. **Parenthesis counting logic** - Added logic to find the matching closing parenthesis for APPLY subqueries by counting open/close parens.
+
+6. **`ALIAS_AFTER_PAREN_RE` pattern** - Added regex to extract the alias that appears after balanced parentheses in APPLY expressions.
 
 ### Phase 18.4: DotNet Compatibility (0/2)
 
@@ -165,7 +181,7 @@ The following changes were made to implement alias resolution:
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 18/18 |
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
-| Phase 18 | BodyDependencies alias resolution: fix table alias handling | 7/12 |
+| Phase 18 | BodyDependencies alias resolution: fix table alias handling | 8/12 |
 | Phase 19 | Whitespace-agnostic trim patterns (lower priority) | 0/3 |
 
 ## Performance Metrics

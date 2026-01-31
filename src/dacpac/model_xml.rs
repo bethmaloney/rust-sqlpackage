@@ -116,9 +116,19 @@ static UNBRACKETED_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Token regex for body dependency scanning
+/// Patterns matched (in order):
+/// 1. @param - parameter references (groups 1-2)
+/// 2. [a].[b].[c] - three-part bracketed reference (groups 3-6)
+/// 3. [a].[b] - two-part bracketed reference (groups 7-9)
+/// 4. alias.[column] - unbracketed alias with bracketed column (groups 10-12)
+/// 5. [ident] - single bracketed identifier (groups 13-14)
+/// 6. schema.table - unbracketed two-part reference (groups 15-16)
+/// 7. ident - unbracketed single identifier (group 17)
+///
+/// NOTE: Patterns 4, 6, 7 use (?:^|[^@\w\]]) as boundary to prevent partial matches
 static TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(@([A-Za-z_]\w*))|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([A-Za-z_][A-Za-z0-9_]*)\])|(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)|(?:^|[^@\w\.\]])([A-Za-z_][A-Za-z0-9_]*)",
+        r"(@([A-Za-z_]\w*))|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])|(?:^|[^@\w\]])(([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\])|(\[([A-Za-z_][A-Za-z0-9_]*)\])|(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)|(?:^|[^@\w\.\]])([A-Za-z_][A-Za-z0-9_]*)",
     )
     .unwrap()
 });
@@ -2907,15 +2917,16 @@ fn extract_body_dependencies(
 
     // Second pass: scan body sequentially for all references in order of appearance
     // This complex regex matches (in order of priority):
-    // 1. @param - parameter references
-    // 2. [a].[b].[c] - three-part bracketed reference
-    // 3. [a].[b] - two-part bracketed reference
-    // 4. [ident] - single bracketed identifier
-    // 5. schema.table - unbracketed two-part reference
-    // 6. ident - unbracketed identifier (column name)
+    // 1. @param - parameter references (groups 1-2)
+    // 2. [a].[b].[c] - three-part bracketed reference (groups 3-6)
+    // 3. [a].[b] - two-part bracketed reference (groups 7-9)
+    // 4. alias.[column] - unbracketed alias with bracketed column (groups 10-12)
+    // 5. [ident] - single bracketed identifier (groups 13-14)
+    // 6. schema.table - unbracketed two-part reference (groups 15-16)
+    // 7. ident - unbracketed single identifier (group 17)
     for cap in TOKEN_RE.captures_iter(body) {
         if cap.get(1).is_some() {
-            // Parameter reference: @param
+            // Pattern 1: Parameter reference: @param
             let param_name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
 
             // Check if this is a declared parameter (not a local variable)
@@ -2930,7 +2941,7 @@ fn extract_body_dependencies(
                 }
             }
         } else if cap.get(3).is_some() {
-            // Three-part bracketed reference: [schema].[table].[column]
+            // Pattern 2: Three-part bracketed reference: [schema].[table].[column]
             let schema = cap.get(4).map(|m| m.as_str()).unwrap_or("");
             let table = cap.get(5).map(|m| m.as_str()).unwrap_or("");
             let column = cap.get(6).map(|m| m.as_str()).unwrap_or("");
@@ -2951,7 +2962,7 @@ fn extract_body_dependencies(
                 }
             }
         } else if cap.get(7).is_some() {
-            // Two-part bracketed reference: [schema].[table] or [alias].[column]
+            // Pattern 3: Two-part bracketed reference: [schema].[table] or [alias].[column]
             let first_part = cap.get(8).map(|m| m.as_str()).unwrap_or("");
             let second_part = cap.get(9).map(|m| m.as_str()).unwrap_or("");
             let first_lower = first_part.to_lowercase();
@@ -2989,8 +3000,42 @@ fn extract_body_dependencies(
                 }
             }
         } else if cap.get(10).is_some() {
-            // Single bracketed identifier: [ident]
-            let ident = cap.get(11).map(|m| m.as_str()).unwrap_or("");
+            // Pattern 4: Unbracketed alias with bracketed column: alias.[column]
+            let alias = cap.get(11).map(|m| m.as_str()).unwrap_or("");
+            let column = cap.get(12).map(|m| m.as_str()).unwrap_or("");
+            let alias_lower = alias.to_lowercase();
+
+            // Check if alias is a subquery/derived table alias - skip entirely
+            if subquery_aliases.contains(&alias_lower) {
+                continue;
+            }
+
+            // Check if alias is a table alias that should be resolved
+            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                // This is alias.[column] - resolve to [schema].[table].[column]
+                // First emit the table reference if not seen
+                if !seen.contains(resolved_table) {
+                    seen.insert(resolved_table.clone());
+                    deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
+                }
+
+                // Then emit the column reference
+                let col_ref = format!("{}.[{}]", resolved_table, column);
+                if !seen.contains(&col_ref) {
+                    seen.insert(col_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(col_ref));
+                }
+            } else {
+                // Not a known alias - treat as [alias].[column] (might be schema.table)
+                let table_ref = format!("[{}].[{}]", alias, column);
+                if !seen.contains(&table_ref) {
+                    seen.insert(table_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(table_ref));
+                }
+            }
+        } else if cap.get(13).is_some() {
+            // Pattern 5: Single bracketed identifier: [ident]
+            let ident = cap.get(14).map(|m| m.as_str()).unwrap_or("");
             let ident_lower = ident.to_lowercase();
             let upper_ident = ident.to_uppercase();
 
@@ -3029,10 +3074,10 @@ fn extract_body_dependencies(
                     }
                 }
             }
-        } else if cap.get(12).is_some() {
-            // Unbracketed two-part reference: schema.table or alias.column
-            let first_part = cap.get(12).map(|m| m.as_str()).unwrap_or("");
-            let second_part = cap.get(13).map(|m| m.as_str()).unwrap_or("");
+        } else if cap.get(15).is_some() {
+            // Pattern 6: Unbracketed two-part reference: schema.table or alias.column
+            let first_part = cap.get(15).map(|m| m.as_str()).unwrap_or("");
+            let second_part = cap.get(16).map(|m| m.as_str()).unwrap_or("");
             let first_lower = first_part.to_lowercase();
             let first_upper = first_part.to_uppercase();
 
@@ -3069,9 +3114,9 @@ fn extract_body_dependencies(
                     deps.push(BodyDependency::ObjectRef(table_ref));
                 }
             }
-        } else if cap.get(14).is_some() {
-            // Unbracketed single identifier: might be a column name
-            let ident = cap.get(14).map(|m| m.as_str()).unwrap_or("");
+        } else if cap.get(17).is_some() {
+            // Pattern 7: Unbracketed single identifier: might be a column name
+            let ident = cap.get(17).map(|m| m.as_str()).unwrap_or("");
             let ident_lower = ident.to_lowercase();
             let upper_ident = ident.to_uppercase();
 
@@ -3157,10 +3202,28 @@ fn extract_table_aliases_for_body_deps(
         ).unwrap()
     });
 
-    // Regex for subquery with alias: JOIN (...) AS alias or FROM (...) AS alias
+    // Regex for subquery with alias using AS: (...) AS alias
     // This matches parentheses followed by AS and an alias
     static SUBQUERY_ALIAS_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?i)\)\s+AS\s+(\[?[A-Za-z_]\w*\]?)").unwrap());
+
+    // Regex to find APPLY keyword positions: CROSS APPLY or OUTER APPLY
+    static APPLY_KEYWORD_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)(?:CROSS|OUTER)\s+APPLY\s*").unwrap());
+
+    // Regex for CROSS APPLY / OUTER APPLY with table-valued function: APPLY func(...) alias
+    // Matches: CROSS APPLY STRING_SPLIT(e.[Skills], ',') s
+    // or: OUTER APPLY OPENJSON(d.[Data]) j
+    static APPLY_FUNCTION_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(?:CROSS|OUTER)\s+APPLY\s+([A-Za-z_]\w*)\s*\([^)]*\)\s*(\[?[A-Za-z_]\w*\]?)",
+        )
+        .unwrap()
+    });
+
+    // Regex to extract alias after balanced parens: identifier at start of string
+    static ALIAS_AFTER_PAREN_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\s*(\[?[A-Za-z_]\w*\]?)").unwrap());
 
     // SQL keywords that should not be treated as aliases
     let alias_keywords = [
@@ -3227,7 +3290,7 @@ fn extract_table_aliases_for_body_deps(
         }
     }
 
-    // Extract subquery aliases: (...) AS alias
+    // Extract subquery aliases: (...) AS alias or (...) alias (for APPLY)
     // These are derived tables/subqueries that should be skipped, not resolved
     for cap in SUBQUERY_ALIAS_RE.captures_iter(body) {
         let alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -3241,6 +3304,67 @@ fn extract_table_aliases_for_body_deps(
 
         if !alias_clean.is_empty() {
             subquery_aliases.insert(alias_clean.to_lowercase());
+        }
+    }
+
+    // Extract APPLY function aliases: CROSS APPLY func(...) alias or OUTER APPLY func(...) alias
+    // These are table-valued function results that should be skipped as subquery aliases
+    for cap in APPLY_FUNCTION_ALIAS_RE.captures_iter(body) {
+        let alias = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
+        let alias_upper = alias_clean.to_uppercase();
+
+        // Skip if alias is a keyword
+        if alias_keywords.iter().any(|&k| k == alias_upper) {
+            continue;
+        }
+
+        if !alias_clean.is_empty() {
+            subquery_aliases.insert(alias_clean.to_lowercase());
+        }
+    }
+
+    // Extract APPLY subquery aliases by finding APPLY keyword and counting balanced parens
+    // This handles: CROSS APPLY (...) alias or OUTER APPLY (...) alias (without AS)
+    for mat in APPLY_KEYWORD_RE.find_iter(body) {
+        let after_apply = &body[mat.end()..];
+
+        // Check if this is a subquery (starts with '(') or a function call
+        if !after_apply.trim_start().starts_with('(') {
+            continue; // This is a function call, handled by APPLY_FUNCTION_ALIAS_RE
+        }
+
+        // Find the matching closing paren by counting
+        let mut paren_depth = 0;
+        let mut found_open = false;
+        let mut close_pos = None;
+
+        for (i, c) in after_apply.char_indices() {
+            if c == '(' {
+                paren_depth += 1;
+                found_open = true;
+            } else if c == ')' {
+                paren_depth -= 1;
+                if found_open && paren_depth == 0 {
+                    close_pos = Some(i + 1); // Position after the closing paren
+                    break;
+                }
+            }
+        }
+
+        // Extract alias after the closing paren
+        if let Some(pos) = close_pos {
+            let after_close = &after_apply[pos..];
+            if let Some(cap) = ALIAS_AFTER_PAREN_RE.captures(after_close) {
+                let alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
+                let alias_upper = alias_clean.to_uppercase();
+
+                // Skip if alias is a keyword or empty
+                if !alias_clean.is_empty() && !alias_keywords.iter().any(|&k| k == alias_upper) {
+                    subquery_aliases.insert(alias_clean.to_lowercase());
+                }
+            }
         }
     }
 }
@@ -6005,5 +6129,115 @@ mod tests {
     fn test_extract_expression_before_as_qualified_column() {
         let result = extract_expression_before_as("t.[Column]\tAS\t[Alias]");
         assert_eq!(result, "t.[Column]");
+    }
+
+    // ============================================================================
+    // OUTER APPLY / CROSS APPLY alias extraction tests
+    // ============================================================================
+
+    #[test]
+    fn test_extract_table_aliases_cross_apply_subquery() {
+        use std::collections::{HashMap, HashSet};
+
+        let sql = r#"
+SELECT a.Id, d.TagCount
+FROM [dbo].[Account] a
+CROSS APPLY (
+    SELECT COUNT(*) AS TagCount
+    FROM [dbo].[AccountTag]
+    WHERE AccountId = a.Id
+) d
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        // 'a' should be a table alias for [dbo].[Account]
+        assert_eq!(table_aliases.get("a"), Some(&"[dbo].[Account]".to_string()));
+
+        // 'd' should be recognized as a subquery alias (CROSS APPLY result)
+        assert!(
+            subquery_aliases.contains("d"),
+            "Expected 'd' to be in subquery_aliases: {:?}",
+            subquery_aliases
+        );
+    }
+
+    #[test]
+    fn test_extract_table_aliases_outer_apply_subquery() {
+        use std::collections::{HashMap, HashSet};
+
+        let sql = r#"
+SELECT a.Id, t.FirstTagName
+FROM [dbo].[Account] a
+OUTER APPLY (
+    SELECT TOP 1 tag.[Name] AS FirstTagName
+    FROM [dbo].[AccountTag] at
+    INNER JOIN [dbo].[Tag] tag ON at.TagId = tag.Id
+    WHERE at.AccountId = a.Id
+) t
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        // 'a' should be a table alias for [dbo].[Account]
+        assert_eq!(table_aliases.get("a"), Some(&"[dbo].[Account]".to_string()));
+
+        // 'at' should be a table alias for [dbo].[AccountTag] (inside the subquery)
+        assert_eq!(
+            table_aliases.get("at"),
+            Some(&"[dbo].[AccountTag]".to_string())
+        );
+
+        // 'tag' should be a table alias for [dbo].[Tag] (inside the subquery)
+        assert_eq!(table_aliases.get("tag"), Some(&"[dbo].[Tag]".to_string()));
+
+        // 't' should be recognized as a subquery alias (OUTER APPLY result)
+        assert!(
+            subquery_aliases.contains("t"),
+            "Expected 't' to be in subquery_aliases: {:?}",
+            subquery_aliases
+        );
+    }
+
+    #[test]
+    fn test_body_dependencies_outer_apply_alias_column() {
+        // Test that tag.[Name] is correctly resolved to [dbo].[Tag].[Name]
+        let sql = r#"
+SELECT a.Id, t.FirstTagName
+FROM [dbo].[Account] a
+OUTER APPLY (
+    SELECT TOP 1 tag.[Name] AS FirstTagName
+    FROM [dbo].[AccountTag] at
+    INNER JOIN [dbo].[Tag] tag ON at.TagId = tag.Id
+    WHERE at.AccountId = a.Id
+) t
+"#;
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+
+        // Should contain [dbo].[Tag].[Name] (resolved from tag.[Name])
+        let has_tag_name = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Tag].[Name]",
+            _ => false,
+        });
+        assert!(
+            has_tag_name,
+            "Expected [dbo].[Tag].[Name] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should NOT contain [dbo].[Account].[Name]
+        let has_account_name = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Account].[Name]",
+            _ => false,
+        });
+        assert!(
+            !has_account_name,
+            "Should NOT have [dbo].[Account].[Name] in body deps. Got: {:?}",
+            deps
+        );
     }
 }
