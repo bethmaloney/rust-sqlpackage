@@ -2836,7 +2836,7 @@ fn extract_body_dependencies(
     full_name: &str,
     params: &[String],
 ) -> Vec<BodyDependency> {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     // Estimate ~10 dependencies typical for a procedure/function body
     let mut deps = Vec::with_capacity(10);
     let mut seen: HashSet<String> = HashSet::with_capacity(10);
@@ -2857,6 +2857,20 @@ fn extract_body_dependencies(
             }
         }
     }
+
+    // Phase 18: Extract table aliases for resolution
+    // Maps alias (lowercase) -> table reference (e.g., "a" -> "[dbo].[Account]")
+    let mut table_aliases: HashMap<String, String> = HashMap::new();
+    // Track subquery/derived table aliases - these should be skipped, not resolved
+    let mut subquery_aliases: HashSet<String> = HashSet::new();
+    // Track column aliases (AS identifier) - these should not be treated as column references
+    let mut column_aliases: HashSet<String> = HashSet::new();
+
+    // Extract aliases from FROM/JOIN clauses with proper alias tracking
+    extract_table_aliases_for_body_deps(body, &mut table_aliases, &mut subquery_aliases);
+
+    // Extract column aliases (SELECT expr AS alias patterns)
+    extract_column_aliases_for_body_deps(body, &mut column_aliases);
 
     // First pass: collect all table references - both bracketed and unbracketed
     // Patterns: [schema].[table] or schema.table
@@ -2937,12 +2951,38 @@ fn extract_body_dependencies(
                 }
             }
         } else if cap.get(7).is_some() {
-            // Two-part bracketed reference: [schema].[table]
-            let schema = cap.get(8).map(|m| m.as_str()).unwrap_or("");
-            let name = cap.get(9).map(|m| m.as_str()).unwrap_or("");
+            // Two-part bracketed reference: [schema].[table] or [alias].[column]
+            let first_part = cap.get(8).map(|m| m.as_str()).unwrap_or("");
+            let second_part = cap.get(9).map(|m| m.as_str()).unwrap_or("");
+            let first_lower = first_part.to_lowercase();
 
-            if !schema.starts_with('@') && !name.starts_with('@') {
-                let table_ref = format!("[{}].[{}]", schema, name);
+            if first_part.starts_with('@') || second_part.starts_with('@') {
+                continue;
+            }
+
+            // Check if first_part is a subquery/derived table alias - skip entirely
+            if subquery_aliases.contains(&first_lower) {
+                continue;
+            }
+
+            // Check if first_part is a table alias that should be resolved
+            if let Some(resolved_table) = table_aliases.get(&first_lower) {
+                // This is alias.column - resolve to [schema].[table].[column]
+                // First emit the table reference if not seen
+                if !seen.contains(resolved_table) {
+                    seen.insert(resolved_table.clone());
+                    deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
+                }
+
+                // Then emit the column reference
+                let col_ref = format!("{}.[{}]", resolved_table, second_part);
+                if !seen.contains(&col_ref) {
+                    seen.insert(col_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(col_ref));
+                }
+            } else {
+                // Not an alias - treat as [schema].[table]
+                let table_ref = format!("[{}].[{}]", first_part, second_part);
                 if !seen.contains(&table_ref) {
                     seen.insert(table_ref.clone());
                     deps.push(BodyDependency::ObjectRef(table_ref));
@@ -2951,10 +2991,19 @@ fn extract_body_dependencies(
         } else if cap.get(10).is_some() {
             // Single bracketed identifier: [ident]
             let ident = cap.get(11).map(|m| m.as_str()).unwrap_or("");
+            let ident_lower = ident.to_lowercase();
             let upper_ident = ident.to_uppercase();
 
             // Skip SQL keywords (but allow column names that happen to match type names)
             if is_sql_keyword_not_column(&upper_ident) {
+                continue;
+            }
+
+            // Skip if this is a known table alias, subquery alias, or column alias
+            if table_aliases.contains_key(&ident_lower)
+                || subquery_aliases.contains(&ident_lower)
+                || column_aliases.contains(&ident_lower)
+            {
                 continue;
             }
 
@@ -2981,23 +3030,49 @@ fn extract_body_dependencies(
                 }
             }
         } else if cap.get(12).is_some() {
-            // Unbracketed two-part reference: schema.table
-            let schema = cap.get(12).map(|m| m.as_str()).unwrap_or("");
-            let name = cap.get(13).map(|m| m.as_str()).unwrap_or("");
+            // Unbracketed two-part reference: schema.table or alias.column
+            let first_part = cap.get(12).map(|m| m.as_str()).unwrap_or("");
+            let second_part = cap.get(13).map(|m| m.as_str()).unwrap_or("");
+            let first_lower = first_part.to_lowercase();
+            let first_upper = first_part.to_uppercase();
 
-            // Skip if schema is a keyword
-            if is_sql_keyword(&schema.to_uppercase()) {
+            // Skip if first part is a keyword
+            if is_sql_keyword(&first_upper) {
                 continue;
             }
 
-            let table_ref = format!("[{}].[{}]", schema, name);
-            if !seen.contains(&table_ref) {
-                seen.insert(table_ref.clone());
-                deps.push(BodyDependency::ObjectRef(table_ref));
+            // Check if first_part is a subquery/derived table alias - skip entirely
+            if subquery_aliases.contains(&first_lower) {
+                continue;
+            }
+
+            // Check if first_part is a table alias that should be resolved
+            if let Some(resolved_table) = table_aliases.get(&first_lower) {
+                // This is alias.column - resolve to [schema].[table].[column]
+                // First emit the table reference if not seen
+                if !seen.contains(resolved_table) {
+                    seen.insert(resolved_table.clone());
+                    deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
+                }
+
+                // Then emit the column reference
+                let col_ref = format!("{}.[{}]", resolved_table, second_part);
+                if !seen.contains(&col_ref) {
+                    seen.insert(col_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(col_ref));
+                }
+            } else {
+                // Not an alias - treat as schema.table
+                let table_ref = format!("[{}].[{}]", first_part, second_part);
+                if !seen.contains(&table_ref) {
+                    seen.insert(table_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(table_ref));
+                }
             }
         } else if cap.get(14).is_some() {
             // Unbracketed single identifier: might be a column name
             let ident = cap.get(14).map(|m| m.as_str()).unwrap_or("");
+            let ident_lower = ident.to_lowercase();
             let upper_ident = ident.to_uppercase();
 
             // Skip SQL keywords
@@ -3005,11 +3080,18 @@ fn extract_body_dependencies(
                 continue;
             }
 
+            // Skip if this is a known table alias, subquery alias, or column alias
+            if table_aliases.contains_key(&ident_lower)
+                || subquery_aliases.contains(&ident_lower)
+                || column_aliases.contains(&ident_lower)
+            {
+                continue;
+            }
+
             // Skip if this is part of a table reference (schema or table name)
             let is_table_or_schema = table_refs.iter().any(|t| {
                 // Check case-insensitive match for unbracketed identifiers
                 let t_lower = t.to_lowercase();
-                let ident_lower = ident.to_lowercase();
                 t_lower.ends_with(&format!("].[{}]", ident_lower))
                     || t_lower.starts_with(&format!("[{}].", ident_lower))
             });
@@ -3035,6 +3117,166 @@ fn extract_body_dependencies(
     }
 
     deps
+}
+
+/// Extract table aliases from FROM/JOIN clauses for body dependency resolution.
+/// Populates two maps:
+/// - table_aliases: maps alias (lowercase) -> full table reference (e.g., "a" -> "[dbo].[Account]")
+/// - subquery_aliases: set of aliases that refer to subqueries/derived tables (should be skipped)
+///
+/// Handles:
+/// - FROM [schema].[table] alias
+/// - FROM [schema].[table] AS alias
+/// - JOIN [schema].[table] alias ON ...
+/// - LEFT JOIN (...) AS SubqueryAlias ON ...
+/// - CROSS APPLY (...) AS ApplyAlias
+fn extract_table_aliases_for_body_deps(
+    body: &str,
+    table_aliases: &mut std::collections::HashMap<String, String>,
+    subquery_aliases: &mut std::collections::HashSet<String>,
+) {
+    // Regex for bracketed table with bracketed alias: FROM/JOIN [schema].[table] [alias]
+    // Must come BEFORE the unbracketed alias regex to match more specific pattern first
+    static BODY_TABLE_BRACKET_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+(?:AS\s+)?\[([^\]]+)\]"
+        ).unwrap()
+    });
+
+    // Regex for bracketed table with unbracketed alias: FROM/JOIN [schema].[table] alias
+    static BODY_TABLE_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+(?:AS\s+)?([A-Za-z_]\w*)"
+        ).unwrap()
+    });
+
+    // Regex for unbracketed table with alias: FROM schema.table alias
+    static BODY_TABLE_ALIAS_UNBR_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)\s+(?:AS\s+)?([A-Za-z_]\w*)"
+        ).unwrap()
+    });
+
+    // Regex for subquery with alias: JOIN (...) AS alias or FROM (...) AS alias
+    // This matches parentheses followed by AS and an alias
+    static SUBQUERY_ALIAS_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)\)\s+AS\s+(\[?[A-Za-z_]\w*\]?)").unwrap());
+
+    // SQL keywords that should not be treated as aliases
+    let alias_keywords = [
+        "ON", "WHERE", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "JOIN", "GROUP", "ORDER",
+        "HAVING", "UNION", "WITH", "AS", "AND", "OR", "NOT", "SET", "FROM", "SELECT", "INTO",
+    ];
+
+    // Extract bracketed table with bracketed aliases: [schema].[table] [alias]
+    for cap in BODY_TABLE_BRACKET_ALIAS_RE.captures_iter(body) {
+        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let alias = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+        let alias_upper = alias.to_uppercase();
+
+        // Skip if alias is a keyword
+        if alias_keywords.iter().any(|&k| k == alias_upper) {
+            continue;
+        }
+
+        if !alias.is_empty() {
+            let table_ref = format!("[{}].[{}]", schema, table);
+            table_aliases.insert(alias.to_lowercase(), table_ref);
+        }
+    }
+
+    // Extract bracketed table aliases: [schema].[table] alias
+    for cap in BODY_TABLE_ALIAS_RE.captures_iter(body) {
+        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let alias = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+        let alias_upper = alias.to_uppercase();
+
+        // Skip if alias is a keyword
+        if alias_keywords.iter().any(|&k| k == alias_upper) {
+            continue;
+        }
+
+        if !alias.is_empty() {
+            let table_ref = format!("[{}].[{}]", schema, table);
+            table_aliases.insert(alias.to_lowercase(), table_ref);
+        }
+    }
+
+    // Extract unbracketed table aliases: schema.table alias
+    for cap in BODY_TABLE_ALIAS_UNBR_RE.captures_iter(body) {
+        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        let alias = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+        let alias_upper = alias.to_uppercase();
+
+        // Skip if schema is dbo or another common schema that would make this a table ref
+        if is_sql_keyword(&schema.to_uppercase()) {
+            continue;
+        }
+
+        // Skip if alias is a keyword
+        if alias_keywords.iter().any(|&k| k == alias_upper) {
+            continue;
+        }
+
+        if !alias.is_empty() {
+            let table_ref = format!("[{}].[{}]", schema, table);
+            table_aliases.insert(alias.to_lowercase(), table_ref);
+        }
+    }
+
+    // Extract subquery aliases: (...) AS alias
+    // These are derived tables/subqueries that should be skipped, not resolved
+    for cap in SUBQUERY_ALIAS_RE.captures_iter(body) {
+        let alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
+        let alias_upper = alias_clean.to_uppercase();
+
+        // Skip if alias is a keyword
+        if alias_keywords.iter().any(|&k| k == alias_upper) {
+            continue;
+        }
+
+        if !alias_clean.is_empty() {
+            subquery_aliases.insert(alias_clean.to_lowercase());
+        }
+    }
+}
+
+/// Extract column aliases from SELECT expressions (expr AS alias patterns).
+/// These are output column names that should not be treated as column references.
+fn extract_column_aliases_for_body_deps(
+    body: &str,
+    column_aliases: &mut std::collections::HashSet<String>,
+) {
+    // Regex for column alias pattern: expr AS alias (with or without brackets)
+    // Matches: COUNT(*) AS Occurrences, A.Id AS AccountBusinessKey, etc.
+    static COLUMN_ALIAS_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)\bAS\s+(\[?[A-Za-z_]\w*\]?)").unwrap());
+
+    // SQL keywords that should not be treated as aliases
+    let alias_keywords = [
+        "ON", "WHERE", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "JOIN", "GROUP", "ORDER",
+        "HAVING", "UNION", "WITH", "AND", "OR", "NOT", "SET", "FROM", "SELECT", "INTO", "BEGIN",
+        "END", "NULL", "INT", "VARCHAR", "NVARCHAR", "DATETIME", "BIT", "DECIMAL",
+    ];
+
+    for cap in COLUMN_ALIAS_RE.captures_iter(body) {
+        let alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
+        let alias_upper = alias_clean.to_uppercase();
+
+        // Skip if alias is a keyword
+        if alias_keywords.iter().any(|&k| k == alias_upper) {
+            continue;
+        }
+
+        if !alias_clean.is_empty() {
+            column_aliases.insert(alias_clean.to_lowercase());
+        }
+    }
 }
 
 /// Check if a word is a SQL keyword (to filter out from column detection)
@@ -3309,6 +3551,34 @@ fn is_sql_keyword_not_column(word: &str) -> bool {
             | "GEOMETRY"
             | "HIERARCHYID"
             | "NTEXT"
+            // SQL Server specific functions and keywords commonly found in queries
+            | "STUFF"
+            | "FOR"
+            | "PATH"
+            | "STRING_AGG"
+            | "CONCAT"
+            | "LEN"
+            | "CHARINDEX"
+            | "SUBSTRING"
+            | "REPLACE"
+            | "LTRIM"
+            | "RTRIM"
+            | "TRIM"
+            | "UPPER"
+            | "LOWER"
+            | "GETDATE"
+            | "GETUTCDATE"
+            | "DATEADD"
+            | "DATEDIFF"
+            | "DATENAME"
+            | "DATEPART"
+            | "YEAR"
+            | "MONTH"
+            | "DAY"
+            | "HOUR"
+            | "MINUTE"
+            | "SECOND"
+            | "APPLY"
     )
     // Intentionally excludes: TIMESTAMP, ACTION, ID, TEXT, IMAGE, DATE, TIME, etc.
     // as these are commonly used as column names
