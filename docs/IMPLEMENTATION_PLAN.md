@@ -222,12 +222,12 @@ Added capacity hints to 9 key vector allocations in hot paths across `src/parser
 
 Note: These are micro-optimizations that reduce allocations and potential reallocation overhead but don't significantly impact overall performance. The full pipeline is dominated by XML generation and I/O, so allocation efficiency has minimal measurable effect.
 
-### Phase 16.3: Medium Effort Optimizations (1/3)
+### Phase 16.3: Medium Effort Optimizations (2/3)
 
 | ID | Task | Status | Blocked By | Expected Gain | Actual Gain |
 |----|------|--------|------------|---------------|-------------|
 | 16.3.1 | Reduce cloning in model builder with Cow | ✅ | 16.2.2-16.2.5 | 3-5% | ~2-3% SQL parsing |
-| 16.3.2 | Pre-compute sort keys for XML elements | ⬜ | 16.2.2-16.2.5 | 1-2% | |
+| 16.3.2 | Pre-compute sort keys for XML elements | ✅ | 16.2.2-16.2.5 | 1-2% | ~2-4% full pipeline |
 | 16.3.3 | Batch string formatting in XML generation | ⬜ | 16.2.2-16.2.5 | 2-5% | |
 
 #### 16.3.1 Implementation Notes
@@ -246,6 +246,21 @@ Introduced `track_schema()` helper function using `Cow<'static, str>` to reduce 
 - Model building: No statistically significant change (within noise margin)
 
 Note: The optimization reduces allocations for schema tracking but doesn't affect the model building stage significantly because struct fields still require owned Strings. The primary benefit is reduced memory churn from duplicate schema name allocations.
+
+#### 16.3.2 Implementation Notes
+
+Used `sort_by_cached_key` in `sort_elements()` function (`src/model/builder.rs`) to pre-compute sort keys once per element instead of recomputing on each comparison. Also optimized the `db_options_sort_key` in `generate_model_xml()` (`src/dacpac/model_xml.rs`) to use static string slices instead of owned Strings.
+
+**Changes:**
+- Replaced `sort_by()` with `sort_by_cached_key()` which computes `(xml_name_attr().to_lowercase(), type_name().to_lowercase())` once per element
+- Changed `db_options_sort_key` from `(String, String)` to `(&str, &str)` to avoid allocation
+
+**Benchmark Results (vs baseline):**
+- Full pipeline: **-4.5%** improvement (e2e_comprehensive: 18.0ms, stress_test: 57.1ms)
+- Model building: -2.7% improvement on stress_test
+- XML generation: -2.4% improvement
+
+Note: The improvement is more pronounced on larger datasets (stress_test) where sorting overhead becomes more significant.
 
 ### Phase 16.4: Parallelization (0/2)
 

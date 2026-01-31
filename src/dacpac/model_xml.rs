@@ -209,17 +209,19 @@ pub fn generate_model_xml<W: Write>(
     // SqlDatabaseOptions has sort key ("", "sqldatabaseoptions") and must be interleaved
     // at the correct position among the other elements.
     // Comparison is case-insensitive to match DotNet's sorting behavior.
-    let db_options_sort_key = ("".to_string(), "sqldatabaseoptions".to_string());
+    //
+    // Use static string slices for db_options_sort_key to avoid allocation.
+    // SqlDatabaseOptions has empty Name and Type "sqldatabaseoptions" (lowercase for comparison).
+    let db_options_sort_key: (&str, &str) = ("", "sqldatabaseoptions");
     let mut db_options_written = false;
 
     for element in &model.elements {
         // Check if SqlDatabaseOptions should be written before this element
         if !db_options_written {
-            let elem_sort_key = (
-                element.xml_name_attr().to_lowercase(),
-                element.type_name().to_lowercase(),
-            );
-            if db_options_sort_key <= elem_sort_key {
+            // Compute sort key only when needed (before db_options is written)
+            let elem_name = element.xml_name_attr().to_lowercase();
+            let elem_type = element.type_name().to_lowercase();
+            if db_options_sort_key <= (elem_name.as_str(), elem_type.as_str()) {
                 write_database_options(&mut xml_writer, project)?;
                 db_options_written = true;
             }

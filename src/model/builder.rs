@@ -825,22 +825,18 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 ///
 /// This means elements without Name attribute (inline constraints) sort before
 /// elements with Name, and within the same Name prefix, elements are sorted by Type.
+///
+/// Uses `sort_by_cached_key` to pre-compute sort keys once per element,
+/// avoiding repeated `xml_name_attr()`, `type_name()`, and `to_lowercase()` calls
+/// during comparisons.
 fn sort_elements(elements: &mut [ModelElement]) {
-    elements.sort_by(|a, b| {
-        // Get Name attribute value (empty string if not emitted in XML)
-        let name_a = a.xml_name_attr().to_lowercase();
-        let name_b = b.xml_name_attr().to_lowercase();
-
-        // Primary sort: by Name attribute (empty sorts first, case-insensitive)
-        match name_a.cmp(&name_b) {
-            std::cmp::Ordering::Equal => {
-                // Same name, sort by Type attribute alphabetically (case-insensitive)
-                a.type_name()
-                    .to_lowercase()
-                    .cmp(&b.type_name().to_lowercase())
-            }
-            other => other,
-        }
+    // Pre-compute sort key: (lowercase_name, lowercase_type)
+    // This avoids O(n log n) calls to xml_name_attr() and to_lowercase() during sorting
+    elements.sort_by_cached_key(|elem| {
+        (
+            elem.xml_name_attr().to_lowercase(),
+            elem.type_name().to_lowercase(),
+        )
     });
 }
 
