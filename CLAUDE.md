@@ -20,7 +20,7 @@ just run build --project path/to/Database.sqlproj
 just build-project path/to/Database.sqlproj
 ```
 
-**Important:** Before finishing a feature or committing, always run `just test`.
+Before finishing a feature or committing, always run `just test`.
 
 ## Architecture
 
@@ -48,7 +48,7 @@ The codebase follows a pipeline architecture:
 
 ## Code Guidelines
 
-**Prefer parser over regex/string manipulation** when working with SQL text. Use sqlparser-rs tokenization or AST methods rather than regex patterns or string methods like `trim_end_matches`. See `docs/PARSER_REFACTORING_GUIDE.md` for patterns.
+**Prefer parser over regex/string manipulation** when working with SQL text. Use sqlparser-rs tokenization or AST methods rather than regex patterns or string methods like `trim_end_matches`. See `docs/PARSER_REFACTORING_GUIDE.md` for patterns. **Important:** Always use an AST/Token approach over regex whenever possible.
 
 ## Tests
 
