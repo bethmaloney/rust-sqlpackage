@@ -189,7 +189,7 @@ The following changes were made to handle unqualified table names:
 
 5. **Unit tests** - Added `test_extract_table_aliases_unqualified_single`, `test_extract_table_aliases_unqualified_multiple_joins`, `test_extract_table_aliases_unqualified_bracketed`, `test_body_dependencies_unqualified_alias_resolution`, and `test_extract_table_aliases_qualified_takes_precedence` tests.
 
-### Phase 18.6: Identifier Utilities Refactoring (0/5)
+### Phase 18.6: Identifier Utilities Refactoring (1/5)
 
 **Goal:** Replace piecemeal bracket handling with centralized identifier utilities and migrate from regex to tokenizer-based parsing.
 
@@ -203,7 +203,7 @@ The following changes were made to handle unqualified table names:
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 18.6.1 | Create `src/parser/identifier_utils.rs` module | ⬜ | Centralize bracket/identifier handling |
+| 18.6.1 | Create `src/parser/identifier_utils.rs` module | ✅ | Centralize bracket/identifier handling |
 | 18.6.2 | Add `format_identifier(word)` function | ⬜ | Convert Word to string with proper quoting |
 | 18.6.3 | Add `normalize_identifier(str)` function | ⬜ | Strip brackets/quotes from identifier |
 | 18.6.4 | Add `normalize_object_name(name, schema)` function | ⬜ | Reuse normalize_table_reference logic |
@@ -263,6 +263,22 @@ The following changes were made to handle unqualified table names:
 - Completes Phase 20.4.1 (TABLE_ALIAS_RE migration) as a side effect
 
 **Priority:** Lower (bug already fixed in 18.5), but high value for code quality
+
+**Implementation Notes (18.6.1 - Identifier Utils Module):**
+
+The following functions were added to `src/parser/identifier_utils.rs`:
+
+1. **`normalize_identifier(ident)`** - Strips brackets `[]` and double quotes `""` from an identifier
+2. **`ensure_bracketed(ident)`** - Ensures an identifier is wrapped in brackets
+3. **`format_word(word)`** - Converts a sqlparser-rs Word token to a properly quoted string
+4. **`format_token(token)`** - Converts a sqlparser-rs Token to a string representation
+5. **`normalize_object_name(name, default_schema)`** - Normalizes an object name to `[schema].[name]` format
+6. **`is_bracketed(ident)`** - Checks if a string is a bracketed identifier
+7. **`is_double_quoted(ident)`** - Checks if a string is a double-quoted identifier
+8. **`is_qualified_name(name)`** - Checks if a string appears to be a qualified name
+9. **`split_qualified_name(name, default_schema)`** - Splits a qualified name into schema and object name parts
+
+The module includes 18 unit tests covering all functions.
 
 ### Implementation Notes
 
