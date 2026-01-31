@@ -8,6 +8,7 @@ mod index_parser;
 mod procedure_parser;
 mod sequence_parser;
 mod sqlcmd;
+mod statement_parser;
 mod table_type_parser;
 mod trigger_parser;
 mod tsql_dialect;

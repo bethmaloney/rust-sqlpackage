@@ -58,7 +58,7 @@ This does not affect Layer 3 parity testing (which compares dacpacs, not deploym
 
 ## Phase 15: Parser Refactoring - Replace Regex Fallbacks with Custom sqlparser-rs Dialect
 
-**Status:** IN PROGRESS (Phase 15.4 complete)
+**Status:** IN PROGRESS (Phase 15.5 complete)
 
 **Goal:** Replace brittle regex-based fallback parsing with proper token-based parsing using sqlparser-rs custom dialect extension. This improves maintainability, error messages, and handles edge cases better.
 
@@ -105,6 +105,24 @@ Created token-based column definition parser in `src/parser/column_parser.rs`:
 - Added 22 unit tests covering various column definition patterns
 - Tasks D1 (column name, type, options) and E1 (default constraint variants) completed
 
+### Phase 15.5: Statement Detection ✅ COMPLETE
+
+Created token-based statement parser in `src/parser/statement_parser.rs`:
+
+- New `StatementTokenParser` struct for token-based statement detection
+- `TokenParsedCteDml` struct for CTE with DML patterns (DELETE, UPDATE, INSERT, MERGE)
+- `TokenParsedMergeOutput` struct for MERGE with OUTPUT clause
+- `TokenParsedXmlUpdate` struct for UPDATE with XML methods (.modify, .value)
+- `TokenParsedDrop` struct for DROP statements (SYNONYM, TRIGGER, INDEX, PROC)
+- `try_parse_cte_dml_tokens()` replaces regex-based `try_cte_dml_fallback()`
+- `try_parse_merge_output_tokens()` replaces regex-based `try_merge_output_fallback()`
+- `try_parse_xml_update_tokens()` replaces regex-based `try_xml_method_fallback()`
+- `try_parse_drop_tokens()` replaces regex-based `try_drop_fallback()`
+- Added 22 unit tests covering various statement patterns
+- Updated `tsql_parser.rs` to use the new token parsers
+- Tasks A1, A2, A3, A4 completed; A5 remains (generic CREATE fallback, low priority)
+- All 491 tests pass
+
 ### Regex Inventory
 
 Current fallback parsing uses **75+ regex patterns** across two files:
@@ -114,12 +132,12 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 ### Tasks by Category
 
 #### Category A: Statement Type Detection Fallbacks (5 tasks)
-| # | Task | Regex Location | Priority |
-|---|------|----------------|----------|
-| A1 | DROP SYNONYM/TRIGGER/INDEX/PROC detection | `try_drop_fallback` L692-769 | Medium |
-| A2 | CTE with DML (DELETE/UPDATE/INSERT/MERGE) | `try_cte_dml_fallback` L772-799 | High |
-| A3 | MERGE with OUTPUT clause | `try_merge_output_fallback` L801-826 | Medium |
-| A4 | UPDATE with XML methods (.MODIFY/.VALUE) | `try_xml_method_fallback` L828-855 | Low |
+| # | Task | Regex Location | Priority | Status |
+|---|------|----------------|----------|--------|
+| A1 | DROP SYNONYM/TRIGGER/INDEX/PROC detection | `try_drop_fallback` | Medium | ✅ |
+| A2 | CTE with DML (DELETE/UPDATE/INSERT/MERGE) | `try_cte_dml_fallback` | High | ✅ |
+| A3 | MERGE with OUTPUT clause | `try_merge_output_fallback` | Medium | ✅ |
+| A4 | UPDATE with XML methods (.MODIFY/.VALUE) | `try_xml_method_fallback` | Low | ✅ |
 | A5 | Generic CREATE fallback | `try_generic_create_fallback` L1115-1171 | Low |
 
 #### Category B: DDL Object Extraction (8 tasks)
@@ -189,7 +207,7 @@ Current fallback parsing uses **75+ regex patterns** across two files:
 2. **Phase 15.2: Critical Path** ✅ COMPLETE - D1, D2, D3, E1, E2 all complete (column definitions fully migrated to token-based parsing)
 3. **Phase 15.3: DDL Objects** ✅ COMPLETE - B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅, B7 ✅, B8 ✅ (all DDL objects migrated to token-based parsing)
 4. **Phase 15.4: Constraints** ✅ COMPLETE - C1 ✅, C2 ✅, C3 ✅, C4 ✅ (constraint parsing migrated to token-based parsing)
-5. **Phase 15.5: Statement Detection** - A1-A5 (fallback statement types)
+5. **Phase 15.5: Statement Detection** ✅ COMPLETE - A1 ✅, A2 ✅, A3 ✅, A4 ✅ (statement detection migrated to token-based parsing; A5 generic fallback low priority)
 6. **Phase 15.6: Options & Misc** - F1-F4, G1-G3 (index options, extended properties)
 7. **Phase 15.7: Preprocessing** - H1-H3, I1-I2 (SQL preprocessing, SQLCMD)
 

@@ -20,6 +20,10 @@ use super::function_parser::{
 use super::index_parser::parse_create_index_tokens;
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
 use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
+use super::statement_parser::{
+    try_parse_cte_dml_tokens, try_parse_drop_tokens, try_parse_merge_output_tokens,
+    try_parse_xml_update_tokens,
+};
 use super::table_type_parser::parse_create_table_type_tokens;
 use super::trigger_parser::parse_create_trigger_tokens;
 use super::tsql_dialect::ExtendedTsqlDialect;
@@ -723,172 +727,50 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
 /// Fallback for DROP statements that sqlparser doesn't support
 /// Handles: DROP SYNONYM, DROP TRIGGER, DROP INDEX ... ON, DROP PROC
+/// Phase 15.5: Uses token-based parsing instead of regex
 fn try_drop_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let sql_upper = sql.to_uppercase();
-
-    // Check for DROP SYNONYM
-    if sql_upper.contains("DROP SYNONYM") {
-        let re = regex::Regex::new(
-            r"(?i)DROP\s+SYNONYM\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
-        )
-        .ok()?;
-        let caps = re.captures(sql)?;
-        let schema = caps
-            .get(1)
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| "dbo".to_string());
-        let name = caps.get(2)?.as_str().to_string();
-        return Some(FallbackStatementType::RawStatement {
-            object_type: "DropSynonym".to_string(),
-            schema,
-            name,
-        });
-    }
-
-    // Check for DROP TRIGGER
-    if sql_upper.contains("DROP TRIGGER") {
-        let re = regex::Regex::new(
-            r"(?i)DROP\s+TRIGGER\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
-        )
-        .ok()?;
-        let caps = re.captures(sql)?;
-        let schema = caps
-            .get(1)
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| "dbo".to_string());
-        let name = caps.get(2)?.as_str().to_string();
-        return Some(FallbackStatementType::RawStatement {
-            object_type: "DropTrigger".to_string(),
-            schema,
-            name,
-        });
-    }
-
-    // Check for DROP INDEX ... ON (T-SQL specific syntax)
-    if sql_upper.contains("DROP INDEX") && sql_upper.contains(" ON ") {
-        let re = regex::Regex::new(
-            r"(?i)DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?\[?(\w+)\]?\s+ON\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?"
-        ).ok()?;
-        let caps = re.captures(sql)?;
-        let index_name = caps.get(1)?.as_str().to_string();
-        let schema = caps
-            .get(2)
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| "dbo".to_string());
-        let table_name = caps.get(3)?.as_str().to_string();
-        return Some(FallbackStatementType::RawStatement {
-            object_type: "DropIndex".to_string(),
-            schema,
-            name: format!("{}_{}", table_name, index_name),
-        });
-    }
-
-    // Check for DROP PROC (abbreviation for DROP PROCEDURE)
-    // Only match PROC that's not followed by EDURE (to avoid matching PROCEDURE)
-    if sql_upper.contains("DROP PROC") && !sql_upper.contains("DROP PROCEDURE") {
-        let re = regex::Regex::new(
-            r"(?i)DROP\s+PROC\s+(?:IF\s+EXISTS\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?",
-        )
-        .ok()?;
-        let caps = re.captures(sql)?;
-        let schema = caps
-            .get(1)
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| "dbo".to_string());
-        let name = caps.get(2)?.as_str().to_string();
-        return Some(FallbackStatementType::RawStatement {
-            object_type: "DropProcedure".to_string(),
-            schema,
-            name,
-        });
-    }
-
-    None
+    let parsed = try_parse_drop_tokens(sql)?;
+    Some(FallbackStatementType::RawStatement {
+        object_type: parsed.drop_type.object_type_str().to_string(),
+        schema: parsed.schema,
+        name: parsed.name,
+    })
 }
 
 /// Fallback for CTEs followed by DELETE, UPDATE, INSERT, or MERGE
 /// sqlparser only supports CTEs followed by SELECT
+/// Phase 15.5: Uses token-based parsing instead of regex
 fn try_cte_dml_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let sql_upper = sql.to_uppercase();
-
-    // Check if this is a CTE (starts with WITH)
-    let trimmed_upper = sql_upper.trim();
-    if !trimmed_upper.starts_with("WITH ") && !trimmed_upper.starts_with("WITH\n") {
-        return None;
-    }
-
-    // Check if followed by DELETE, UPDATE, INSERT, or MERGE (after the CTE definition)
-    // Look for these keywords after a closing parenthesis
-    let dml_pattern = regex::Regex::new(r"(?i)\)\s*(DELETE|UPDATE|INSERT|MERGE)\b").ok()?;
-    if dml_pattern.is_match(sql) {
-        // Extract the DML type
-        let caps = dml_pattern.captures(sql)?;
-        let dml_type = caps.get(1)?.as_str().to_uppercase();
-
-        return Some(FallbackStatementType::RawStatement {
-            object_type: format!("CteWith{}", dml_type),
-            schema: "dbo".to_string(),
-            name: "anonymous".to_string(),
-        });
-    }
-
-    None
+    let parsed = try_parse_cte_dml_tokens(sql)?;
+    Some(FallbackStatementType::RawStatement {
+        object_type: format!("CteWith{}", parsed.dml_type.as_str()),
+        schema: "dbo".to_string(),
+        name: "anonymous".to_string(),
+    })
 }
 
 /// Fallback for MERGE statements with OUTPUT clause
 /// sqlparser doesn't support the OUTPUT clause on MERGE
+/// Phase 15.5: Uses token-based parsing instead of regex
 fn try_merge_output_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let sql_upper = sql.to_uppercase();
-
-    // Check for MERGE ... OUTPUT
-    if sql_upper.contains("MERGE") && sql_upper.contains("OUTPUT") {
-        // Extract target table name
-        let re =
-            regex::Regex::new(r"(?i)MERGE\s+(?:INTO\s+)?(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
-        let caps = re.captures(sql)?;
-        let schema = caps
-            .get(1)
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| "dbo".to_string());
-        let name = caps.get(2)?.as_str().to_string();
-
-        return Some(FallbackStatementType::RawStatement {
-            object_type: "MergeWithOutput".to_string(),
-            schema,
-            name,
-        });
-    }
-
-    None
+    let parsed = try_parse_merge_output_tokens(sql)?;
+    Some(FallbackStatementType::RawStatement {
+        object_type: "MergeWithOutput".to_string(),
+        schema: parsed.schema,
+        name: parsed.name,
+    })
 }
 
 /// Fallback for UPDATE statements with XML methods (.modify(), .value(), etc.)
 /// sqlparser doesn't support XML method call syntax
+/// Phase 15.5: Uses token-based parsing instead of regex
 fn try_xml_method_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let sql_upper = sql.to_uppercase();
-
-    // Check for UPDATE with XML method call pattern
-    // Pattern: UPDATE ... SET [column].modify(...) or [column].value(...)
-    if sql_upper.contains("UPDATE")
-        && (sql_upper.contains(".MODIFY(") || sql_upper.contains(".VALUE("))
-    {
-        // Extract target table name
-        let re = regex::Regex::new(r"(?i)UPDATE\s+(?:\[?(\w+)\]?\.)?\[?(\w+)\]?").ok()?;
-        let caps = re.captures(sql)?;
-        let schema = caps
-            .get(1)
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| "dbo".to_string());
-        let name = caps.get(2)?.as_str().to_string();
-
-        return Some(FallbackStatementType::RawStatement {
-            object_type: "UpdateWithXmlMethod".to_string(),
-            schema,
-            name,
-        });
-    }
-
-    None
+    let parsed = try_parse_xml_update_tokens(sql)?;
+    Some(FallbackStatementType::RawStatement {
+        object_type: "UpdateWithXmlMethod".to_string(),
+        schema: parsed.schema,
+        name: parsed.name,
+    })
 }
 
 /// Extract schema and name from ALTER TABLE statement
