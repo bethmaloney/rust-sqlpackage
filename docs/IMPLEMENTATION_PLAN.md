@@ -5,7 +5,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
-**Phase 15 complete: All parser refactoring tasks finished.**
+**Phase 15.1-15.7 complete: Parser refactoring tasks finished.**
+**Phase 15.8 in progress: Whitespace-agnostic keyword matching.**
 **Phase 16 in progress: Performance tuning and benchmarking.**
 - Phase 15.1: ExtendedTsqlDialect infrastructure ✅
 - Phase 15.2: Column definition token parsing (D1, D2, D3, E1, E2) ✅
@@ -14,6 +15,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Phase 15.5: Statement detection (A1-A5) ✅
 - Phase 15.6: Miscellaneous extraction (G1-G3) ✅
 - Phase 15.7: SQL preprocessing (H1-H3) ✅
+- Phase 15.8: Whitespace-agnostic keyword matching (J1-J7) 🔄
 - SQLCMD tasks I1-I2 remain regex-based by design (line-oriented preprocessing)
 
 | Layer | Passing | Rate |
@@ -60,6 +62,48 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 When deploying the e2e_comprehensive dacpac, SqlPackage may report "The reference to the element that has the name [nvarchar] could not be resolved". This is caused by type references (e.g., `[nvarchar]`) emitted in ExpressionDependencies for computed columns with CAST expressions.
 
 This does not affect Layer 3 parity testing (which compares dacpacs, not deployments) and the test passes in CI where SQL Server is available via Docker.
+
+---
+
+## Phase 15.8: Whitespace-Agnostic Keyword Matching
+
+**Goal:** Replace space-only string matching patterns (e.g., `find(" AS ")`) with token-based parsing to correctly handle tabs, multiple spaces, and mixed whitespace around SQL keywords.
+
+**Background:** Several locations use patterns like `find(" AS ")` or `contains(" FROM ")` which only match single spaces. SQL allows any whitespace (tabs, multiple spaces, newlines) between tokens. The fix uses sqlparser's tokenizer to find keywords regardless of surrounding whitespace.
+
+**Pattern:** Use `Tokenizer::new(&MsSqlDialect{}, sql).tokenize()` and search for `Token::Word` with the appropriate `Keyword` enum value, tracking parenthesis depth when needed.
+
+### Phase 15.8: Tasks (1/7)
+
+| ID | Task | File | Line | Current Pattern | Status |
+|----|------|------|------|-----------------|--------|
+| J1 | Fix AS alias in `parse_column_expression()` | `src/dacpac/model_xml.rs` | 1621+ | Token-based (fixed) | ✅ |
+| J2 | Fix AS alias in TVF parameter references | `src/dacpac/model_xml.rs` | 1307 | `rfind(" AS ")` | ⬜ |
+| J3 | Fix AS keyword in `extract_view_query()` | `src/dacpac/model_xml.rs` | 1067-1070 | Chain of `find()` patterns | ⬜ |
+| J4 | Fix FOR keyword in trigger parsing | `src/dacpac/model_xml.rs` | 5050 | `find(" FOR ")` | ⬜ |
+| J5 | Fix AS keyword in trigger body extraction | `src/dacpac/model_xml.rs` | 5054-5069 | Chain of `find()` patterns | ⬜ |
+| J6 | Fix FROM/AS TABLE in type detection | `src/parser/tsql_parser.rs` | 633 | `contains(" FROM ")`, `contains(" AS TABLE")` | ⬜ |
+| J7 | Fix FROM/NOT NULL in scalar type parsing | `src/parser/tsql_parser.rs` | 1029, 1038 | `find(" FROM ")`, `contains(" NOT NULL")` | ⬜ |
+
+### Implementation Notes
+
+**J1 (Complete):** Demonstrates the pattern - tokenize expression, track paren depth, find last `Keyword::AS` at depth 0, extract alias from subsequent tokens.
+
+**J2-J5:** Similar to J1 - replace string matching with token iteration. Consider extracting shared helper functions:
+- `find_keyword_at_depth(tokens, keyword, depth)` - find keyword position at specific paren depth
+- `find_keyword_after_position(tokens, keyword, start)` - find keyword after given token index
+
+**J6-J7:** These are in tsql_parser.rs which already uses tokenizer in other places. Can reuse existing token infrastructure.
+
+### Lower Priority
+
+These patterns are less likely to cause issues but must be addressed for consistency:
+
+| Pattern | File | Line | Notes |
+|---------|------|------|-------|
+| `trim_end_matches(" READONLY")` | `src/dacpac/model_xml.rs` | 2728 | End-of-string, less likely tab-affected |
+| `trim_end_matches(" NULL")` | `src/dacpac/model_xml.rs` | 2729 | End-of-string, less likely tab-affected |
+| `trim_end_matches(" NOT")` | `src/dacpac/model_xml.rs` | 2730 | End-of-string, less likely tab-affected |
 
 ---
 
@@ -222,7 +266,7 @@ cargo flamegraph --release -- build --project tests/fixtures/e2e_comprehensive/D
 | Phase 12 | SELECT * expansion, TVF columns, duplicate refs | 6/6 |
 | Phase 13 | Fix remaining relationship parity issues (TVP support) | 4/4 |
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
-| Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
+| Phase 15 | Parser refactoring: replace regex with token-based parsing | 35/41 |
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 9/18 |
 
 ### Key Implementation Details
@@ -259,6 +303,7 @@ Replaced regex-based fallback parsing with token-based parsing using sqlparser-r
 - **15.5**: Token-based statement detection in `src/parser/statement_parser.rs` (A1-A5)
 - **15.6**: Token-based extended property parsing in `src/parser/extended_property_parser.rs` (G1-G3)
 - **15.7**: Token-based SQL preprocessing in `src/parser/preprocess_parser.rs` (H1-H3)
+- **15.8**: Whitespace-agnostic keyword matching (J1-J7) - replace space-only patterns with tokenizer
 - SQLCMD (I1-I2) intentionally remain regex-based for line-oriented preprocessing
 
 See [PARSER_REFACTORING_GUIDE.md](./PARSER_REFACTORING_GUIDE.md) for implementation details.

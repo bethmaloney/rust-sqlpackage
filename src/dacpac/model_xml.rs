@@ -3,6 +3,9 @@
 use quick_xml::events::{BytesCData, BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
 use regex::Regex;
+use sqlparser::dialect::MsSqlDialect;
+use sqlparser::keywords::Keyword;
+use sqlparser::tokenizer::{Token, Tokenizer};
 use std::io::Write;
 use std::sync::LazyLock;
 
@@ -1618,32 +1621,60 @@ fn extract_select_columns(query: &str) -> Vec<String> {
 }
 
 /// Parse a column expression and return (output_name, source_reference)
+/// Uses token-based parsing to correctly handle AS aliases with any whitespace (tabs, spaces, etc.)
 fn parse_column_expression(
     expr: &str,
     table_aliases: &[(String, String)],
     default_schema: &str,
 ) -> (String, Option<String>) {
     let trimmed = expr.trim();
-    let upper = trimmed.to_uppercase();
 
-    // Check for AS alias
-    // Handle both "column AS alias" and "column alias" forms
-    let (col_expr, alias) = if let Some(as_pos) = upper.rfind(" AS ") {
-        let alias = trimmed[as_pos + 4..]
-            .trim()
-            .trim_matches(|c| c == '[' || c == ']');
-        let col = trimmed[..as_pos].trim();
-        (col.to_string(), Some(alias.to_string()))
+    // Tokenize the expression using sqlparser
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, trimmed).tokenize() {
+        Ok(t) => t,
+        Err(_) => {
+            // Fallback: if tokenization fails, use simple extraction
+            let output_name = extract_column_name_from_expr_simple(trimmed);
+            let source_ref = resolve_column_reference(trimmed, table_aliases, default_schema);
+            return (output_name, source_ref);
+        }
+    };
+
+    // Find the last AS keyword at top level (not inside parentheses)
+    // We iterate forward and keep updating, so we end up with the last match
+    let mut as_position: Option<usize> = None;
+    let mut paren_depth: i32 = 0;
+
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::LParen => paren_depth += 1,
+            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+            Token::Word(w) if w.keyword == Keyword::AS && paren_depth == 0 => {
+                as_position = Some(i);
+            }
+            _ => {}
+        }
+    }
+
+    // Extract alias and column expression based on AS position
+    let (col_expr, alias) = if let Some(as_idx) = as_position {
+        // Extract alias: tokens after AS
+        let alias = extract_alias_from_tokens(&tokens[as_idx + 1..]);
+
+        // Reconstruct column expression: tokens before AS
+        let col_expr = reconstruct_tokens(&tokens[..as_idx]);
+
+        (col_expr, alias)
     } else {
-        // No AS keyword - check for space-separated alias (but not function calls)
-        // Only treat last word as alias if it's a simple identifier
+        // No AS keyword found
         (trimmed.to_string(), None)
     };
 
     // Determine the output column name
     let output_name = alias.unwrap_or_else(|| {
         // Extract the column name from the expression
-        extract_column_name_from_expr(&col_expr)
+        extract_column_name_from_expr_simple(&col_expr)
     });
 
     // Determine the source reference (for simple column references)
@@ -1652,8 +1683,65 @@ fn parse_column_expression(
     (output_name, source_ref)
 }
 
-/// Extract the column name from an expression like "[Id]", "t.[Name]", "COUNT(*)"
-fn extract_column_name_from_expr(expr: &str) -> String {
+/// Extract alias name from tokens after AS keyword
+fn extract_alias_from_tokens(tokens: &[Token]) -> Option<String> {
+    // Skip whitespace and find the first meaningful token
+    for token in tokens {
+        match token {
+            Token::Whitespace(_) => continue,
+            Token::Word(w) => {
+                // Return the word value (unquoted)
+                return Some(w.value.clone());
+            }
+            Token::SingleQuotedString(s) => {
+                // Handle 'alias' style (SQL Server allows this)
+                return Some(s.clone());
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
+/// Reconstruct SQL text from tokens
+fn reconstruct_tokens(tokens: &[Token]) -> String {
+    let mut result = String::new();
+    for token in tokens {
+        result.push_str(&token_to_sql(token));
+    }
+    result.trim().to_string()
+}
+
+/// Convert a token back to its SQL representation
+fn token_to_sql(token: &Token) -> String {
+    // Handle bracket-quoted identifiers specially (sqlparser Display doesn't preserve them)
+    if let Token::Word(w) = token {
+        if w.quote_style == Some('[') {
+            return format!("[{}]", w.value);
+        }
+    }
+    // For everything else, use the Display impl
+    token.to_string()
+}
+
+/// Check if an expression starts with a specific SQL keyword using tokenizer
+fn starts_with_keyword(expr: &str, keyword: Keyword) -> bool {
+    let dialect = MsSqlDialect {};
+    if let Ok(tokens) = Tokenizer::new(&dialect, expr).tokenize() {
+        for token in tokens {
+            match token {
+                Token::Whitespace(_) => continue,
+                Token::Word(w) if w.keyword == keyword => return true,
+                _ => return false,
+            }
+        }
+    }
+    false
+}
+
+/// Extract the column name from a simple expression like "[Id]", "t.[Name]", "COUNT(*)"
+/// This is a fallback for when we don't have an AS alias
+fn extract_column_name_from_expr_simple(expr: &str) -> String {
     let trimmed = expr.trim();
 
     // If it's a function call (contains parentheses), return the expression as-is
@@ -1671,7 +1759,7 @@ fn extract_column_name_from_expr(expr: &str) -> String {
 }
 
 /// Resolve a column reference to its full [schema].[table].[column] form
-/// Returns None for aggregate/function expressions
+/// Returns None for aggregate/function expressions or complex expressions (CASE, etc.)
 fn resolve_column_reference(
     expr: &str,
     table_aliases: &[(String, String)],
@@ -1680,7 +1768,13 @@ fn resolve_column_reference(
     let trimmed = expr.trim();
 
     // If it's a function call (contains parentheses), no direct reference
+    // This catches IIF(...), COALESCE(...), NULLIF(...), COUNT(*), etc.
     if trimmed.contains('(') {
+        return None;
+    }
+
+    // Check for CASE expression using tokenizer (CASE doesn't use parens)
+    if starts_with_keyword(trimmed, Keyword::CASE) {
         return None;
     }
 
@@ -5322,4 +5416,138 @@ fn write_extended_property<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper for testing parse_column_expression
+    fn parse_expr(expr: &str) -> (String, Option<String>) {
+        parse_column_expression(expr, &[], "dbo")
+    }
+
+    // ============================================================================
+    // AS keyword whitespace handling tests
+    // ============================================================================
+
+    #[test]
+    fn test_as_alias_with_space() {
+        let (name, _) = parse_expr("column AS alias");
+        assert_eq!(name, "alias");
+    }
+
+    #[test]
+    fn test_as_alias_with_tab() {
+        let (name, _) = parse_expr("column\tAS\talias");
+        assert_eq!(name, "alias");
+    }
+
+    #[test]
+    fn test_as_alias_with_multiple_spaces() {
+        let (name, _) = parse_expr("column   AS   alias");
+        assert_eq!(name, "alias");
+    }
+
+    #[test]
+    fn test_as_alias_with_mixed_whitespace() {
+        let (name, _) = parse_expr("column \t AS \t alias");
+        assert_eq!(name, "alias");
+    }
+
+    #[test]
+    fn test_as_alias_with_newline() {
+        let (name, _) = parse_expr("column\nAS\nalias");
+        assert_eq!(name, "alias");
+    }
+
+    #[test]
+    fn test_bracketed_column_as_alias() {
+        let (name, _) = parse_expr("[MyColumn] AS [My Alias]");
+        assert_eq!(name, "My Alias");
+    }
+
+    #[test]
+    fn test_bracketed_column_as_alias_with_tab() {
+        let (name, _) = parse_expr("[MyColumn]\tAS\t[My Alias]");
+        assert_eq!(name, "My Alias");
+    }
+
+    // ============================================================================
+    // Column expression without alias
+    // ============================================================================
+
+    #[test]
+    fn test_simple_column_no_alias() {
+        let (name, _) = parse_expr("[Column]");
+        assert_eq!(name, "Column");
+    }
+
+    #[test]
+    fn test_qualified_column_no_alias() {
+        let (name, _) = parse_expr("t.[Column]");
+        assert_eq!(name, "Column");
+    }
+
+    // ============================================================================
+    // Function calls
+    // ============================================================================
+
+    #[test]
+    fn test_function_with_as_alias() {
+        let (name, _) = parse_expr("COUNT(*) AS Total");
+        assert_eq!(name, "Total");
+    }
+
+    #[test]
+    fn test_function_with_as_alias_tab() {
+        let (name, _) = parse_expr("COUNT(*)\tAS\tTotal");
+        assert_eq!(name, "Total");
+    }
+
+    #[test]
+    fn test_nested_function_with_alias() {
+        let (name, _) = parse_expr("COALESCE(NULLIF(a, ''), b) AS Result");
+        assert_eq!(name, "Result");
+    }
+
+    // ============================================================================
+    // CASE expressions
+    // ============================================================================
+
+    #[test]
+    fn test_case_expression_with_alias() {
+        let (name, _) = parse_expr("CASE WHEN x = 1 THEN 'a' ELSE 'b' END AS Result");
+        assert_eq!(name, "Result");
+    }
+
+    #[test]
+    fn test_case_expression_with_tab_alias() {
+        let (name, _) = parse_expr("CASE WHEN x = 1 THEN 'a' END\tAS\tResult");
+        assert_eq!(name, "Result");
+    }
+
+    // ============================================================================
+    // Edge cases
+    // ============================================================================
+
+    #[test]
+    fn test_string_containing_as_word() {
+        // The word 'AS' appears inside the string literal, should not be treated as keyword
+        let (name, _) = parse_expr("'has' AS Label");
+        assert_eq!(name, "Label");
+    }
+
+    #[test]
+    fn test_cast_expression_with_alias() {
+        // CAST contains 'AS' keyword inside parens - should find outer AS
+        let (name, _) = parse_expr("CAST(x AS INT) AS Value");
+        assert_eq!(name, "Value");
+    }
+
+    #[test]
+    fn test_cast_expression_with_tab_alias() {
+        let (name, _) = parse_expr("CAST(x AS VARCHAR(50))\tAS\tValue");
+        assert_eq!(name, "Value");
+    }
 }
