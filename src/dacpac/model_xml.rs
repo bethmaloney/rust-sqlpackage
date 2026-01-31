@@ -1307,11 +1307,8 @@ fn extract_inline_tvf_columns(
             if idx < columns.len() {
                 let trimmed_expr = col_expr.trim();
                 // Check if the expression (before AS) is a parameter reference
-                let expr_part = if let Some(as_pos) = trimmed_expr.to_uppercase().rfind(" AS ") {
-                    trimmed_expr[..as_pos].trim()
-                } else {
-                    trimmed_expr
-                };
+                // Use token-based parsing to handle any whitespace around AS (tabs, multiple spaces, etc.)
+                let expr_part = extract_expression_before_as(trimmed_expr);
 
                 // If it's a parameter reference like @ParamName
                 if expr_part.starts_with('@') && !expr_part.contains('(') {
@@ -1741,6 +1738,45 @@ fn starts_with_keyword(expr: &str, keyword: Keyword) -> bool {
         }
     }
     false
+}
+
+/// Extract the expression part before the AS keyword (if present)
+/// Uses token-based parsing to handle any whitespace (tabs, multiple spaces, newlines)
+/// Returns the expression before AS, or the original expression if no AS found
+fn extract_expression_before_as(expr: &str) -> String {
+    let trimmed = expr.trim();
+
+    // Tokenize the expression using sqlparser
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, trimmed).tokenize() {
+        Ok(t) => t,
+        Err(_) => {
+            // Fallback: if tokenization fails, return trimmed expression
+            return trimmed.to_string();
+        }
+    };
+
+    // Find the last AS keyword at top level (not inside parentheses)
+    let mut as_position: Option<usize> = None;
+    let mut paren_depth: i32 = 0;
+
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::LParen => paren_depth += 1,
+            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+            Token::Word(w) if w.keyword == Keyword::AS && paren_depth == 0 => {
+                as_position = Some(i);
+            }
+            _ => {}
+        }
+    }
+
+    // Return expression before AS, or original if no AS found
+    if let Some(as_idx) = as_position {
+        reconstruct_tokens(&tokens[..as_idx])
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Extract the column name from a simple expression like "[Id]", "t.[Name]", "COUNT(*)"
@@ -5555,5 +5591,70 @@ mod tests {
     fn test_cast_expression_with_tab_alias() {
         let (name, _) = parse_expr("CAST(x AS VARCHAR(50))\tAS\tValue");
         assert_eq!(name, "Value");
+    }
+
+    // ============================================================================
+    // extract_expression_before_as tests (J2 - TVF parameter references)
+    // ============================================================================
+
+    #[test]
+    fn test_extract_expression_before_as_with_space() {
+        let result = extract_expression_before_as("@CustomerId AS [CustomerId]");
+        assert_eq!(result, "@CustomerId");
+    }
+
+    #[test]
+    fn test_extract_expression_before_as_with_tab() {
+        let result = extract_expression_before_as("@CustomerId\tAS\t[CustomerId]");
+        assert_eq!(result, "@CustomerId");
+    }
+
+    #[test]
+    fn test_extract_expression_before_as_with_multiple_spaces() {
+        let result = extract_expression_before_as("@CustomerId   AS   [CustomerId]");
+        assert_eq!(result, "@CustomerId");
+    }
+
+    #[test]
+    fn test_extract_expression_before_as_with_mixed_whitespace() {
+        let result = extract_expression_before_as("@CustomerId \t AS \t [CustomerId]");
+        assert_eq!(result, "@CustomerId");
+    }
+
+    #[test]
+    fn test_extract_expression_before_as_with_newline() {
+        let result = extract_expression_before_as("@CustomerId\nAS\n[CustomerId]");
+        assert_eq!(result, "@CustomerId");
+    }
+
+    #[test]
+    fn test_extract_expression_before_as_no_alias() {
+        let result = extract_expression_before_as("@CustomerId");
+        assert_eq!(result, "@CustomerId");
+    }
+
+    #[test]
+    fn test_extract_expression_before_as_cast_with_alias() {
+        // CAST contains AS inside parens - should find outer AS
+        let result = extract_expression_before_as("CAST(@Value AS INT) AS IntValue");
+        assert_eq!(result, "CAST(@Value AS INT)");
+    }
+
+    #[test]
+    fn test_extract_expression_before_as_cast_tab_alias() {
+        let result = extract_expression_before_as("CAST(@Value AS INT)\tAS\tIntValue");
+        assert_eq!(result, "CAST(@Value AS INT)");
+    }
+
+    #[test]
+    fn test_extract_expression_before_as_simple_column() {
+        let result = extract_expression_before_as("[Column] AS [Alias]");
+        assert_eq!(result, "[Column]");
+    }
+
+    #[test]
+    fn test_extract_expression_before_as_qualified_column() {
+        let result = extract_expression_before_as("t.[Column]\tAS\t[Alias]");
+        assert_eq!(result, "t.[Column]");
     }
 }

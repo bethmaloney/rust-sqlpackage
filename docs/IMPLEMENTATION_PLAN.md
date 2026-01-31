@@ -59,12 +59,12 @@ SQL_TEST_PROJECT=tests/fixtures/<name>/project.sqlproj cargo test --test e2e_tes
 
 **Pattern:** Use `Tokenizer::new(&MsSqlDialect{}, sql).tokenize()` and search for `Token::Word` with the appropriate `Keyword` enum value, tracking parenthesis depth when needed.
 
-### Phase 15.8: Tasks (1/7)
+### Phase 15.8: Tasks (2/7)
 
 | ID | Task | File | Line | Current Pattern | Status |
 |----|------|------|------|-----------------|--------|
 | J1 | Fix AS alias in `parse_column_expression()` | `src/dacpac/model_xml.rs` | 1621+ | Token-based (fixed) | ✅ |
-| J2 | Fix AS alias in TVF parameter references | `src/dacpac/model_xml.rs` | 1307 | `rfind(" AS ")` | ⬜ |
+| J2 | Fix AS alias in TVF parameter references | `src/dacpac/model_xml.rs` | 1307 | Token-based (fixed) | ✅ |
 | J3 | Fix AS keyword in `extract_view_query()` | `src/dacpac/model_xml.rs` | 1067-1070 | Chain of `find()` patterns | ⬜ |
 | J4 | Fix FOR keyword in trigger parsing | `src/dacpac/model_xml.rs` | 5050 | `find(" FOR ")` | ⬜ |
 | J5 | Fix AS keyword in trigger body extraction | `src/dacpac/model_xml.rs` | 5054-5069 | Chain of `find()` patterns | ⬜ |
