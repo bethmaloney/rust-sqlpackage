@@ -192,6 +192,128 @@ The following changes were made to implement alias resolution:
 
 ---
 
+## Phase 20: Replace Remaining Regex with Tokenization/AST
+
+**Goal:** Eliminate remaining regex patterns in favor of tokenizer-based or AST-based parsing for better maintainability and correctness.
+
+**Background:** Phase 15 converted many regex patterns to token-based parsing, but several complex patterns remain in `src/dacpac/model_xml.rs` and other modules. These patterns are fragile and can fail on edge cases involving tabs, multiple spaces, or nested expressions.
+
+### Phase 20.1: Parameter Parsing (0/3)
+
+**Location:** `src/dacpac/model_xml.rs`
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 20.1.1 | Replace PROC_PARAM_RE with token-based parser | ⬜ | Line 92-96: Complex regex for `@param type READONLY/OUTPUT` |
+| 20.1.2 | Replace FUNC_PARAM_RE with token-based parser | ⬜ | Line 100-102: Function parameter extraction |
+| 20.1.3 | Replace parameter name trim_start_matches('@') | ⬜ | Lines 2551, 2575, 2938: Use tokenizer to identify parameters |
+
+**Implementation Approach:** Create a `ParameterParser` using sqlparser-rs tokenization to extract parameter declarations from procedure/function signatures. Parse parameter attributes (OUTPUT, READONLY) as tokens rather than regex captures.
+
+### Phase 20.2: Body Dependency Token Extraction (0/8)
+
+**Location:** `src/dacpac/model_xml.rs`
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 20.2.1 | Replace TOKEN_RE with tokenizer-based scanning | ⬜ | Lines 129-134: Massive regex with 17 capture groups |
+| 20.2.2 | Replace COL_REF_RE with tokenizer | ⬜ | Line 77-78: `alias.column` or `schema.table.column` |
+| 20.2.3 | Replace BARE_COL_RE with tokenizer | ⬜ | Line 88-89: `[ColumnName]` not preceded by dot |
+| 20.2.4 | Replace BRACKETED_IDENT_RE with tokenizer | ⬜ | Line 137-138: `[Name]` pattern |
+| 20.2.5 | Replace ALIAS_COL_RE with tokenizer | ⬜ | Line 157-158: `alias.[column]` pattern |
+| 20.2.6 | Replace SINGLE_BRACKET_RE with tokenizer | ⬜ | Line 154: `[name]` single identifier |
+| 20.2.7 | Replace COLUMN_ALIAS_RE with tokenizer | ⬜ | Line 3469: Column alias detection |
+| 20.2.8 | Replace split('.') with qualified name parser | ⬜ | Lines 1563, 1578-1580, 1819, 1848, 2333: Use tokenizer for dotted names |
+
+**Implementation Approach:** Use sqlparser-rs `Tokenizer` to scan body text and identify SQL tokens. Build a token stream and pattern-match against token sequences instead of regex. This handles whitespace, comments, and nested expressions correctly.
+
+### Phase 20.3: Type and Declaration Parsing (0/4)
+
+**Location:** `src/dacpac/model_xml.rs`
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 20.3.1 | Replace DECLARE_TYPE_RE with tokenizer | ⬜ | Line 105-107: `DECLARE @var type` extraction |
+| 20.3.2 | Replace TVF_COL_TYPE_RE with tokenizer | ⬜ | Line 55-57: TVF column type with precision/scale |
+| 20.3.3 | Replace CAST_EXPR_RE with tokenizer | ⬜ | Line 141-142: `CAST(expr AS type)` extraction |
+| 20.3.4 | Replace bracket trimming with tokenizer | ⬜ | Lines 754-755, 748-749: trim_start_matches('['), trim_end_matches(']') |
+
+**Implementation Approach:** Parse DECLARE, CAST, and type definitions using sqlparser-rs AST or tokenizer. Extract type names as tokens rather than string manipulation.
+
+### Phase 20.4: Table and Alias Pattern Matching (0/7)
+
+**Location:** `src/dacpac/model_xml.rs`
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 20.4.1 | Replace TABLE_ALIAS_RE with tokenizer | ⬜ | Line 60-65: `FROM/JOIN table alias` extraction |
+| 20.4.2 | Replace TRIGGER_ALIAS_RE with tokenizer | ⬜ | Line 149-151: Trigger table aliases |
+| 20.4.3 | Replace BRACKETED_TABLE_RE with tokenizer | ⬜ | Line 110-111: `[schema].[table]` pattern |
+| 20.4.4 | Replace UNBRACKETED_TABLE_RE with tokenizer | ⬜ | Line 114-116: `schema.table` pattern |
+| 20.4.5 | Replace QUALIFIED_TABLE_NAME_RE with tokenizer | ⬜ | Line 47-48: `^\[schema\]\.\[table\]$` |
+| 20.4.6 | Replace INSERT_SELECT_RE with tokenizer | ⬜ | Line 161-166: Complex INSERT...SELECT pattern |
+| 20.4.7 | Replace UPDATE_ALIAS_RE with tokenizer | ⬜ | Line 177-182: UPDATE with JOIN pattern |
+
+**Implementation Approach:** Use sqlparser-rs to parse FROM clauses, JOIN clauses, and table references. Extract table names and aliases from AST nodes rather than regex pattern matching.
+
+### Phase 20.5: SQL Keyword Detection (0/6)
+
+**Location:** `src/dacpac/model_xml.rs`
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 20.5.1 | Replace AS_KEYWORD_RE with tokenizer | ⬜ | Line 145-146: Find AS keyword in function body |
+| 20.5.2 | Replace find_body_separator_as() with tokenizer | ⬜ | Lines 4022-4076: Manual character scanning for AS |
+| 20.5.3 | Replace starts_with() SQL keyword checks with tokenizer | ⬜ | Lines 4054-4065: BEGIN, RETURN, SELECT, etc. |
+| 20.5.4 | Replace ON_KEYWORD_RE with tokenizer | ⬜ | Line 68: `ON` keyword in JOIN clauses |
+| 20.5.5 | Replace GROUP_BY_RE with tokenizer | ⬜ | Line 81: `GROUP BY` keyword |
+| 20.5.6 | Replace terminator patterns with tokenizer | ⬜ | Lines 71-73, 84-85: WHERE, HAVING, ORDER, etc. |
+
+**Implementation Approach:** Scan SQL body text with tokenizer and identify keywords as `Token::Word` instances. Check token values instead of string prefix/suffix matching.
+
+### Phase 20.6: Semicolon and Whitespace Handling (0/3)
+
+**Location:** Multiple files
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 20.6.1 | Replace trim_end_matches(';') in tsql_parser.rs | ⬜ | Line 1472: Predicate semicolon removal |
+| 20.6.2 | Replace trim_end_matches(';') in builder.rs | ⬜ | Line 1647: Predicate semicolon removal |
+| 20.6.3 | Replace trim_end_matches([';', ' ']) in model_xml.rs | ⬜ | Line 1525: Table name cleanup |
+
+**Implementation Approach:** Use tokenizer to parse statements. Semicolons and whitespace are automatically handled as separate tokens. Extract statement content without string manipulation.
+
+### Phase 20.7: CTE and Subquery Pattern Matching (0/4)
+
+**Location:** `src/dacpac/model_xml.rs`
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 20.7.1 | Replace CTE_ALIAS_RE with tokenizer | ⬜ | Line 3235: `WITH CteName AS (` pattern |
+| 20.7.2 | Replace SUBQUERY_ALIAS_RE with tokenizer | ⬜ | Line 3211: Derived table alias detection |
+| 20.7.3 | Replace APPLY_KEYWORD_RE with tokenizer | ⬜ | Line 3215: CROSS/OUTER APPLY detection |
+| 20.7.4 | Replace APPLY_FUNCTION_ALIAS_RE with tokenizer | ⬜ | Line 3221-3229: APPLY subquery alias extraction |
+
+**Implementation Approach:** Parse WITH clauses, subqueries, and APPLY expressions using sqlparser-rs AST. Extract CTE names and subquery aliases from the syntax tree.
+
+### Implementation Notes
+
+**Benefits of tokenization over regex:**
+- Handles variable whitespace (tabs, multiple spaces, newlines) correctly
+- Respects SQL comments and string literals
+- More maintainable and easier to extend
+- Better error messages when parsing fails
+- Faster performance on complex patterns
+
+**Migration Strategy:**
+1. Create new token-based parsers alongside existing regex patterns
+2. Add unit tests for token-based implementations
+3. Switch production code to use token-based parsers
+4. Remove regex patterns after validation
+5. Update performance benchmarks to measure impact
+
+---
+
 <details>
 <summary>Completed Phases Summary (Phases 1-17)</summary>
 
@@ -210,6 +332,7 @@ The following changes were made to implement alias resolution:
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
 | Phase 18 | BodyDependencies alias resolution: fix table alias handling | 8/12 |
 | Phase 19 | Whitespace-agnostic trim patterns (lower priority) | 0/3 |
+| Phase 20 | Replace remaining regex with tokenization/AST (cleanup) | 0/35 |
 
 ## Performance Metrics
 
