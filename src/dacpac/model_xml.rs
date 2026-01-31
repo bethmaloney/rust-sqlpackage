@@ -1096,7 +1096,8 @@ fn expand_select_star(
     table_aliases: &[(String, String)],
     model: &DatabaseModel,
 ) -> Vec<ViewColumn> {
-    let mut columns = Vec::new();
+    // Estimate ~5 columns per table on average
+    let mut columns = Vec::with_capacity(table_aliases.len() * 5);
 
     // For each table in the FROM clause, look up its columns in the model
     for (_alias, table_ref) in table_aliases {
@@ -1151,14 +1152,16 @@ fn extract_view_columns_and_deps(
     model: &DatabaseModel,
     is_schema_bound: bool,
 ) -> (Vec<ViewColumn>, Vec<String>) {
-    let mut columns = Vec::new();
-    let mut query_deps = Vec::new();
-
     // Parse table aliases from FROM clause and JOINs
     let table_aliases = extract_table_aliases(query, default_schema);
 
     // Extract SELECT column list
     let select_columns = extract_select_columns(query);
+
+    // Pre-allocate based on expected sizes
+    let mut columns = Vec::with_capacity(select_columns.len());
+    // Estimate: tables + columns (~2x select columns + tables)
+    let mut query_deps = Vec::with_capacity(table_aliases.len() + select_columns.len() * 2);
 
     for col_expr in select_columns {
         let (col_name, source_ref) =
@@ -1334,8 +1337,6 @@ struct TvfColumn {
 
 /// Extract columns from a multi-statement TVF's RETURNS @TableVar TABLE (...) clause
 fn extract_multi_statement_tvf_columns(definition: &str) -> Vec<TvfColumn> {
-    let mut columns = Vec::new();
-
     // Find the RETURNS @var TABLE (...) clause
     // We need to handle nested parentheses in column types like NVARCHAR(100)
     // First find "RETURNS @name TABLE ("
@@ -1348,15 +1349,18 @@ fn extract_multi_statement_tvf_columns(definition: &str) -> Vec<TvfColumn> {
             // Split by comma, respecting parentheses for types like NVARCHAR(100)
             let col_defs = split_column_definitions(&cols_str);
 
+            // Pre-allocate based on column count
+            let mut columns = Vec::with_capacity(col_defs.len());
             for col_def in col_defs {
                 if let Some(col) = parse_tvf_column_definition(&col_def) {
                     columns.push(col);
                 }
             }
+            return columns;
         }
     }
 
-    columns
+    Vec::new()
 }
 
 /// Extract content inside balanced parentheses, handling nested parens
@@ -2666,8 +2670,9 @@ fn extract_body_dependencies(
     params: &[String],
 ) -> Vec<BodyDependency> {
     use std::collections::HashSet;
-    let mut deps = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    // Estimate ~10 dependencies typical for a procedure/function body
+    let mut deps = Vec::with_capacity(10);
+    let mut seen: HashSet<String> = HashSet::with_capacity(10);
 
     // Extract DECLARE type dependencies first (for scalar functions)
     for cap in DECLARE_TYPE_RE.captures_iter(body) {
@@ -2689,7 +2694,8 @@ fn extract_body_dependencies(
     // First pass: collect all table references - both bracketed and unbracketed
     // Patterns: [schema].[table] or schema.table
     // But don't add them to deps yet - we'll process everything in order of appearance
-    let mut table_refs: Vec<String> = Vec::new();
+    // Estimate ~5 table references typical
+    let mut table_refs: Vec<String> = Vec::with_capacity(5);
 
     // Match bracketed table refs: [schema].[table]
     for cap in BRACKETED_TABLE_RE.captures_iter(body) {

@@ -399,7 +399,8 @@ impl ParsedStatement {
 
 /// Parse multiple SQL files
 pub fn parse_sql_files(files: &[PathBuf]) -> Result<Vec<ParsedStatement>> {
-    let mut all_statements = Vec::new();
+    // Estimate ~2 statements per file on average
+    let mut all_statements = Vec::with_capacity(files.len() * 2);
 
     for file in files {
         let statements = parse_sql_file(file)?;
@@ -423,7 +424,8 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
     let batches = split_batches(content);
 
     let dialect = ExtendedTsqlDialect::new();
-    let mut statements = Vec::new();
+    // Estimate ~1 statement per batch on average
+    let mut statements = Vec::with_capacity(batches.len());
 
     for batch in batches {
         let trimmed = batch.content.trim();
@@ -1389,11 +1391,12 @@ fn parse_table_body(
     body: &str,
     table_name: &str,
 ) -> (Vec<ExtractedTableColumn>, Vec<ExtractedTableConstraint>) {
-    let mut columns = Vec::new();
-    let mut constraints = Vec::new();
-
     // Split by top-level commas (not inside parentheses)
     let parts = split_by_top_level_comma(body);
+
+    // Most parts are columns, with a few constraints
+    let mut columns = Vec::with_capacity(parts.len());
+    let mut constraints = Vec::with_capacity(parts.len().min(4));
 
     for part in parts {
         let trimmed = part.trim();
@@ -1426,7 +1429,9 @@ fn parse_table_body(
 
 /// Split string by commas at the top level (not inside parentheses)
 fn split_by_top_level_comma(s: &str) -> Vec<String> {
-    let mut parts = Vec::new();
+    // Estimate ~1 part per 30 chars (average column definition length)
+    let estimated_parts = (s.len() / 30).max(1);
+    let mut parts = Vec::with_capacity(estimated_parts);
     let mut current = String::new();
     let mut depth = 0;
 
@@ -1523,7 +1528,10 @@ fn preprocess_tsql(sql: &str) -> PreprocessResult {
 
 /// Split SQL content into batches by GO statement, tracking line numbers
 fn split_batches(content: &str) -> Vec<Batch<'_>> {
-    let mut batches = Vec::new();
+    // Estimate ~1 batch per 20 lines (GO separators are relatively sparse)
+    let line_count = content.lines().count();
+    let estimated_batches = (line_count / 20).max(1);
+    let mut batches = Vec::with_capacity(estimated_batches);
     let mut current_pos = 0;
     let mut batch_start = 0;
     let mut current_line = 1; // 1-based line numbers
