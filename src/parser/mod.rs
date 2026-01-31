@@ -4,6 +4,7 @@ mod column_parser;
 mod function_parser;
 mod procedure_parser;
 mod sqlcmd;
+mod trigger_parser;
 mod tsql_dialect;
 mod tsql_parser;
 

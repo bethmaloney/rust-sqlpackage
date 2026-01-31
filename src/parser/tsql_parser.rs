@@ -13,6 +13,7 @@ use super::function_parser::{
     parse_create_function_tokens, TokenParsedFunctionType,
 };
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
+use super::trigger_parser::parse_create_trigger_tokens;
 use super::tsql_dialect::ExtendedTsqlDialect;
 use crate::error::SqlPackageError;
 
@@ -1486,80 +1487,20 @@ fn extract_table_type_structure(
 
 /// Extract trigger information from CREATE TRIGGER statement
 /// Parses trigger name, parent table/view, events (INSERT/UPDATE/DELETE), and type (AFTER/INSTEAD OF)
+///
+/// Uses token-based parsing (Phase 15.3) for improved maintainability and edge case handling.
 fn extract_trigger_info(sql: &str) -> Option<FallbackStatementType> {
-    // Match patterns like:
-    // CREATE TRIGGER [dbo].[TriggerName] ON [dbo].[TableName] FOR INSERT, UPDATE
-    // CREATE TRIGGER [dbo].[TriggerName] ON [dbo].[ViewName] INSTEAD OF DELETE
-    // CREATE OR ALTER TRIGGER [dbo].[TriggerName] ON [dbo].[TableName] AFTER INSERT, UPDATE, DELETE
-
-    // First extract trigger name: CREATE [OR ALTER] TRIGGER [schema].[name]
-    let trigger_re = regex::Regex::new(
-        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?TRIGGER\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))"
-    ).ok()?;
-
-    let caps = trigger_re.captures(sql)?;
-    let schema = caps
-        .get(1)
-        .or_else(|| caps.get(2))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "dbo".to_string());
-    let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
-
-    // Extract parent table/view: ON [schema].[name]
-    // Must match ON followed by a schema-qualified identifier (possibly bracketed)
-    // The pattern is after the trigger name and before INSTEAD OF/AFTER/FOR
-    // Use a more specific pattern that requires brackets or a dot to avoid matching "on view" in comments
-    let parent_re = regex::Regex::new(
-        r"(?i)CREATE\s+(?:OR\s+ALTER\s+)?TRIGGER\s+(?:\[?[^\]]+\]?\.)?\[?[^\]]+\]?\s+ON\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))"
-    ).ok()?;
-
-    let parent_caps = parent_re.captures(sql)?;
-    let parent_schema = parent_caps
-        .get(1)
-        .or_else(|| parent_caps.get(2))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "dbo".to_string());
-    let parent_name = parent_caps
-        .get(3)
-        .or_else(|| parent_caps.get(4))?
-        .as_str()
-        .to_string();
-
-    // Determine trigger type and events
-    // Look for INSTEAD OF, AFTER, or FOR (FOR is equivalent to AFTER)
-    let sql_upper = sql.to_uppercase();
-
-    // Find the position after ON [table] to extract the trigger clause
-    // The pattern is: ... ON [table] (INSTEAD OF | AFTER | FOR) (INSERT|UPDATE|DELETE)[,...]
-    let trigger_type = if sql_upper.contains("INSTEAD OF") {
-        3u8 // INSTEAD OF
-    } else {
-        2u8 // AFTER or FOR (both are type 2)
-    };
-
-    // Extract events (INSERT, UPDATE, DELETE) from the trigger action clause
-    // Look for pattern after "INSTEAD OF" or "AFTER" or "FOR" and before "AS"
-    // The events are: INSERT, UPDATE, DELETE - separated by commas
-    let events_re = regex::Regex::new(
-        r"(?i)(?:INSTEAD\s+OF|AFTER|\bFOR\b)\s+((?:INSERT|UPDATE|DELETE)(?:\s*,\s*(?:INSERT|UPDATE|DELETE))*)"
-    ).ok()?;
-
-    let events_match = events_re.captures(sql)?;
-    let events_str = events_match.get(1)?.as_str().to_uppercase();
-
-    let is_insert = events_str.contains("INSERT");
-    let is_update = events_str.contains("UPDATE");
-    let is_delete = events_str.contains("DELETE");
+    let parsed = parse_create_trigger_tokens(sql)?;
 
     Some(FallbackStatementType::Trigger {
-        schema,
-        name,
-        parent_schema,
-        parent_name,
-        is_insert,
-        is_update,
-        is_delete,
-        trigger_type,
+        schema: parsed.schema,
+        name: parsed.name,
+        parent_schema: parsed.parent_schema,
+        parent_name: parsed.parent_name,
+        is_insert: parsed.is_insert,
+        is_update: parsed.is_update,
+        is_delete: parsed.is_delete,
+        trigger_type: parsed.trigger_type,
     })
 }
 
