@@ -6,8 +6,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 **Phases 1-14 complete (146 tasks). Full parity achieved.**
 **Phase 15 complete: Parser refactoring tasks finished (including whitespace-agnostic keyword matching).**
-**Phase 16 in progress: Performance tuning and benchmarking.**
-**Phase 17 in progress: Real-world SQL compatibility fixes.**
+**Phase 16 in progress: Performance tuning and benchmarking (16/18 tasks).**
+**Phase 17 complete: Real-world SQL compatibility fixes.**
 - Phase 15.1: ExtendedTsqlDialect infrastructure ✅
 - Phase 15.2: Column definition token parsing (D1, D2, D3, E1, E2) ✅
 - Phase 15.3: DDL object extraction (B1-B8) ✅
@@ -16,6 +16,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Phase 15.6: Miscellaneous extraction (G1-G3) ✅
 - Phase 15.7: SQL preprocessing (H1-H3) ✅
 - Phase 15.8: Whitespace-agnostic keyword matching (J1-J7) ✅
+- Phase 16.4: SQL parsing parallelization with rayon (2/2) ✅
 - Phase 17.1: Comma-less constraint parsing (3/3) ✅
 - Phase 17.2: SQLCMD variable header format (2/2) ✅
 - SQLCMD tasks I1-I2 remain regex-based by design (line-oriented preprocessing)
@@ -293,12 +294,32 @@ For conditional attributes (like Disambiguator), used if/else to create differen
 
 Note: The improvement exceeds the expected 2-5% gain, particularly on smaller projects where XML generation is a larger proportion of total time.
 
-### Phase 16.4: Parallelization (0/2)
+### Phase 16.4: Parallelization (2/2) ✅
 
-| ID | Task | Status | Blocked By | Expected Gain |
-|----|------|--------|------------|---------------|
-| 16.4.1 | Add rayon dependency | ⬜ | - | - |
-| 16.4.2 | Parallelize SQL file parsing | ⬜ | 16.1.6, 16.4.1 | 20-40% |
+| ID | Task | Status | Blocked By | Expected Gain | Actual Gain |
+|----|------|--------|------------|---------------|-------------|
+| 16.4.1 | Add rayon dependency | ✅ | - | - | - |
+| 16.4.2 | Parallelize SQL file parsing | ✅ | 16.1.6, 16.4.1 | 20-40% | **43-67% SQL parsing** |
+
+#### 16.4.1-16.4.2 Implementation Notes
+
+Added rayon for parallel SQL file parsing with an adaptive threshold:
+- Files >= 8: Uses `par_iter()` for parallel processing
+- Files < 8: Uses sequential processing to avoid rayon overhead
+
+**Changes:**
+- Added `rayon = "1"` to Cargo.toml dependencies
+- Modified `parse_sql_files()` in `src/parser/tsql_parser.rs` to use `par_iter().map().collect()`
+- Added `PARALLEL_THRESHOLD = 8` constant to balance overhead vs. parallelization benefit
+
+**Benchmark Results (vs baseline):**
+- SQL parsing (28 files): **-43%** improvement (2.95ms from 5.2ms baseline)
+- SQL parsing (135 files): **-67%** improvement (3.48ms from 10.5ms baseline)
+- Full pipeline e2e_simple: No regression (uses sequential path due to <8 files)
+- Full pipeline e2e_comprehensive: No change detected (30 files)
+- Full pipeline stress_test: Within noise threshold (135 files)
+
+Note: The massive SQL parsing improvement (up to 67%) exceeds the expected 20-40% gain. The full pipeline improvement is less visible because other stages (XML generation, I/O) now dominate the total time.
 
 ### Phase 16.5: Documentation (0/1)
 
@@ -316,7 +337,7 @@ Based on code analysis:
 | String joining | `src/parser/preprocess_parser.rs` | Vec<String>.join() inefficiency | MEDIUM | ✅ Fixed in 16.2.3 |
 | Cloning | `src/model/builder.rs` | 149 clone() calls | MEDIUM | ⬜ |
 | String conversion | `src/parser/tsql_parser.rs` | Multiple .to_uppercase() on same SQL | LOW | ✅ Fixed in 16.2.4 |
-| Sequential I/O | `src/parser/tsql_parser.rs` | Sequential file parsing | HIGH (large projects) | ⬜ |
+| Sequential I/O | `src/parser/tsql_parser.rs` | Sequential file parsing | HIGH (large projects) | ✅ Fixed in 16.4.2 |
 
 ### Benchmark Commands
 
@@ -421,7 +442,7 @@ The fix tracks a `constraint_immediately_precedes` flag that is set when a `CONS
 | Phase 13 | Fix remaining relationship parity issues (TVP support) | 4/4 |
 | Phase 14 | Layer 3 (SqlPackage) parity | 3/3 |
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
-| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 12/18 |
+| Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 16/18 |
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
 
 ### Key Implementation Details

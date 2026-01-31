@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use rayon::prelude::*;
 use regex::Regex;
 use sqlparser::ast::Statement;
 use sqlparser::dialect::MsSqlDialect;
@@ -406,14 +407,30 @@ impl ParsedStatement {
     }
 }
 
-/// Parse multiple SQL files
+/// Minimum number of files to benefit from parallel processing.
+/// Below this threshold, sequential processing is faster due to rayon overhead.
+const PARALLEL_THRESHOLD: usize = 8;
+
+/// Parse multiple SQL files, using parallel processing for larger file sets
 pub fn parse_sql_files(files: &[PathBuf]) -> Result<Vec<ParsedStatement>> {
-    // Estimate ~2 statements per file on average
+    // Pre-allocate with estimate of ~2 statements per file
     let mut all_statements = Vec::with_capacity(files.len() * 2);
 
-    for file in files {
-        let statements = parse_sql_file(file)?;
-        all_statements.extend(statements);
+    if files.len() >= PARALLEL_THRESHOLD {
+        // Parse files in parallel using rayon for larger projects
+        let results: Vec<Result<Vec<ParsedStatement>>> =
+            files.par_iter().map(|file| parse_sql_file(file)).collect();
+
+        // Combine results, propagating the first error if any
+        for result in results {
+            all_statements.extend(result?);
+        }
+    } else {
+        // Sequential processing for small projects (avoids rayon overhead)
+        for file in files {
+            let statements = parse_sql_file(file)?;
+            all_statements.extend(statements);
+        }
     }
 
     Ok(all_statements)
