@@ -18,9 +18,10 @@
 //! ALTER TRIGGER [schema].[name] ON [schema].[table] AFTER UPDATE AS ...
 //! ```
 
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use sqlparser::tokenizer::Token;
+
+use super::token_parser_base::TokenParser;
 
 /// Result of parsing a trigger definition using tokens
 #[derive(Debug, Clone, Default)]
@@ -45,65 +46,61 @@ pub struct TokenParsedTrigger {
 
 /// Token-based trigger definition parser
 pub struct TriggerTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl TriggerTokenParser {
     /// Create a new parser for a trigger definition string
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(sql)?,
+        })
     }
 
     /// Parse CREATE TRIGGER and return trigger info
     pub fn parse_create_trigger(&mut self) -> Option<TokenParsedTrigger> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect CREATE keyword
-        if !self.check_keyword(Keyword::CREATE) {
+        if !self.base.check_keyword(Keyword::CREATE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Check for optional OR ALTER
-        if self.check_keyword(Keyword::OR) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_keyword(Keyword::OR) {
+            self.base.advance();
+            self.base.skip_whitespace();
 
-            if !self.check_keyword(Keyword::ALTER) {
+            if !self.base.check_keyword(Keyword::ALTER) {
                 return None;
             }
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Expect TRIGGER keyword
-        if !self.check_keyword(Keyword::TRIGGER) {
+        if !self.base.check_keyword(Keyword::TRIGGER) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse trigger name (schema-qualified)
-        let (trigger_schema, trigger_name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
+        let (trigger_schema, trigger_name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Expect ON keyword
-        if !self.check_keyword(Keyword::ON) {
+        if !self.base.check_keyword(Keyword::ON) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse parent table/view name (schema-qualified)
-        let (parent_schema, parent_name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
+        let (parent_schema, parent_name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Parse trigger type and events
         let (trigger_type, is_insert, is_update, is_delete) = self.parse_trigger_clause()?;
@@ -124,20 +121,20 @@ impl TriggerTokenParser {
     /// Returns (trigger_type, is_insert, is_update, is_delete)
     fn parse_trigger_clause(&mut self) -> Option<(u8, bool, bool, bool)> {
         // Determine trigger type based on keyword
-        let trigger_type = if self.check_word_ci("INSTEAD") {
+        let trigger_type = if self.base.check_word_ci("INSTEAD") {
             // INSTEAD OF
-            self.advance();
-            self.skip_whitespace();
-            if !self.check_keyword(Keyword::OF) {
+            self.base.advance();
+            self.base.skip_whitespace();
+            if !self.base.check_keyword(Keyword::OF) {
                 return None;
             }
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
             3u8 // INSTEAD OF
-        } else if self.check_keyword(Keyword::AFTER) || self.check_keyword(Keyword::FOR) {
+        } else if self.base.check_keyword(Keyword::AFTER) || self.base.check_keyword(Keyword::FOR) {
             // AFTER and FOR are equivalent trigger types in T-SQL
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
             2u8 // AFTER or FOR
         } else {
             return None;
@@ -149,26 +146,26 @@ impl TriggerTokenParser {
         let mut is_delete = false;
 
         loop {
-            if self.check_keyword(Keyword::INSERT) {
+            if self.base.check_keyword(Keyword::INSERT) {
                 is_insert = true;
-                self.advance();
-            } else if self.check_keyword(Keyword::UPDATE) {
+                self.base.advance();
+            } else if self.base.check_keyword(Keyword::UPDATE) {
                 is_update = true;
-                self.advance();
-            } else if self.check_keyword(Keyword::DELETE) {
+                self.base.advance();
+            } else if self.base.check_keyword(Keyword::DELETE) {
                 is_delete = true;
-                self.advance();
+                self.base.advance();
             } else {
                 // Not an event keyword - either end or unknown
                 break;
             }
 
-            self.skip_whitespace();
+            self.base.skip_whitespace();
 
             // Check for comma (more events)
-            if self.check_token(&Token::Comma) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_token(&Token::Comma) {
+                self.base.advance();
+                self.base.skip_whitespace();
             } else {
                 break;
             }
@@ -180,106 +177,6 @@ impl TriggerTokenParser {
         }
 
         Some((trigger_type, is_insert, is_update, is_delete))
-    }
-
-    /// Parse a schema-qualified name: [schema].[name] or schema.name or [name] or name
-    fn parse_schema_qualified_name(&mut self) -> Option<(String, String)> {
-        let first_ident = self.parse_identifier()?;
-        self.skip_whitespace();
-
-        // Check if there's a dot (schema.name pattern)
-        if self.check_token(&Token::Period) {
-            self.advance();
-            self.skip_whitespace();
-
-            let second_ident = self.parse_identifier()?;
-
-            Some((first_ident, second_ident))
-        } else {
-            // No dot - just a name, default schema to "dbo"
-            Some(("dbo".to_string(), first_ident))
-        }
-    }
-
-    // ========================================================================
-    // Helper methods (similar to ProcedureTokenParser)
-    // ========================================================================
-
-    /// Parse an identifier (bracketed or unbracketed)
-    fn parse_identifier(&mut self) -> Option<String> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Word(w) => {
-                let name = w.value.clone();
-                self.advance();
-                Some(name)
-            }
-            _ => None,
-        }
-    }
-
-    /// Skip whitespace tokens
-    fn skip_whitespace(&mut self) {
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
-                match &token.token {
-                    Token::Whitespace(_) => {
-                        self.advance();
-                    }
-                    _ => break,
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Check if at end of tokens
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-    }
-
-    /// Get current token without consuming
-    fn current_token(&self) -> Option<&TokenWithSpan> {
-        self.tokens.get(self.pos)
-    }
-
-    /// Advance to next token
-    fn advance(&mut self) {
-        if !self.is_at_end() {
-            self.pos += 1;
-        }
-    }
-
-    /// Check if current token is a specific keyword
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token is a word matching (case-insensitive)
-    fn check_word_ci(&self, word: &str) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word))
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token matches a specific token type
-    fn check_token(&self, expected: &Token) -> bool {
-        if let Some(token) = self.current_token() {
-            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
-        } else {
-            false
-        }
     }
 }
 

@@ -13,6 +13,7 @@ mod sequence_parser;
 mod sqlcmd;
 mod statement_parser;
 mod table_type_parser;
+pub mod token_parser_base;
 mod trigger_parser;
 mod tsql_dialect;
 mod tsql_parser;

@@ -13,9 +13,10 @@
 //! CREATE FULLTEXT CATALOG [name] AS DEFAULT;
 //! ```
 
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use sqlparser::tokenizer::Token;
+
+use super::token_parser_base::TokenParser;
 
 /// Result of parsing a fulltext index column
 #[derive(Debug, Clone)]
@@ -54,88 +55,84 @@ pub struct TokenParsedFullTextCatalog {
 
 /// Token-based fulltext definition parser
 pub struct FullTextTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl FullTextTokenParser {
     /// Create a new parser for a fulltext definition string
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(sql)?,
+        })
     }
 
     /// Parse CREATE FULLTEXT INDEX and return index info
     pub fn parse_fulltext_index(&mut self) -> Option<TokenParsedFullTextIndex> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect CREATE keyword
-        if !self.check_keyword(Keyword::CREATE) {
+        if !self.base.check_keyword(Keyword::CREATE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect FULLTEXT keyword
-        if !self.check_word_ci("FULLTEXT") {
+        if !self.base.check_word_ci("FULLTEXT") {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect INDEX keyword
-        if !self.check_keyword(Keyword::INDEX) {
+        if !self.base.check_keyword(Keyword::INDEX) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect ON keyword
-        if !self.check_keyword(Keyword::ON) {
+        if !self.base.check_keyword(Keyword::ON) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse table name (schema-qualified)
-        let (table_schema, table_name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
+        let (table_schema, table_name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Parse column list with optional LANGUAGE specifiers
         let columns = self.parse_fulltext_column_list()?;
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect KEY keyword
-        if !self.check_keyword(Keyword::KEY) {
+        if !self.base.check_keyword(Keyword::KEY) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect INDEX keyword
-        if !self.check_keyword(Keyword::INDEX) {
+        if !self.base.check_keyword(Keyword::INDEX) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse key index name
-        let key_index = self.parse_identifier()?;
-        self.skip_whitespace();
+        let key_index = self.base.parse_identifier()?;
+        self.base.skip_whitespace();
 
         // Parse optional ON [catalog]
-        let catalog = if self.check_keyword(Keyword::ON) {
-            self.advance();
-            self.skip_whitespace();
-            self.parse_identifier()
+        let catalog = if self.base.check_keyword(Keyword::ON) {
+            self.base.advance();
+            self.base.skip_whitespace();
+            self.base.parse_identifier()
         } else {
             None
         };
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Parse optional WITH clause (CHANGE_TRACKING)
         let change_tracking = self.parse_fulltext_with_options();
@@ -152,32 +149,32 @@ impl FullTextTokenParser {
 
     /// Parse CREATE FULLTEXT CATALOG and return catalog info
     pub fn parse_fulltext_catalog(&mut self) -> Option<TokenParsedFullTextCatalog> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect CREATE keyword
-        if !self.check_keyword(Keyword::CREATE) {
+        if !self.base.check_keyword(Keyword::CREATE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect FULLTEXT keyword
-        if !self.check_word_ci("FULLTEXT") {
+        if !self.base.check_word_ci("FULLTEXT") {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect CATALOG keyword
-        if !self.check_word_ci("CATALOG") {
+        if !self.base.check_word_ci("CATALOG") {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse catalog name
-        let name = self.parse_identifier()?;
-        self.skip_whitespace();
+        let name = self.base.parse_identifier()?;
+        self.base.skip_whitespace();
 
         // Check for AS DEFAULT
         let is_default = self.check_as_default();
@@ -187,11 +184,11 @@ impl FullTextTokenParser {
 
     /// Check for "AS DEFAULT" clause
     fn check_as_default(&mut self) -> bool {
-        if self.check_keyword(Keyword::AS) {
-            self.advance();
-            self.skip_whitespace();
-            if self.check_keyword(Keyword::DEFAULT) {
-                self.advance();
+        if self.base.check_keyword(Keyword::AS) {
+            self.base.advance();
+            self.base.skip_whitespace();
+            if self.base.check_keyword(Keyword::DEFAULT) {
+                self.base.advance();
                 return true;
             }
         }
@@ -201,53 +198,53 @@ impl FullTextTokenParser {
     /// Parse fulltext column list: ([col1] LANGUAGE 1033, [col2], [col3] LANGUAGE 1041)
     fn parse_fulltext_column_list(&mut self) -> Option<Vec<TokenParsedFullTextColumn>> {
         // Expect opening parenthesis
-        if !self.check_token(&Token::LParen) {
+        if !self.base.check_token(&Token::LParen) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         let mut columns = Vec::new();
 
-        while !self.is_at_end() && !self.check_token(&Token::RParen) {
-            self.skip_whitespace();
+        while !self.base.is_at_end() && !self.base.check_token(&Token::RParen) {
+            self.base.skip_whitespace();
 
             // Parse column name
-            if let Some(col_name) = self.parse_identifier() {
+            if let Some(col_name) = self.base.parse_identifier() {
                 let mut col = TokenParsedFullTextColumn {
                     name: col_name,
                     language_id: None,
                 };
 
-                self.skip_whitespace();
+                self.base.skip_whitespace();
 
                 // Check for optional LANGUAGE specifier
-                if self.check_word_ci("LANGUAGE") {
-                    self.advance();
-                    self.skip_whitespace();
-                    if let Some(lang_id) = self.parse_positive_integer() {
+                if self.base.check_word_ci("LANGUAGE") {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    if let Some(lang_id) = self.base.parse_positive_integer() {
                         col.language_id = Some(lang_id as u32);
                     }
-                    self.skip_whitespace();
+                    self.base.skip_whitespace();
                 }
 
                 // Check for TYPE COLUMN (advanced feature, skip it)
-                if self.check_keyword(Keyword::TYPE) {
-                    self.advance();
-                    self.skip_whitespace();
-                    if self.check_word_ci("COLUMN") {
-                        self.advance();
-                        self.skip_whitespace();
+                if self.base.check_keyword(Keyword::TYPE) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    if self.base.check_word_ci("COLUMN") {
+                        self.base.advance();
+                        self.base.skip_whitespace();
                         // Skip the type column name
-                        let _ = self.parse_identifier();
-                        self.skip_whitespace();
+                        let _ = self.base.parse_identifier();
+                        self.base.skip_whitespace();
                     }
                 }
 
                 // Check for STATISTICAL_SEMANTICS (advanced feature, skip it)
-                if self.check_word_ci("STATISTICAL_SEMANTICS") {
-                    self.advance();
-                    self.skip_whitespace();
+                if self.base.check_word_ci("STATISTICAL_SEMANTICS") {
+                    self.base.advance();
+                    self.base.skip_whitespace();
                 }
 
                 columns.push(col);
@@ -257,20 +254,20 @@ impl FullTextTokenParser {
             }
 
             // Check for comma (more columns) or right paren (end)
-            if self.check_token(&Token::Comma) {
-                self.advance();
-                self.skip_whitespace();
-            } else if self.check_token(&Token::RParen) {
+            if self.base.check_token(&Token::Comma) {
+                self.base.advance();
+                self.base.skip_whitespace();
+            } else if self.base.check_token(&Token::RParen) {
                 break;
             } else {
                 // Unexpected token, advance to avoid infinite loop
-                self.advance();
+                self.base.advance();
             }
         }
 
         // Consume closing parenthesis
-        if self.check_token(&Token::RParen) {
-            self.advance();
+        if self.base.check_token(&Token::RParen) {
+            self.base.advance();
         }
 
         if columns.is_empty() {
@@ -282,37 +279,37 @@ impl FullTextTokenParser {
 
     /// Parse WITH clause for fulltext index: WITH CHANGE_TRACKING AUTO|MANUAL|OFF
     fn parse_fulltext_with_options(&mut self) -> Option<String> {
-        if !self.check_keyword(Keyword::WITH) {
+        if !self.base.check_keyword(Keyword::WITH) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Check for CHANGE_TRACKING keyword
-        if self.check_word_ci("CHANGE_TRACKING") {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_word_ci("CHANGE_TRACKING") {
+            self.base.advance();
+            self.base.skip_whitespace();
 
             // Parse the mode: AUTO, MANUAL, OFF, or NO POPULATION
-            if self.check_word_ci("AUTO") {
-                self.advance();
+            if self.base.check_word_ci("AUTO") {
+                self.base.advance();
                 return Some("AUTO".to_string());
-            } else if self.check_word_ci("MANUAL") {
-                self.advance();
+            } else if self.base.check_word_ci("MANUAL") {
+                self.base.advance();
                 return Some("MANUAL".to_string());
-            } else if self.check_word_ci("OFF") {
-                self.advance();
-                self.skip_whitespace();
+            } else if self.base.check_word_ci("OFF") {
+                self.base.advance();
+                self.base.skip_whitespace();
                 // Check for optional ", NO POPULATION" after OFF
-                if self.check_token(&Token::Comma) {
-                    self.advance();
-                    self.skip_whitespace();
+                if self.base.check_token(&Token::Comma) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
                 }
-                if self.check_word_ci("NO") {
-                    self.advance();
-                    self.skip_whitespace();
-                    if self.check_word_ci("POPULATION") {
-                        self.advance();
+                if self.base.check_word_ci("NO") {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    if self.base.check_word_ci("POPULATION") {
+                        self.base.advance();
                     }
                 }
                 return Some("OFF".to_string());
@@ -322,126 +319,6 @@ impl FullTextTokenParser {
         // Handle STOPLIST or other WITH options we don't specifically track
         // Just skip to end
         None
-    }
-
-    /// Parse a schema-qualified name: [schema].[name] or schema.name or [name] or name
-    fn parse_schema_qualified_name(&mut self) -> Option<(String, String)> {
-        let first_ident = self.parse_identifier()?;
-        self.skip_whitespace();
-
-        // Check if there's a dot (schema.name pattern)
-        if self.check_token(&Token::Period) {
-            self.advance();
-            self.skip_whitespace();
-
-            let second_ident = self.parse_identifier()?;
-
-            Some((first_ident, second_ident))
-        } else {
-            // No dot - just a name, default schema to "dbo"
-            Some(("dbo".to_string(), first_ident))
-        }
-    }
-
-    /// Parse an identifier (bracketed or unbracketed)
-    fn parse_identifier(&mut self) -> Option<String> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Word(w) => {
-                let name = w.value.clone();
-                self.advance();
-                Some(name)
-            }
-            _ => None,
-        }
-    }
-
-    /// Parse a positive integer
-    fn parse_positive_integer(&mut self) -> Option<i64> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Number(n, _) => {
-                if let Ok(value) = n.parse::<i64>() {
-                    self.advance();
-                    Some(value)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    // ========================================================================
-    // Helper methods
-    // ========================================================================
-
-    /// Skip whitespace tokens
-    fn skip_whitespace(&mut self) {
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
-                match &token.token {
-                    Token::Whitespace(_) => {
-                        self.advance();
-                    }
-                    _ => break,
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Check if at end of tokens
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-    }
-
-    /// Get current token without consuming
-    fn current_token(&self) -> Option<&TokenWithSpan> {
-        self.tokens.get(self.pos)
-    }
-
-    /// Advance to next token
-    fn advance(&mut self) {
-        if !self.is_at_end() {
-            self.pos += 1;
-        }
-    }
-
-    /// Check if current token is a specific keyword
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token is a word matching (case-insensitive)
-    fn check_word_ci(&self, word: &str) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word))
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token matches a specific token type
-    fn check_token(&self, expected: &Token) -> bool {
-        if let Some(token) = self.current_token() {
-            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
-        } else {
-            false
-        }
     }
 }
 

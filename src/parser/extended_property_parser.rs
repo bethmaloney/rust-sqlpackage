@@ -20,9 +20,10 @@
 //! - NULL values for @value parameter
 //! - Mixed case parameter names
 
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use sqlparser::tokenizer::Token;
+
+use super::token_parser_base::TokenParser;
 
 /// Result of parsing an extended property call using tokens
 #[derive(Debug, Clone, Default)]
@@ -45,47 +46,43 @@ pub struct TokenParsedExtendedProperty {
 
 /// Token-based extended property parser
 pub struct ExtendedPropertyTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl ExtendedPropertyTokenParser {
     /// Create a new parser for an extended property SQL string
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(sql)?,
+        })
     }
 
     /// Parse sp_addextendedproperty call and return property info
     pub fn parse_extended_property(&mut self) -> Option<TokenParsedExtendedProperty> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Skip optional EXEC or EXECUTE keyword
-        if self.check_keyword(Keyword::EXEC) || self.check_keyword(Keyword::EXECUTE) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_keyword(Keyword::EXEC) || self.base.check_keyword(Keyword::EXECUTE) {
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Skip optional schema prefix (e.g., [sys]. or sys.)
-        if self.check_word_ci("sys") || self.check_word_ci("dbo") {
-            self.advance();
-            self.skip_whitespace();
-            if self.check_token(&Token::Period) {
-                self.advance();
-                self.skip_whitespace();
+        if self.base.check_word_ci("sys") || self.base.check_word_ci("dbo") {
+            self.base.advance();
+            self.base.skip_whitespace();
+            if self.base.check_token(&Token::Period) {
+                self.base.advance();
+                self.base.skip_whitespace();
             }
         }
 
         // Expect sp_addextendedproperty identifier
-        if !self.check_word_ci("sp_addextendedproperty") {
+        if !self.base.check_word_ci("sp_addextendedproperty") {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Initialize with defaults
         let mut result = TokenParsedExtendedProperty {
@@ -108,11 +105,11 @@ impl ExtendedPropertyTokenParser {
     fn parse_parameters(&mut self, result: &mut TokenParsedExtendedProperty) -> Option<()> {
         // Parse all @param = value pairs
         // Note: MsSqlDialect tokenizes @name as a single Word token, not @ + name
-        while !self.is_at_end() {
-            self.skip_whitespace();
+        while !self.base.is_at_end() {
+            self.base.skip_whitespace();
 
             // Check for semicolon or end of statement
-            if self.check_token(&Token::SemiColon) {
+            if self.base.check_token(&Token::SemiColon) {
                 break;
             }
 
@@ -121,23 +118,23 @@ impl ExtendedPropertyTokenParser {
                 Some(name) => name,
                 None => {
                     // Skip any commas
-                    if self.check_token(&Token::Comma) {
-                        self.advance();
+                    if self.base.check_token(&Token::Comma) {
+                        self.base.advance();
                         continue;
                     }
                     // Skip unknown tokens
-                    self.advance();
+                    self.base.advance();
                     continue;
                 }
             };
-            self.skip_whitespace();
+            self.base.skip_whitespace();
 
             // Expect =
-            if !self.check_token(&Token::Eq) {
+            if !self.base.check_token(&Token::Eq) {
                 continue;
             }
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
 
             // Parse value - could be N'string', 'string', NULL, or identifier
             let value = self.parse_parameter_value();
@@ -182,12 +179,12 @@ impl ExtendedPropertyTokenParser {
     /// Try to parse a parameter name (word starting with @)
     /// MsSqlDialect tokenizes @name as a single Word token
     fn try_parse_param_name(&mut self) -> Option<String> {
-        if let Some(token) = self.current_token() {
+        if let Some(token) = self.base.current_token() {
             if let Token::Word(w) = &token.token {
                 if w.value.starts_with('@') {
                     // Extract parameter name (without @)
                     let param_name = w.value[1..].to_uppercase();
-                    self.advance();
+                    self.base.advance();
                     return Some(param_name);
                 }
             }
@@ -198,30 +195,30 @@ impl ExtendedPropertyTokenParser {
     /// Parse a parameter value: N'string', 'string', NULL, or identifier
     /// Note: MsSqlDialect tokenizes N'string' as NationalStringLiteral directly
     fn parse_parameter_value(&mut self) -> Option<String> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
-        if self.is_at_end() {
+        if self.base.is_at_end() {
             return None;
         }
 
         // Check for NULL keyword
-        if self.check_keyword(Keyword::NULL) {
-            self.advance();
+        if self.base.check_keyword(Keyword::NULL) {
+            self.base.advance();
             return None;
         }
 
         // Check for string literal (including NationalStringLiteral which handles N'...')
-        if let Some(token) = self.current_token() {
+        if let Some(token) = self.base.current_token() {
             match &token.token {
                 Token::SingleQuotedString(s) | Token::NationalStringLiteral(s) => {
                     let value = s.clone();
-                    self.advance();
+                    self.base.advance();
                     return Some(value);
                 }
                 Token::Word(w) => {
                     // Could be an identifier value or NULL
                     let value = w.value.clone();
-                    self.advance();
+                    self.base.advance();
                     // Check for NULL as a word
                     if value.eq_ignore_ascii_case("NULL") {
                         return None;
@@ -233,70 +230,6 @@ impl ExtendedPropertyTokenParser {
         }
 
         None
-    }
-
-    // ========================================================================
-    // Helper methods
-    // ========================================================================
-
-    /// Skip whitespace tokens
-    fn skip_whitespace(&mut self) {
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
-                if matches!(&token.token, Token::Whitespace(_)) {
-                    self.advance();
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Check if at end of tokens
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-    }
-
-    /// Get current token without consuming
-    fn current_token(&self) -> Option<&TokenWithSpan> {
-        self.tokens.get(self.pos)
-    }
-
-    /// Advance to next token
-    fn advance(&mut self) {
-        if !self.is_at_end() {
-            self.pos += 1;
-        }
-    }
-
-    /// Check if current token is a specific keyword
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token matches a word (case-insensitive)
-    fn check_word_ci(&self, word: &str) -> bool {
-        if let Some(token) = self.current_token() {
-            if let Token::Word(w) = &token.token {
-                return w.value.eq_ignore_ascii_case(word);
-            }
-        }
-        false
-    }
-
-    /// Check if current token matches a specific token type
-    fn check_token(&self, expected: &Token) -> bool {
-        if let Some(token) = self.current_token() {
-            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
-        } else {
-            false
-        }
     }
 }
 

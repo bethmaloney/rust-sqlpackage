@@ -20,9 +20,9 @@
 //! ALTER SEQUENCE [schema].[name] MINVALUE 1 MAXVALUE 10000 CYCLE
 //! ```
 
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+
+use super::token_parser_base::TokenParser;
 
 /// Result of parsing a sequence definition using tokens
 #[derive(Debug, Clone, Default)]
@@ -53,42 +53,38 @@ pub struct TokenParsedSequence {
 
 /// Token-based sequence definition parser
 pub struct SequenceTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl SequenceTokenParser {
     /// Create a new parser for a sequence definition string
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(sql)?,
+        })
     }
 
     /// Parse CREATE SEQUENCE and return sequence info
     pub fn parse_create_sequence(&mut self) -> Option<TokenParsedSequence> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect CREATE keyword
-        if !self.check_keyword(Keyword::CREATE) {
+        if !self.base.check_keyword(Keyword::CREATE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect SEQUENCE keyword
-        if !self.check_keyword(Keyword::SEQUENCE) {
+        if !self.base.check_keyword(Keyword::SEQUENCE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse sequence name (schema-qualified)
-        let (schema, name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Parse sequence options
         let mut result = TokenParsedSequence {
@@ -104,25 +100,25 @@ impl SequenceTokenParser {
 
     /// Parse ALTER SEQUENCE and return sequence info
     pub fn parse_alter_sequence(&mut self) -> Option<TokenParsedSequence> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect ALTER keyword
-        if !self.check_keyword(Keyword::ALTER) {
+        if !self.base.check_keyword(Keyword::ALTER) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect SEQUENCE keyword
-        if !self.check_keyword(Keyword::SEQUENCE) {
+        if !self.base.check_keyword(Keyword::SEQUENCE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse sequence name (schema-qualified)
-        let (schema, name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Parse sequence options (ALTER uses RESTART instead of START)
         let mut result = TokenParsedSequence {
@@ -139,44 +135,44 @@ impl SequenceTokenParser {
 
     /// Parse sequence options: AS type, START/RESTART WITH, INCREMENT BY, MINVALUE, MAXVALUE, CYCLE, CACHE
     fn parse_sequence_options(&mut self, result: &mut TokenParsedSequence, is_alter: bool) {
-        while !self.is_at_end() {
-            self.skip_whitespace();
+        while !self.base.is_at_end() {
+            self.base.skip_whitespace();
 
-            if self.is_at_end() {
+            if self.base.is_at_end() {
                 break;
             }
 
             // Check for AS <data_type> (only for CREATE)
-            if !is_alter && self.check_keyword(Keyword::AS) {
-                self.advance();
-                self.skip_whitespace();
-                if let Some(data_type) = self.parse_data_type() {
+            if !is_alter && self.base.check_keyword(Keyword::AS) {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if let Some(data_type) = self.base.parse_data_type_simple() {
                     result.data_type = Some(data_type);
                 }
                 continue;
             }
 
             // Check for START WITH <value> (CREATE) or RESTART WITH <value> (ALTER)
-            if !is_alter && self.check_word_ci("START") {
-                self.advance();
-                self.skip_whitespace();
-                if self.check_keyword(Keyword::WITH) {
-                    self.advance();
-                    self.skip_whitespace();
-                    if let Some(value) = self.parse_integer() {
+            if !is_alter && self.base.check_word_ci("START") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_keyword(Keyword::WITH) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    if let Some(value) = self.base.parse_signed_integer() {
                         result.start_value = Some(value);
                     }
                 }
                 continue;
             }
 
-            if is_alter && self.check_word_ci("RESTART") {
-                self.advance();
-                self.skip_whitespace();
-                if self.check_keyword(Keyword::WITH) {
-                    self.advance();
-                    self.skip_whitespace();
-                    if let Some(value) = self.parse_integer() {
+            if is_alter && self.base.check_word_ci("RESTART") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_keyword(Keyword::WITH) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    if let Some(value) = self.base.parse_signed_integer() {
                         result.start_value = Some(value);
                     }
                 }
@@ -184,13 +180,13 @@ impl SequenceTokenParser {
             }
 
             // Check for INCREMENT BY <value>
-            if self.check_word_ci("INCREMENT") {
-                self.advance();
-                self.skip_whitespace();
-                if self.check_keyword(Keyword::BY) {
-                    self.advance();
-                    self.skip_whitespace();
-                    if let Some(value) = self.parse_integer() {
+            if self.base.check_word_ci("INCREMENT") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_keyword(Keyword::BY) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    if let Some(value) = self.base.parse_signed_integer() {
                         result.increment_value = Some(value);
                     }
                 }
@@ -198,30 +194,30 @@ impl SequenceTokenParser {
             }
 
             // Check for NO keyword (NO MINVALUE, NO MAXVALUE, NO CYCLE, NO CACHE)
-            if self.check_keyword(Keyword::NO) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_keyword(Keyword::NO) {
+                self.base.advance();
+                self.base.skip_whitespace();
 
-                if self.check_word_ci("MINVALUE") {
+                if self.base.check_word_ci("MINVALUE") {
                     result.has_no_min_value = true;
                     result.min_value = None;
-                    self.advance();
+                    self.base.advance();
                     continue;
                 }
-                if self.check_word_ci("MAXVALUE") {
+                if self.base.check_word_ci("MAXVALUE") {
                     result.has_no_max_value = true;
                     result.max_value = None;
-                    self.advance();
+                    self.base.advance();
                     continue;
                 }
-                if self.check_keyword(Keyword::CYCLE) {
+                if self.base.check_keyword(Keyword::CYCLE) {
                     result.is_cycling = false;
-                    self.advance();
+                    self.base.advance();
                     continue;
                 }
-                if self.check_word_ci("CACHE") {
+                if self.base.check_word_ci("CACHE") {
                     result.cache_size = Some(0); // NO CACHE means cache size of 0
-                    self.advance();
+                    self.base.advance();
                     continue;
                 }
                 // Unknown NO X, skip
@@ -229,190 +225,44 @@ impl SequenceTokenParser {
             }
 
             // Check for MINVALUE <value>
-            if self.check_word_ci("MINVALUE") {
-                self.advance();
-                self.skip_whitespace();
-                if let Some(value) = self.parse_integer() {
+            if self.base.check_word_ci("MINVALUE") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if let Some(value) = self.base.parse_signed_integer() {
                     result.min_value = Some(value);
                 }
                 continue;
             }
 
             // Check for MAXVALUE <value>
-            if self.check_word_ci("MAXVALUE") {
-                self.advance();
-                self.skip_whitespace();
-                if let Some(value) = self.parse_integer() {
+            if self.base.check_word_ci("MAXVALUE") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if let Some(value) = self.base.parse_signed_integer() {
                     result.max_value = Some(value);
                 }
                 continue;
             }
 
             // Check for CYCLE (without NO)
-            if self.check_keyword(Keyword::CYCLE) {
+            if self.base.check_keyword(Keyword::CYCLE) {
                 result.is_cycling = true;
-                self.advance();
+                self.base.advance();
                 continue;
             }
 
             // Check for CACHE <size>
-            if self.check_word_ci("CACHE") {
-                self.advance();
-                self.skip_whitespace();
-                if let Some(value) = self.parse_integer() {
+            if self.base.check_word_ci("CACHE") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if let Some(value) = self.base.parse_signed_integer() {
                     result.cache_size = Some(value);
                 }
                 continue;
             }
 
             // Unknown token, advance
-            self.advance();
-        }
-    }
-
-    /// Parse a schema-qualified name: [schema].[name] or schema.name or [name] or name
-    fn parse_schema_qualified_name(&mut self) -> Option<(String, String)> {
-        let first_ident = self.parse_identifier()?;
-        self.skip_whitespace();
-
-        // Check if there's a dot (schema.name pattern)
-        if self.check_token(&Token::Period) {
-            self.advance();
-            self.skip_whitespace();
-
-            let second_ident = self.parse_identifier()?;
-
-            Some((first_ident, second_ident))
-        } else {
-            // No dot - just a name, default schema to "dbo"
-            Some(("dbo".to_string(), first_ident))
-        }
-    }
-
-    /// Parse an identifier (bracketed or unbracketed)
-    fn parse_identifier(&mut self) -> Option<String> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Word(w) => {
-                let name = w.value.clone();
-                self.advance();
-                Some(name)
-            }
-            _ => None,
-        }
-    }
-
-    /// Parse a data type (simple identifier like INT, BIGINT, SMALLINT, TINYINT, DECIMAL, NUMERIC)
-    fn parse_data_type(&mut self) -> Option<String> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Word(w) => {
-                let type_name = w.value.to_uppercase();
-                self.advance();
-                Some(type_name)
-            }
-            _ => None,
-        }
-    }
-
-    /// Parse an integer (positive or negative)
-    fn parse_integer(&mut self) -> Option<i64> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        // Check for optional minus sign
-        let is_negative = if self.check_token(&Token::Minus) {
-            self.advance();
-            self.skip_whitespace();
-            true
-        } else {
-            false
-        };
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Number(n, _) => {
-                if let Ok(value) = n.parse::<i64>() {
-                    self.advance();
-                    Some(if is_negative { -value } else { value })
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    // ========================================================================
-    // Helper methods
-    // ========================================================================
-
-    /// Skip whitespace tokens
-    fn skip_whitespace(&mut self) {
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
-                match &token.token {
-                    Token::Whitespace(_) => {
-                        self.advance();
-                    }
-                    _ => break,
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Check if at end of tokens
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-    }
-
-    /// Get current token without consuming
-    fn current_token(&self) -> Option<&TokenWithSpan> {
-        self.tokens.get(self.pos)
-    }
-
-    /// Advance to next token
-    fn advance(&mut self) {
-        if !self.is_at_end() {
-            self.pos += 1;
-        }
-    }
-
-    /// Check if current token is a specific keyword
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token is a word matching (case-insensitive)
-    fn check_word_ci(&self, word: &str) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word))
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token matches a specific token type
-    fn check_token(&self, expected: &Token) -> bool {
-        if let Some(token) = self.current_token() {
-            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
-        } else {
-            false
+            self.base.advance();
         }
     }
 }

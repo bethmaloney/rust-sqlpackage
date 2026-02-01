@@ -32,7 +32,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Prevents APPLY subquery aliases (e.g., `d` from `CROSS APPLY (...) d`) from being treated as schema names
 
 **Code Simplification (Phases 27-31):**
-- Phase 27: Parser token helper consolidation (0/4) - ~400-500 lines reduction
+- Phase 27: Parser token helper consolidation (3/4) - ~400-500 lines reduction (in progress)
 - Phase 28: Test infrastructure simplification (0/3) - ~560 lines reduction
 - Phase 29: Test dacpac parsing helper (0/2) - ~150-200 lines reduction
 - Phase 30: Model builder constraint helper (0/2) - ~200 lines reduction
@@ -304,7 +304,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 27: Parser Token Helper Consolidation (0/4) - HIGH PRIORITY
+## Phase 27: Parser Token Helper Consolidation (3/4) - IN PROGRESS
 
 **Goal:** Eliminate ~400-500 lines of duplicated helper methods across 12 parser files.
 
@@ -315,19 +315,36 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 - `statement_parser.rs`, `trigger_parser.rs`, `sequence_parser.rs`, `index_parser.rs`
 - `table_type_parser.rs`, `fulltext_parser.rs`, `extended_property_parser.rs`, `preprocess_parser.rs`
 
-### Phase 27.1: Create Base TokenParser (0/2)
+### Phase 27.1: Create Base TokenParser (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 27.1.1 | Create `src/parser/token_parser_base.rs` with shared `TokenParser` struct | ⬜ | Contains tokens vec, pos, and all common helper methods |
-| 27.1.2 | Add `new(sql: &str) -> Option<Self>` constructor with MsSqlDialect tokenization | ⬜ | Shared tokenization logic |
+| 27.1.1 | Create `src/parser/token_parser_base.rs` with shared `TokenParser` struct | ✅ | Contains tokens vec, pos, and all common helper methods |
+| 27.1.2 | Add `new(sql: &str) -> Option<Self>` constructor with MsSqlDialect tokenization | ✅ | Shared tokenization logic |
 
-### Phase 27.2: Migrate Parsers to Use Base (0/2)
+### Phase 27.2: Migrate Parsers to Use Base (1/2) - IN PROGRESS
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 27.2.1 | Refactor all `*TokenParser` structs to use composition with base `TokenParser` | ⬜ | Each parser wraps `TokenParser` instead of reimplementing |
+| 27.2.1 | Refactor all `*TokenParser` structs to use composition with base `TokenParser` | 🔄 | 4/12 parsers migrated: trigger_parser, sequence_parser, extended_property_parser, fulltext_parser. Remaining: column_parser, constraint_parser, function_parser, index_parser, preprocess_parser, procedure_parser, statement_parser, table_type_parser |
 | 27.2.2 | Remove duplicate `token_to_string()` implementations, use `identifier_utils::format_token()` | ⬜ | 6+ files have redundant implementations |
+
+**Progress Notes:**
+- Created `src/parser/token_parser_base.rs` with shared `TokenParser` struct containing common helper methods
+- Refactored 4 parsers to use composition with base `TokenParser`:
+  - `trigger_parser.rs`
+  - `sequence_parser.rs`
+  - `extended_property_parser.rs`
+  - `fulltext_parser.rs`
+- Remaining 8 parsers still need refactoring:
+  - `column_parser.rs`
+  - `constraint_parser.rs`
+  - `function_parser.rs`
+  - `index_parser.rs`
+  - `preprocess_parser.rs`
+  - `procedure_parser.rs`
+  - `statement_parser.rs`
+  - `table_type_parser.rs`
 
 **Estimated Impact:** ~400-500 lines removed, improved maintainability.
 
