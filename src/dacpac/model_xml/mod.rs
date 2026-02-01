@@ -1504,8 +1504,13 @@ fn write_tvf_columns<W: Write>(
         writer.write_event(Event::Start(spec_elem))?;
 
         // Write Length or Precision/Scale properties if present
+        // u32::MAX is used as a marker for MAX types (e.g., NVARCHAR(MAX))
         if let Some(length) = col.length {
-            write_property(writer, "Length", &length.to_string())?;
+            if length == u32::MAX {
+                write_property(writer, "IsMax", "True")?;
+            } else {
+                write_property(writer, "Length", &length.to_string())?;
+            }
         }
         if let Some(precision) = col.precision {
             write_property(writer, "Precision", &precision.to_string())?;
@@ -9715,6 +9720,19 @@ FROM [dbo].[Account] A
             result,
             Some(TvfColumnTypeInfo {
                 data_type: "nvarchar".to_string(),
+                first_num: Some(u32::MAX),
+                second_num: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_varbinary_max() {
+        let result = parse_tvf_column_type_tokenized("VARBINARY(MAX)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "varbinary".to_string(),
                 first_num: Some(u32::MAX),
                 second_num: None,
             })

@@ -10,6 +10,7 @@ mod index_tests;
 mod metadata_tests;
 mod model_xml_tests;
 mod structure_tests;
+mod tvf_column_tests;
 
 // Re-export helper functions used by multiple test modules
 pub(crate) fn parse_model_xml(model_xml: &str) -> roxmltree::Document<'_> {
