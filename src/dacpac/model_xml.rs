@@ -111,9 +111,8 @@ static UNBRACKETED_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
 // Note: TOKEN_RE has been replaced with BodyDependencyTokenScanner in Phase 20.2.1
 // The token-based scanner handles whitespace (tabs, multiple spaces, newlines) correctly.
 
-/// Bracketed identifier pattern: [Name]
-static BRACKETED_IDENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([A-Za-z_][A-Za-z0-9_]*)\]").unwrap());
+// Note: BRACKETED_IDENT_RE has been replaced with extract_bracketed_identifiers_tokenized() in Phase 20.2.4
+// The token-based function handles whitespace, comments, and multi-part references correctly.
 
 /// CAST expression pattern
 static CAST_EXPR_RE: LazyLock<Regex> =
@@ -4136,6 +4135,120 @@ impl BodyDependencyTokenScanner {
     }
 }
 
+/// Represents a bracketed identifier with its position in the source text.
+/// Used for extracting `[ColumnName]` patterns from SQL expressions.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct BracketedIdentWithPos {
+    /// The identifier name without brackets
+    pub name: String,
+    /// The byte position where the identifier starts (position of the '[')
+    pub position: usize,
+}
+
+/// Extract single bracketed identifiers from SQL text using tokenization.
+///
+/// This function uses the sqlparser tokenizer to find all `[identifier]` patterns
+/// in the SQL text, returning them with their positions. This replaces the
+/// `BRACKETED_IDENT_RE` regex for more robust parsing.
+///
+/// Only single bracketed identifiers are returned; multi-part references like
+/// `[schema].[table]` are not included as individual components.
+pub(crate) fn extract_bracketed_identifiers_tokenized(sql: &str) -> Vec<BracketedIdentWithPos> {
+    let dialect = MsSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, sql).tokenize_with_location() else {
+        return Vec::new();
+    };
+
+    // Build a line/column to byte offset map for position calculation
+    // This allows us to convert token Location (line, column) to byte offset
+    let line_offsets = compute_line_offsets(sql);
+
+    let mut results = Vec::new();
+    let mut i = 0;
+    let len = tokens.len();
+
+    while i < len {
+        let token = &tokens[i];
+
+        // Look for bracketed Word tokens (quote_style is Some('[') for bracketed identifiers)
+        if let Token::Word(w) = &token.token {
+            if w.quote_style == Some('[') {
+                // Check if this is a standalone bracketed identifier
+                // (not followed by a dot, which would make it part of a multi-part name)
+                let is_standalone = {
+                    // Look ahead for Period token (skip whitespace)
+                    let mut j = i + 1;
+                    while j < len {
+                        match &tokens[j].token {
+                            Token::Whitespace(_) => j += 1,
+                            Token::Period => break,
+                            _ => break,
+                        }
+                    }
+                    // If followed by period, it's not standalone
+                    j >= len || !matches!(&tokens[j].token, Token::Period)
+                };
+
+                // Also check if this is preceded by a dot (meaning it's the second/third part)
+                let not_preceded_by_dot = {
+                    if i == 0 {
+                        true
+                    } else {
+                        // Look back for Period token (skip whitespace)
+                        let mut j = i as isize - 1;
+                        while j >= 0 {
+                            match &tokens[j as usize].token {
+                                Token::Whitespace(_) => j -= 1,
+                                Token::Period => break,
+                                _ => break,
+                            }
+                        }
+                        j < 0 || !matches!(&tokens[j as usize].token, Token::Period)
+                    }
+                };
+
+                if is_standalone && not_preceded_by_dot {
+                    // Convert (line, column) to byte offset
+                    let location = &token.span.start;
+                    let byte_pos =
+                        location_to_byte_offset(&line_offsets, location.line, location.column);
+                    results.push(BracketedIdentWithPos {
+                        name: w.value.clone(),
+                        position: byte_pos,
+                    });
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    results
+}
+
+/// Compute byte offsets for each line in the source text.
+/// Returns a vector where index i contains the byte offset where line (i+1) starts.
+fn compute_line_offsets(sql: &str) -> Vec<usize> {
+    let mut offsets = vec![0]; // Line 1 starts at offset 0
+    for (i, ch) in sql.char_indices() {
+        if ch == '\n' {
+            // Next line starts after this newline
+            offsets.push(i + 1);
+        }
+    }
+    offsets
+}
+
+/// Convert a (1-based line, 1-based column) Location to a byte offset.
+fn location_to_byte_offset(line_offsets: &[usize], line: u64, column: u64) -> usize {
+    if line == 0 || line as usize > line_offsets.len() {
+        return 0;
+    }
+    let line_start = line_offsets[(line - 1) as usize];
+    // Column is 1-based, so subtract 1 to get offset within line
+    line_start + (column.saturating_sub(1) as usize)
+}
+
 /// Strip SQL comments from body text for dependency extraction.
 /// Removes both line comments (-- ...) and block comments (/* ... */).
 /// This prevents words in comments from being treated as column/table references.
@@ -4564,27 +4677,24 @@ fn extract_filter_predicate_columns(predicate: &str, table_ref: &str) -> Vec<Str
     let mut columns = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    // Match bracketed identifiers: [ColumnName]
-    // These are column references in the predicate
-    for cap in BRACKETED_IDENT_RE.captures_iter(predicate) {
-        if let Some(col_match) = cap.get(1) {
-            let col_name = col_match.as_str();
-            let upper_name = col_name.to_uppercase();
+    // Use token-based extraction for single bracketed identifiers [ColumnName]
+    // This replaces BRACKETED_IDENT_RE for better whitespace and comment handling
+    for ident in extract_bracketed_identifiers_tokenized(predicate) {
+        let upper_name = ident.name.to_uppercase();
 
-            // Skip SQL keywords
-            if is_sql_keyword(&upper_name) {
-                continue;
-            }
+        // Skip SQL keywords
+        if is_sql_keyword(&upper_name) {
+            continue;
+        }
 
-            // Build fully-qualified column reference using provided table_ref
-            // table_ref is in format "[schema].[table]"
-            let col_ref = format!("{}.[{}]", table_ref, col_name);
+        // Build fully-qualified column reference using provided table_ref
+        // table_ref is in format "[schema].[table]"
+        let col_ref = format!("{}.[{}]", table_ref, ident.name);
 
-            // Only add each column once, but preserve order of first appearance
-            if !seen.contains(&col_ref) {
-                seen.insert(col_ref.clone());
-                columns.push(col_ref);
-            }
+        // Only add each column once, but preserve order of first appearance
+        if !seen.contains(&col_ref) {
+            seen.insert(col_ref.clone());
+            columns.push(col_ref);
         }
     }
 
@@ -4645,32 +4755,29 @@ fn extract_expression_column_references(
         }
     }
 
-    // Collect column references with their positions
-    // Match bracketed identifiers: [ColumnName]
-    for cap in BRACKETED_IDENT_RE.captures_iter(expression) {
-        if let Some(col_match) = cap.get(1) {
-            let col_name = col_match.as_str();
-            let upper_name = col_name.to_uppercase();
+    // Collect column references with their positions using token-based extraction
+    // This replaces BRACKETED_IDENT_RE for better whitespace and comment handling
+    for ident in extract_bracketed_identifiers_tokenized(expression) {
+        let upper_name = ident.name.to_uppercase();
 
-            // Skip SQL keywords
-            if is_sql_keyword(&upper_name) {
-                continue;
-            }
-
-            // Build fully-qualified column reference
-            let col_ref = format!("[{}].[{}].[{}]", table_schema, table_name, col_name);
-            let pos = col_match.start();
-
-            // For columns inside a CAST, adjust position to appear after the type
-            // This matches DotNet's behavior: CAST type first, then inner columns
-            let adjusted_pos = cast_ranges
-                .iter()
-                .find(|(start, end, _)| pos >= *start && pos < *end)
-                .map(|(_, _, type_pos)| type_pos + 1)
-                .unwrap_or(pos);
-
-            position_refs.push((adjusted_pos, col_ref));
+        // Skip SQL keywords
+        if is_sql_keyword(&upper_name) {
+            continue;
         }
+
+        // Build fully-qualified column reference
+        let col_ref = format!("[{}].[{}].[{}]", table_schema, table_name, ident.name);
+        let pos = ident.position;
+
+        // For columns inside a CAST, adjust position to appear after the type
+        // This matches DotNet's behavior: CAST type first, then inner columns
+        let adjusted_pos = cast_ranges
+            .iter()
+            .find(|(start, end, _)| pos >= *start && pos < *end)
+            .map(|(_, _, type_pos)| type_pos + 1)
+            .unwrap_or(pos);
+
+        position_refs.push((adjusted_pos, col_ref));
     }
 
     // Sort by position to maintain order of appearance in expression
@@ -8105,5 +8212,127 @@ FROM [dbo].[Account] A
         let refs = extract_column_refs_tokenized("[My Schema].[My Table]");
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0], "[My Schema].[My Table]");
+    }
+
+    // ============================================================================
+    // Tests for extract_bracketed_identifiers_tokenized (Phase 20.2.4)
+    // ============================================================================
+
+    #[test]
+    fn test_bracketed_idents_single_column() {
+        let idents = extract_bracketed_identifiers_tokenized("[ColumnName]");
+        assert_eq!(idents.len(), 1);
+        assert_eq!(idents[0].name, "ColumnName");
+        assert_eq!(idents[0].position, 0);
+    }
+
+    #[test]
+    fn test_bracketed_idents_multiple_columns() {
+        let idents = extract_bracketed_identifiers_tokenized("[Col1] AND [Col2]");
+        assert_eq!(idents.len(), 2);
+        assert_eq!(idents[0].name, "Col1");
+        assert_eq!(idents[1].name, "Col2");
+    }
+
+    #[test]
+    fn test_bracketed_idents_skip_multipart_reference() {
+        // Two-part references should be skipped (they are part of qualified names)
+        let idents = extract_bracketed_identifiers_tokenized("[schema].[table]");
+        assert!(idents.is_empty());
+    }
+
+    #[test]
+    fn test_bracketed_idents_skip_three_part_reference() {
+        // Three-part references should be skipped
+        let idents = extract_bracketed_identifiers_tokenized("[schema].[table].[column]");
+        assert!(idents.is_empty());
+    }
+
+    #[test]
+    fn test_bracketed_idents_with_whitespace() {
+        let idents = extract_bracketed_identifiers_tokenized("[Col1]\tAND\t[Col2]");
+        assert_eq!(idents.len(), 2);
+        assert_eq!(idents[0].name, "Col1");
+        assert_eq!(idents[1].name, "Col2");
+    }
+
+    #[test]
+    fn test_bracketed_idents_with_newlines() {
+        let idents = extract_bracketed_identifiers_tokenized("[Col1]\nAND\n[Col2]");
+        assert_eq!(idents.len(), 2);
+        assert_eq!(idents[0].name, "Col1");
+        assert_eq!(idents[1].name, "Col2");
+    }
+
+    #[test]
+    fn test_bracketed_idents_position_tracking() {
+        let idents = extract_bracketed_identifiers_tokenized("[A] = [B]");
+        assert_eq!(idents.len(), 2);
+        assert_eq!(idents[0].name, "A");
+        assert_eq!(idents[0].position, 0);
+        assert_eq!(idents[1].name, "B");
+        assert_eq!(idents[1].position, 6);
+    }
+
+    #[test]
+    fn test_bracketed_idents_filter_predicate_example() {
+        // Example from filtered index predicate
+        let idents =
+            extract_bracketed_identifiers_tokenized("[DeletedAt] IS NULL AND [Status] = N'Active'");
+        assert_eq!(idents.len(), 2);
+        assert_eq!(idents[0].name, "DeletedAt");
+        assert_eq!(idents[1].name, "Status");
+    }
+
+    #[test]
+    fn test_bracketed_idents_computed_column_example() {
+        // Example from computed column expression
+        let idents = extract_bracketed_identifiers_tokenized("[Quantity] * [UnitPrice]");
+        assert_eq!(idents.len(), 2);
+        assert_eq!(idents[0].name, "Quantity");
+        assert_eq!(idents[1].name, "UnitPrice");
+    }
+
+    #[test]
+    fn test_bracketed_idents_empty_input() {
+        let idents = extract_bracketed_identifiers_tokenized("");
+        assert!(idents.is_empty());
+    }
+
+    #[test]
+    fn test_bracketed_idents_whitespace_only() {
+        let idents = extract_bracketed_identifiers_tokenized("   \t\n   ");
+        assert!(idents.is_empty());
+    }
+
+    #[test]
+    fn test_bracketed_idents_no_brackets() {
+        // Unbracketed identifiers should not be returned
+        let idents = extract_bracketed_identifiers_tokenized("Col1 AND Col2");
+        assert!(idents.is_empty());
+    }
+
+    #[test]
+    fn test_bracketed_idents_mixed_qualified_and_standalone() {
+        // Only standalone bracketed identifiers should be returned
+        let idents = extract_bracketed_identifiers_tokenized("[standalone] AND [schema].[table]");
+        assert_eq!(idents.len(), 1);
+        assert_eq!(idents[0].name, "standalone");
+    }
+
+    #[test]
+    fn test_bracketed_idents_with_spaces_in_name() {
+        // Bracketed identifiers can contain spaces
+        let idents = extract_bracketed_identifiers_tokenized("[Column Name]");
+        assert_eq!(idents.len(), 1);
+        assert_eq!(idents[0].name, "Column Name");
+    }
+
+    #[test]
+    fn test_bracketed_idents_with_dots_between_whitespace() {
+        // Ensure whitespace around dots is handled correctly
+        let idents = extract_bracketed_identifiers_tokenized("[a] . [b]");
+        // These are still part of a qualified name despite whitespace
+        assert!(idents.is_empty());
     }
 }
