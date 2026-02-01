@@ -14,15 +14,7 @@ use crate::common::{DacpacInfo, TestContext};
 #[test]
 fn test_build_with_extended_properties() {
     let ctx = TestContext::with_fixture("extended_properties");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with extended properties should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -46,15 +38,7 @@ fn test_build_with_extended_properties() {
 #[test]
 fn test_build_with_fulltext_index() {
     let ctx = TestContext::with_fixture("fulltext_index");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with full-text index should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -77,15 +61,7 @@ fn test_build_with_fulltext_index() {
 #[test]
 fn test_build_with_table_types() {
     let ctx = TestContext::with_fixture("table_types");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with table types should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -143,15 +119,7 @@ fn test_build_with_ampersand_encoding() {
 #[test]
 fn test_build_with_index_naming() {
     let ctx = TestContext::with_fixture("index_naming");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with indexes should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -180,15 +148,7 @@ fn test_build_with_index_naming() {
 #[test]
 fn test_build_with_named_default_constraints() {
     let ctx = TestContext::with_fixture("default_constraints_named");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with named defaults should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -223,15 +183,7 @@ fn test_build_with_named_default_constraints() {
 #[test]
 fn test_build_with_inline_constraints() {
     let ctx = TestContext::with_fixture("inline_constraints");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with inline constraints should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -282,11 +234,7 @@ fn test_build_with_inline_constraints() {
 #[test]
 fn test_build_with_inline_check_constraints() {
     let ctx = TestContext::with_fixture("inline_constraints");
-    let result = ctx.build();
-
-    assert!(result.success);
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -321,11 +269,7 @@ fn test_build_with_inline_check_constraints() {
 #[test]
 fn test_build_with_inline_unique_constraints() {
     let ctx = TestContext::with_fixture("inline_constraints");
-    let result = ctx.build();
-
-    assert!(result.success);
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -345,15 +289,7 @@ fn test_build_with_inline_unique_constraints() {
 #[test]
 fn test_build_with_procedure_parameters() {
     let ctx = TestContext::with_fixture("procedure_parameters");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with procedure parameters should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -373,11 +309,7 @@ fn test_build_with_procedure_parameters() {
 #[test]
 fn test_build_with_output_parameters() {
     let ctx = TestContext::with_fixture("procedure_parameters");
-    let result = ctx.build();
-
-    assert!(result.success);
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -396,11 +328,7 @@ fn test_build_with_output_parameters() {
 #[test]
 fn test_build_with_header_section() {
     let ctx = TestContext::with_fixture("header_section");
-    let result = ctx.build();
-
-    assert!(result.success);
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -430,11 +358,7 @@ fn test_build_with_header_section() {
 #[test]
 fn test_build_with_package_references() {
     let ctx = TestContext::with_fixture("header_section");
-    let result = ctx.build();
-
-    assert!(result.success);
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -459,11 +383,7 @@ fn test_build_with_package_references() {
 #[test]
 fn test_build_with_database_options() {
     let ctx = TestContext::with_fixture("database_options");
-    let result = ctx.build();
-
-    assert!(result.success);
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -492,11 +412,7 @@ fn test_build_with_database_options() {
 #[test]
 fn test_build_with_sqlcmd_variables() {
     let ctx = TestContext::with_fixture("sqlcmd_variables");
-    let result = ctx.build();
-
-    assert!(result.success);
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -520,11 +436,7 @@ fn test_build_with_sqlcmd_variables() {
 #[test]
 fn test_table_has_ansi_nulls_property() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     let model_xml = info.model_xml_content.expect("Should have model XML");

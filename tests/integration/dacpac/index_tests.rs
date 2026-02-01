@@ -15,10 +15,7 @@ use super::{find_index_by_name, get_property_value, has_relationship, parse_mode
 #[test]
 fn test_index_is_unique_property() {
     let ctx = TestContext::with_fixture("index_properties");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -62,10 +59,7 @@ fn test_index_is_unique_property() {
 #[test]
 fn test_index_is_clustered_property() {
     let ctx = TestContext::with_fixture("index_properties");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -110,10 +104,7 @@ fn test_index_is_clustered_property() {
 #[test]
 fn test_index_column_specifications() {
     let ctx = TestContext::with_fixture("index_properties");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -188,10 +179,7 @@ fn test_index_column_specifications() {
 #[test]
 fn test_index_include_columns() {
     let ctx = TestContext::with_fixture("index_properties");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");

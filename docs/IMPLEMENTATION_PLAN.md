@@ -33,7 +33,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 **Code Simplification (Phases 27-31):**
 - Phase 27: Parser token helper consolidation (4/4) ✅ - ~400-500 lines reduction (complete)
-- Phase 28: Test infrastructure simplification (0/3) - ~560 lines reduction
+- Phase 28: Test infrastructure simplification (3/3) ✅ - ~560 lines reduction (complete)
 - Phase 29: Test dacpac parsing helper (0/2) - ~150-200 lines reduction
 - Phase 30: Model builder constraint helper (0/2) - ~200 lines reduction
 - Phase 31: Project parser helpers (0/2) - ~50 lines reduction
@@ -354,27 +354,21 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 28: Test Infrastructure Simplification (0/3) - HIGH PRIORITY
+## Phase 28: Test Infrastructure Simplification (3/3) ✅ COMPLETE
 
 **Goal:** Reduce ~560 lines of duplicated test setup boilerplate.
 
-**Problem:** This 4-line pattern appears ~140 times across integration tests:
-```rust
-let ctx = TestContext::with_fixture("fixture_name");
-let result = ctx.build();
-assert!(result.success, "Build failed: {:?}", result.errors);
-let dacpac_path = result.dacpac_path.unwrap();
-```
+**Solution:** Added `TestContext::build_successfully()` method that combines build + assert + unwrap.
 
-### Phase 28.1: Add TestContext Helper (0/3)
+### Phase 28.1: Add TestContext Helper (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 28.1.1 | Add `TestContext::build_successfully(&self) -> PathBuf` method | ⬜ | Combines build + assert + unwrap |
-| 28.1.2 | Update integration tests in `tests/integration/build_tests.rs` | ⬜ | ~27 occurrences |
-| 28.1.3 | Update integration tests in `tests/integration/dacpac/` modules | ⬜ | ~100+ occurrences |
+| 28.1.1 | Add `TestContext::build_successfully(&self) -> PathBuf` method | ✅ | Added to tests/common/mod.rs |
+| 28.1.2 | Update integration tests in `tests/integration/build_tests.rs` | ✅ | 27 occurrences updated |
+| 28.1.3 | Update integration tests in `tests/integration/dacpac/` modules | ✅ | ~100+ occurrences updated |
 
-**Estimated Impact:** ~560 lines removed (4 lines × 140 occurrences).
+**Actual Impact:** ~420 lines removed (~3 lines × 140 occurrences - build/assert/unwrap combined into single call).
 
 ---
 

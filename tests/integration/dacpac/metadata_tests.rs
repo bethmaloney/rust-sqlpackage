@@ -11,10 +11,7 @@ use crate::common::{DacpacInfo, TestContext};
 #[test]
 fn test_metadata_xml_structure() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let metadata_xml = info.metadata_xml_content.expect("Should have metadata XML");
@@ -36,10 +33,7 @@ fn test_metadata_xml_structure() {
 #[test]
 fn test_metadata_xml_has_name() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let metadata_xml = info
@@ -66,10 +60,7 @@ fn test_metadata_xml_has_name() {
 #[test]
 fn test_metadata_xml_has_version() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let metadata_xml = info
@@ -103,10 +94,7 @@ fn test_metadata_xml_has_version() {
 #[test]
 fn test_origin_xml_has_package_properties() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let origin_xml = info
@@ -129,10 +117,7 @@ fn test_origin_xml_has_package_properties() {
 #[test]
 fn test_origin_xml_has_version() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let origin_xml = info
@@ -161,10 +146,7 @@ fn test_origin_xml_has_version() {
 #[test]
 fn test_origin_xml_has_contains_exported_data() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let origin_xml = info
@@ -200,10 +182,7 @@ fn test_origin_xml_has_contains_exported_data() {
 #[test]
 fn test_content_types_has_correct_mime_types() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let content_types_xml = info

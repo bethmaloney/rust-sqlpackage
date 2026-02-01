@@ -64,6 +64,26 @@ impl TestContext {
             },
         }
     }
+
+    /// Build the project and return the dacpac path, panicking if build fails.
+    ///
+    /// This is a convenience method that combines build + assert + unwrap:
+    /// ```rust,ignore
+    /// let result = ctx.build();
+    /// assert!(result.success, "Build failed: {:?}", result.errors);
+    /// let dacpac_path = result.dacpac_path.unwrap();
+    /// ```
+    pub fn build_successfully(&self) -> PathBuf {
+        let result = self.build();
+        assert!(
+            result.success,
+            "Build failed for fixture '{}': {:?}",
+            self._fixture_name, result.errors
+        );
+        result
+            .dacpac_path
+            .expect("Build succeeded but no dacpac path")
+    }
 }
 
 /// Result of a build operation

@@ -12,16 +12,7 @@ use crate::common::{DacpacInfo, TestContext};
 #[test]
 fn test_successful_simple_build() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Simple build should succeed. Errors: {:?}",
-        result.errors
-    );
-    assert!(result.dacpac_path.is_some(), "Should produce a dacpac file");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     assert!(dacpac_path.exists(), "Dacpac file should exist");
 
     // Verify dacpac structure
@@ -36,10 +27,7 @@ fn test_successful_simple_build() {
 #[test]
 fn test_build_produces_all_required_files() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
@@ -62,15 +50,7 @@ fn test_build_produces_all_required_files() {
 #[test]
 fn test_build_with_constraints() {
     let ctx = TestContext::with_fixture("constraints");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with constraints should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Verify all tables are present
@@ -103,15 +83,7 @@ fn test_build_with_constraints() {
 #[test]
 fn test_build_with_indexes() {
     let ctx = TestContext::with_fixture("indexes");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with indexes should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -134,15 +106,7 @@ fn test_build_with_indexes() {
 #[test]
 fn test_build_with_views() {
     let ctx = TestContext::with_fixture("views");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with views should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -162,15 +126,7 @@ fn test_build_with_views() {
 #[test]
 fn test_build_with_exclude() {
     let ctx = TestContext::with_fixture("build_with_exclude");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with exclude should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Table1 should be included
@@ -223,15 +179,7 @@ fn test_build_failure_with_unresolved_reference() {
 #[test]
 fn test_build_with_pre_post_deploy_scripts() {
     let ctx = TestContext::with_fixture("pre_post_deploy");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with pre/post deploy should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Verify table is present
@@ -269,15 +217,7 @@ fn test_build_with_pre_post_deploy_scripts() {
 #[test]
 fn test_build_with_sqlcmd_includes() {
     let ctx = TestContext::with_fixture("sqlcmd_includes");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with SQLCMD :r includes should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Verify tables are present
@@ -352,15 +292,7 @@ fn test_build_multiple_tables() {
     );
     std::fs::write(&sqlproj_path, updated).unwrap();
 
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Multi-table build should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -393,15 +325,7 @@ fn test_build_sdk_style_project_with_globbing() {
 </Project>"#;
     std::fs::write(&sqlproj_path, sqlproj).unwrap();
 
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "SDK-style build should succeed via globbing. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -424,15 +348,7 @@ fn test_build_with_sql150_target() {
     let updated = sqlproj.replace("Sql160", "Sql150");
     std::fs::write(&sqlproj_path, updated).unwrap();
 
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with Sql150 target should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Verify DSP name in model XML
@@ -501,15 +417,7 @@ fn test_build_with_custom_schema() {
     )
     .unwrap();
 
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with custom schema should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -525,15 +433,7 @@ fn test_build_with_custom_schema() {
 #[test]
 fn test_build_with_fk_actions() {
     let ctx = TestContext::with_fixture("fk_actions");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with FK actions should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Verify all tables are present
@@ -573,15 +473,7 @@ fn test_build_with_fk_actions() {
 #[test]
 fn test_build_with_filtered_indexes() {
     let ctx = TestContext::with_fixture("filtered_indexes");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with filtered indexes should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -604,15 +496,7 @@ fn test_build_with_filtered_indexes() {
 #[test]
 fn test_build_with_computed_columns() {
     let ctx = TestContext::with_fixture("computed_columns");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with computed columns should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -632,15 +516,7 @@ fn test_build_with_computed_columns() {
 #[test]
 fn test_build_with_collation() {
     let ctx = TestContext::with_fixture("collation");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with collation should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -667,15 +543,7 @@ fn test_build_with_collation() {
 #[test]
 fn test_build_with_view_options() {
     let ctx = TestContext::with_fixture("view_options");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with view options should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Verify views are present
@@ -702,15 +570,7 @@ fn test_build_with_view_options() {
 #[test]
 fn test_build_with_procedure_options() {
     let ctx = TestContext::with_fixture("procedure_options");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with procedure options should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Verify table is present
@@ -734,15 +594,7 @@ fn test_build_with_procedure_options() {
 #[test]
 fn test_build_with_index_options() {
     let ctx = TestContext::with_fixture("index_options");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with index options should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -765,15 +617,7 @@ fn test_build_with_index_options() {
 #[test]
 fn test_build_with_constraint_nocheck() {
     let ctx = TestContext::with_fixture("constraint_nocheck");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with constraint NOCHECK should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -799,15 +643,7 @@ fn test_build_with_constraint_nocheck() {
 #[test]
 fn test_build_with_scalar_types() {
     let ctx = TestContext::with_fixture("scalar_types");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with scalar types should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     assert!(
@@ -832,15 +668,7 @@ fn test_build_with_scalar_types() {
 #[test]
 fn test_build_with_instead_of_triggers() {
     let ctx = TestContext::with_fixture("instead_of_triggers");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with INSTEAD OF triggers should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Verify tables are present
@@ -874,15 +702,7 @@ fn test_build_with_instead_of_triggers() {
 #[test]
 fn test_build_with_composite_fk() {
     let ctx = TestContext::with_fixture("composite_fk");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with composite foreign keys should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Verify all tables are present
@@ -922,15 +742,7 @@ fn test_build_with_composite_fk() {
 #[test]
 fn test_build_with_output_parameters() {
     let ctx = TestContext::with_fixture("procedure_parameters");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build with OUTPUT parameters should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
     // Verify model XML contains procedure definitions with parameters
@@ -961,15 +773,7 @@ fn test_build_with_output_parameters() {
 #[test]
 fn test_output_parameter_model_xml_structure() {
     let ctx = TestContext::with_fixture("procedure_parameters");
-    let result = ctx.build();
-
-    assert!(
-        result.success,
-        "Build should succeed. Errors: {:?}",
-        result.errors
-    );
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 

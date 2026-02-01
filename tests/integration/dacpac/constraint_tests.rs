@@ -13,10 +13,7 @@ use super::{find_elements_by_type, has_relationship, parse_model_xml};
 #[test]
 fn test_primary_key_constraint() {
     let ctx = TestContext::with_fixture("constraints");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -56,10 +53,7 @@ fn test_primary_key_constraint() {
 #[test]
 fn test_foreign_key_constraint_with_referenced_table() {
     let ctx = TestContext::with_fixture("constraints");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -108,10 +102,7 @@ fn test_foreign_key_constraint_with_referenced_table() {
 #[test]
 fn test_check_constraint_with_definition() {
     let ctx = TestContext::with_fixture("constraints");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -173,10 +164,7 @@ fn test_default_constraint() {
     // This test verifies the structure works when SqlDefaultConstraint elements exist.
     // For now, we just verify the model can be built and parsed.
     let ctx = TestContext::with_fixture("constraints");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -204,10 +192,7 @@ fn test_default_constraint() {
 #[test]
 fn test_all_constraint_types_combined() {
     let ctx = TestContext::with_fixture("all_constraints");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");

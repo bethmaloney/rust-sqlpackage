@@ -15,10 +15,7 @@ use super::{
 #[test]
 fn test_column_nullable_property() {
     let ctx = TestContext::with_fixture("column_properties");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -51,10 +48,7 @@ fn test_column_nullable_property() {
 #[test]
 fn test_column_identity_property() {
     let ctx = TestContext::with_fixture("identity_column");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -80,10 +74,7 @@ fn test_column_identity_property() {
 #[test]
 fn test_column_type_specifier() {
     let ctx = TestContext::with_fixture("column_properties");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -125,10 +116,7 @@ fn test_column_type_specifier() {
 #[test]
 fn test_column_length_property() {
     let ctx = TestContext::with_fixture("column_properties");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -168,10 +156,7 @@ fn test_column_length_property() {
 #[test]
 fn test_column_precision_scale_properties() {
     let ctx = TestContext::with_fixture("column_properties");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -212,10 +197,7 @@ fn test_column_precision_scale_properties() {
 #[test]
 fn test_column_max_property() {
     let ctx = TestContext::with_fixture("column_properties");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -248,10 +230,7 @@ fn test_column_max_property() {
 #[test]
 fn test_column_varbinary_max_property() {
     let ctx = TestContext::with_fixture("varbinary_max");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");

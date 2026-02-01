@@ -13,10 +13,7 @@ use super::{find_elements_by_type, has_relationship, parse_model_xml};
 #[test]
 fn test_model_xml_has_correct_namespace() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -30,10 +27,7 @@ fn test_model_xml_has_correct_namespace() {
 #[test]
 fn test_model_xml_has_correct_dsp() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -55,10 +49,7 @@ fn test_model_xml_has_correct_dsp() {
 #[test]
 fn test_model_xml_has_file_format_version() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -86,10 +77,7 @@ fn test_model_xml_has_file_format_version() {
 #[test]
 fn test_model_xml_has_schema_version() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -111,10 +99,7 @@ fn test_model_xml_has_schema_version() {
 #[test]
 fn test_model_xml_has_collation_lcid() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -139,10 +124,7 @@ fn test_model_xml_has_collation_lcid() {
 #[test]
 fn test_model_xml_has_collation_case_sensitive() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -169,10 +151,7 @@ fn test_model_xml_has_collation_case_sensitive() {
 #[test]
 fn test_table_has_schema_relationship() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -197,10 +176,7 @@ fn test_table_has_schema_relationship() {
 #[test]
 fn test_table_has_columns_relationship() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -256,10 +232,7 @@ fn test_table_has_columns_relationship() {
 #[test]
 fn test_view_has_schema_relationship() {
     let ctx = TestContext::with_fixture("views");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -284,10 +257,7 @@ fn test_view_has_schema_relationship() {
 #[test]
 fn test_type_references_have_external_source() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -332,10 +302,7 @@ fn test_type_references_have_external_source() {
 #[test]
 fn test_model_xml_is_well_formed() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -352,10 +319,7 @@ fn test_model_xml_is_well_formed() {
 #[test]
 fn test_model_xml_has_xml_declaration() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -374,10 +338,7 @@ fn test_model_xml_has_xml_declaration() {
 #[test]
 fn test_model_xml_has_dataschemamodel_root() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -395,10 +356,7 @@ fn test_model_xml_has_dataschemamodel_root() {
 #[test]
 fn test_model_xml_has_model_element() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -419,10 +377,7 @@ fn test_model_xml_has_model_element() {
 fn test_special_characters_escaped_in_definitions() {
     // Test with the constraints fixture which may have check constraints with < or >
     let ctx = TestContext::with_fixture("constraints");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");

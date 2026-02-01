@@ -13,10 +13,7 @@ use super::{find_elements_by_type, parse_model_xml};
 #[test]
 fn test_model_contains_all_tables() {
     let ctx = TestContext::with_fixture("constraints");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
@@ -31,10 +28,7 @@ fn test_model_contains_all_tables() {
 #[test]
 fn test_model_contains_all_views() {
     let ctx = TestContext::with_fixture("views");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
@@ -48,10 +42,7 @@ fn test_model_contains_all_views() {
 #[test]
 fn test_model_contains_indexes() {
     let ctx = TestContext::with_fixture("indexes");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -69,10 +60,7 @@ fn test_model_contains_indexes() {
 #[test]
 fn test_dacpac_with_relationships() {
     let ctx = TestContext::with_fixture("constraints");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -87,10 +75,7 @@ fn test_dacpac_with_relationships() {
 #[test]
 fn test_dacpac_with_constraints() {
     let ctx = TestContext::with_fixture("constraints");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -120,10 +105,7 @@ fn test_dacpac_with_constraints() {
 #[test]
 fn test_model_contains_procedures() {
     let ctx = TestContext::with_fixture("element_types");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -153,10 +135,7 @@ fn test_model_contains_procedures() {
 #[test]
 fn test_model_contains_scalar_functions() {
     let ctx = TestContext::with_fixture("element_types");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -187,10 +166,7 @@ fn test_model_contains_scalar_functions() {
 #[test]
 fn test_model_contains_table_valued_functions() {
     let ctx = TestContext::with_fixture("element_types");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -211,10 +187,7 @@ fn test_model_contains_table_valued_functions() {
 #[test]
 fn test_model_contains_sequences() {
     let ctx = TestContext::with_fixture("element_types");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -245,10 +218,7 @@ fn test_model_contains_sequences() {
 #[test]
 fn test_model_contains_user_defined_types() {
     let ctx = TestContext::with_fixture("element_types");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -278,10 +248,7 @@ fn test_model_contains_user_defined_types() {
 #[test]
 fn test_model_contains_triggers() {
     let ctx = TestContext::with_fixture("element_types");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -312,10 +279,7 @@ fn test_model_contains_triggers() {
 #[test]
 fn test_model_contains_schemas() {
     let ctx = TestContext::with_fixture("element_types");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -350,10 +314,7 @@ fn test_model_contains_schemas() {
 #[test]
 fn test_self_referencing_foreign_key() {
     let ctx = TestContext::with_fixture("self_ref_fk");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -409,10 +370,7 @@ fn test_self_referencing_foreign_key() {
 #[test]
 fn test_multiple_indexes_same_table() {
     let ctx = TestContext::with_fixture("multiple_indexes");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");

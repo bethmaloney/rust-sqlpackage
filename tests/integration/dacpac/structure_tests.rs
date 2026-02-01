@@ -15,10 +15,7 @@ use crate::common::{DacpacInfo, TestContext};
 #[test]
 fn test_dacpac_is_valid_zip() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     // Try to open as ZIP
     let file = File::open(&dacpac_path).expect("Should open file");
@@ -30,10 +27,7 @@ fn test_dacpac_is_valid_zip() {
 #[test]
 fn test_dacpac_contains_model_xml() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     assert!(info.has_model_xml, "Dacpac must contain model.xml");
@@ -42,10 +36,7 @@ fn test_dacpac_contains_model_xml() {
 #[test]
 fn test_dacpac_contains_dac_metadata_xml() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     assert!(info.has_metadata_xml, "Dacpac must contain DacMetadata.xml");
@@ -54,10 +45,7 @@ fn test_dacpac_contains_dac_metadata_xml() {
 #[test]
 fn test_dacpac_contains_origin_xml() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     assert!(info.has_origin_xml, "Dacpac must contain Origin.xml");
@@ -66,10 +54,7 @@ fn test_dacpac_contains_origin_xml() {
 #[test]
 fn test_dacpac_contains_content_types_xml() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     assert!(
@@ -85,10 +70,7 @@ fn test_dacpac_contains_content_types_xml() {
 #[test]
 fn test_dacpac_file_count() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let file = File::open(&dacpac_path).expect("Should open file");
     let archive = ZipArchive::new(file).expect("Should be valid ZIP");
@@ -104,10 +86,7 @@ fn test_dacpac_file_count() {
 #[test]
 fn test_dacpac_file_names() {
     let ctx = TestContext::with_fixture("simple_table");
-    let result = ctx.build();
-
-    assert!(result.success);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let mut file_names: Vec<String> = Vec::new();
     let mut archive = ZipArchive::new(File::open(&dacpac_path).expect("Should open file"))
@@ -147,15 +126,13 @@ fn test_dacpac_file_names() {
 fn test_dacpac_model_xml_consistency() {
     // Build twice and verify model.xml content is consistent
     let ctx1 = TestContext::with_fixture("simple_table");
-    let result1 = ctx1.build();
-    assert!(result1.success);
+    let dacpac_path1 = ctx1.build_successfully();
 
     let ctx2 = TestContext::with_fixture("simple_table");
-    let result2 = ctx2.build();
-    assert!(result2.success);
+    let dacpac_path2 = ctx2.build_successfully();
 
-    let info1 = DacpacInfo::from_dacpac(&result1.dacpac_path.unwrap()).unwrap();
-    let info2 = DacpacInfo::from_dacpac(&result2.dacpac_path.unwrap()).unwrap();
+    let info1 = DacpacInfo::from_dacpac(&dacpac_path1).unwrap();
+    let info2 = DacpacInfo::from_dacpac(&dacpac_path2).unwrap();
 
     // Tables should be the same
     assert_eq!(
@@ -226,10 +203,7 @@ fn test_empty_project() {
 #[test]
 fn test_project_with_only_schemas() {
     let ctx = TestContext::with_fixture("only_schemas");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -251,10 +225,7 @@ fn test_project_with_only_schemas() {
 #[test]
 fn test_reserved_keyword_identifiers() {
     let ctx = TestContext::with_fixture("reserved_keywords");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
@@ -277,10 +248,7 @@ fn test_reserved_keyword_identifiers() {
 #[test]
 fn test_unicode_identifiers() {
     let ctx = TestContext::with_fixture("unicode_identifiers");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
@@ -309,10 +277,7 @@ fn test_unicode_identifiers() {
 #[test]
 fn test_large_table_many_columns() {
     let ctx = TestContext::with_fixture("large_table");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -344,10 +309,7 @@ fn test_large_table_many_columns() {
 #[test]
 fn test_pre_post_deploy_scripts_excluded_from_model() {
     let ctx = TestContext::with_fixture("pre_post_deploy");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
@@ -375,10 +337,7 @@ fn test_pre_post_deploy_scripts_excluded_from_model() {
 #[test]
 fn test_sdk_style_exclusions_work() {
     let ctx = TestContext::with_fixture("build_with_exclude");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 
@@ -402,10 +361,7 @@ fn test_sdk_style_exclusions_work() {
 #[test]
 fn test_sqlcmd_includes_resolved() {
     let ctx = TestContext::with_fixture("sqlcmd_includes");
-    let result = ctx.build();
-
-    assert!(result.success, "Build failed: {:?}", result.errors);
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
 
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 

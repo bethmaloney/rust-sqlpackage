@@ -142,10 +142,7 @@ fn get_procedure_body_dependencies(proc_name: &str, model_xml: &str) -> Vec<Stri
 fn test_stuff_nested_subquery_alias_resolution() {
     // Test the ITTAG alias bug: aliases in STUFF() nested subqueries should be resolved
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -187,10 +184,7 @@ fn test_stuff_nested_subquery_alias_resolution() {
 fn test_nested_subquery_alias_resolution() {
     // Test multiple levels of nested subqueries with aliases
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -219,10 +213,7 @@ fn test_nested_subquery_alias_resolution() {
 fn test_apply_clause_alias_resolution() {
     // Test CROSS APPLY and OUTER APPLY with aliases
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -251,10 +242,7 @@ fn test_apply_clause_alias_resolution() {
 fn test_procedure_apply_clause_alias_resolution() {
     // Test CROSS APPLY and OUTER APPLY with aliases in procedures (Phase 26.2.2)
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -286,10 +274,7 @@ fn test_procedure_apply_clause_alias_resolution() {
 fn test_cte_alias_recognition() {
     // Test that CTE names are NOT treated as table references
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -316,10 +301,7 @@ fn test_cte_alias_recognition() {
 fn test_procedure_nested_alias_resolution() {
     // Test aliases in procedure bodies
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -351,10 +333,7 @@ fn test_procedure_nested_alias_resolution() {
 fn test_simple_alias_resolution() {
     // Test simple, flat aliases (this should work correctly)
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -393,10 +372,7 @@ fn test_simple_alias_resolution() {
 fn test_scalar_function_nested_alias_resolution() {
     // Test aliases in scalar function bodies (STUFF pattern)
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -430,10 +406,7 @@ fn test_scalar_function_nested_alias_resolution() {
 fn test_tvf_nested_alias_resolution() {
     // Test aliases in table-valued function bodies (OUTER APPLY pattern)
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -461,10 +434,7 @@ fn test_tvf_nested_alias_resolution() {
 fn test_multiple_ctes_in_procedure() {
     // Test multiple CTEs in sequence within a procedure
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -503,10 +473,7 @@ fn test_multiple_ctes_in_procedure() {
 fn test_exists_subquery_alias_resolution() {
     // Test aliases inside EXISTS and NOT EXISTS subqueries
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -540,10 +507,7 @@ fn test_exists_subquery_alias_resolution() {
 fn test_in_subquery_alias_resolution() {
     // Test aliases inside IN clause subqueries (including nested IN)
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -576,10 +540,7 @@ fn test_in_subquery_alias_resolution() {
 fn test_correlated_subquery_alias_resolution() {
     // Test aliases in correlated subqueries in SELECT list
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -612,10 +573,7 @@ fn test_correlated_subquery_alias_resolution() {
 fn test_union_alias_resolution() {
     // Test aliases in UNION branches (each SELECT has different aliases)
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -651,10 +609,7 @@ fn test_union_alias_resolution() {
 fn test_case_subquery_alias_resolution() {
     // Test aliases in subqueries inside CASE expressions
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -688,10 +643,7 @@ fn test_case_subquery_alias_resolution() {
 fn test_window_function_alias_resolution() {
     // Test aliases in window function OVER clauses
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -724,10 +676,7 @@ fn test_window_function_alias_resolution() {
 fn test_derived_table_chain_alias_resolution() {
     // Test aliases through multiple levels of derived tables
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -759,10 +708,7 @@ fn test_derived_table_chain_alias_resolution() {
 fn test_recursive_cte_alias_resolution() {
     // Test that recursive CTE self-references don't appear as dependencies
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -793,10 +739,7 @@ fn test_recursive_cte_alias_resolution() {
 fn test_update_from_alias_resolution() {
     // Test aliases in UPDATE...FROM statements
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -829,10 +772,7 @@ fn test_update_from_alias_resolution() {
 fn test_delete_from_alias_resolution() {
     // Test aliases in DELETE...FROM statements
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -865,10 +805,7 @@ fn test_delete_from_alias_resolution() {
 fn test_merge_alias_resolution() {
     // Test aliases in MERGE statements (TARGET and SOURCE)
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -901,10 +838,7 @@ fn test_merge_alias_resolution() {
 fn test_insert_select_alias_resolution() {
     // Test aliases in INSERT...SELECT with nested EXISTS
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
@@ -965,10 +899,7 @@ fn function_has_dynamic_objects_cte(func_name: &str, cte_name: &str, model_xml: 
 fn test_function_with_cte_emits_dynamic_objects() {
     // Test that functions with CTEs emit DynamicObjects relationship (Phase 24.4.1)
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
-    let result = ctx.build();
-    assert!(result.success, "Build should succeed");
-
-    let dacpac_path = result.dacpac_path.unwrap();
+    let dacpac_path = ctx.build_successfully();
     let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
     let model_xml = info.model_xml_content.expect("Should have model XML");
 
