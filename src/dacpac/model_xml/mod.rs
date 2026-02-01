@@ -2593,20 +2593,21 @@ fn write_constraint<W: Write>(
     }
 
     // Write annotation at the end of the constraint element
-    // - Inline constraints: <Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="X" />
-    // - Named constraints: <AttachedAnnotation Disambiguator="X" /> (referencing table's disambiguator)
+    // DotNet pattern:
+    // - Inline constraints: always Annotation
+    // - Named constraints: Annotation or AttachedAnnotation based on uses_annotation flag
     // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
     if let Some(disambiguator) = constraint.inline_constraint_disambiguator {
         let disamb_str = disambiguator.to_string();
-        if constraint.is_inline {
-            // Inline constraint gets its own SqlInlineConstraintAnnotation
+        if constraint.uses_annotation {
+            // Constraint uses Annotation (inline constraints, or named with multiple siblings)
             let annotation = BytesStart::new("Annotation").with_attributes([
                 ("Type", "SqlInlineConstraintAnnotation"),
                 ("Disambiguator", disamb_str.as_str()),
             ]);
             writer.write_event(Event::Empty(annotation))?;
         } else {
-            // Named constraint references the table's disambiguator via AttachedAnnotation
+            // Constraint uses AttachedAnnotation (references table's annotation)
             let annotation = BytesStart::new("AttachedAnnotation")
                 .with_attributes([("Disambiguator", disamb_str.as_str())]);
             writer.write_event(Event::Empty(annotation))?;

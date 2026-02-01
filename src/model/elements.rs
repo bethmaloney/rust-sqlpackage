@@ -150,6 +150,12 @@ pub struct TableElement {
     /// Tables with inline constraints get their own annotation, and named table-level
     /// constraints (like CONSTRAINT [PK_Table]) reference this via AttachedAnnotation
     pub inline_constraint_disambiguator: Option<u32>,
+    /// AttachedAnnotation disambiguators linking to constraints that reference this table.
+    /// DotNet uses this pattern:
+    /// - Single named constraint: table gets Annotation, constraint gets AttachedAnnotation
+    /// - Multiple named constraints: each constraint (except one) gets Annotation,
+    ///   table gets AttachedAnnotation for those, plus one Annotation for the remaining constraint
+    pub attached_annotations: Vec<u32>,
 }
 
 /// Column element
@@ -380,9 +386,15 @@ pub struct ConstraintElement {
     /// CREATE TABLE or via ALTER TABLE) are treated as non-inline.
     /// Inline constraints have no Name attribute in XML and get SqlInlineConstraintAnnotation.
     pub is_inline: bool,
-    /// Disambiguator for SqlInlineConstraintAnnotation (inline constraints only)
-    /// Also used for AttachedAnnotation on named constraints that reference a table's disambiguator
+    /// Disambiguator for SqlInlineConstraintAnnotation
+    /// Every constraint gets a unique disambiguator (starting from 3)
     pub inline_constraint_disambiguator: Option<u32>,
+    /// Whether this constraint writes Annotation (true) or AttachedAnnotation (false).
+    /// DotNet pattern:
+    /// - Inline constraints: always use Annotation
+    /// - Single named constraint in table: use AttachedAnnotation (table uses Annotation)
+    /// - Multiple named constraints in table: most use Annotation, one uses AttachedAnnotation
+    pub uses_annotation: bool,
     /// Whether to emit the Name attribute in XML.
     /// - True for all table-level (non-inline) constraints
     /// - True for inline constraints with explicit CONSTRAINT [name] in SQL

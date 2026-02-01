@@ -49,8 +49,17 @@ pub(crate) fn write_table<W: Write>(
     // Relationship to schema (comes after Columns in DotNet output)
     write_schema_relationship(writer, &table.schema)?;
 
-    // Write SqlInlineConstraintAnnotation if table has inline constraints
-    // DotNet assigns a disambiguator to tables with inline constraints
+    // Write AttachedAnnotation elements first (for constraints that use Annotation)
+    // DotNet writes AttachedAnnotation before Annotation
+    for disambiguator in &table.attached_annotations {
+        let disamb_str = disambiguator.to_string();
+        let annotation = BytesStart::new("AttachedAnnotation")
+            .with_attributes([("Disambiguator", disamb_str.as_str())]);
+        writer.write_event(Event::Empty(annotation))?;
+    }
+
+    // Write SqlInlineConstraintAnnotation if table has one
+    // (for the constraint that uses AttachedAnnotation, or for inline constraint scenarios)
     if let Some(disambiguator) = table.inline_constraint_disambiguator {
         let disamb_str = disambiguator.to_string();
         let annotation = BytesStart::new("Annotation").with_attributes([
@@ -630,6 +639,7 @@ mod tests {
             is_node: false,
             is_edge: false,
             inline_constraint_disambiguator: None,
+            attached_annotations: vec![],
         };
         let mut writer = create_test_writer();
         write_table(&mut writer, &table).unwrap();
@@ -649,6 +659,7 @@ mod tests {
             is_node: false,
             is_edge: false,
             inline_constraint_disambiguator: Some(1),
+            attached_annotations: vec![],
         };
         let mut writer = create_test_writer();
         write_table(&mut writer, &table).unwrap();

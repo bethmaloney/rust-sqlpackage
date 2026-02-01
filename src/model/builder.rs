@@ -265,6 +265,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         is_node: *is_node,
                         is_edge: *is_edge,
                         inline_constraint_disambiguator: None, // Set during post-processing
+                        attached_annotations: Vec::new(),      // Set during post-processing
                     }));
 
                     // Add constraints as separate elements
@@ -297,6 +298,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
                                 emit_name: col.emit_default_constraint_name, // Emit Name only if CONSTRAINT after NOT NULL
                             }));
                         }
@@ -322,6 +324,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
                                 emit_name: col.emit_check_constraint_name, // Emit Name only if CONSTRAINT after NOT NULL
                             }));
                         }
@@ -423,6 +426,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_node: false,
                     is_edge: false,
                     inline_constraint_disambiguator: None, // Set during post-processing
+                    attached_annotations: Vec::new(),      // Set during post-processing
                 }));
 
                 // Extract constraints from table definition (table-level constraints)
@@ -471,6 +475,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
                                 emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
                             }));
                         }
@@ -546,6 +551,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
                                 emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
                             }));
                         }
@@ -573,6 +579,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 is_clustered: None,
                                 is_inline: true, // Column-level constraints are always inline
                                 inline_constraint_disambiguator: None,
+                                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
                                 emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
                             }));
                         }
@@ -594,7 +601,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         is_clustered: None,
                         is_inline: false, // Named constraint (uses CONSTRAINT keyword)
                         inline_constraint_disambiguator: None,
-                        emit_name: true, // Table-level constraints always emit Name
+                        uses_annotation: false, // Set by assign_inline_constraint_disambiguators
+                        emit_name: true,        // Table-level constraints always emit Name
                     }));
                 }
             }
@@ -901,14 +909,16 @@ fn resolve_udt_nullability(elements: &mut [ModelElement]) {
     }
 }
 
-/// Assign disambiguator values to inline constraints and build linkages to columns/tables.
+/// Assign disambiguator values to ALL constraints and build linkages to columns/tables.
 ///
-/// DotNet's DacFx assigns sequential disambiguator values starting at 3 for inline constraints.
-/// The order is:
-/// 1. Each inline constraint gets a disambiguator in element order
-/// 2. Each table with inline constraints gets a disambiguator after all constraints
-/// 3. Columns with inline constraints get AttachedAnnotation referencing their constraints
-/// 4. Named constraints at table-level get AttachedAnnotation referencing their table
+/// DotNet DacFx annotation pattern:
+/// - Every constraint gets a unique disambiguator (starting from 3)
+/// - Every constraint gets either Annotation or AttachedAnnotation
+/// - Inline constraints: always use Annotation, columns use AttachedAnnotation
+/// - Named constraints: pattern depends on count per table:
+///   * Single named constraint: table gets Annotation, constraint gets AttachedAnnotation
+///   * Multiple named constraints: constraints get Annotation (except one which gets AttachedAnnotation)
+///     and table gets AttachedAnnotation for constraints with Annotation, plus one Annotation
 fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
     use std::collections::HashMap;
 
@@ -918,42 +928,30 @@ fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
     // Map: (table_schema, table_name, column_name) -> Vec<disambiguator>
     let mut column_annotations: HashMap<(String, String, String), Vec<u32>> = HashMap::new();
 
-    // Map: (table_schema, table_name) -> table_disambiguator
-    let mut table_disambiguators: HashMap<(String, String), u32> = HashMap::new();
+    // Map: (table_schema, table_name) -> Vec<(constraint_index, disambiguator, is_inline)>
+    // Track all constraints per table
+    let mut table_constraints: HashMap<(String, String), Vec<(usize, u32, bool)>> = HashMap::new();
 
-    // Tables that have inline constraints
-    let mut tables_with_inline_constraints: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
-
-    // Tables that have named (non-inline) constraints
-    let mut tables_with_named_constraints: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
-
-    // Pre-pass: Identify tables with named constraints
-    for element in elements.iter() {
+    // First pass: Assign unique disambiguators to ALL constraints
+    for (idx, element) in elements.iter_mut().enumerate() {
         if let ModelElement::Constraint(constraint) = element {
-            if !constraint.is_inline {
-                tables_with_named_constraints.insert((
-                    constraint.table_schema.clone(),
-                    constraint.table_name.clone(),
-                ));
-            }
-        }
-    }
+            let disambiguator = next_disambiguator;
+            next_disambiguator += 1;
+            constraint.inline_constraint_disambiguator = Some(disambiguator);
 
-    // First pass: Assign disambiguators to inline constraints and track columns
-    for element in elements.iter_mut() {
-        if let ModelElement::Constraint(constraint) = element {
+            let table_key = (
+                constraint.table_schema.clone(),
+                constraint.table_name.clone(),
+            );
+            table_constraints
+                .entry(table_key.clone())
+                .or_default()
+                .push((idx, disambiguator, constraint.is_inline));
+
+            // For inline constraints, link to column(s) for AttachedAnnotation
             if constraint.is_inline {
-                let disambiguator = next_disambiguator;
-                next_disambiguator += 1;
-                constraint.inline_constraint_disambiguator = Some(disambiguator);
-
-                // Track that this table has inline constraints
-                tables_with_inline_constraints.insert((
-                    constraint.table_schema.clone(),
-                    constraint.table_name.clone(),
-                ));
+                // Inline constraints always use Annotation
+                constraint.uses_annotation = true;
 
                 // Link the constraint's column(s) to this disambiguator
                 for col in &constraint.columns {
@@ -971,42 +969,85 @@ fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
         }
     }
 
-    // Second pass: Assign disambiguators to tables that have BOTH inline constraints
-    // AND named constraints. DotNet only adds SqlInlineConstraintAnnotation to tables
-    // that have a mix of inline and named constraints.
-    for element in elements.iter_mut() {
-        if let ModelElement::Table(table) = element {
-            let table_key = (table.schema.clone(), table.name.clone());
-            if tables_with_inline_constraints.contains(&table_key)
-                && tables_with_named_constraints.contains(&table_key)
-            {
-                let disambiguator = next_disambiguator;
-                next_disambiguator += 1;
-                table.inline_constraint_disambiguator = Some(disambiguator);
-                table_disambiguators.insert(table_key, disambiguator);
-            }
-        }
-    }
+    // Map to track table annotations and attached annotations
+    let mut table_annotation: HashMap<(String, String), Option<u32>> = HashMap::new();
+    let mut table_attached: HashMap<(String, String), Vec<u32>> = HashMap::new();
 
-    // Third pass: Link named (non-inline) table-level constraints to their table's disambiguator
-    for element in elements.iter_mut() {
-        if let ModelElement::Constraint(constraint) = element {
-            if !constraint.is_inline {
-                // Named constraint - link to table's disambiguator if table has inline constraints
-                let table_key = (
-                    constraint.table_schema.clone(),
-                    constraint.table_name.clone(),
-                );
-                if let Some(&table_disambiguator) = table_disambiguators.get(&table_key) {
-                    constraint.inline_constraint_disambiguator = Some(table_disambiguator);
+    // Second pass: Determine annotation types for named constraints based on count per table
+    for (table_key, constraints) in &table_constraints {
+        // Filter to named (non-inline) constraints only
+        let named_constraints: Vec<_> = constraints
+            .iter()
+            .filter(|(_, _, is_inline)| !is_inline)
+            .collect();
+
+        if named_constraints.is_empty() {
+            // No named constraints - nothing to do for table-level annotations
+            continue;
+        }
+
+        if named_constraints.len() == 1 {
+            // Single named constraint: table gets Annotation, constraint gets AttachedAnnotation
+            let (_, disambiguator, _) = named_constraints[0];
+            table_annotation.insert(table_key.clone(), Some(*disambiguator));
+            // Constraint uses AttachedAnnotation (uses_annotation = false)
+        } else {
+            // Multiple named constraints: all except the last get Annotation
+            // The last one gets AttachedAnnotation and table gets Annotation for it
+            for (i, (_, disambiguator, _)) in named_constraints.iter().enumerate() {
+                if i < named_constraints.len() - 1 {
+                    // Not the last - uses Annotation
+                    // table gets AttachedAnnotation for this
+                    table_attached
+                        .entry(table_key.clone())
+                        .or_default()
+                        .push(*disambiguator);
+                } else {
+                    // Last one - uses AttachedAnnotation
+                    // table gets Annotation for this
+                    table_annotation.insert(table_key.clone(), Some(*disambiguator));
                 }
             }
         }
     }
 
-    // Fourth pass: Assign attached_annotations to columns
+    // Third pass: Update constraints with uses_annotation flag for named constraints
+    for element in elements.iter_mut() {
+        if let ModelElement::Constraint(constraint) = element {
+            if !constraint.is_inline {
+                let table_key = (
+                    constraint.table_schema.clone(),
+                    constraint.table_name.clone(),
+                );
+                let disambiguator = constraint.inline_constraint_disambiguator.unwrap();
+
+                // Check if this constraint should use Annotation (not AttachedAnnotation)
+                if let Some(attached_list) = table_attached.get(&table_key) {
+                    // This constraint uses Annotation if it's in the attached list
+                    // (table attaches to it via AttachedAnnotation)
+                    constraint.uses_annotation = attached_list.contains(&disambiguator);
+                }
+                // If not in attached list, uses_annotation stays false (AttachedAnnotation)
+            }
+        }
+    }
+
+    // Fourth pass: Assign annotations to tables
     for element in elements.iter_mut() {
         if let ModelElement::Table(table) = element {
+            let table_key = (table.schema.clone(), table.name.clone());
+
+            // Check if table has an annotation (for the constraint that uses AttachedAnnotation)
+            if let Some(Some(disambiguator)) = table_annotation.get(&table_key) {
+                table.inline_constraint_disambiguator = Some(*disambiguator);
+            }
+
+            // Add attached annotations for constraints that use Annotation
+            if let Some(attached_list) = table_attached.get(&table_key) {
+                table.attached_annotations = attached_list.clone();
+            }
+
+            // Also assign attached_annotations to columns from inline constraints
             for column in &mut table.columns {
                 let key = (
                     table.schema.clone(),
@@ -1332,7 +1373,8 @@ fn constraint_from_extracted(
             is_clustered: Some(*is_clustered),
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
-            emit_name: true, // Table-level constraints always emit Name
+            uses_annotation: false, // Set by assign_inline_constraint_disambiguators
+            emit_name: true,        // Table-level constraints always emit Name
         }),
         ExtractedTableConstraint::ForeignKey {
             name,
@@ -1354,7 +1396,8 @@ fn constraint_from_extracted(
             is_clustered: None,
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
-            emit_name: true, // Table-level constraints always emit Name
+            uses_annotation: false, // Set by assign_inline_constraint_disambiguators
+            emit_name: true,        // Table-level constraints always emit Name
         }),
         ExtractedTableConstraint::Unique {
             name,
@@ -1375,7 +1418,8 @@ fn constraint_from_extracted(
             is_clustered: Some(*is_clustered),
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
-            emit_name: true, // Table-level constraints always emit Name
+            uses_annotation: false, // Set by assign_inline_constraint_disambiguators
+            emit_name: true,        // Table-level constraints always emit Name
         }),
         ExtractedTableConstraint::Check { name, expression } => Some(ConstraintElement {
             name: name.clone(),
@@ -1389,7 +1433,8 @@ fn constraint_from_extracted(
             is_clustered: None,
             is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
             inline_constraint_disambiguator: None,
-            emit_name: true, // Table-level constraints always emit Name
+            uses_annotation: false, // Set by assign_inline_constraint_disambiguators
+            emit_name: true,        // Table-level constraints always emit Name
         }),
     }
 }
@@ -1502,7 +1547,8 @@ fn constraint_from_table_constraint(
                 is_clustered,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
-                emit_name: true, // Table-level constraints always emit Name
+                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
+                emit_name: true,        // Table-level constraints always emit Name
             })
         }
         TableConstraint::ForeignKey {
@@ -1539,7 +1585,8 @@ fn constraint_from_table_constraint(
                 is_clustered: None,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
-                emit_name: true, // Table-level constraints always emit Name
+                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
+                emit_name: true,        // Table-level constraints always emit Name
             })
         }
         TableConstraint::Unique { name, columns, .. } => {
@@ -1567,7 +1614,8 @@ fn constraint_from_table_constraint(
                 is_clustered,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
-                emit_name: true, // Table-level constraints always emit Name
+                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
+                emit_name: true,        // Table-level constraints always emit Name
             })
         }
         TableConstraint::Check { name, expr } => {
@@ -1588,7 +1636,8 @@ fn constraint_from_table_constraint(
                 is_clustered: None,
                 is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
                 inline_constraint_disambiguator: None,
-                emit_name: true, // Table-level constraints always emit Name
+                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
+                emit_name: true,        // Table-level constraints always emit Name
             })
         }
         _ => None,
