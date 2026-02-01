@@ -927,3 +927,63 @@ fn test_insert_select_alias_resolution() {
     assert!(deps.iter().any(|d| d == "[dbo].[AccountTag]"));
     assert!(deps.iter().any(|d| d == "[dbo].[Tag]"));
 }
+
+// ============================================================================
+// Tests for DynamicObjects in Functions (Phase 24.4.1)
+// ============================================================================
+
+/// Helper to check if a function has DynamicObjects relationship with a CTE
+fn function_has_dynamic_objects_cte(func_name: &str, cte_name: &str, model_xml: &str) -> bool {
+    // Find the function element
+    let func_element_tag = format!(
+        "Element Type=\"SqlScalarFunction\" Name=\"[dbo].[{}]\"",
+        func_name
+    );
+
+    if let Some(func_start) = model_xml.find(&func_element_tag) {
+        // Find the end of this element (next Element tag at same level or end)
+        let func_section = &model_xml[func_start..];
+
+        // Look for DynamicObjects relationship within this function
+        if let Some(dyn_start) = func_section.find("DynamicObjects") {
+            // Check if the CTE is referenced within DynamicObjects
+            let dyn_section_start = dyn_start;
+            if let Some(dyn_end) = func_section[dyn_section_start..].find("</Relationship>") {
+                let dyn_section = &func_section[dyn_section_start..dyn_section_start + dyn_end];
+
+                // Look for SqlDynamicColumnSource with CTE pattern
+                let cte_pattern = format!(".[CTE1].[{}]", cte_name);
+                return dyn_section.contains(&cte_pattern);
+            }
+        }
+    }
+
+    false
+}
+
+#[test]
+fn test_function_with_cte_emits_dynamic_objects() {
+    // Test that functions with CTEs emit DynamicObjects relationship (Phase 24.4.1)
+    let ctx = TestContext::with_fixture("body_dependencies_aliases");
+    let result = ctx.build();
+    assert!(result.success, "Build should succeed");
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    // The GetAccountWithCteFunction has a CTE named "AccountTags"
+    let has_cte =
+        function_has_dynamic_objects_cte("GetAccountWithCteFunction", "AccountTags", &model_xml);
+
+    assert!(
+        has_cte,
+        "Function GetAccountWithCteFunction should have DynamicObjects with CTE 'AccountTags'"
+    );
+
+    // Also verify the function exists
+    assert!(
+        model_xml.contains("GetAccountWithCteFunction"),
+        "Function GetAccountWithCteFunction should exist in model"
+    );
+}

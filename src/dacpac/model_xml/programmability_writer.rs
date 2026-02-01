@@ -212,6 +212,11 @@ pub(crate) fn write_function<W: Write>(
     let body_deps = extract_body_dependencies(&body, &full_name, &param_names);
     write_body_dependencies(writer, &body_deps)?;
 
+    // Write DynamicObjects relationship for CTEs, temp tables, and table variables
+    // Functions don't have TVP parameters like procedures, so we pass an empty slice
+    let empty_tvp_params: Vec<(&ProcedureParameter, Option<&UserDefinedTypeElement>)> = Vec::new();
+    write_all_dynamic_objects(writer, &full_name, &body, &func.schema, &empty_tvp_params)?;
+
     // For inline TVFs, write Columns relationship (after BodyDependencies, before FunctionBody)
     if matches!(
         func.function_type,

@@ -24,7 +24,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Added MAX keyword detection in scalar type parser
 
 **Remaining Parity Issues (Phases 24-25):**
-- Phase 24: Dynamic column sources in procedures (7/8) - CTE, temp table, and table variable extraction complete; integration pending
+- Phase 24: Dynamic column sources in procedures (8/8) ✅ - Complete
 - Phase 25: ALTER TABLE constraints (0/6) - 14 PKs, 19 FKs missing
 
 **Phase 26 Complete: APPLY Subquery Alias Capture (4/4) ✅**
@@ -126,7 +126,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 24: Track Dynamic Column Sources in Procedure Bodies (7/8)
+## Phase 24: Track Dynamic Column Sources in Procedure Bodies (8/8) ✅
 
 **Goal:** Generate `SqlDynamicColumnSource` elements for CTEs, temp tables, and table variables.
 
@@ -183,11 +183,15 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 - `test_extract_table_variable_with_primary_key_inline` - Inline PRIMARY KEY on column
 - `test_extract_table_variable_mixed_with_regular_declare` - Mixed with regular DECLARE statements
 
-### Phase 24.4: Integration (0/1)
+### Phase 24.4: Integration (1/1) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 24.4.1 | Integrate into procedure/function writers | ⬜ | Add to DynamicObjects relationship |
+| 24.4.1 | Integrate into procedure/function writers | ✅ | Functions now call write_all_dynamic_objects() |
+
+**Tests Added:**
+- `test_function_with_cte_emits_dynamic_objects` - Integration test in `alias_resolution_tests.rs`
+- `GetAccountWithCteFunction.sql` - Test fixture for function with CTE
 
 ---
 
