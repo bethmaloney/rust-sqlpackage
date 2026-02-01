@@ -378,7 +378,7 @@ impl TableTypeTokenParser {
         })
     }
 
-    /// Capture column definition text until next comma or closing paren at depth 0
+    /// Capture column definition text until next comma, closing paren, or constraint keyword at depth 0
     fn capture_column_text(&mut self) -> String {
         let mut result = String::new();
         let mut depth = 0;
@@ -407,6 +407,20 @@ impl TableTypeTokenParser {
                 Token::Comma if depth == 0 => {
                     // End of this column definition
                     break;
+                }
+                // Stop at table-level constraint keywords at depth 0 (comma-less constraint syntax)
+                Token::Word(w) if depth == 0 => {
+                    // Check for constraint keywords that start table-level constraints
+                    match w.keyword {
+                        Keyword::PRIMARY | Keyword::UNIQUE | Keyword::CHECK | Keyword::INDEX => {
+                            // Stop capturing - this is the start of a table-level constraint
+                            break;
+                        }
+                        _ => {
+                            result.push_str(&TokenParser::token_to_string(&token.token));
+                            self.base.advance();
+                        }
+                    }
                 }
                 _ => {
                     result.push_str(&TokenParser::token_to_string(&token.token));
@@ -575,6 +589,43 @@ mod tests {
                 assert_eq!(columns.len(), 1);
                 assert_eq!(columns[0].name, "Id");
                 assert!(!columns[0].descending);
+            }
+            _ => panic!("Expected PrimaryKey constraint"),
+        }
+    }
+
+    #[test]
+    fn test_table_type_with_commaless_primary_key() {
+        // Test comma-less constraint syntax where no comma precedes the PRIMARY KEY
+        let sql = r#"CREATE TYPE [dbo].[TableTypeWithCommalessPK] AS TABLE
+(
+    [ElementId] INT NOT NULL,
+    [SequenceNo] INT NULL,
+    [ParentId] INT,
+    [Name] NVARCHAR(200),
+    [Value] NVARCHAR(MAX) NOT NULL
+    PRIMARY KEY ([ElementId])
+)"#;
+        let result = parse_create_table_type_tokens(sql).unwrap();
+
+        assert_eq!(result.schema, "dbo");
+        assert_eq!(result.name, "TableTypeWithCommalessPK");
+        assert_eq!(result.columns.len(), 5);
+        assert_eq!(result.constraints.len(), 1);
+
+        // Verify columns
+        assert_eq!(result.columns[0].name, "ElementId");
+        assert_eq!(result.columns[4].name, "Value");
+
+        // Verify PRIMARY KEY constraint
+        match &result.constraints[0] {
+            ExtractedTableTypeConstraint::PrimaryKey {
+                columns,
+                is_clustered,
+            } => {
+                assert!(is_clustered); // Default is clustered
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0].name, "ElementId");
             }
             _ => panic!("Expected PrimaryKey constraint"),
         }

@@ -473,6 +473,30 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 
 ---
 
+## Phase 33: Fix Comma-less Table Type Primary Key Constraint (1/1) ✅ COMPLETE
+
+**Goal:** Fix relationship parity error in commaless_constraints fixture.
+
+**Problem:** Table type definitions with PRIMARY KEY constraints that lack a comma separator before the constraint were not being parsed correctly. The constraint was being consumed by the column parser.
+
+**Root Cause:**
+- `capture_column_text()` in `table_type_parser.rs` captured text until a comma or closing parenthesis
+- Without a comma before PRIMARY KEY, the entire constraint was captured as part of the preceding column definition
+- `parse_column_definition_tokens()` then failed to parse the malformed column text, silently dropping the constraint
+
+**Fix Applied:**
+- Updated `capture_column_text()` in `src/parser/table_type_parser.rs` to stop capturing when it encounters a table-level constraint keyword (`PRIMARY`, `UNIQUE`, `CHECK`, `INDEX`) at depth 0
+- This allows the constraint to be parsed separately by `try_parse_constraint()` in the next iteration
+
+**Test Added:**
+- `test_table_type_with_commaless_primary_key` - Unit test verifying comma-less PRIMARY KEY constraint parsing
+
+**Results:**
+- commaless_constraints fixture now shows Rel:0 (was Rel:1)
+- SqlTableTypePrimaryKeyConstraint element is now correctly generated for table types with comma-less constraints
+
+---
+
 ## Known Issues
 
 | Issue | Location | Phase | Status |
@@ -480,7 +504,7 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 | ~~Missing SqlDynamicColumnSource elements~~ | procedure bodies | Phase 24 | ✅ Fixed |
 | ~~Missing constraints from ALTER TABLE~~ | parser/builder | Phase 25 | ✅ Fixed (Layer 1 at 100%) |
 | Relationship parity body_dependencies_aliases | body_deps.rs | Phase 32 | 61 errors (ordering differences, APPLY context issues); CTE column resolution fixed |
-| Relationship parity commaless_constraints | constraint_parser.rs | - | 1 error |
+| ~~Relationship parity commaless_constraints~~ | table_type_parser.rs | Phase 33 | ✅ Fixed (comma-less table type PK constraint) |
 | ~~Layer 2 errors in stress_test~~ | other_writers.rs | - | ✅ Fixed (CacheSize property) |
 
 ## Code Simplification Opportunities
