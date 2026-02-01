@@ -4,39 +4,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-23 complete (268 tasks). Full parity achieved.**
+**Phases 1-33 complete. Full parity achieved.**
 
-**Phase 22 In Progress:** Layer 7 Canonical XML parity (5 tasks remaining: 22.4.4 disambiguator numbering)
-
-**Discovered: Phase 22 - Layer 7 Canonical XML Parity** (8.5/10 tasks)
-- Layer 7 now performs true 1-1 XML comparison (no sorting/normalization)
-- Phase 22.3.2 fixed: AttachedAnnotation capture bug was in TEST infrastructure, not main code
-- Phase 22.4 substantially complete: Constraint annotation pattern matches DotNet (4/5 tasks)
-  - ✅ Added `uses_annotation` field to track Annotation vs AttachedAnnotation per constraint
-  - ✅ Added `attached_annotations` field to TableElement for proper annotation linkage
-  - ✅ Rewrote `assign_inline_constraint_disambiguators()` for correct DotNet pattern
-  - ⬜ Disambiguator numbering still differs (lower priority - dacpac functions correctly)
-- ✅ Element ordering improved: Added secondary sort key on DefiningTable reference for deterministic inline constraint ordering
-- See Phase 22 section below for detailed task breakdown
-
-**Phase 23 Complete: IsMax property for MAX types (4/4) ✅**
-- Fixed TVF column and scalar type MAX handling to write `IsMax="True"` instead of invalid Length values
-- Added MAX keyword detection in scalar type parser
-
-**Remaining Parity Issues (Phases 24-25):**
-- Phase 24: Dynamic column sources in procedures (8/8) ✅ - Complete
-- Phase 25: Constraint parsing (5/6) ✅ - ALTER TABLE parsing complete, Layer 1 at 100%
-
-**Phase 26 Complete: APPLY Subquery Alias Capture (4/4) ✅**
-- Fixed `extract_table_refs_tokenized()` to check `subquery_aliases` for APPLY aliases
-- Prevents APPLY subquery aliases (e.g., `d` from `CROSS APPLY (...) d`) from being treated as schema names
-
-**Code Simplification (Phases 27-31):**
-- Phase 27: Parser token helper consolidation (4/4) ✅ - ~400-500 lines reduction (complete)
-- Phase 28: Test infrastructure simplification (3/3) ✅ - ~560 lines reduction (complete)
-- Phase 29: Test dacpac parsing helper (2/2) ✅ - ~120 lines reduction (complete)
-- Phase 30: Model builder constraint helper (2/2) ✅ - ConstraintBuilder pattern (complete)
-- Phase 31: Project parser helpers (2/2) ✅ - ~58 lines reduction (complete)
+**Remaining Work:**
+- **Phase 34: Fix APPLY subquery column resolution (HIGH PRIORITY)** - Unqualified columns in APPLY subqueries resolve to wrong table
+- Phase 22.4.4: Disambiguator numbering (lower priority - dacpac functions correctly)
+- Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -132,368 +105,29 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 24: Track Dynamic Column Sources in Procedure Bodies (8/8) ✅
+## Phase 34: Fix APPLY Subquery Column Resolution (HIGH PRIORITY)
 
-**Goal:** Generate `SqlDynamicColumnSource` elements for CTEs, temp tables, and table variables.
+**Goal:** Fix unqualified column references inside APPLY subqueries resolving to the wrong table.
 
-**Impact:** 177 missing SqlDynamicColumnSource, 181 missing SqlSimpleColumn/SqlTypeSpecifier elements.
+**Problem:** In `body_dependencies_aliases` fixture, unqualified columns inside CROSS/OUTER APPLY subqueries are incorrectly resolved. When a column like `TagCount` appears inside an APPLY subquery, it should resolve to the subquery's internal context, not the outer table.
 
-### Phase 24.1: CTE Column Source Extraction (3/3) ✅
+**Impact:** 61 relationship parity errors in `body_dependencies_aliases` fixture (majority caused by this issue).
 
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 24.1.1 | Create `DynamicColumnSource` struct | ✅ | Added `DynamicColumnSource`, `DynamicColumn`, `DynamicColumnSourceType` to elements.rs; added `dynamic_sources` field to ProcedureElement and FunctionElement |
-| 24.1.2 | Extract CTE definitions from bodies | ✅ | Added `CteColumn` and `CteDefinition` structs, `extract_cte_definitions()`, `extract_cte_columns_from_tokens()`, `parse_cte_column_expression()`, `resolve_cte_column_ref()` in body_deps.rs |
-| 24.1.3 | Write `SqlDynamicColumnSource` for CTEs | ✅ | Added `write_all_dynamic_objects()`, `write_cte_columns()`, `write_expression_dependencies()` in programmability_writer.rs; added `write_view_cte_dynamic_objects()` in view_writer.rs |
+**Location:** `src/dacpac/model_xml/body_deps.rs` - column resolution logic in APPLY contexts
 
-**Unit Tests Added (body_deps.rs):**
-- `test_extract_cte_definitions_single_cte` - Single CTE with explicit column list
-- `test_extract_cte_definitions_multiple_ctes_same_with` - Multiple CTEs in same WITH block
-- `test_extract_cte_definitions_multiple_with_blocks` - Multiple separate WITH blocks
-- `test_extract_cte_definitions_no_cte` - Body without CTE returns empty
-- `test_extract_cte_definitions_column_with_alias` - Column expressions with AS aliases
-
-### Phase 24.2: Temp Table Column Source Extraction (2/2) ✅
+### Phase 34.1: Diagnose APPLY Column Resolution (0/2)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 24.2.1 | Extract temp table definitions | ✅ | Added `TempTableDefinition`, `TempTableColumn` structs; `extract_temp_table_definitions()`, `extract_temp_table_name()`, `extract_temp_table_columns()`, `extract_column_data_type()` in body_deps.rs |
-| 24.2.2 | Write `SqlDynamicColumnSource` for temp tables | ✅ | Added `write_temp_table_columns()`, `write_temp_table_column_type_specifier()`, `parse_temp_table_data_type()` in programmability_writer.rs; integrated into `write_all_dynamic_objects()` |
+| 34.1.1 | Add unit test reproducing APPLY subquery column mis-resolution | ⬜ | Test case with unqualified column inside APPLY resolving incorrectly |
+| 34.1.2 | Trace column resolution path for APPLY subquery context | ⬜ | Identify where context should switch |
 
-**Unit Tests Added (body_deps.rs):**
-- `test_extract_temp_table_single_table` - Single temp table with basic columns
-- `test_extract_temp_table_with_varchar_lengths` - VARCHAR/NVARCHAR with lengths and MAX
-- `test_extract_temp_table_with_decimal` - DECIMAL/NUMERIC with precision/scale
-- `test_extract_temp_table_multiple_tables` - Multiple temp tables in one body
-- `test_extract_temp_table_global_temp` - Global temp table (##name)
-- `test_extract_temp_table_no_temp_table` - Body without temp tables
-- `test_extract_temp_table_with_constraint` - Temp table with table-level constraint
-- `test_extract_temp_table_with_primary_key_inline` - Inline PRIMARY KEY on column
-
-**Note:** INSERT...SELECT column inference not implemented (would require complex type resolution from source tables). Temp tables with explicit column definitions are fully supported.
-
-### Phase 24.3: Table Variable Column Source Extraction (2/2) ✅
+### Phase 34.2: Fix Column Resolution Context (0/2)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 24.3.1 | Extract table variable definitions | ✅ | Added `TableVariableDefinition`, `TableVariableColumn` structs; `extract_table_variable_definitions()`, `extract_table_variable_name()`, `extract_table_variable_columns()` in body_deps.rs |
-| 24.3.2 | Write `SqlDynamicColumnSource` for table variables | ✅ | Added `write_table_variable_columns()` in programmability_writer.rs; integrated into `write_all_dynamic_objects()` |
-
-**Unit Tests Added (body_deps.rs):**
-- `test_extract_table_variable_single_table` - Single table variable with basic columns
-- `test_extract_table_variable_with_varchar_lengths` - VARCHAR/NVARCHAR with lengths and MAX
-- `test_extract_table_variable_with_decimal` - DECIMAL/NUMERIC with precision/scale
-- `test_extract_table_variable_multiple_variables` - Multiple table variables in one body
-- `test_extract_table_variable_no_table_variable` - Body without table variables
-- `test_extract_table_variable_with_constraint` - Table variable with table-level constraint
-- `test_extract_table_variable_with_primary_key_inline` - Inline PRIMARY KEY on column
-- `test_extract_table_variable_mixed_with_regular_declare` - Mixed with regular DECLARE statements
-
-### Phase 24.4: Integration (1/1) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 24.4.1 | Integrate into procedure/function writers | ✅ | Functions now call write_all_dynamic_objects() |
-
-**Tests Added:**
-- `test_function_with_cte_emits_dynamic_objects` - Integration test in `alias_resolution_tests.rs`
-- `GetAccountWithCteFunction.sql` - Test fixture for function with CTE
-
----
-
-## Phase 25: Constraint Parsing & Properties (6/6) ✅
-
-**Goal:** Parse constraints defined via `ALTER TABLE...ADD CONSTRAINT` statements.
-
-**Status (2026-02-01):** Previous claim of "14 missing PKs, 19 missing FKs" is **outdated**. Layer 1 (inventory) now passes at 100%, meaning all constraints including PKs and FKs are correctly parsed and present in the dacpac. The ALTER TABLE ADD CONSTRAINT parsing was already implemented in `constraint_parser.rs` with comprehensive token-based parsing.
-  - `preprocess_parser.rs`
-
-### Phase 25.1: Parse ALTER TABLE Constraints (3/3) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 25.1.1 | Handle `GO;` batch separator | ✅ | Already implemented in tsql_parser.rs:1915 |
-| 25.1.2 | Parse `ALTER TABLE...ADD CONSTRAINT PRIMARY KEY` | ✅ | Implemented in constraint_parser.rs:595-600, parse_alter_table_add_constraint_tokens() |
-| 25.1.3 | Parse `ALTER TABLE...ADD CONSTRAINT FOREIGN KEY` | ✅ | Handles PK, FK, UNIQUE, CHECK with WITH CHECK/NOCHECK |
-
-### Phase 25.2: Fix Inline Constraint Edge Cases (1/2)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 25.2.1 | Debug inline PK parsing edge cases | ✅ | Token parser handles CLUSTERED/NONCLUSTERED correctly |
-| 25.2.2 | Add tests for inline constraint variations | ⬜ | Additional edge case tests (lower priority) |
-
-### Phase 25.3: Validation (1/1) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 25.3.1 | Validate constraint counts match DotNet | ✅ | Layer 1 at 100% - all elements match DotNet |
-
-### Phase 25.4: Fix IsNullable for Table Type Columns (1/1) ✅
-
-**Goal:** Fix incorrect IsNullable emission for SqlTableTypeSimpleColumn elements.
-
-**Issue:** Previous comments incorrectly stated "DotNet never emits IsNullable for SqlTableTypeSimpleColumn". In fact, DotNet **does** emit `IsNullable="True"` for nullable table type columns.
-
-**Fix Applied:**
-- Updated `src/dacpac/model_xml/table_writer.rs` lines 227-251
-- Removed incorrect logic that suppressed IsNullable for table type columns
-- Now correctly emits `IsNullable="True"` when columns are nullable
-
-**Impact:** Layer 2 parity improved from 46/48 to 47/48 (95.8% to 97.9%)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 25.4.1 | Fix IsNullable emission for SqlTableTypeSimpleColumn | ✅ | Corrected table_writer.rs to emit IsNullable="True" for nullable columns |
-
-### Phase 25.5: Fix SqlSequence CacheSize Property (1/1) ✅
-
-**Goal:** Fix missing CacheSize property in SqlSequence elements.
-
-**Issue:** DotNet emits `CacheSize="10"` for sequences with `CACHE 10`, but Rust was not emitting this property despite parsing and storing it correctly in the model.
-
-**Fix Applied:**
-- Updated `src/dacpac/model_xml/other_writers.rs` line 322-325
-- Added CacheSize property writing in `write_sequence()` function
-- Now correctly emits `<Property Name="CacheSize">10</Property>` when cache_size is specified
-
-**Impact:** Layer 2 parity improved from 47/48 to 48/48 (97.9% to 100%)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 25.5.1 | Write CacheSize property for SqlSequence elements | ✅ | Added to other_writers.rs:write_sequence() |
-
----
-
-## Phase 26: Fix OUTER/CROSS APPLY Subquery Alias Capture (4/4) ✅
-
-**Goal:** Fix deployment failure caused by unresolved references to APPLY subquery aliases.
-
-**Error:** `The reference to the element that has the name [AliasName].[Column] could not be resolved because no element with that name exists.`
-
-**Root Cause (Identified):**
-- `extract_table_refs_tokenized()` was not checking `subquery_aliases` when processing `TwoPartUnbracketed` tokens
-- APPLY subquery aliases (like `d` from `CROSS APPLY (...) d`) were being treated as schema names
-- This caused column references like `d.TagCount` to be emitted as `[d].[TagCount]` dependencies
-
-**Fix Applied:**
-- Updated `extract_table_refs_tokenized()` function signature to take `subquery_aliases: &HashSet<String>` as a new parameter
-- Added checks for `subquery_aliases.contains(&first.to_lowercase())` in:
-  - `TwoPartUnbracketed` handler
-  - `AliasDotBracketedColumn` handler
-  - `BracketedAliasDotColumn` handler
-  - `TwoPartBracketed` handler
-- Updated all callers to pass the `subquery_aliases` parameter
-
-### Phase 26.1: Diagnose Alias Capture Failure (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 26.1.1 | Add unit test reproducing APPLY alias not captured | ✅ | `test_body_dependencies_cross_apply_alias_column` - verifies `d.TagCount` is not emitted as `[d].[TagCount]` |
-| 26.1.2 | Debug `try_parse_subquery_alias` after `)` token | ✅ | Root cause was in `extract_table_refs_tokenized()`, not alias capture itself |
-
-### Phase 26.2: Fix Alias Extraction (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 26.2.1 | Fix APPLY subquery alias capture in `TableAliasTokenParser` | ✅ | Fixed in `extract_table_refs_tokenized()` by adding `subquery_aliases` parameter |
-| 26.2.2 | Add integration test for procedure with APPLY aliases | ✅ | `test_procedure_apply_clause_alias_resolution` for `GetAccountWithApply` procedure |
-
-**Location:** `src/dacpac/model_xml/body_deps.rs` - `extract_table_refs_tokenized()` function
-
-**Validation:** Deploy dacpac to SQL Server without unresolved reference errors.
-
----
-
-## Phase 27: Parser Token Helper Consolidation (4/4) ✅ COMPLETE
-
-**Goal:** Eliminate ~400-500 lines of duplicated helper methods across 12 parser files.
-
-**Problem:** Every `*TokenParser` struct reimplements identical methods: `skip_whitespace()`, `check_keyword()`, `parse_identifier()`, `is_at_end()`, `current_token()`, `advance()`, `check_token()`, `check_word_ci()`, `parse_schema_qualified_name()`.
-
-**Files Affected:**
-- `procedure_parser.rs`, `function_parser.rs`, `column_parser.rs`, `constraint_parser.rs`
-  - `preprocess_parser.rs`
-- `statement_parser.rs`, `trigger_parser.rs`, `sequence_parser.rs`, `index_parser.rs`
-- `table_type_parser.rs`, `fulltext_parser.rs`, `extended_property_parser.rs`, `preprocess_parser.rs`
-
-### Phase 27.1: Create Base TokenParser (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 27.1.1 | Create `src/parser/token_parser_base.rs` with shared `TokenParser` struct | ✅ | Contains tokens vec, pos, and all common helper methods |
-| 27.1.2 | Add `new(sql: &str) -> Option<Self>` constructor with MsSqlDialect tokenization | ✅ | Shared tokenization logic |
-
-### Phase 27.2: Migrate Parsers to Use Base (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 27.2.1 | Refactor all `*TokenParser` structs to use composition with base `TokenParser` | ✅ | 12/12 parsers migrated: trigger_parser, sequence_parser, extended_property_parser, fulltext_parser, column_parser, constraint_parser, preprocess_parser, function_parser, index_parser, procedure_parser, statement_parser, table_type_parser |
-| 27.2.2 | Remove duplicate `token_to_string()` implementations, use `identifier_utils::format_token()` | ✅ | Removed `token_to_string_simple()` from tsql_parser.rs (replaced with `format_token_sql()`), removed `token_to_string()` instance method from preprocess_parser.rs (replaced with `format_token_sql_cow()`) |
-
-**Progress Notes:**
-- Created `src/parser/token_parser_base.rs` with shared `TokenParser` struct containing common helper methods
-- Refactored 12 parsers to use composition with base `TokenParser`:
-  - `trigger_parser.rs`
-  - `sequence_parser.rs`
-  - `extended_property_parser.rs`
-  - `fulltext_parser.rs`
-  - `column_parser.rs`
-  - `constraint_parser.rs`
-  - `preprocess_parser.rs`
-  - `function_parser.rs`
-  - `index_parser.rs` (2026-02-01)
-  - `procedure_parser.rs` (2026-02-01) - removed ~120 lines of duplicate helper methods
-  - `statement_parser.rs` (2026-02-01)
-  - `table_type_parser.rs` (2026-02-01)
-- Removed duplicate `token_to_string()` implementations (2026-02-01):
-  - `tsql_parser.rs`: Removed `token_to_string_simple()`, now uses `identifier_utils::format_token_sql()` directly
-  - `preprocess_parser.rs`: Removed `token_to_string()` instance method, now uses `identifier_utils::format_token_sql_cow()` directly
-
-**Estimated Impact:** ~400-500 lines removed, improved maintainability.
-
----
-
-## Phase 28: Test Infrastructure Simplification (3/3) ✅ COMPLETE
-
-**Goal:** Reduce ~560 lines of duplicated test setup boilerplate.
-
-**Solution:** Added `TestContext::build_successfully()` method that combines build + assert + unwrap.
-
-### Phase 28.1: Add TestContext Helper (3/3) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 28.1.1 | Add `TestContext::build_successfully(&self) -> PathBuf` method | ✅ | Added to tests/common/mod.rs |
-| 28.1.2 | Update integration tests in `tests/integration/build_tests.rs` | ✅ | 27 occurrences updated |
-| 28.1.3 | Update integration tests in `tests/integration/dacpac/` modules | ✅ | ~100+ occurrences updated |
-
-**Actual Impact:** ~420 lines removed (~3 lines × 140 occurrences - build/assert/unwrap combined into single call).
-
----
-
-## Phase 29: Test Dacpac Parsing Helper (2/2) ✅ COMPLETE
-
-**Goal:** Reduce ~150-200 lines of duplicated XML parsing chains.
-
-**Problem:** This 3-line pattern appeared repeatedly:
-```rust
-let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-let model_xml = info.model_xml_content.expect("Should have model XML");
-let doc = parse_model_xml(&model_xml);
-```
-
-### Phase 29.1: Add Parsing Helper (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 29.1.1 | Add `parse_dacpac_model(dacpac_path: &Path) -> (DacpacInfo, String)` in `tests/integration/dacpac/mod.rs` | ✅ | Returns tuple since roxmltree borrows from String |
-| 29.1.2 | Update dacpac test modules to use helper | ✅ | Updated 7 files with 41 occurrences: column_tests, constraint_tests, element_tests, index_tests, model_xml_tests, scalar_type_tests, tvf_column_tests |
-
-**Actual Impact:** ~120 lines removed (3 lines → 2 lines per occurrence × 41 occurrences, minus new helper function).
-
-**Notes:**
-- The helper returns `(DacpacInfo, String)` instead of `roxmltree::Document` because roxmltree borrows from the String
-- Tests still need to call `parse_model_xml(&model_xml)` to get the Document, but the parsing and extraction is consolidated
-- Some tests that need the `DacpacInfo` for additional validation (like counting tables/views) can now use the `_info` from the tuple
-
----
-
-## Phase 30: Model Builder Constraint Helper (2/2) ✅ COMPLETE
-
-**Goal:** Reduce ~200 lines of duplicated `ConstraintElement` creation boilerplate.
-
-**Problem:** 14+ instances create `ConstraintElement` with mostly identical field patterns in `src/model/builder.rs`.
-
-**Location:** Lines 288-301, 313-326, 462-475, 537-550, 564-577, 585-598, and functions `constraint_from_extracted` (1307-1391), `constraint_from_table_constraint` (1468-1593).
-
-### Phase 30.1: Extract Builder Function (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 30.1.1 | Create `create_inline_constraint()` helper function | ✅ | Added ConstraintBuilder struct with builder pattern |
-| 30.1.2 | Refactor constraint creation sites to use helper | ✅ | Refactored 12 call sites across inline and table-level constraints |
-
-**Additional Cleanup:**
-- Remove duplicate comment on lines 440-441
-- Remove unused `_schema` and `_table_name` parameters in `column_from_def` and `column_from_fallback_table`
-
-**Actual Impact:** ~200 lines removed, clearer intent.
-
----
-
-## Phase 31: Project Parser Helpers (2/2) ✅ COMPLETE
-
-**Goal:** Reduce ~50 lines of duplicated boolean property parsing.
-
-**Problem:** `parse_database_options()` in `src/project/sqlproj_parser.rs` repeats this pattern 6 times:
-```rust
-if let Some(val) = find_property_value(root, "PropertyName") {
-    options.property_name = val.eq_ignore_ascii_case("true");
-}
-```
-
-**Location:** Lines 281-309 in `sqlproj_parser.rs`.
-
-### Phase 31.1: Extract Helpers (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 31.1.1 | Create `parse_bool_property(root, property_name, default) -> bool` helper | ✅ | Combines find + parse + default |
-| 31.1.2 | Create `find_child_text(node, tag_name) -> Option<String>` helper | ✅ | Used in dacpac refs, package refs, sqlcmd vars |
-
-**Additional Cleanup:**
-- ✅ Removed dead `extract_lcid_from_collation()` function (always returned 1033)
-- ✅ Simplified `extract_version_from_dsp()` with const array iteration
-
-**Actual Impact:** ~58 lines removed (exceeds estimated ~50 lines), improved readability.
-
----
-
-## Phase 32: Fix CTE Column Resolution in Body Dependencies (Complete) ✅
-
-**Goal:** Fix body dependency extraction to resolve CTE column references to their underlying tables.
-
-**Problem:** When SQL code references CTE columns like `AccountCte.Id`, DotNet resolves these to the underlying table columns (e.g., `[dbo].[Account].[Id]`). Rust was treating CTEs as subquery aliases to skip, missing these references.
-
-**Fix Applied:**
-- Modified `extract_cte_aliases_with_tables()` to extract the first FROM table from each CTE body
-- CTEs now map to their underlying tables in `table_aliases` instead of being added to `subquery_aliases`
-- When code references `AccountCte.Id`, it now resolves to `[dbo].[Account].[Id]`
-
-**Results:**
-- GetAccountWithCte: Rust now emits 21 refs (up from 12), matching DotNet's 19 more closely
-- CTE column references are now properly resolved to underlying table columns
-- Tests updated to reflect new behavior where CTEs map to their underlying tables
-
-**Remaining Issues in body_dependencies_aliases:**
-- Ordering differences between Rust and DotNet (not tracked at relationship level)
-- APPLY subquery context: Unqualified columns in APPLY subqueries resolve to wrong table
-- Minor deduplication differences
-
----
-
-## Phase 33: Fix Comma-less Table Type Primary Key Constraint (1/1) ✅ COMPLETE
-
-**Goal:** Fix relationship parity error in commaless_constraints fixture.
-
-**Problem:** Table type definitions with PRIMARY KEY constraints that lack a comma separator before the constraint were not being parsed correctly. The constraint was being consumed by the column parser.
-
-**Root Cause:**
-- `capture_column_text()` in `table_type_parser.rs` captured text until a comma or closing parenthesis
-- Without a comma before PRIMARY KEY, the entire constraint was captured as part of the preceding column definition
-- `parse_column_definition_tokens()` then failed to parse the malformed column text, silently dropping the constraint
-
-**Fix Applied:**
-- Updated `capture_column_text()` in `src/parser/table_type_parser.rs` to stop capturing when it encounters a table-level constraint keyword (`PRIMARY`, `UNIQUE`, `CHECK`, `INDEX`) at depth 0
-- This allows the constraint to be parsed separately by `try_parse_constraint()` in the next iteration
-
-**Test Added:**
-- `test_table_type_with_commaless_primary_key` - Unit test verifying comma-less PRIMARY KEY constraint parsing
-
-**Results:**
-- commaless_constraints fixture now shows Rel:0 (was Rel:1)
-- SqlTableTypePrimaryKeyConstraint element is now correctly generated for table types with comma-less constraints
+| 34.2.1 | Track APPLY subquery scope during body dependency extraction | ⬜ | Columns inside APPLY should not resolve to outer table aliases |
+| 34.2.2 | Validate against DotNet output for body_dependencies_aliases | ⬜ | Target: reduce 61 errors significantly |
 
 ---
 
@@ -501,26 +135,12 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 
 | Issue | Location | Phase | Status |
 |-------|----------|-------|--------|
-| ~~Missing SqlDynamicColumnSource elements~~ | procedure bodies | Phase 24 | ✅ Fixed |
-| ~~Missing constraints from ALTER TABLE~~ | parser/builder | Phase 25 | ✅ Fixed (Layer 1 at 100%) |
-| Relationship parity body_dependencies_aliases | body_deps.rs | Phase 32 | 61 errors (ordering differences, APPLY context issues); CTE column resolution fixed |
-| ~~Relationship parity commaless_constraints~~ | table_type_parser.rs | Phase 33 | ✅ Fixed (comma-less table type PK constraint) |
-| ~~Layer 2 errors in stress_test~~ | other_writers.rs | - | ✅ Fixed (CacheSize property) |
-
-## Code Simplification Opportunities
-
-| Issue | Location | Phase | Impact |
-|-------|----------|-------|--------|
-| Duplicated token parser helper methods | src/parser/*.rs (12 files) | Phase 27 ✅ | ~400-500 lines |
-| Test setup boilerplate (4 lines × 140 occurrences) | tests/integration/ | Phase 28 ✅ | ~560 lines |
-| Dacpac XML parsing chain duplication | tests/integration/dacpac/ | Phase 29 ✅ | ~120 lines |
-| ConstraintElement creation boilerplate | src/model/builder.rs | Phase 30 ✅ | ~200 lines |
-| Boolean property parsing duplication | src/project/sqlproj_parser.rs | Phase 31 ✅ | ~58 lines |
+| Relationship parity body_dependencies_aliases | body_deps.rs | Phase 34 | 61 errors (APPLY subquery column resolution) |
 
 ---
 
 <details>
-<summary>Completed Phases Summary (Phases 1-23)</summary>
+<summary>Completed Phases Summary (Phases 1-33)</summary>
 
 ## Phase Overview
 
@@ -541,20 +161,16 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 | Phase 21 | Split model_xml.rs into submodules | 10/10 |
 | Phase 22.1-22.3 | Layer 7 XML parity (CollationCaseSensitive, CustomData, ordering) | 4/5 |
 | Phase 23 | Fix IsMax property for MAX types | 4/4 |
+| Phase 24 | Track dynamic column sources in procedure bodies (CTEs, temp tables, table variables) | 8/8 |
+| Phase 25 | Constraint parsing & properties (ALTER TABLE, IsNullable, CacheSize) | 6/6 |
 | Phase 26 | Fix APPLY subquery alias capture in body dependencies | 4/4 |
-
-## Phase 21: Split model_xml.rs into Submodules (10/10) ✅
-
-Split the largest file (~7,520 lines) into logical submodules for improved maintainability.
-
-**Submodules created:**
-- `xml_helpers.rs` - Low-level XML utilities (244 lines, 9 tests)
-- `header.rs` - Header/metadata writing (324 lines, 9 tests)
-- `table_writer.rs` - Table/column XML (650 lines, 10 tests)
-- `view_writer.rs` - View XML (574 lines, 8 tests)
-- `programmability_writer.rs` - Procs/functions (1838 lines, 35 tests)
-- `body_deps.rs` - Dependency extraction (~2,200 lines)
-- `other_writers.rs` - Index, fulltext, sequence, extended property (~555 lines)
+| Phase 27 | Parser token helper consolidation (~400-500 lines removed) | 4/4 |
+| Phase 28 | Test infrastructure simplification (~420 lines removed) | 3/3 |
+| Phase 29 | Test dacpac parsing helper (~120 lines removed) | 2/2 |
+| Phase 30 | Model builder constraint helper (~200 lines removed) | 2/2 |
+| Phase 31 | Project parser helpers (~58 lines removed) | 2/2 |
+| Phase 32 | Fix CTE column resolution in body dependencies | Complete |
+| Phase 33 | Fix comma-less table type PRIMARY KEY constraint parsing | 1/1 |
 
 ## Phase 22.1-22.3: Layer 7 Canonical XML Parity (4/5) ✅
 
@@ -588,6 +204,76 @@ Fixed deployment failure caused by unresolved references to APPLY subquery alias
 - `test_body_dependencies_cross_apply_alias_column` - Unit test verifying `d.TagCount` is not emitted as `[d].[TagCount]`
 - `test_procedure_apply_clause_alias_resolution` - Integration test for `GetAccountWithApply` procedure
 
+## Phase 24: Track Dynamic Column Sources in Procedure Bodies (8/8) ✅
+
+Generated `SqlDynamicColumnSource` elements for CTEs, temp tables, and table variables.
+
+- **24.1** CTE Column Source Extraction (3/3): Created `DynamicColumnSource` struct, `extract_cte_definitions()`, `write_all_dynamic_objects()`
+- **24.2** Temp Table Column Source Extraction (2/2): Created `TempTableDefinition` struct, `extract_temp_table_definitions()`, `write_temp_table_columns()`
+- **24.3** Table Variable Column Source Extraction (2/2): Created `TableVariableDefinition` struct, `extract_table_variable_definitions()`, `write_table_variable_columns()`
+- **24.4** Integration (1/1): Functions now call `write_all_dynamic_objects()`
+
+## Phase 25: Constraint Parsing & Properties (6/6) ✅
+
+Parse constraints defined via `ALTER TABLE...ADD CONSTRAINT` statements. Layer 1 (inventory) at 100%.
+
+- **25.1** Parse ALTER TABLE Constraints (3/3): Handles PK, FK, UNIQUE, CHECK with WITH CHECK/NOCHECK
+- **25.3** Validation (1/1): All constraints match DotNet
+- **25.4** Fix IsNullable for Table Type Columns (1/1): Corrected `table_writer.rs` to emit `IsNullable="True"` for nullable columns
+- **25.5** Fix SqlSequence CacheSize Property (1/1): Added CacheSize property writing in `write_sequence()`
+
+## Phase 27: Parser Token Helper Consolidation (4/4) ✅
+
+Eliminated ~400-500 lines of duplicated helper methods across 12 parser files.
+
+- Created `src/parser/token_parser_base.rs` with shared `TokenParser` struct
+- Migrated 12 parsers to use composition with base `TokenParser`
+- Removed duplicate `token_to_string()` implementations
+
+## Phase 28: Test Infrastructure Simplification (3/3) ✅
+
+Reduced ~420 lines of duplicated test setup boilerplate.
+
+- Added `TestContext::build_successfully()` method combining build + assert + unwrap
+- Updated 140+ occurrences across integration tests
+
+## Phase 29: Test Dacpac Parsing Helper (2/2) ✅
+
+Reduced ~120 lines of duplicated XML parsing chains.
+
+- Added `parse_dacpac_model()` helper in `tests/integration/dacpac/mod.rs`
+- Updated 41 occurrences across 7 test files
+
+## Phase 30: Model Builder Constraint Helper (2/2) ✅
+
+Reduced ~200 lines of duplicated `ConstraintElement` creation boilerplate.
+
+- Added `ConstraintBuilder` struct with builder pattern
+- Refactored 12 call sites across inline and table-level constraints
+
+## Phase 31: Project Parser Helpers (2/2) ✅
+
+Reduced ~58 lines of duplicated boolean property parsing.
+
+- Created `parse_bool_property()` and `find_child_text()` helpers
+- Removed dead `extract_lcid_from_collation()` function
+- Simplified `extract_version_from_dsp()` with const array iteration
+
+## Phase 32: Fix CTE Column Resolution in Body Dependencies ✅
+
+Fixed body dependency extraction to resolve CTE column references to their underlying tables.
+
+- Modified `extract_cte_aliases_with_tables()` to extract the first FROM table from each CTE body
+- CTEs now map to their underlying tables in `table_aliases` instead of being added to `subquery_aliases`
+- CTE column references like `AccountCte.Id` now resolve to `[dbo].[Account].[Id]`
+
+## Phase 33: Fix Comma-less Table Type PRIMARY KEY Constraint (1/1) ✅
+
+Fixed relationship parity error in commaless_constraints fixture.
+
+- Updated `capture_column_text()` in `table_type_parser.rs` to stop capturing when it encounters table-level constraint keywords at depth 0
+- SqlTableTypePrimaryKeyConstraint element now correctly generated for table types with comma-less constraints
+
 ## Phase 20: Replace Remaining Regex with Tokenization/AST (43/43) ✅
 
 Eliminated remaining regex patterns in favor of tokenizer-based parsing for better maintainability and correctness.
@@ -619,13 +305,6 @@ Replaced CTE_ALIAS_RE, SUBQUERY_ALIAS_RE, APPLY_KEYWORD_RE, APPLY_FUNCTION_ALIAS
 Fixed 11 alias resolution bugs in `extract_all_column_references()`. Table aliases now filtered before treating as column references. Added MERGE keyword detection for TARGET/SOURCE aliases.
 
 ## Key Implementation Details
-
-### Tokenization Benefits
-- Handles variable whitespace (tabs, multiple spaces, newlines) correctly
-- Respects SQL comments and string literals
-- More maintainable and easier to extend
-- Better error messages when parsing fails
-- Faster performance on complex patterns
 
 ### Remaining Hotspots
 
