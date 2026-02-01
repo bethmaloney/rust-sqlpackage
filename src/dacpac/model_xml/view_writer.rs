@@ -14,9 +14,9 @@ use crate::model::{DatabaseModel, ModelElement, RawElement, ViewElement};
 
 use super::xml_helpers::{write_property, write_schema_relationship, write_script_property};
 use super::{
-    extract_all_column_references, extract_group_by_columns, extract_join_on_columns,
-    extract_select_columns, extract_table_aliases, parse_column_expression,
-    parse_qualified_name_tokenized, reconstruct_tokens,
+    extract_all_column_references, extract_cte_definitions, extract_group_by_columns,
+    extract_join_on_columns, extract_select_columns, extract_table_aliases,
+    parse_column_expression, parse_qualified_name_tokenized, reconstruct_tokens, CteColumn,
 };
 
 /// Represents a view column with its name and optional source dependency
@@ -82,12 +82,15 @@ pub(crate) fn write_view<W: Write>(
         write_view_columns(writer, &full_name, &columns)?;
     }
 
-    // 7. Write QueryDependencies relationship
+    // 7. Write DynamicObjects relationship for CTEs
+    write_view_cte_dynamic_objects(writer, &full_name, &query_script, &view.schema)?;
+
+    // 8. Write QueryDependencies relationship
     if !query_deps.is_empty() {
         write_query_dependencies(writer, &query_deps)?;
     }
 
-    // 8. Schema relationship
+    // 9. Schema relationship
     write_schema_relationship(writer, &view.schema)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -157,12 +160,15 @@ pub(crate) fn write_raw_view<W: Write>(
         write_view_columns(writer, &full_name, &columns)?;
     }
 
-    // 7. Write QueryDependencies relationship
+    // 7. Write DynamicObjects relationship for CTEs
+    write_view_cte_dynamic_objects(writer, &full_name, &query_script, &raw.schema)?;
+
+    // 8. Write QueryDependencies relationship
     if !query_deps.is_empty() {
         write_query_dependencies(writer, &query_deps)?;
     }
 
-    // 8. Schema relationship
+    // 9. Schema relationship
     write_schema_relationship(writer, &raw.schema)?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -446,6 +452,104 @@ pub(crate) fn write_query_dependencies<W: Write>(
         let refs = BytesStart::new("References").with_attributes([("Name", dep.as_str())]);
         writer.write_event(Event::Empty(refs))?;
 
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+// =============================================================================
+// CTE DynamicObjects Writing for Views (Phase 24.1.3)
+// =============================================================================
+
+/// Write DynamicObjects relationship for CTEs extracted from a view's query.
+/// Each CTE becomes a SqlDynamicColumnSource element with SqlComputedColumn children.
+fn write_view_cte_dynamic_objects<W: Write>(
+    writer: &mut Writer<W>,
+    full_name: &str,
+    query_script: &str,
+    default_schema: &str,
+) -> anyhow::Result<()> {
+    // Extract CTEs from the query script
+    let cte_defs = extract_cte_definitions(query_script, default_schema);
+
+    if cte_defs.is_empty() {
+        return Ok(());
+    }
+
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "DynamicObjects")]);
+    writer.write_event(Event::Start(rel))?;
+
+    for cte in &cte_defs {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        // Element name: [schema].[view].[CTEn].[cte_name]
+        let cte_source_name = format!("{}.[CTE{}].[{}]", full_name, cte.cte_number, cte.name);
+
+        let elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlDynamicColumnSource"),
+            ("Name", cte_source_name.as_str()),
+        ]);
+        writer.write_event(Event::Start(elem))?;
+
+        // Write Columns relationship with SqlComputedColumn elements
+        if !cte.columns.is_empty() {
+            write_cte_columns_for_view(writer, &cte_source_name, &cte.columns)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write Columns relationship for a CTE SqlDynamicColumnSource in a view.
+fn write_cte_columns_for_view<W: Write>(
+    writer: &mut Writer<W>,
+    cte_source_name: &str,
+    columns: &[CteColumn],
+) -> anyhow::Result<()> {
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
+    writer.write_event(Event::Start(rel))?;
+
+    for col in columns {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let col_full_name = format!("{}.[{}]", cte_source_name, col.name);
+        let col_elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlComputedColumn"),
+            ("Name", col_full_name.as_str()),
+        ]);
+        writer.write_event(Event::Start(col_elem))?;
+
+        // Write ExpressionDependencies if any
+        if !col.expression_dependencies.is_empty() {
+            write_expression_dependencies_for_view(writer, &col.expression_dependencies)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write ExpressionDependencies relationship for a CTE column in a view.
+fn write_expression_dependencies_for_view<W: Write>(
+    writer: &mut Writer<W>,
+    dependencies: &[String],
+) -> anyhow::Result<()> {
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "ExpressionDependencies")]);
+    writer.write_event(Event::Start(rel))?;
+
+    for dep in dependencies {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+        let refs_elem = BytesStart::new("References").with_attributes([("Name", dep.as_str())]);
+        writer.write_event(Event::Empty(refs_elem))?;
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     }
 

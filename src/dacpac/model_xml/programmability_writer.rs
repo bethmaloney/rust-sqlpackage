@@ -94,10 +94,8 @@ pub(crate) fn write_procedure<W: Write>(
     };
     write_body_dependencies(writer, &body_deps)?;
 
-    // Write DynamicObjects relationship for TVP parameters
-    if !tvp_params.is_empty() {
-        write_dynamic_objects(writer, &full_name, &tvp_params)?;
-    }
+    // Write DynamicObjects relationship for TVP parameters and CTEs
+    write_all_dynamic_objects(writer, &full_name, &body, &proc.schema, &tvp_params)?;
 
     // Write Parameters relationship
     if !params.is_empty() {
@@ -394,46 +392,6 @@ fn find_table_type_for_parameter<'a>(
     None
 }
 
-/// Write DynamicObjects relationship for table-valued parameters
-fn write_dynamic_objects<W: Write>(
-    writer: &mut Writer<W>,
-    proc_full_name: &str,
-    tvp_params: &[(&ProcedureParameter, Option<&UserDefinedTypeElement>)],
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", "DynamicObjects")]);
-    writer.write_event(Event::Start(rel))?;
-
-    for (param, table_type_opt) in tvp_params {
-        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-        let param_name_with_at = if param.name.starts_with('@') {
-            param.name.clone()
-        } else {
-            format!("@{}", param.name)
-        };
-        let dynamic_source_name = format!("{}.[{}]", proc_full_name, param_name_with_at);
-
-        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-        let elem = BytesStart::new("Element").with_attributes([
-            ("Type", "SqlDynamicColumnSource"),
-            ("Name", dynamic_source_name.as_str()),
-        ]);
-        writer.write_event(Event::Start(elem))?;
-
-        // Write Columns relationship if we have the table type definition
-        if let Some(table_type) = table_type_opt {
-            write_dynamic_columns(writer, &dynamic_source_name, table_type)?;
-        }
-
-        writer.write_event(Event::End(BytesEnd::new("Element")))?;
-        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    }
-
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-    Ok(())
-}
-
 /// Write Columns relationship for a SqlDynamicColumnSource
 fn write_dynamic_columns<W: Write>(
     writer: &mut Writer<W>,
@@ -468,6 +426,134 @@ fn write_dynamic_columns<W: Write>(
 
         // Write TypeSpecifier relationship
         write_column_type_specifier(writer, &col.data_type, col.precision, col.scale)?;
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+// =============================================================================
+// CTE DynamicObjects Writing (Phase 24.1.3)
+// =============================================================================
+
+use super::{extract_cte_definitions, CteColumn};
+
+/// Write Columns relationship for a CTE SqlDynamicColumnSource.
+/// Each column is a SqlComputedColumn with ExpressionDependencies.
+fn write_cte_columns<W: Write>(
+    writer: &mut Writer<W>,
+    cte_source_name: &str,
+    columns: &[CteColumn],
+) -> anyhow::Result<()> {
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
+    writer.write_event(Event::Start(rel))?;
+
+    for col in columns {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let col_full_name = format!("{}.[{}]", cte_source_name, col.name);
+        let col_elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlComputedColumn"),
+            ("Name", col_full_name.as_str()),
+        ]);
+        writer.write_event(Event::Start(col_elem))?;
+
+        // Write ExpressionDependencies if any
+        if !col.expression_dependencies.is_empty() {
+            write_expression_dependencies(writer, &col.expression_dependencies)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write ExpressionDependencies relationship for a CTE column.
+fn write_expression_dependencies<W: Write>(
+    writer: &mut Writer<W>,
+    dependencies: &[String],
+) -> anyhow::Result<()> {
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "ExpressionDependencies")]);
+    writer.write_event(Event::Start(rel))?;
+
+    for dep in dependencies {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+        let refs_elem = BytesStart::new("References").with_attributes([("Name", dep.as_str())]);
+        writer.write_event(Event::Empty(refs_elem))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Extract CTE definitions and write combined DynamicObjects (both TVPs and CTEs)
+pub(crate) fn write_all_dynamic_objects<W: Write>(
+    writer: &mut Writer<W>,
+    full_name: &str,
+    body: &str,
+    default_schema: &str,
+    tvp_params: &[(&ProcedureParameter, Option<&UserDefinedTypeElement>)],
+) -> anyhow::Result<()> {
+    // Extract CTEs from body
+    let cte_defs = extract_cte_definitions(body, default_schema);
+
+    // If no TVPs and no CTEs, nothing to write
+    if tvp_params.is_empty() && cte_defs.is_empty() {
+        return Ok(());
+    }
+
+    // Open DynamicObjects relationship
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "DynamicObjects")]);
+    writer.write_event(Event::Start(rel))?;
+
+    // Write TVP entries first
+    for (param, table_type_opt) in tvp_params {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let param_name_with_at = if param.name.starts_with('@') {
+            param.name.clone()
+        } else {
+            format!("@{}", param.name)
+        };
+        let dynamic_source_name = format!("{}.[{}]", full_name, param_name_with_at);
+
+        let elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlDynamicColumnSource"),
+            ("Name", dynamic_source_name.as_str()),
+        ]);
+        writer.write_event(Event::Start(elem))?;
+
+        // Write Columns relationship if we have the table type definition
+        if let Some(table_type) = table_type_opt {
+            write_dynamic_columns(writer, &dynamic_source_name, table_type)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    // Write CTE entries
+    for cte in &cte_defs {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let cte_source_name = format!("{}.[CTE{}].[{}]", full_name, cte.cte_number, cte.name);
+
+        let elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlDynamicColumnSource"),
+            ("Name", cte_source_name.as_str()),
+        ]);
+        writer.write_event(Event::Start(elem))?;
+
+        if !cte.columns.is_empty() {
+            write_cte_columns(writer, &cte_source_name, &cte.columns)?;
+        }
 
         writer.write_event(Event::End(BytesEnd::new("Element")))?;
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;

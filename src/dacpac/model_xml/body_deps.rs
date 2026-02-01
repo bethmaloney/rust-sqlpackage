@@ -27,6 +27,32 @@ pub(crate) enum BodyDependency {
 }
 
 // =============================================================================
+// CTE (Common Table Expression) Extraction (Phase 24.1.2)
+// =============================================================================
+
+/// Represents a column extracted from a CTE definition
+#[derive(Debug, Clone)]
+pub(crate) struct CteColumn {
+    /// Column name (output alias or original column name)
+    pub name: String,
+    /// Expression dependencies - source columns this CTE column references
+    /// e.g., ["[dbo].[Account].[Id]", "[dbo].[Account].[Name]"]
+    pub expression_dependencies: Vec<String>,
+}
+
+/// Represents a CTE extracted from a WITH clause
+#[derive(Debug, Clone)]
+pub(crate) struct CteDefinition {
+    /// CTE name (e.g., "AccountCte")
+    pub name: String,
+    /// CTE sequence number within the procedure/view (CTE1, CTE2, etc.)
+    /// This is based on the WITH block number, not the CTE position within a WITH block
+    pub cte_number: u32,
+    /// Columns in this CTE with their expression dependencies
+    pub columns: Vec<CteColumn>,
+}
+
+// =============================================================================
 // Body Dependency Token Scanner (Phase 20.2.1)
 // =============================================================================
 // Replaces TOKEN_RE regex with tokenizer-based scanning for body dependency extraction.
@@ -2359,6 +2385,626 @@ pub(crate) fn is_sql_keyword_not_column(word: &str) -> bool {
 }
 
 // =============================================================================
+// CTE Definition Extraction (Phase 24.1.2)
+// =============================================================================
+
+/// Extract CTE definitions from a SQL body (procedure or view).
+/// Returns a list of CTE definitions with their columns and expression dependencies.
+///
+/// # Arguments
+/// * `sql` - The SQL body text containing WITH clauses
+/// * `default_schema` - Default schema for unqualified table references
+///
+/// # Returns
+/// Vector of CteDefinition structs, one per CTE found in the body
+pub(crate) fn extract_cte_definitions(sql: &str, default_schema: &str) -> Vec<CteDefinition> {
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, sql).tokenize_with_location() {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut cte_defs = Vec::new();
+    let mut with_block_number = 0u32; // Tracks which WITH block we're in
+    let mut pos = 0;
+
+    // First, extract table aliases for the entire body so we can resolve column references
+    let mut table_aliases = HashMap::new();
+    let mut subquery_aliases = HashSet::new();
+    if let Some(mut parser) = TableAliasTokenParser::with_default_schema(sql, default_schema) {
+        parser.extract_all_aliases(&mut table_aliases, &mut subquery_aliases);
+    }
+
+    while pos < tokens.len() {
+        // Skip whitespace
+        while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+            pos += 1;
+        }
+        if pos >= tokens.len() {
+            break;
+        }
+
+        // Look for WITH keyword
+        if matches!(tokens[pos].token, Token::Word(ref w) if w.keyword == Keyword::WITH) {
+            pos += 1;
+            with_block_number += 1;
+
+            // Skip whitespace
+            while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                pos += 1;
+            }
+
+            // Skip RECURSIVE if present
+            if pos < tokens.len() {
+                if let Token::Word(ref w) = tokens[pos].token {
+                    if w.value.to_uppercase() == "RECURSIVE" {
+                        pos += 1;
+                        while pos < tokens.len()
+                            && matches!(tokens[pos].token, Token::Whitespace(_))
+                        {
+                            pos += 1;
+                        }
+                    }
+                }
+            }
+
+            // Parse CTE definitions in this WITH block
+            loop {
+                // Get CTE name
+                let cte_name = match &tokens.get(pos).map(|t| &t.token) {
+                    Some(Token::Word(w)) => {
+                        pos += 1;
+                        w.value.clone()
+                    }
+                    Some(Token::SingleQuotedString(s) | Token::DoubleQuotedString(s)) => {
+                        pos += 1;
+                        s.clone()
+                    }
+                    _ => break,
+                };
+
+                // Skip whitespace
+                while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                    pos += 1;
+                }
+
+                // Check for optional column list: cte_name (col1, col2, ...) AS (...)
+                // We skip this for now - column names come from the SELECT
+                if pos < tokens.len() && matches!(tokens[pos].token, Token::LParen) {
+                    // Check if next token after LParen is AS - if so, this is the query body, not a column list
+                    let mut check_pos = pos + 1;
+                    while check_pos < tokens.len()
+                        && matches!(tokens[check_pos].token, Token::Whitespace(_))
+                    {
+                        check_pos += 1;
+                    }
+                    if check_pos < tokens.len() {
+                        if let Token::Word(ref w) = tokens[check_pos].token {
+                            if w.keyword != Keyword::AS && w.value.to_uppercase() != "SELECT" {
+                                // This is an optional column list, skip it
+                                let mut depth = 1;
+                                pos += 1;
+                                while pos < tokens.len() && depth > 0 {
+                                    match tokens[pos].token {
+                                        Token::LParen => depth += 1,
+                                        Token::RParen => depth -= 1,
+                                        _ => {}
+                                    }
+                                    pos += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Skip whitespace
+                while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                    pos += 1;
+                }
+
+                // Expect AS keyword
+                let is_as = pos < tokens.len()
+                    && matches!(&tokens[pos].token, Token::Word(w) if w.keyword == Keyword::AS);
+                if !is_as {
+                    break;
+                }
+                pos += 1;
+
+                // Skip whitespace
+                while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                    pos += 1;
+                }
+
+                // Expect opening paren
+                if pos >= tokens.len() || !matches!(tokens[pos].token, Token::LParen) {
+                    break;
+                }
+                let cte_body_start = pos + 1;
+
+                // Find matching closing paren to extract CTE body
+                let mut depth = 1;
+                pos += 1;
+                while pos < tokens.len() && depth > 0 {
+                    match tokens[pos].token {
+                        Token::LParen => depth += 1,
+                        Token::RParen => depth -= 1,
+                        _ => {}
+                    }
+                    pos += 1;
+                }
+                let cte_body_end = pos - 1;
+
+                // Extract CTE body SQL
+                if cte_body_start < cte_body_end {
+                    let cte_body_tokens = &tokens[cte_body_start..cte_body_end];
+                    let columns = extract_cte_columns_from_tokens(
+                        cte_body_tokens,
+                        &table_aliases,
+                        default_schema,
+                    );
+
+                    cte_defs.push(CteDefinition {
+                        name: cte_name,
+                        cte_number: with_block_number,
+                        columns,
+                    });
+                }
+
+                // Skip whitespace
+                while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                    pos += 1;
+                }
+
+                // Check for comma (more CTEs in this WITH block)
+                if pos < tokens.len() && matches!(tokens[pos].token, Token::Comma) {
+                    pos += 1;
+                    while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                        pos += 1;
+                    }
+                    continue;
+                }
+
+                // End of this WITH block
+                break;
+            }
+        } else {
+            pos += 1;
+        }
+    }
+
+    cte_defs
+}
+
+/// Extract columns and their expression dependencies from CTE body tokens.
+/// Parses the SELECT clause to find column aliases/names and their source references.
+fn extract_cte_columns_from_tokens(
+    tokens: &[sqlparser::tokenizer::TokenWithSpan],
+    table_aliases: &HashMap<String, String>,
+    default_schema: &str,
+) -> Vec<CteColumn> {
+    let mut columns = Vec::new();
+    let mut pos = 0;
+
+    // Skip to SELECT keyword
+    while pos < tokens.len() {
+        if let Token::Word(ref w) = tokens[pos].token {
+            if w.keyword == Keyword::SELECT {
+                pos += 1;
+                break;
+            }
+        }
+        pos += 1;
+    }
+
+    // Skip DISTINCT, TOP, etc.
+    while pos < tokens.len() {
+        match &tokens[pos].token {
+            Token::Whitespace(_) => pos += 1,
+            Token::Word(w) if w.keyword == Keyword::DISTINCT || w.keyword == Keyword::ALL => {
+                pos += 1
+            }
+            Token::Word(w) if w.keyword == Keyword::TOP => {
+                pos += 1;
+                // Skip the TOP number/expression
+                while pos < tokens.len() {
+                    match &tokens[pos].token {
+                        Token::Whitespace(_) | Token::Number(_, _) => pos += 1,
+                        Token::LParen => {
+                            let mut depth = 1;
+                            pos += 1;
+                            while pos < tokens.len() && depth > 0 {
+                                match tokens[pos].token {
+                                    Token::LParen => depth += 1,
+                                    Token::RParen => depth -= 1,
+                                    _ => {}
+                                }
+                                pos += 1;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+
+    // Parse column expressions until FROM
+    while pos < tokens.len() {
+        // Skip whitespace
+        while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+            pos += 1;
+        }
+        if pos >= tokens.len() {
+            break;
+        }
+
+        // Check for FROM (end of SELECT list)
+        if let Token::Word(ref w) = tokens[pos].token {
+            if w.keyword == Keyword::FROM {
+                break;
+            }
+        }
+
+        // Parse one column expression
+        let (column_name, dependencies, new_pos) =
+            parse_cte_column_expression(&tokens[pos..], table_aliases, default_schema);
+
+        if !column_name.is_empty() {
+            columns.push(CteColumn {
+                name: column_name,
+                expression_dependencies: dependencies,
+            });
+        }
+
+        pos += new_pos;
+
+        // Skip whitespace
+        while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+            pos += 1;
+        }
+
+        // Check for comma (more columns)
+        if pos < tokens.len() && matches!(tokens[pos].token, Token::Comma) {
+            pos += 1;
+            continue;
+        }
+
+        // Not a comma - exit the loop (no more columns)
+        break;
+    }
+
+    columns
+}
+
+/// Parse a single column expression from the SELECT clause.
+/// Returns (column_name, expression_dependencies, tokens_consumed)
+fn parse_cte_column_expression(
+    tokens: &[sqlparser::tokenizer::TokenWithSpan],
+    table_aliases: &HashMap<String, String>,
+    default_schema: &str,
+) -> (String, Vec<String>, usize) {
+    let mut pos = 0;
+    let mut column_name = String::new();
+    let mut dependencies = Vec::new();
+    let mut current_ref_parts: Vec<String> = Vec::new();
+    let mut paren_depth = 0;
+
+    // Track potential column references as we go
+    while pos < tokens.len() {
+        match &tokens[pos].token {
+            Token::Whitespace(_) => {
+                // Flush any pending reference before whitespace
+                if !current_ref_parts.is_empty() && paren_depth == 0 {
+                    // Extract column name from the last part if no AS alias was used yet
+                    if column_name.is_empty() {
+                        column_name = current_ref_parts.last().unwrap().clone();
+                    }
+                    if let Some(dep) =
+                        resolve_cte_column_ref(&current_ref_parts, table_aliases, default_schema)
+                    {
+                        if !dependencies.contains(&dep) {
+                            dependencies.push(dep);
+                        }
+                    }
+                    current_ref_parts.clear();
+                }
+                pos += 1;
+            }
+            Token::Comma => {
+                // End of this column expression
+                if !current_ref_parts.is_empty() {
+                    // Extract column name from the last part if no AS alias was used
+                    if column_name.is_empty() {
+                        // Use the last part as the column name
+                        column_name = current_ref_parts.last().unwrap().clone();
+                    }
+                    // Try to resolve as a dependency
+                    if let Some(dep) =
+                        resolve_cte_column_ref(&current_ref_parts, table_aliases, default_schema)
+                    {
+                        if !dependencies.contains(&dep) {
+                            dependencies.push(dep);
+                        }
+                    }
+                }
+                break;
+            }
+            Token::LParen => {
+                // Flush pending reference
+                if !current_ref_parts.is_empty() {
+                    if let Some(dep) =
+                        resolve_cte_column_ref(&current_ref_parts, table_aliases, default_schema)
+                    {
+                        if !dependencies.contains(&dep) {
+                            dependencies.push(dep);
+                        }
+                    }
+                    current_ref_parts.clear();
+                }
+                paren_depth += 1;
+                pos += 1;
+            }
+            Token::RParen => {
+                if paren_depth > 0 {
+                    paren_depth -= 1;
+                }
+                pos += 1;
+            }
+            Token::Period => {
+                // Part of a qualified name - don't flush yet
+                pos += 1;
+            }
+            Token::Word(w) => {
+                if w.keyword == Keyword::FROM {
+                    // End of SELECT list - flush pending
+                    if !current_ref_parts.is_empty() {
+                        // Extract column name from the last part if no AS alias was used
+                        if column_name.is_empty() {
+                            column_name = current_ref_parts.last().unwrap().clone();
+                        }
+                        if let Some(dep) = resolve_cte_column_ref(
+                            &current_ref_parts,
+                            table_aliases,
+                            default_schema,
+                        ) {
+                            if !dependencies.contains(&dep) {
+                                dependencies.push(dep);
+                            }
+                        }
+                    }
+                    break;
+                } else if w.keyword == Keyword::AS && paren_depth == 0 {
+                    // AS indicates the next identifier is the column alias
+                    // First flush any pending reference as a dependency
+                    if !current_ref_parts.is_empty() {
+                        if let Some(dep) = resolve_cte_column_ref(
+                            &current_ref_parts,
+                            table_aliases,
+                            default_schema,
+                        ) {
+                            if !dependencies.contains(&dep) {
+                                dependencies.push(dep);
+                            }
+                        }
+                        current_ref_parts.clear();
+                    }
+                    pos += 1;
+                    // Skip whitespace
+                    while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                        pos += 1;
+                    }
+                    // Get the alias name
+                    if pos < tokens.len() {
+                        match &tokens[pos].token {
+                            Token::Word(alias_w) => {
+                                column_name = alias_w.value.clone();
+                                pos += 1;
+                            }
+                            Token::SingleQuotedString(s) | Token::DoubleQuotedString(s) => {
+                                column_name = s.clone();
+                                pos += 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                } else if is_sql_reserved_word(&w.value) && paren_depth == 0 {
+                    // SQL function or keyword - flush pending reference
+                    if !current_ref_parts.is_empty() {
+                        if let Some(dep) = resolve_cte_column_ref(
+                            &current_ref_parts,
+                            table_aliases,
+                            default_schema,
+                        ) {
+                            if !dependencies.contains(&dep) {
+                                dependencies.push(dep);
+                            }
+                        }
+                        current_ref_parts.clear();
+                    }
+                    pos += 1;
+                } else {
+                    // Regular identifier - add to current reference
+                    current_ref_parts.push(w.value.clone());
+                    pos += 1;
+                }
+            }
+            Token::SingleQuotedString(_) | Token::DoubleQuotedString(_) => {
+                // String literal - could be alias if after expression, or just a literal
+                pos += 1;
+            }
+            Token::Number(_, _) => {
+                // Numeric literal
+                pos += 1;
+            }
+            _ => {
+                // Operator or other token - flush pending reference
+                if !current_ref_parts.is_empty() {
+                    if let Some(dep) =
+                        resolve_cte_column_ref(&current_ref_parts, table_aliases, default_schema)
+                    {
+                        if !dependencies.contains(&dep) {
+                            dependencies.push(dep);
+                        }
+                    }
+                    current_ref_parts.clear();
+                }
+                pos += 1;
+            }
+        }
+    }
+
+    // Flush any remaining reference
+    if !current_ref_parts.is_empty() {
+        // Extract column name from the last part if no AS alias was used
+        if column_name.is_empty() {
+            column_name = current_ref_parts.last().unwrap().clone();
+        }
+        if let Some(dep) = resolve_cte_column_ref(&current_ref_parts, table_aliases, default_schema)
+        {
+            if !dependencies.contains(&dep) {
+                dependencies.push(dep);
+            }
+        }
+    }
+
+    (column_name, dependencies, pos)
+}
+
+/// Resolve a column reference to its fully qualified form.
+/// Handles alias resolution and schema qualification.
+fn resolve_cte_column_ref(
+    parts: &[String],
+    table_aliases: &HashMap<String, String>,
+    default_schema: &str,
+) -> Option<String> {
+    if parts.is_empty() {
+        return None;
+    }
+
+    match parts.len() {
+        1 => {
+            // Single identifier - could be a column name without table prefix
+            // We can't resolve this to a specific table without more context
+            None
+        }
+        2 => {
+            // alias.column or table.column
+            let alias_or_table = &parts[0];
+            let column = &parts[1];
+            let alias_lower = alias_or_table.to_lowercase();
+
+            // Check if first part is a known table alias
+            if let Some(table_ref) = table_aliases.get(&alias_lower) {
+                // table_ref is like "[dbo].[Account]"
+                Some(format!("{}.[{}]", table_ref, column))
+            } else {
+                // Assume it's schema.table (unlikely in CTE select) or just table.column
+                // Use default schema if it looks like an unqualified table
+                Some(format!(
+                    "[{}].[{}].[{}]",
+                    default_schema, alias_or_table, column
+                ))
+            }
+        }
+        3 => {
+            // schema.table.column
+            let schema = &parts[0];
+            let table = &parts[1];
+            let column = &parts[2];
+            Some(format!("[{}].[{}].[{}]", schema, table, column))
+        }
+        _ => {
+            // More than 3 parts - take last 3
+            let len = parts.len();
+            let schema = &parts[len - 3];
+            let table = &parts[len - 2];
+            let column = &parts[len - 1];
+            Some(format!("[{}].[{}].[{}]", schema, table, column))
+        }
+    }
+}
+
+/// Check if a word is a SQL reserved word that should not be treated as a column reference
+fn is_sql_reserved_word(word: &str) -> bool {
+    let upper = word.to_uppercase();
+    matches!(
+        upper.as_str(),
+        "SELECT"
+            | "FROM"
+            | "WHERE"
+            | "AND"
+            | "OR"
+            | "NOT"
+            | "NULL"
+            | "IS"
+            | "IN"
+            | "BETWEEN"
+            | "LIKE"
+            | "EXISTS"
+            | "CASE"
+            | "WHEN"
+            | "THEN"
+            | "ELSE"
+            | "END"
+            | "CAST"
+            | "CONVERT"
+            | "COALESCE"
+            | "NULLIF"
+            | "IIF"
+            | "COUNT"
+            | "SUM"
+            | "AVG"
+            | "MIN"
+            | "MAX"
+            | "ROW_NUMBER"
+            | "RANK"
+            | "DENSE_RANK"
+            | "OVER"
+            | "PARTITION"
+            | "ORDER"
+            | "BY"
+            | "ASC"
+            | "DESC"
+            | "INNER"
+            | "LEFT"
+            | "RIGHT"
+            | "FULL"
+            | "OUTER"
+            | "CROSS"
+            | "JOIN"
+            | "ON"
+            | "GROUP"
+            | "HAVING"
+            | "UNION"
+            | "ALL"
+            | "DISTINCT"
+            | "TOP"
+            | "STUFF"
+            | "STRING_AGG"
+            | "CONCAT"
+            | "LEN"
+            | "CHARINDEX"
+            | "SUBSTRING"
+            | "REPLACE"
+            | "LTRIM"
+            | "RTRIM"
+            | "TRIM"
+            | "UPPER"
+            | "LOWER"
+            | "GETDATE"
+            | "GETUTCDATE"
+            | "DATEADD"
+            | "DATEDIFF"
+            | "DATENAME"
+            | "DATEPART"
+            | "YEAR"
+            | "MONTH"
+            | "DAY"
+    )
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -2791,5 +3437,95 @@ mod tests {
     fn test_extract_column_alias_filters_keywords() {
         let aliases = extract_column_aliases_tokenized("SELECT a AS FROM, b AS alias");
         assert_eq!(aliases, vec!["alias"]);
+    }
+
+    // ============================================================================
+    // CTE extraction tests (Phase 24.1.2)
+    // ============================================================================
+
+    #[test]
+    fn test_extract_cte_definitions_single_cte() {
+        let sql = r#"
+            WITH AccountCte AS (
+                SELECT A.Id, A.Name
+                FROM [dbo].[Account] A
+            )
+            SELECT * FROM AccountCte
+        "#;
+        let cte_defs = extract_cte_definitions(sql, "dbo");
+        assert_eq!(cte_defs.len(), 1, "Expected 1 CTE, got {:?}", cte_defs);
+        assert_eq!(cte_defs[0].name, "AccountCte");
+        assert_eq!(cte_defs[0].cte_number, 1);
+        assert_eq!(
+            cte_defs[0].columns.len(),
+            2,
+            "Expected 2 columns, got {:?}",
+            cte_defs[0].columns
+        );
+        assert_eq!(cte_defs[0].columns[0].name, "Id");
+        assert_eq!(cte_defs[0].columns[1].name, "Name");
+    }
+
+    #[test]
+    fn test_extract_cte_definitions_multiple_ctes_same_with() {
+        let sql = r#"
+            WITH TagCte AS (
+                SELECT T.Id, T.Name FROM [dbo].[Tag] T
+            ),
+            AccountTagCte AS (
+                SELECT AT.AccountId, AT.TagId FROM [dbo].[AccountTag] AT
+            )
+            SELECT * FROM TagCte
+        "#;
+        let cte_defs = extract_cte_definitions(sql, "dbo");
+        assert_eq!(cte_defs.len(), 2);
+        assert_eq!(cte_defs[0].name, "TagCte");
+        assert_eq!(cte_defs[0].cte_number, 1);
+        assert_eq!(cte_defs[1].name, "AccountTagCte");
+        assert_eq!(cte_defs[1].cte_number, 1); // Same WITH block
+    }
+
+    #[test]
+    fn test_extract_cte_definitions_multiple_with_blocks() {
+        let sql = r#"
+            WITH Cte1 AS (SELECT 1 AS A)
+            SELECT * FROM Cte1;
+
+            WITH Cte2 AS (SELECT 2 AS B),
+            Cte3 AS (SELECT 3 AS C)
+            SELECT * FROM Cte2;
+        "#;
+        let cte_defs = extract_cte_definitions(sql, "dbo");
+        assert_eq!(cte_defs.len(), 3);
+        assert_eq!(cte_defs[0].name, "Cte1");
+        assert_eq!(cte_defs[0].cte_number, 1);
+        assert_eq!(cte_defs[1].name, "Cte2");
+        assert_eq!(cte_defs[1].cte_number, 2); // Second WITH block
+        assert_eq!(cte_defs[2].name, "Cte3");
+        assert_eq!(cte_defs[2].cte_number, 2); // Same second WITH block
+    }
+
+    #[test]
+    fn test_extract_cte_definitions_no_cte() {
+        let sql = "SELECT * FROM [dbo].[Account]";
+        let cte_defs = extract_cte_definitions(sql, "dbo");
+        assert!(cte_defs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_cte_definitions_column_with_alias() {
+        let sql = r#"
+            WITH Cte AS (
+                SELECT A.Id AS AccountId, A.Name AS AccountName
+                FROM [dbo].[Account] A
+            )
+            SELECT * FROM Cte
+        "#;
+        let cte_defs = extract_cte_definitions(sql, "dbo");
+        assert_eq!(cte_defs.len(), 1);
+        // Aliased columns should use the alias name
+        let col_names: Vec<_> = cte_defs[0].columns.iter().map(|c| &c.name).collect();
+        assert!(col_names.contains(&&"AccountId".to_string()));
+        assert!(col_names.contains(&&"AccountName".to_string()));
     }
 }

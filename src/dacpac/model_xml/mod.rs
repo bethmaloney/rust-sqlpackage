@@ -50,8 +50,9 @@ use other_writers::{
 // Re-export body dependency extraction functions and types
 use body_deps::{
     compute_line_offsets, extract_body_dependencies, extract_bracketed_identifiers_tokenized,
-    is_sql_keyword, location_to_byte_offset, parse_qualified_name_tokenized, BodyDepToken,
-    BodyDependency, BodyDependencyTokenScanner, TableAliasTokenParser,
+    extract_cte_definitions, is_sql_keyword, location_to_byte_offset,
+    parse_qualified_name_tokenized, BodyDepToken, BodyDependency, BodyDependencyTokenScanner,
+    CteColumn, TableAliasTokenParser,
 };
 
 #[cfg(test)]

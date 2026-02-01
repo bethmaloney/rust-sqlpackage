@@ -24,7 +24,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Added MAX keyword detection in scalar type parser
 
 **Remaining Parity Issues (Phases 24-25):**
-- Phase 24: Dynamic column sources in procedures (0/8) - 177 missing elements
+- Phase 24: Dynamic column sources in procedures (3/8) - 177 missing elements
 - Phase 25: ALTER TABLE constraints (0/6) - 14 PKs, 19 FKs missing
 
 **Phase 26 Complete: APPLY Subquery Alias Capture (4/4) ✅**
@@ -126,19 +126,26 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 24: Track Dynamic Column Sources in Procedure Bodies (1/8)
+## Phase 24: Track Dynamic Column Sources in Procedure Bodies (3/8)
 
 **Goal:** Generate `SqlDynamicColumnSource` elements for CTEs, temp tables, and table variables.
 
 **Impact:** 177 missing SqlDynamicColumnSource, 181 missing SqlSimpleColumn/SqlTypeSpecifier elements.
 
-### Phase 24.1: CTE Column Source Extraction (1/3)
+### Phase 24.1: CTE Column Source Extraction (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 24.1.1 | Create `DynamicColumnSource` struct | ✅ | Added `DynamicColumnSource`, `DynamicColumn`, `DynamicColumnSourceType` to elements.rs; added `dynamic_sources` field to ProcedureElement and FunctionElement |
-| 24.1.2 | Extract CTE definitions from bodies | ⬜ | Parse `WITH cte AS (SELECT ...)` |
-| 24.1.3 | Write `SqlDynamicColumnSource` for CTEs | ⬜ | With `SqlComputedColumn` for each column |
+| 24.1.2 | Extract CTE definitions from bodies | ✅ | Added `CteColumn` and `CteDefinition` structs, `extract_cte_definitions()`, `extract_cte_columns_from_tokens()`, `parse_cte_column_expression()`, `resolve_cte_column_ref()` in body_deps.rs |
+| 24.1.3 | Write `SqlDynamicColumnSource` for CTEs | ✅ | Added `write_all_dynamic_objects()`, `write_cte_columns()`, `write_expression_dependencies()` in programmability_writer.rs; added `write_view_cte_dynamic_objects()` in view_writer.rs |
+
+**Unit Tests Added (body_deps.rs):**
+- `test_extract_cte_definitions_single_cte` - Single CTE with explicit column list
+- `test_extract_cte_definitions_multiple_ctes_same_with` - Multiple CTEs in same WITH block
+- `test_extract_cte_definitions_multiple_with_blocks` - Multiple separate WITH blocks
+- `test_extract_cte_definitions_no_cte` - Body without CTE returns empty
+- `test_extract_cte_definitions_column_with_alias` - Column expressions with AS aliases
 
 ### Phase 24.2: Temp Table Column Source Extraction (0/2)
 
