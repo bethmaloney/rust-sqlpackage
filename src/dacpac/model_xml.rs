@@ -70,12 +70,11 @@ static MULTI_STMT_TVF_RE: LazyLock<Regex> =
 // Note: BARE_COL_RE has been removed and replaced with token-based parsing in Phase 20.2.2.
 // Single bracketed column detection now uses BodyDepToken::SingleBracketed in extract_all_column_references().
 
-/// GROUP BY keyword pattern
-static GROUP_BY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bGROUP\s+BY\s+").unwrap());
+// Note: GROUP_BY_RE has been removed and replaced with token-based parsing in Phase 20.5.5.
+// GROUP BY clause detection now uses extract_group_by_clause_boundaries_tokenized().
 
-/// Terminator pattern for GROUP BY clause
-static GROUP_TERMINATOR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\b(?:HAVING|ORDER|UNION|;|$)").unwrap());
+// Note: GROUP_TERMINATOR_RE has been removed and replaced with token-based parsing in Phase 20.5.6.
+// GROUP BY clause termination detection is now handled by extract_group_by_clause_boundaries_tokenized().
 
 // Note: PROC_PARAM_RE has been removed and replaced with token-based parsing in Phase 20.1.3.
 // Procedure parameter extraction now uses extract_procedure_parameters_tokens() from procedure_parser.rs.
@@ -2331,6 +2330,9 @@ fn extract_join_on_columns(
 }
 
 /// Extract column references from GROUP BY clause
+///
+/// Phase 20.5.5-20.5.6: Uses token-based boundary detection instead of
+/// GROUP_BY_RE and GROUP_TERMINATOR_RE regex patterns.
 fn extract_group_by_columns(
     query: &str,
     table_aliases: &[(String, String)],
@@ -2338,18 +2340,9 @@ fn extract_group_by_columns(
 ) -> Vec<String> {
     let mut refs = Vec::new();
 
-    // Find GROUP BY clause
-    if let Some(group_match) = GROUP_BY_RE.find(query) {
-        let start = group_match.end();
-        let remaining = &query[start..];
-
-        // Find where GROUP BY clause ends
-        let end = GROUP_TERMINATOR_RE
-            .find(remaining)
-            .map(|m| m.start())
-            .unwrap_or(remaining.len());
-
-        let clause_text = &remaining[..end];
+    // Phase 20.5.5-20.5.6: Use token-based GROUP BY clause boundary detection
+    if let Some((start, end)) = extract_group_by_clause_boundaries_tokenized(query) {
+        let clause_text = &query[start..end];
 
         // Phase 20.2.2: Use token-based extraction instead of COL_REF_RE regex
         for col_ref in extract_column_refs_tokenized(clause_text) {
@@ -6628,6 +6621,119 @@ fn extract_on_clause_boundaries_tokenized(query: &str) -> Vec<(usize, usize)> {
     }
 
     results
+}
+
+/// Extract GROUP BY clause boundaries from a SQL query using token-based parsing.
+///
+/// Phase 20.5.5-20.5.6: Replaces GROUP_BY_RE and GROUP_TERMINATOR_RE regex patterns.
+///
+/// # Arguments
+/// * `query` - The SQL query text
+///
+/// # Returns
+/// * `Option<(usize, usize)>` - The (start, end) byte positions of the GROUP BY clause content
+///   (excluding the "GROUP BY" keywords themselves), or None if no GROUP BY clause found
+///
+/// # Terminating Keywords
+/// GROUP BY clauses terminate at: HAVING, ORDER, UNION, or semicolon.
+fn extract_group_by_clause_boundaries_tokenized(query: &str) -> Option<(usize, usize)> {
+    let dialect = MsSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, query).tokenize_with_location() else {
+        return None;
+    };
+
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let line_offsets = compute_line_offsets(query);
+    let len = tokens.len();
+    let mut i = 0;
+
+    // Helper to skip whitespace tokens
+    let skip_whitespace =
+        |tokens: &[sqlparser::tokenizer::TokenWithSpan], mut idx: usize| -> usize {
+            while idx < tokens.len() && matches!(&tokens[idx].token, Token::Whitespace(_)) {
+                idx += 1;
+            }
+            idx
+        };
+
+    // Keywords that terminate a GROUP BY clause
+    let terminator_keywords = ["HAVING", "ORDER", "UNION"];
+
+    while i < len {
+        // Look for GROUP keyword (unquoted word)
+        if let Token::Word(w) = &tokens[i].token {
+            if w.quote_style.is_none() && w.value.eq_ignore_ascii_case("GROUP") {
+                // Skip whitespace after GROUP
+                let j = skip_whitespace(&tokens, i + 1);
+
+                // Check for BY keyword
+                if j < len {
+                    if let Token::Word(by_word) = &tokens[j].token {
+                        if by_word.quote_style.is_none() && by_word.value.eq_ignore_ascii_case("BY")
+                        {
+                            // Found GROUP BY - skip whitespace after BY
+                            let k = skip_whitespace(&tokens, j + 1);
+
+                            // Calculate start position (after GROUP BY and whitespace)
+                            let clause_start = if k < len {
+                                location_to_byte_offset(
+                                    &line_offsets,
+                                    tokens[k].span.start.line,
+                                    tokens[k].span.start.column,
+                                )
+                            } else {
+                                // GROUP BY is at the end
+                                return None;
+                            };
+
+                            // Find where the GROUP BY clause ends
+                            let mut m = k;
+                            let mut clause_end = query.len();
+                            while m < len {
+                                match &tokens[m].token {
+                                    // Check for terminator keywords
+                                    Token::Word(word) => {
+                                        if word.quote_style.is_none() {
+                                            let upper = word.value.to_uppercase();
+                                            if terminator_keywords.contains(&upper.as_str()) {
+                                                clause_end = location_to_byte_offset(
+                                                    &line_offsets,
+                                                    tokens[m].span.start.line,
+                                                    tokens[m].span.start.column,
+                                                );
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    // Check for semicolon
+                                    Token::SemiColon => {
+                                        clause_end = location_to_byte_offset(
+                                            &line_offsets,
+                                            tokens[m].span.start.line,
+                                            tokens[m].span.start.column,
+                                        );
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                                m += 1;
+                            }
+
+                            if clause_start < clause_end {
+                                return Some((clause_start, clause_end));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    None
 }
 
 /// Write the data type relationship for a parameter with inline type specifier
@@ -12590,5 +12696,195 @@ FROM [dbo].[Account] A
         let sql = "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id OUTER JOIN t3 ON t3.id = t2.id";
         let result = extract_on_clause_boundaries_tokenized(sql);
         assert_eq!(result.len(), 2);
+    }
+
+    // ============================================================================
+    // extract_group_by_clause_boundaries_tokenized tests (Phase 20.5.5-20.5.6)
+    // ============================================================================
+
+    #[test]
+    fn test_group_by_basic() {
+        let sql = "SELECT name, COUNT(*) FROM users GROUP BY name";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.trim().eq_ignore_ascii_case("name"));
+    }
+
+    #[test]
+    fn test_group_by_multiple_columns() {
+        let sql = "SELECT dept, role, COUNT(*) FROM employees GROUP BY dept, role";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+        assert!(clause.contains("role"));
+    }
+
+    #[test]
+    fn test_group_by_with_having() {
+        let sql = "SELECT dept, COUNT(*) FROM employees GROUP BY dept HAVING COUNT(*) > 5";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+        // HAVING should NOT be included
+        assert!(!clause.to_uppercase().contains("HAVING"));
+    }
+
+    #[test]
+    fn test_group_by_with_order_by() {
+        let sql = "SELECT dept, COUNT(*) FROM employees GROUP BY dept ORDER BY dept";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+        // ORDER should NOT be included
+        assert!(!clause.to_uppercase().contains("ORDER"));
+    }
+
+    #[test]
+    fn test_group_by_with_union() {
+        let sql = "SELECT dept FROM employees GROUP BY dept UNION SELECT dept FROM contractors";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+        // UNION should NOT be included
+        assert!(!clause.to_uppercase().contains("UNION"));
+    }
+
+    #[test]
+    fn test_group_by_with_semicolon() {
+        let sql = "SELECT dept, COUNT(*) FROM employees GROUP BY dept;";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+        // Semicolon should NOT be included
+        assert!(!clause.contains(";"));
+    }
+
+    #[test]
+    fn test_group_by_with_tabs() {
+        let sql = "SELECT\tdept,\tCOUNT(*)\tFROM\temployees\tGROUP\tBY\tdept";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+    }
+
+    #[test]
+    fn test_group_by_with_newlines() {
+        let sql = "SELECT dept, COUNT(*)\nFROM employees\nGROUP BY\n  dept";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+    }
+
+    #[test]
+    fn test_group_by_case_insensitive() {
+        let sql = "SELECT dept FROM employees group by dept";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+    }
+
+    #[test]
+    fn test_group_by_no_match() {
+        let sql = "SELECT * FROM employees WHERE dept = 'IT'";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_group_by_empty() {
+        let sql = "";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_group_by_quoted_group_not_keyword() {
+        // [GROUP] as a column name should not be treated as GROUP BY keyword
+        let sql = "SELECT [GROUP], COUNT(*) FROM items";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_group_by_with_qualified_columns() {
+        let sql = "SELECT t.[dept], COUNT(*) FROM employees t GROUP BY t.[dept]";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("t.[dept]"));
+    }
+
+    #[test]
+    fn test_group_by_multiple_spaces() {
+        let sql = "SELECT dept FROM employees GROUP    BY    dept";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+    }
+
+    #[test]
+    fn test_group_by_with_having_and_order() {
+        let sql =
+            "SELECT dept, COUNT(*) FROM employees GROUP BY dept HAVING COUNT(*) > 5 ORDER BY dept";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+        assert!(!clause.to_uppercase().contains("HAVING"));
+        assert!(!clause.to_uppercase().contains("ORDER"));
+    }
+
+    #[test]
+    fn test_group_by_complex_expression() {
+        let sql = "SELECT YEAR(hire_date), COUNT(*) FROM employees GROUP BY YEAR(hire_date)";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("YEAR"));
+        assert!(clause.contains("hire_date"));
+    }
+
+    #[test]
+    fn test_group_by_with_alias_table() {
+        let sql = "SELECT e.dept, COUNT(*) FROM employees e GROUP BY e.dept";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("e.dept"));
+    }
+
+    #[test]
+    fn test_group_by_mixed_case_keywords() {
+        let sql = "SELECT dept FROM employees Group By dept Having COUNT(*) > 0";
+        let result = extract_group_by_clause_boundaries_tokenized(sql);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        let clause = &sql[start..end];
+        assert!(clause.contains("dept"));
+        assert!(!clause.to_uppercase().contains("HAVING"));
     }
 }
