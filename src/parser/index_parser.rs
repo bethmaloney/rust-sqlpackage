@@ -18,6 +18,8 @@ use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
 use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 
+use super::token_parser_base::TokenParser;
+
 /// Result of parsing an index definition using tokens
 #[derive(Debug, Clone, Default)]
 pub struct TokenParsedIndex {
@@ -45,62 +47,58 @@ pub struct TokenParsedIndex {
 
 /// Token-based index definition parser
 pub struct IndexTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl IndexTokenParser {
     /// Create a new parser for an index definition string
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(sql)?,
+        })
     }
 
     /// Parse CREATE INDEX and return index info
     pub fn parse_create_index(&mut self) -> Option<TokenParsedIndex> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect CREATE keyword
-        if !self.check_keyword(Keyword::CREATE) {
+        if !self.base.check_keyword(Keyword::CREATE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         let mut is_unique = false;
         let mut is_clustered = false;
         let mut has_clustering_spec = false;
 
         // Parse optional UNIQUE
-        if self.check_keyword(Keyword::UNIQUE) {
+        if self.base.check_keyword(Keyword::UNIQUE) {
             is_unique = true;
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Parse optional CLUSTERED or NONCLUSTERED
-        if self.check_word_ci("CLUSTERED") {
+        if self.base.check_word_ci("CLUSTERED") {
             is_clustered = true;
             has_clustering_spec = true;
-            self.advance();
-            self.skip_whitespace();
-        } else if self.check_word_ci("NONCLUSTERED") {
+            self.base.advance();
+            self.base.skip_whitespace();
+        } else if self.base.check_word_ci("NONCLUSTERED") {
             is_clustered = false;
             has_clustering_spec = true;
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Expect INDEX keyword
-        if !self.check_keyword(Keyword::INDEX) {
+        if !self.base.check_keyword(Keyword::INDEX) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // This parser only handles T-SQL specific indexes with CLUSTERED/NONCLUSTERED
         // Standard CREATE INDEX statements are handled by sqlparser directly
@@ -109,23 +107,23 @@ impl IndexTokenParser {
         }
 
         // Parse index name
-        let name = self.parse_identifier()?;
-        self.skip_whitespace();
+        let name = self.base.parse_identifier()?;
+        self.base.skip_whitespace();
 
         // Expect ON keyword
-        if !self.check_keyword(Keyword::ON) {
+        if !self.base.check_keyword(Keyword::ON) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse table name (schema-qualified)
-        let (table_schema, table_name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
+        let (table_schema, table_name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Parse column list
         let columns = self.parse_column_list()?;
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Initialize result
         let mut result = TokenParsedIndex {
@@ -149,17 +147,17 @@ impl IndexTokenParser {
 
     /// Parse optional index clauses: INCLUDE, WHERE, WITH
     fn parse_index_options(&mut self, result: &mut TokenParsedIndex) {
-        while !self.is_at_end() {
-            self.skip_whitespace();
+        while !self.base.is_at_end() {
+            self.base.skip_whitespace();
 
-            if self.is_at_end() {
+            if self.base.is_at_end() {
                 break;
             }
 
             // Check for INCLUDE clause
-            if self.check_keyword(Keyword::INCLUDE) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_keyword(Keyword::INCLUDE) {
+                self.base.advance();
+                self.base.skip_whitespace();
                 if let Some(cols) = self.parse_column_list() {
                     result.include_columns = cols;
                 }
@@ -167,9 +165,9 @@ impl IndexTokenParser {
             }
 
             // Check for WHERE clause (filtered index)
-            if self.check_keyword(Keyword::WHERE) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_keyword(Keyword::WHERE) {
+                self.base.advance();
+                self.base.skip_whitespace();
                 if let Some(predicate) = self.parse_filter_predicate() {
                     result.filter_predicate = Some(predicate);
                 }
@@ -177,44 +175,44 @@ impl IndexTokenParser {
             }
 
             // Check for WITH clause (index options)
-            if self.check_keyword(Keyword::WITH) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_keyword(Keyword::WITH) {
+                self.base.advance();
+                self.base.skip_whitespace();
                 self.parse_with_options(result);
                 continue;
             }
 
             // Check for semicolon (end of statement)
-            if self.check_token(&Token::SemiColon) {
+            if self.base.check_token(&Token::SemiColon) {
                 break;
             }
 
             // Unknown token, advance
-            self.advance();
+            self.base.advance();
         }
     }
 
     /// Parse WITH clause options: FILLFACTOR, DATA_COMPRESSION, etc.
     fn parse_with_options(&mut self, result: &mut TokenParsedIndex) {
         // Expect opening parenthesis
-        if !self.check_token(&Token::LParen) {
+        if !self.base.check_token(&Token::LParen) {
             return;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse options until closing parenthesis
-        while !self.is_at_end() && !self.check_token(&Token::RParen) {
-            self.skip_whitespace();
+        while !self.base.is_at_end() && !self.base.check_token(&Token::RParen) {
+            self.base.skip_whitespace();
 
             // Check for FILLFACTOR
-            if self.check_word_ci("FILLFACTOR") {
-                self.advance();
-                self.skip_whitespace();
-                if self.check_token(&Token::Eq) {
-                    self.advance();
-                    self.skip_whitespace();
-                    if let Some(value) = self.parse_positive_integer() {
+            if self.base.check_word_ci("FILLFACTOR") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_token(&Token::Eq) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    if let Some(value) = self.base.parse_positive_integer() {
                         if value <= 100 {
                             result.fill_factor = Some(value as u8);
                         }
@@ -225,13 +223,13 @@ impl IndexTokenParser {
             }
 
             // Check for DATA_COMPRESSION
-            if self.check_word_ci("DATA_COMPRESSION") {
-                self.advance();
-                self.skip_whitespace();
-                if self.check_token(&Token::Eq) {
-                    self.advance();
-                    self.skip_whitespace();
-                    if let Some(compression) = self.parse_identifier() {
+            if self.base.check_word_ci("DATA_COMPRESSION") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_token(&Token::Eq) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    if let Some(compression) = self.base.parse_identifier() {
                         result.data_compression = Some(compression.to_uppercase());
                     }
                 }
@@ -244,41 +242,41 @@ impl IndexTokenParser {
         }
 
         // Consume closing parenthesis
-        if self.check_token(&Token::RParen) {
-            self.advance();
+        if self.base.check_token(&Token::RParen) {
+            self.base.advance();
         }
     }
 
     /// Skip tokens until we hit a comma or right parenthesis
     fn skip_to_comma_or_paren(&mut self) {
-        while !self.is_at_end() {
-            if self.check_token(&Token::Comma) {
-                self.advance();
+        while !self.base.is_at_end() {
+            if self.base.check_token(&Token::Comma) {
+                self.base.advance();
                 break;
             }
-            if self.check_token(&Token::RParen) {
+            if self.base.check_token(&Token::RParen) {
                 break;
             }
-            self.advance();
+            self.base.advance();
         }
     }
 
     /// Parse the filter predicate from a WHERE clause
     /// This captures everything until WITH, semicolon, or end of statement
     fn parse_filter_predicate(&mut self) -> Option<String> {
-        let start_pos = self.pos;
-        let mut end_pos = self.pos;
+        let start_pos = self.base.pos();
+        let mut end_pos = self.base.pos();
 
         // Collect tokens until we hit WITH, semicolon, or end
-        while !self.is_at_end() {
-            if self.check_keyword(Keyword::WITH) {
+        while !self.base.is_at_end() {
+            if self.base.check_keyword(Keyword::WITH) {
                 break;
             }
-            if self.check_token(&Token::SemiColon) {
+            if self.base.check_token(&Token::SemiColon) {
                 break;
             }
-            end_pos = self.pos + 1;
-            self.advance();
+            end_pos = self.base.pos() + 1;
+            self.base.advance();
         }
 
         if end_pos <= start_pos {
@@ -298,10 +296,11 @@ impl IndexTokenParser {
 
     /// Convert a range of tokens back to a string
     fn tokens_to_string(&self, start: usize, end: usize) -> String {
+        let tokens = self.base.tokens();
         let mut result = String::new();
 
-        for i in start..end.min(self.tokens.len()) {
-            let token = &self.tokens[i];
+        for i in start..end.min(tokens.len()) {
+            let token = &tokens[i];
             match &token.token {
                 Token::Word(w) => {
                     result.push_str(&format_word_bracketed(w));
@@ -338,174 +337,54 @@ impl IndexTokenParser {
     /// Returns just the column names, stripping ASC/DESC
     fn parse_column_list(&mut self) -> Option<Vec<String>> {
         // Expect opening parenthesis
-        if !self.check_token(&Token::LParen) {
+        if !self.base.check_token(&Token::LParen) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         let mut columns = Vec::new();
 
-        while !self.is_at_end() && !self.check_token(&Token::RParen) {
-            self.skip_whitespace();
+        while !self.base.is_at_end() && !self.base.check_token(&Token::RParen) {
+            self.base.skip_whitespace();
 
             // Parse column name
-            if let Some(col_name) = self.parse_identifier() {
+            if let Some(col_name) = self.base.parse_identifier() {
                 columns.push(col_name);
             } else {
                 // No valid identifier, break
                 break;
             }
 
-            self.skip_whitespace();
+            self.base.skip_whitespace();
 
             // Skip optional ASC/DESC
-            if self.check_keyword(Keyword::ASC) || self.check_keyword(Keyword::DESC) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_keyword(Keyword::ASC) || self.base.check_keyword(Keyword::DESC) {
+                self.base.advance();
+                self.base.skip_whitespace();
             }
 
             // Check for comma (more columns) or right paren (end)
-            if self.check_token(&Token::Comma) {
-                self.advance();
-                self.skip_whitespace();
-            } else if self.check_token(&Token::RParen) {
+            if self.base.check_token(&Token::Comma) {
+                self.base.advance();
+                self.base.skip_whitespace();
+            } else if self.base.check_token(&Token::RParen) {
                 break;
             } else {
                 // Unexpected token, try to continue
-                self.advance();
+                self.base.advance();
             }
         }
 
         // Consume closing parenthesis
-        if self.check_token(&Token::RParen) {
-            self.advance();
+        if self.base.check_token(&Token::RParen) {
+            self.base.advance();
         }
 
         if columns.is_empty() {
             None
         } else {
             Some(columns)
-        }
-    }
-
-    /// Parse a schema-qualified name: [schema].[name] or schema.name or [name] or name
-    fn parse_schema_qualified_name(&mut self) -> Option<(String, String)> {
-        let first_ident = self.parse_identifier()?;
-        self.skip_whitespace();
-
-        // Check if there's a dot (schema.name pattern)
-        if self.check_token(&Token::Period) {
-            self.advance();
-            self.skip_whitespace();
-
-            let second_ident = self.parse_identifier()?;
-
-            Some((first_ident, second_ident))
-        } else {
-            // No dot - just a name, default schema to "dbo"
-            Some(("dbo".to_string(), first_ident))
-        }
-    }
-
-    /// Parse an identifier (bracketed or unbracketed)
-    fn parse_identifier(&mut self) -> Option<String> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Word(w) => {
-                let name = w.value.clone();
-                self.advance();
-                Some(name)
-            }
-            _ => None,
-        }
-    }
-
-    /// Parse a positive integer
-    fn parse_positive_integer(&mut self) -> Option<i64> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Number(n, _) => {
-                if let Ok(value) = n.parse::<i64>() {
-                    self.advance();
-                    Some(value)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    // ========================================================================
-    // Helper methods
-    // ========================================================================
-
-    /// Skip whitespace tokens
-    fn skip_whitespace(&mut self) {
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
-                match &token.token {
-                    Token::Whitespace(_) => {
-                        self.advance();
-                    }
-                    _ => break,
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Check if at end of tokens
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-    }
-
-    /// Get current token without consuming
-    fn current_token(&self) -> Option<&TokenWithSpan> {
-        self.tokens.get(self.pos)
-    }
-
-    /// Advance to next token
-    fn advance(&mut self) {
-        if !self.is_at_end() {
-            self.pos += 1;
-        }
-    }
-
-    /// Check if current token is a specific keyword
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token is a word matching (case-insensitive)
-    fn check_word_ci(&self, word: &str) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word))
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token matches a specific token type
-    fn check_token(&self, expected: &Token) -> bool {
-        if let Some(token) = self.current_token() {
-            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
-        } else {
-            false
         }
     }
 }
