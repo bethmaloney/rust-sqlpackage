@@ -73,6 +73,7 @@ impl TestContext {
     /// assert!(result.success, "Build failed: {:?}", result.errors);
     /// let dacpac_path = result.dacpac_path.unwrap();
     /// ```
+    #[allow(dead_code)]
     pub fn build_successfully(&self) -> PathBuf {
         let result = self.build();
         assert!(
