@@ -49,9 +49,9 @@ pub(crate) fn write_table<W: Write>(
     // Relationship to schema (comes after Columns in DotNet output)
     write_schema_relationship(writer, &table.schema)?;
 
-    // Write AttachedAnnotation elements first (for constraints that use Annotation)
-    // DotNet writes AttachedAnnotation before Annotation
-    for disambiguator in &table.attached_annotations {
+    // Write AttachedAnnotation elements that come BEFORE the Annotation
+    // DotNet outputs AttachedAnnotations for constraints appearing after the annotated one first
+    for disambiguator in &table.attached_annotations_before_annotation {
         let disamb_str = disambiguator.to_string();
         let annotation = BytesStart::new("AttachedAnnotation")
             .with_attributes([("Disambiguator", disamb_str.as_str())]);
@@ -66,6 +66,15 @@ pub(crate) fn write_table<W: Write>(
             ("Type", "SqlInlineConstraintAnnotation"),
             ("Disambiguator", disamb_str.as_str()),
         ]);
+        writer.write_event(Event::Empty(annotation))?;
+    }
+
+    // Write AttachedAnnotation elements that come AFTER the Annotation
+    // DotNet outputs AttachedAnnotations for constraints appearing before the annotated one last
+    for disambiguator in &table.attached_annotations_after_annotation {
+        let disamb_str = disambiguator.to_string();
+        let annotation = BytesStart::new("AttachedAnnotation")
+            .with_attributes([("Disambiguator", disamb_str.as_str())]);
         writer.write_event(Event::Empty(annotation))?;
     }
 
@@ -642,7 +651,8 @@ mod tests {
             is_node: false,
             is_edge: false,
             inline_constraint_disambiguator: None,
-            attached_annotations: vec![],
+            attached_annotations_before_annotation: vec![],
+            attached_annotations_after_annotation: vec![],
         };
         let mut writer = create_test_writer();
         write_table(&mut writer, &table).unwrap();
@@ -662,7 +672,8 @@ mod tests {
             is_node: false,
             is_edge: false,
             inline_constraint_disambiguator: Some(1),
-            attached_annotations: vec![],
+            attached_annotations_before_annotation: vec![],
+            attached_annotations_after_annotation: vec![],
         };
         let mut writer = create_test_writer();
         write_table(&mut writer, &table).unwrap();

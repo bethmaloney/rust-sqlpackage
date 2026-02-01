@@ -91,7 +91,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 | 22.4.1 | Determine exact constraint count threshold | ✅ | Single constraint = table gets Annotation; multiple = most constraints get Annotation |
 | 22.4.2 | Single-constraint tables: table gets Annotation, constraint gets AttachedAnnotation | ✅ | Implemented correct behavior |
 | 22.4.3 | Multi-constraint tables: constraints get Annotation, table gets AttachedAnnotation | ✅ | Each constraint gets unique disambiguator |
-| 22.4.4 | Fix disambiguator numbering to match DotNet order | ⬜ | **Lower priority:** DotNet assigns in XML output order, Rust assigns in model building order. Would require sorting elements before assignment. |
+| 22.4.4 | Fix disambiguator numbering to match DotNet order | 🔶 | **Partial:** Disambiguators now assigned in sorted element order (matching DotNet). Remaining issue: AttachedAnnotation ordering on multi-constraint tables differs from DotNet. |
 | 22.4.5 | Column AttachedAnnotation for inline defaults | ✅ | Columns with inline defaults correctly reference their DEFAULT constraint |
 
 **Validation:** Run `cargo test --test e2e_tests test_parity_all_fixtures` - all constraint tests pass.
@@ -103,6 +103,16 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 | Layer 7 (Canonical XML) | 10/48 (20.8%) | Functionally correct, byte-level parity blocked by disambiguator numbering |
 
 **NOTE:** The annotation pattern is now functionally correct. Layer 7 byte-level parity requires disambiguator values to match DotNet's XML-output-order assignment. This is a lower priority improvement since the dacpac functions correctly - deployments succeed and all constraints are properly represented.
+
+**Progress (2026-02-01):**
+- Refactored `assign_inline_constraint_disambiguators()` to assign disambiguators in sorted element order
+- Disambiguator values now match DotNet (e.g., Categories table gets 3, CK_Products_Price gets 4, etc.)
+- Split `attached_annotations` into `attached_annotations_before_annotation` and `attached_annotations_after_annotation` to support DotNet's interleaved output order
+- Remaining issue: DotNet's AttachedAnnotation ordering within multi-constraint tables is complex:
+  - AttachedAnnotations for constraints appearing AFTER the annotated constraint (by element index) come first, in descending disambiguator order
+  - Then the Annotation
+  - Then AttachedAnnotations for constraints appearing BEFORE, in ascending order
+- This affects fixtures with multiple named constraints per table but doesn't affect functionality
 
 ---
 

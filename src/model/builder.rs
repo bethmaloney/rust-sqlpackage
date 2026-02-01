@@ -362,7 +362,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         is_node: *is_node,
                         is_edge: *is_edge,
                         inline_constraint_disambiguator: None, // Set during post-processing
-                        attached_annotations: Vec::new(),      // Set during post-processing
+                        attached_annotations_before_annotation: Vec::new(), // Set during post-processing
+                        attached_annotations_after_annotation: Vec::new(), // Set during post-processing
                     }));
 
                     // Add constraints as separate elements
@@ -517,7 +518,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_node: false,
                     is_edge: false,
                     inline_constraint_disambiguator: None, // Set during post-processing
-                    attached_annotations: Vec::new(),      // Set during post-processing
+                    attached_annotations_before_annotation: Vec::new(), // Set during post-processing
+                    attached_annotations_after_annotation: Vec::new(), // Set during post-processing
                 }));
 
                 // Extract constraints from table definition (table-level constraints)
@@ -1000,132 +1002,250 @@ fn resolve_udt_nullability(elements: &mut [ModelElement]) {
 fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
     use std::collections::HashMap;
 
-    // Type alias to reduce complexity
-    type TableConstraintMap = HashMap<(String, String), Vec<(usize, u32, bool)>>;
+    // DotNet assigns disambiguators in XML output order to elements that will carry <Annotation>.
+    // The pattern is:
+    // - Inline constraints: constraint always gets Annotation
+    // - Single named constraint per table: TABLE gets Annotation, constraint gets AttachedAnnotation
+    // - Multiple named constraints per table: constraints get Annotation (except last), last gets AttachedAnnotation
 
-    // DotNet starts disambiguator values at 3
-    let mut next_disambiguator: u32 = 3;
+    // Phase 1: Collect constraint info per table (before assigning any disambiguators)
+    // Map: (table_schema, table_name) -> Vec<(element_index, is_inline)>
+    let mut table_constraints: HashMap<(String, String), Vec<(usize, bool)>> = HashMap::new();
 
-    // Map: (table_schema, table_name, column_name) -> Vec<disambiguator>
-    let mut column_annotations: HashMap<(String, String, String), Vec<u32>> = HashMap::new();
-
-    // Map: (table_schema, table_name) -> Vec<(constraint_index, disambiguator, is_inline)>
-    // Track all constraints per table
-    let mut table_constraints: TableConstraintMap = HashMap::new();
-
-    // First pass: Assign unique disambiguators to ALL constraints
-    for (idx, element) in elements.iter_mut().enumerate() {
+    for (idx, element) in elements.iter().enumerate() {
         if let ModelElement::Constraint(constraint) = element {
-            let disambiguator = next_disambiguator;
-            next_disambiguator += 1;
-            constraint.inline_constraint_disambiguator = Some(disambiguator);
-
             let table_key = (
                 constraint.table_schema.clone(),
                 constraint.table_name.clone(),
             );
             table_constraints
-                .entry(table_key.clone())
+                .entry(table_key)
                 .or_default()
-                .push((idx, disambiguator, constraint.is_inline));
-
-            // For inline constraints, link to column(s) for AttachedAnnotation
-            if constraint.is_inline {
-                // Inline constraints always use Annotation
-                constraint.uses_annotation = true;
-
-                // Link the constraint's column(s) to this disambiguator
-                for col in &constraint.columns {
-                    let key = (
-                        constraint.table_schema.clone(),
-                        constraint.table_name.clone(),
-                        col.name.clone(),
-                    );
-                    column_annotations
-                        .entry(key)
-                        .or_default()
-                        .push(disambiguator);
-                }
-            }
+                .push((idx, constraint.is_inline));
         }
     }
 
-    // Map to track table annotations and attached annotations
-    let mut table_annotation: HashMap<(String, String), Option<u32>> = HashMap::new();
-    let mut table_attached: HashMap<(String, String), Vec<u32>> = HashMap::new();
+    // Phase 2: Determine which elements will carry Annotation vs AttachedAnnotation
+    // For single named constraint tables, track that table carries the Annotation
+    let mut table_carries_annotation: HashMap<(String, String), bool> = HashMap::new();
 
-    // Second pass: Determine annotation types for named constraints based on count per table
     for (table_key, constraints) in &table_constraints {
-        // Filter to named (non-inline) constraints only
-        let named_constraints: Vec<_> = constraints
+        // Count named (non-inline) constraints
+        let named_count = constraints
             .iter()
-            .filter(|(_, _, is_inline)| !is_inline)
-            .collect();
+            .filter(|(_, is_inline)| !is_inline)
+            .count();
 
-        if named_constraints.is_empty() {
-            // No named constraints - nothing to do for table-level annotations
-            continue;
+        if named_count == 1 {
+            // Single named constraint: table gets Annotation
+            table_carries_annotation.insert(table_key.clone(), true);
         }
+        // For 0 or multiple named constraints, table doesn't carry primary Annotation
+    }
 
-        if named_constraints.len() == 1 {
-            // Single named constraint: table gets Annotation, constraint gets AttachedAnnotation
-            let (_, disambiguator, _) = named_constraints[0];
-            table_annotation.insert(table_key.clone(), Some(*disambiguator));
-            // Constraint uses AttachedAnnotation (uses_annotation = false)
-        } else {
-            // Multiple named constraints: all except the last get Annotation
-            // The last one gets AttachedAnnotation and table gets Annotation for it
-            for (i, (_, disambiguator, _)) in named_constraints.iter().enumerate() {
-                if i < named_constraints.len() - 1 {
-                    // Not the last - uses Annotation
-                    // table gets AttachedAnnotation for this
-                    table_attached
-                        .entry(table_key.clone())
-                        .or_default()
-                        .push(*disambiguator);
-                } else {
-                    // Last one - uses AttachedAnnotation
-                    // table gets Annotation for this
-                    table_annotation.insert(table_key.clone(), Some(*disambiguator));
-                }
-            }
+    // Phase 3: Walk through elements in sorted order and assign disambiguators
+    // to elements that will carry Annotation
+    let mut next_disambiguator: u32 = 3; // DotNet starts at 3
+
+    // Map element index -> assigned disambiguator
+    let mut element_disambiguators: HashMap<usize, u32> = HashMap::new();
+
+    // Track which constraints use Annotation (vs AttachedAnnotation)
+    let mut constraint_uses_annotation: HashMap<usize, bool> = HashMap::new();
+
+    // Map: (table_schema, table_name) -> table element index
+    let mut table_indices: HashMap<(String, String), usize> = HashMap::new();
+
+    for (idx, element) in elements.iter().enumerate() {
+        if let ModelElement::Table(table) = element {
+            let table_key = (table.schema.clone(), table.name.clone());
+            table_indices.insert(table_key, idx);
         }
     }
 
-    // Third pass: Update constraints with uses_annotation flag for named constraints
-    for element in elements.iter_mut() {
-        if let ModelElement::Constraint(constraint) = element {
-            if !constraint.is_inline {
+    // First, iterate in sorted order and assign disambiguators to elements carrying Annotations
+    for (idx, element) in elements.iter().enumerate() {
+        match element {
+            ModelElement::Table(table) => {
+                let table_key = (table.schema.clone(), table.name.clone());
+                // Table gets Annotation if it has exactly one named constraint
+                if table_carries_annotation.get(&table_key) == Some(&true) {
+                    let disambiguator = next_disambiguator;
+                    next_disambiguator += 1;
+                    element_disambiguators.insert(idx, disambiguator);
+                }
+            }
+            ModelElement::Constraint(constraint) => {
                 let table_key = (
                     constraint.table_schema.clone(),
                     constraint.table_name.clone(),
                 );
-                let disambiguator = constraint.inline_constraint_disambiguator.unwrap();
 
-                // Check if this constraint should use Annotation (not AttachedAnnotation)
-                if let Some(attached_list) = table_attached.get(&table_key) {
-                    // This constraint uses Annotation if it's in the attached list
-                    // (table attaches to it via AttachedAnnotation)
-                    constraint.uses_annotation = attached_list.contains(&disambiguator);
+                if constraint.is_inline {
+                    // Inline constraints always get Annotation
+                    let disambiguator = next_disambiguator;
+                    next_disambiguator += 1;
+                    element_disambiguators.insert(idx, disambiguator);
+                    constraint_uses_annotation.insert(idx, true);
+                } else {
+                    // Named constraint
+                    let named_count = table_constraints
+                        .get(&table_key)
+                        .map(|c| c.iter().filter(|(_, is_inline)| !is_inline).count())
+                        .unwrap_or(0);
+
+                    if named_count == 1 {
+                        // Single named constraint: constraint gets AttachedAnnotation
+                        // (the table got the disambiguator already)
+                        // Use the same disambiguator as the table
+                        if let Some(&table_idx) = table_indices.get(&table_key) {
+                            if let Some(&disambiguator) = element_disambiguators.get(&table_idx) {
+                                element_disambiguators.insert(idx, disambiguator);
+                            }
+                        }
+                        constraint_uses_annotation.insert(idx, false);
+                    } else {
+                        // Multiple named constraints
+                        // Find this constraint's position among named constraints for this table
+                        let named_constraints: Vec<_> = table_constraints
+                            .get(&table_key)
+                            .unwrap()
+                            .iter()
+                            .filter(|(_, is_inline)| !is_inline)
+                            .collect();
+
+                        let position = named_constraints
+                            .iter()
+                            .position(|(c_idx, _)| *c_idx == idx)
+                            .unwrap();
+
+                        if position < named_constraints.len() - 1 {
+                            // Not the last: gets Annotation
+                            let disambiguator = next_disambiguator;
+                            next_disambiguator += 1;
+                            element_disambiguators.insert(idx, disambiguator);
+                            constraint_uses_annotation.insert(idx, true);
+                        } else {
+                            // Last one: gets AttachedAnnotation
+                            // It shares the table's disambiguator (but table also needs Annotation for this)
+                            let disambiguator = next_disambiguator;
+                            next_disambiguator += 1;
+                            element_disambiguators.insert(idx, disambiguator);
+                            constraint_uses_annotation.insert(idx, false);
+                        }
+                    }
                 }
-                // If not in attached list, uses_annotation stays false (AttachedAnnotation)
+            }
+            ModelElement::FullTextIndex(_) => {
+                // Fulltext indexes get their own disambiguators
+                let disambiguator = next_disambiguator;
+                next_disambiguator += 1;
+                element_disambiguators.insert(idx, disambiguator);
+            }
+            _ => {}
+        }
+    }
+
+    // Phase 4: Apply disambiguators to elements and build annotation maps
+    // Map: (table_schema, table_name, column_name) -> Vec<disambiguator>
+    let mut column_annotations: HashMap<(String, String, String), Vec<u32>> = HashMap::new();
+
+    // Map: (table_schema, table_name) -> (Annotation disambiguator, index of annotated constraint)
+    let mut table_annotation: HashMap<(String, String), (u32, usize)> = HashMap::new();
+
+    // Map: (table_schema, table_name) -> Vec<(disambiguator, constraint_index)>
+    // Tracks constraints that use Annotation (table gets AttachedAnnotation for them)
+    let mut table_attached: HashMap<(String, String), Vec<(u32, usize)>> = HashMap::new();
+
+    for (idx, element) in elements.iter_mut().enumerate() {
+        if let ModelElement::Constraint(constraint) = element {
+            let disambiguator = element_disambiguators.get(&idx).copied();
+            constraint.inline_constraint_disambiguator = disambiguator;
+            constraint.uses_annotation = constraint_uses_annotation
+                .get(&idx)
+                .copied()
+                .unwrap_or(false);
+
+            let table_key = (
+                constraint.table_schema.clone(),
+                constraint.table_name.clone(),
+            );
+
+            if constraint.is_inline {
+                // Inline constraints: link to column(s) for AttachedAnnotation
+                if let Some(d) = disambiguator {
+                    for col in &constraint.columns {
+                        let key = (
+                            constraint.table_schema.clone(),
+                            constraint.table_name.clone(),
+                            col.name.clone(),
+                        );
+                        column_annotations.entry(key).or_default().push(d);
+                    }
+                }
+            } else {
+                // Named constraints: set up table annotations
+                if let Some(d) = disambiguator {
+                    if constraint.uses_annotation {
+                        // This constraint uses Annotation, so table gets AttachedAnnotation for it
+                        table_attached.entry(table_key).or_default().push((d, idx));
+                    } else {
+                        // This constraint uses AttachedAnnotation, so table gets Annotation for it
+                        table_annotation.insert(table_key, (d, idx));
+                    }
+                }
             }
         }
     }
 
-    // Fourth pass: Assign annotations to tables
-    for element in elements.iter_mut() {
+    // Phase 5: Apply to tables
+    // DotNet outputs AttachedAnnotations in a specific order relative to the Annotation:
+    // 1. AttachedAnnotations for constraints that appear AFTER the annotated constraint (descending order)
+    // 2. The Annotation itself
+    // 3. AttachedAnnotations for constraints that appear BEFORE the annotated constraint (ascending order)
+    for (idx, element) in elements.iter_mut().enumerate() {
         if let ModelElement::Table(table) = element {
             let table_key = (table.schema.clone(), table.name.clone());
 
-            // Check if table has an annotation (for the constraint that uses AttachedAnnotation)
-            if let Some(Some(disambiguator)) = table_annotation.get(&table_key) {
-                table.inline_constraint_disambiguator = Some(*disambiguator);
+            // For single-constraint tables, the table carries the Annotation
+            // (disambiguator was already assigned in Phase 3)
+            if table_carries_annotation.get(&table_key) == Some(&true) {
+                if let Some(&d) = element_disambiguators.get(&idx) {
+                    table.inline_constraint_disambiguator = Some(d);
+                }
+            } else {
+                // Multi-constraint table: get annotation from the last constraint
+                if let Some(&(d, _)) = table_annotation.get(&table_key) {
+                    table.inline_constraint_disambiguator = Some(d);
+                }
             }
 
-            // Add attached annotations for constraints that use Annotation
+            // Split attached annotations based on position relative to annotated constraint
             if let Some(attached_list) = table_attached.get(&table_key) {
-                table.attached_annotations = attached_list.clone();
+                if let Some(&(_, annotated_idx)) = table_annotation.get(&table_key) {
+                    // Constraints after annotated_idx go before the Annotation (descending order)
+                    let mut after: Vec<u32> = attached_list
+                        .iter()
+                        .filter(|(_, c_idx)| *c_idx > annotated_idx)
+                        .map(|(d, _)| *d)
+                        .collect();
+                    after.sort_by(|a, b| b.cmp(a)); // Descending
+
+                    // Constraints before annotated_idx go after the Annotation (ascending order)
+                    let mut before: Vec<u32> = attached_list
+                        .iter()
+                        .filter(|(_, c_idx)| *c_idx < annotated_idx)
+                        .map(|(d, _)| *d)
+                        .collect();
+                    before.sort(); // Ascending
+
+                    table.attached_annotations_before_annotation = after;
+                    table.attached_annotations_after_annotation = before;
+                } else {
+                    // No annotated constraint (single constraint case), all go before
+                    let all: Vec<u32> = attached_list.iter().map(|(d, _)| *d).collect();
+                    table.attached_annotations_before_annotation = all;
+                }
             }
 
             // Also assign attached_annotations to columns from inline constraints
@@ -1142,13 +1262,12 @@ fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
         }
     }
 
-    // Fifth pass: Assign disambiguators to fulltext indexes
-    // Fulltext indexes share the same name as their table, so they need disambiguators
-    for element in elements.iter_mut() {
+    // Phase 6: Apply to fulltext indexes
+    for (idx, element) in elements.iter_mut().enumerate() {
         if let ModelElement::FullTextIndex(fulltext) = element {
-            let disambiguator = next_disambiguator;
-            next_disambiguator += 1;
-            fulltext.disambiguator = Some(disambiguator);
+            if let Some(&d) = element_disambiguators.get(&idx) {
+                fulltext.disambiguator = Some(d);
+            }
         }
     }
 }

@@ -150,12 +150,14 @@ pub struct TableElement {
     /// Tables with inline constraints get their own annotation, and named table-level
     /// constraints (like CONSTRAINT [PK_Table]) reference this via AttachedAnnotation
     pub inline_constraint_disambiguator: Option<u32>,
-    /// AttachedAnnotation disambiguators linking to constraints that reference this table.
-    /// DotNet uses this pattern:
-    /// - Single named constraint: table gets Annotation, constraint gets AttachedAnnotation
-    /// - Multiple named constraints: each constraint (except one) gets Annotation,
-    ///   table gets AttachedAnnotation for those, plus one Annotation for the remaining constraint
-    pub attached_annotations: Vec<u32>,
+    /// AttachedAnnotation disambiguators to output BEFORE the Annotation element.
+    /// DotNet outputs AttachedAnnotations for constraints that appear AFTER the annotated
+    /// constraint in the sorted element list, in descending order.
+    pub attached_annotations_before_annotation: Vec<u32>,
+    /// AttachedAnnotation disambiguators to output AFTER the Annotation element.
+    /// DotNet outputs AttachedAnnotations for constraints that appear BEFORE the annotated
+    /// constraint in the sorted element list, in ascending order.
+    pub attached_annotations_after_annotation: Vec<u32>,
 }
 
 /// Column element
