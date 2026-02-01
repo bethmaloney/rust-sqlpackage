@@ -4,7 +4,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-20.2 complete (232 tasks). Full parity achieved.**
+**Phases 1-20.7 complete (239 tasks). Full parity achieved.**
 
 **Current Focus: Phase 20 - Replace Remaining Regex with Tokenization/AST**
 - ✅ Phase 20.1 complete: Token-based parameter parsing (3/3 tasks)
@@ -13,7 +13,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.4 complete: Table and alias pattern matching (7/7 tasks)
 - ✅ Phase 20.5 complete: SQL keyword detection (6/6 tasks)
 - ✅ Phase 20.6 complete: Semicolon and whitespace handling (3/3 tasks)
-- 🔄 Phase 20.7: CTE and subquery pattern matching (4 tasks remaining)
+- ✅ Phase 20.7 complete: CTE and subquery pattern matching (4/4 tasks)
 - 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (11 tasks)
 
 **Upcoming: Phase 21 - Split model_xml.rs into Submodules** (0/10 tasks)
@@ -120,18 +120,18 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Implementation Approach:** Created `extract_index_filter_predicate_tokenized()` in `index_parser.rs` using sqlparser-rs tokenizer. Scans for WHERE keyword after closing parenthesis, collects tokens until WITH/semicolon/end, reconstructs predicate string without semicolons. Handles tabs, multiple spaces, and newlines correctly.
 
-### Phase 20.7: CTE and Subquery Pattern Matching (0/4)
+### Phase 20.7: CTE and Subquery Pattern Matching (4/4) ✅
 
 **Location:** `src/dacpac/model_xml.rs`
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 20.7.1 | Replace CTE_ALIAS_RE with tokenizer | ⬜ | Line 3235: `WITH CteName AS (` pattern |
-| 20.7.2 | Replace SUBQUERY_ALIAS_RE with tokenizer | ⬜ | Line 3211: Derived table alias detection |
-| 20.7.3 | Replace APPLY_KEYWORD_RE with tokenizer | ⬜ | Line 3215: CROSS/OUTER APPLY detection |
-| 20.7.4 | Replace APPLY_FUNCTION_ALIAS_RE with tokenizer | ⬜ | Line 3221-3229: APPLY subquery alias extraction |
+| 20.7.1 | Replace CTE_ALIAS_RE with tokenizer | ✅ | Implemented via `extract_cte_aliases()` method (lines 3794-3849) using `TableAliasTokenParser`. Detects WITH keyword, handles RECURSIVE, parses multiple comma-separated CTEs, uses `skip_balanced_parens()` for CTE bodies. 20 unit tests passing. |
+| 20.7.2 | Replace SUBQUERY_ALIAS_RE with tokenizer | ✅ | Implemented via `try_parse_subquery_alias()` method (lines 4018-4105). Token-based detection of `) AS alias` and `) alias` patterns. Filters SQL keywords to avoid false matches. 4 unit tests passing. |
+| 20.7.3 | Replace APPLY_KEYWORD_RE with tokenizer | ✅ | Implemented in `extract_all_aliases()` method (lines 3655-3670). Uses `check_word_ci("CROSS")`, `check_word_ci("OUTER")`, and `check_keyword(Keyword::APPLY)` for detection. 3 unit tests passing. |
+| 20.7.4 | Replace APPLY_FUNCTION_ALIAS_RE with tokenizer | ✅ | APPLY aliases captured via the `) AS/alias` pattern in `try_parse_subquery_alias()`. Same tokenized approach as subquery aliases. |
 
-**Implementation Approach:** Parse WITH clauses, subqueries, and APPLY expressions using sqlparser-rs AST. Extract CTE names and subquery aliases from the syntax tree.
+**Implementation Approach:** All patterns replaced with token-based parsing using `TableAliasTokenParser` struct and sqlparser-rs tokenizer. CTE extraction runs as first pass, followed by table/subquery alias extraction in second pass.
 
 ### Phase 20.8: Fix Alias Resolution Bugs in BodyDependencies (0/11)
 
