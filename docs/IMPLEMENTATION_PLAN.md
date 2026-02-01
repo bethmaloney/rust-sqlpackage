@@ -450,13 +450,36 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 
 ---
 
+## Phase 32: Fix CTE Column Resolution in Body Dependencies (Complete) ✅
+
+**Goal:** Fix body dependency extraction to resolve CTE column references to their underlying tables.
+
+**Problem:** When SQL code references CTE columns like `AccountCte.Id`, DotNet resolves these to the underlying table columns (e.g., `[dbo].[Account].[Id]`). Rust was treating CTEs as subquery aliases to skip, missing these references.
+
+**Fix Applied:**
+- Modified `extract_cte_aliases_with_tables()` to extract the first FROM table from each CTE body
+- CTEs now map to their underlying tables in `table_aliases` instead of being added to `subquery_aliases`
+- When code references `AccountCte.Id`, it now resolves to `[dbo].[Account].[Id]`
+
+**Results:**
+- GetAccountWithCte: Rust now emits 21 refs (up from 12), matching DotNet's 19 more closely
+- CTE column references are now properly resolved to underlying table columns
+- Tests updated to reflect new behavior where CTEs map to their underlying tables
+
+**Remaining Issues in body_dependencies_aliases:**
+- Ordering differences between Rust and DotNet (not tracked at relationship level)
+- APPLY subquery context: Unqualified columns in APPLY subqueries resolve to wrong table
+- Minor deduplication differences
+
+---
+
 ## Known Issues
 
 | Issue | Location | Phase | Status |
 |-------|----------|-------|--------|
 | ~~Missing SqlDynamicColumnSource elements~~ | procedure bodies | Phase 24 | ✅ Fixed |
 | ~~Missing constraints from ALTER TABLE~~ | parser/builder | Phase 25 | ✅ Fixed (Layer 1 at 100%) |
-| Relationship parity body_dependencies_aliases | body_deps.rs | - | 61 errors (duplicate column refs) |
+| Relationship parity body_dependencies_aliases | body_deps.rs | Phase 32 | 61 errors (ordering differences, APPLY context issues); CTE column resolution fixed |
 | Relationship parity commaless_constraints | constraint_parser.rs | - | 1 error |
 | ~~Layer 2 errors in stress_test~~ | other_writers.rs | - | ✅ Fixed (CacheSize property) |
 

@@ -1147,7 +1147,9 @@ impl TableAliasTokenParser {
         subquery_aliases: &mut HashSet<String>,
     ) {
         // First pass: extract CTE aliases from WITH clauses
-        self.extract_cte_aliases(subquery_aliases);
+        // CTEs are mapped to their underlying tables so references like AccountCte.Id
+        // get resolved to [dbo].[Account].[Id]
+        self.extract_cte_aliases_with_tables(table_aliases, subquery_aliases);
 
         // Reset position for second pass
         self.pos = 0;
@@ -1403,7 +1405,14 @@ impl TableAliasTokenParser {
     }
 
     /// Extract CTE aliases from WITH clause
-    fn extract_cte_aliases(&mut self, subquery_aliases: &mut HashSet<String>) {
+    /// Extract CTE aliases and map them to their underlying tables.
+    /// CTEs are treated like table aliases - when code references `AccountCte.Id`,
+    /// it gets resolved to `[dbo].[Account].[Id]` because AccountCte selects FROM Account.
+    fn extract_cte_aliases_with_tables(
+        &mut self,
+        table_aliases: &mut HashMap<String, String>,
+        subquery_aliases: &mut HashSet<String>,
+    ) {
         while !self.is_at_end() {
             self.skip_whitespace();
 
@@ -1426,20 +1435,78 @@ impl TableAliasTokenParser {
 
                         self.skip_whitespace();
 
+                        // Skip optional column list: CTE_name (col1, col2, ...) AS (...)
+                        if self.check_token(&Token::LParen) {
+                            // This might be column list or AS body - peek ahead
+                            let saved_pos = self.pos;
+                            self.skip_balanced_parens();
+                            self.skip_whitespace();
+
+                            // If followed by AS, that was column list; otherwise restore
+                            if !self.check_keyword(Keyword::AS) {
+                                self.pos = saved_pos;
+                            }
+                        }
+
                         // Expect AS keyword
                         if self.check_keyword(Keyword::AS) {
                             self.advance();
                             self.skip_whitespace();
 
-                            // Expect opening paren
+                            // Expect opening paren for CTE body
                             if self.check_token(&Token::LParen) {
-                                // This is a valid CTE - add to subquery aliases
-                                if !Self::is_alias_keyword(&cte_name_lower) {
-                                    subquery_aliases.insert(cte_name_lower);
+                                // Save position to scan CTE body for FROM table
+                                let cte_body_start = self.pos;
+                                self.advance(); // Skip opening paren
+
+                                // Find first FROM clause in CTE body
+                                let mut paren_depth = 1;
+                                let mut found_table: Option<String> = None;
+
+                                while !self.is_at_end() && paren_depth > 0 {
+                                    if self.check_token(&Token::LParen) {
+                                        paren_depth += 1;
+                                        self.advance();
+                                    } else if self.check_token(&Token::RParen) {
+                                        paren_depth -= 1;
+                                        if paren_depth == 0 {
+                                            break;
+                                        }
+                                        self.advance();
+                                    } else if paren_depth == 1
+                                        && self.check_keyword(Keyword::FROM)
+                                        && found_table.is_none()
+                                    {
+                                        // Found FROM at top level of CTE body
+                                        self.advance();
+                                        self.skip_whitespace();
+
+                                        // Parse the table name
+                                        if let Some((schema, table_name)) = self.parse_table_name()
+                                        {
+                                            found_table =
+                                                Some(format!("[{}].[{}]", schema, table_name));
+                                        }
+                                    } else {
+                                        self.advance();
+                                    }
                                 }
 
-                                // Skip past the balanced parens
+                                // Skip to end of balanced parens
+                                self.pos = cte_body_start;
                                 self.skip_balanced_parens();
+
+                                // Add CTE to appropriate map
+                                if !Self::is_alias_keyword(&cte_name_lower) {
+                                    if let Some(table_ref) = found_table {
+                                        // CTE maps to its underlying table
+                                        table_aliases.insert(cte_name_lower, table_ref);
+                                    } else {
+                                        // CTE doesn't have a simple FROM table (e.g., VALUES, recursive)
+                                        // Treat as subquery alias (skip column refs)
+                                        subquery_aliases.insert(cte_name_lower);
+                                    }
+                                }
 
                                 self.skip_whitespace();
 
@@ -1457,6 +1524,16 @@ impl TableAliasTokenParser {
             } else {
                 self.advance();
             }
+        }
+    }
+
+    /// Legacy version that only extracts CTE names as subquery aliases (for backward compatibility)
+    fn extract_cte_aliases(&mut self, subquery_aliases: &mut HashSet<String>) {
+        let mut dummy_table_aliases = HashMap::new();
+        self.extract_cte_aliases_with_tables(&mut dummy_table_aliases, subquery_aliases);
+        // Move any entries from table_aliases to subquery_aliases for legacy behavior
+        for (cte_name, _) in dummy_table_aliases {
+            subquery_aliases.insert(cte_name);
         }
     }
 

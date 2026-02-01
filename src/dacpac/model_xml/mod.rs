@@ -3863,11 +3863,13 @@ FROM AccountCte;
         // 'A' should be a table alias for [dbo].[Account]
         assert_eq!(table_aliases.get("a"), Some(&"[dbo].[Account]".to_string()));
 
-        // 'AccountCte' should be recognized as a CTE/subquery alias (not a table)
-        assert!(
-            subquery_aliases.contains("accountcte"),
-            "Expected 'accountcte' to be in subquery_aliases: {:?}",
-            subquery_aliases
+        // 'AccountCte' should now map to its underlying table [dbo].[Account]
+        // so that AccountCte.Id resolves to [dbo].[Account].[Id] (DotNet behavior)
+        assert_eq!(
+            table_aliases.get("accountcte"),
+            Some(&"[dbo].[Account]".to_string()),
+            "Expected 'accountcte' to map to [dbo].[Account] in table_aliases: {:?}",
+            table_aliases
         );
     }
 
@@ -3902,16 +3904,19 @@ INNER JOIN AccountTagCte ON AccountTagCte.TagId = TagCte.Id
             Some(&"[dbo].[AccountTag]".to_string())
         );
 
-        // Both CTE names should be recognized as subquery aliases
-        assert!(
-            subquery_aliases.contains("tagcte"),
-            "Expected 'tagcte' to be in subquery_aliases: {:?}",
-            subquery_aliases
+        // CTEs should now map to their underlying tables (DotNet behavior)
+        // TagCte -> [dbo].[Tag], AccountTagCte -> [dbo].[AccountTag]
+        assert_eq!(
+            table_aliases.get("tagcte"),
+            Some(&"[dbo].[Tag]".to_string()),
+            "Expected 'tagcte' to map to [dbo].[Tag] in table_aliases: {:?}",
+            table_aliases
         );
-        assert!(
-            subquery_aliases.contains("accounttagcte"),
-            "Expected 'accounttagcte' to be in subquery_aliases: {:?}",
-            subquery_aliases
+        assert_eq!(
+            table_aliases.get("accounttagcte"),
+            Some(&"[dbo].[AccountTag]".to_string()),
+            "Expected 'accounttagcte' to map to [dbo].[AccountTag] in table_aliases: {:?}",
+            table_aliases
         );
     }
 
