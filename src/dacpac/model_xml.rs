@@ -2403,7 +2403,6 @@ fn extract_all_column_references(
                 // Skip if this identifier is a known table alias (to avoid treating alias
                 // definitions like [ITTAG] in "JOIN [dbo].[Tag] [ITTAG]" as column refs)
                 BodyDepToken::SingleBracketed(ident) => {
-                    let ident_lower = ident.to_lowercase();
                     // Check if this is a table alias - if so, skip it
                     let is_alias = table_aliases
                         .iter()
