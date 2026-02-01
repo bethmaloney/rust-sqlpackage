@@ -2733,13 +2733,11 @@ fn write_constraint<W: Write>(
     } else {
         // Write column relationships and DefiningTable based on constraint type
         // DotNet ordering for foreign keys: Columns, DefiningTable, ForeignColumns, ForeignTable
-        // DotNet ordering for PK/Unique: DefiningTable, ColumnSpecifications
+        // DotNet ordering for PK/Unique: ColumnSpecifications, DefiningTable
         if !constraint.columns.is_empty() {
             match constraint.constraint_type {
                 ConstraintType::PrimaryKey | ConstraintType::Unique => {
-                    // PK/Unique: DefiningTable first, then ColumnSpecifications
-                    write_relationship(writer, "DefiningTable", &[&table_ref])?;
-
+                    // PK/Unique: ColumnSpecifications first, then DefiningTable
                     // Primary keys and unique constraints use ColumnSpecifications with inline elements
                     // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
                     let rel = BytesStart::new("Relationship")
@@ -2767,6 +2765,9 @@ fn write_constraint<W: Write>(
                     }
 
                     writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+                    // DefiningTable comes after ColumnSpecifications
+                    write_relationship(writer, "DefiningTable", &[&table_ref])?;
                 }
                 ConstraintType::ForeignKey => {
                     // Foreign keys: Columns, DefiningTable, ForeignColumns, ForeignTable (DotNet order)

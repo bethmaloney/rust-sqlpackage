@@ -35,7 +35,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Relationships | 46/48 | 95.8% |
 | Layer 4 (Ordering) | 48/48 | 100% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 2/48 | 4.2% |
+| Layer 7 (Canonical XML) | 10/48 | 20.8% |
 
 ### Excluded Fixtures
 
@@ -279,11 +279,12 @@ Line 13: Rust='</Header>', DotNet='<CustomData Category="SqlCmdVariables" Type="
 | 22.2.1 | Add empty SqlCmdVariables CustomData element | ✅ | `<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable" />` should be emitted even when no SQLCMD variables are defined. Location: `write_header()` in header.rs |
 | 22.2.2 | Verify other CustomData elements match DotNet | ⬜ | Check for other missing CustomData categories in Header section |
 
-### Phase 22.3: Fix Element/Property Ordering (0/1)
+### Phase 22.3: Fix Element/Property Ordering (1/2)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 22.3.1 | Audit element ordering against DotNet output | ⬜ | Compare element order in Model section. May need to reorder schema/table/view/etc. elements to match DotNet |
+| 22.3.1 | Audit element ordering against DotNet output | ✅ | Fixed PK/Unique constraint relationship ordering (ColumnSpecifications before DefiningTable). Fixed table SqlInlineConstraintAnnotation - only added when table has BOTH inline AND named constraints. Layer 7 pass rate improved from 2/48 (4.2%) to 10/48 (20.8%). |
+| 22.3.2 | Fix SqlInlineConstraintAnnotation/AttachedAnnotation order-dependent assignment | ⬜ | DotNet assigns Annotation to whichever element comes first (constraint or table), and AttachedAnnotation to the other. This depends on element ordering in the XML output. |
 
 **Validation:** Run `cargo test --test e2e_tests test_parity_all_fixtures` and verify Layer 7 pass rate increases.
 

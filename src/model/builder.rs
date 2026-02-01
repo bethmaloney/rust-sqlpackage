@@ -922,6 +922,22 @@ fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
     let mut tables_with_inline_constraints: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
 
+    // Tables that have named (non-inline) constraints
+    let mut tables_with_named_constraints: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+
+    // Pre-pass: Identify tables with named constraints
+    for element in elements.iter() {
+        if let ModelElement::Constraint(constraint) = element {
+            if !constraint.is_inline {
+                tables_with_named_constraints.insert((
+                    constraint.table_schema.clone(),
+                    constraint.table_name.clone(),
+                ));
+            }
+        }
+    }
+
     // First pass: Assign disambiguators to inline constraints and track columns
     for element in elements.iter_mut() {
         if let ModelElement::Constraint(constraint) = element {
@@ -952,12 +968,15 @@ fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
         }
     }
 
-    // Second pass: Assign disambiguators to tables that have inline constraints
-    // and link named constraints to their table's disambiguator
+    // Second pass: Assign disambiguators to tables that have BOTH inline constraints
+    // AND named constraints. DotNet only adds SqlInlineConstraintAnnotation to tables
+    // that have a mix of inline and named constraints.
     for element in elements.iter_mut() {
         if let ModelElement::Table(table) = element {
             let table_key = (table.schema.clone(), table.name.clone());
-            if tables_with_inline_constraints.contains(&table_key) {
+            if tables_with_inline_constraints.contains(&table_key)
+                && tables_with_named_constraints.contains(&table_key)
+            {
                 let disambiguator = next_disambiguator;
                 next_disambiguator += 1;
                 table.inline_constraint_disambiguator = Some(disambiguator);
