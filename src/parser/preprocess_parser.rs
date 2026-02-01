@@ -23,9 +23,7 @@
 //! ## Performance Optimizations (Phase 16.2.3)
 //!
 //! - Uses single `String` buffer with pre-allocated capacity instead of `Vec<String>.join()`
-//! - Returns `Cow<'static, str>` from `token_to_string()` to avoid allocations for static tokens
-
-use std::borrow::Cow;
+//! - Uses `format_token_sql_cow()` from `identifier_utils` to avoid allocations for static tokens
 
 use sqlparser::keywords::Keyword;
 use sqlparser::tokenizer::Token;
@@ -97,9 +95,9 @@ impl PreprocessTokenParser {
                 continue;
             }
 
-            // Output the token unchanged - uses Cow to avoid allocations for static tokens
+            // Output the token unchanged - uses format_token_sql_cow to avoid allocations for static tokens
             if let Some(token) = self.base.current_token() {
-                output.push_str(&self.token_to_string(&token.token));
+                output.push_str(&format_token_sql_cow(&token.token));
             }
             self.base.advance();
         }
@@ -132,7 +130,7 @@ impl PreprocessTokenParser {
         while !self.base.is_at_end() {
             if let Some(token) = self.base.current_token() {
                 if matches!(&token.token, Token::Whitespace(_)) {
-                    whitespace.push_str(&self.token_to_string(&token.token));
+                    whitespace.push_str(&format_token_sql_cow(&token.token));
                     self.base.advance();
                     continue;
                 }
@@ -319,16 +317,16 @@ impl PreprocessTokenParser {
                 match &token.token {
                     Token::LParen => {
                         depth += 1;
-                        result.push_str(&self.token_to_string(&token.token));
+                        result.push_str(&format_token_sql_cow(&token.token));
                     }
                     Token::RParen => {
                         depth -= 1;
                         if depth > 0 {
-                            result.push_str(&self.token_to_string(&token.token));
+                            result.push_str(&format_token_sql_cow(&token.token));
                         }
                     }
                     _ => {
-                        result.push_str(&self.token_to_string(&token.token));
+                        result.push_str(&format_token_sql_cow(&token.token));
                     }
                 }
             }
@@ -340,15 +338,6 @@ impl PreprocessTokenParser {
         }
 
         Some(result)
-    }
-
-    /// Convert a token back to its string representation
-    ///
-    /// Returns `Cow<'static, str>` to avoid allocations for static tokens like
-    /// punctuation and operators. Dynamic content (identifiers, strings) returns
-    /// an owned String wrapped in Cow::Owned.
-    fn token_to_string(&self, token: &Token) -> Cow<'static, str> {
-        format_token_sql_cow(token)
     }
 }
 

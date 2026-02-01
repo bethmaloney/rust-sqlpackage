@@ -1691,7 +1691,7 @@ fn split_by_comma_or_constraint_tokens(
                 }
 
                 // Add the token to current part
-                current_part.push_str(&token_to_string_simple(&token.token));
+                current_part.push_str(&format_token_sql(&token.token));
                 seen_content_in_part = true;
             }
             Token::Whitespace(ws) => {
@@ -1699,7 +1699,7 @@ fn split_by_comma_or_constraint_tokens(
                 current_part.push_str(&ws.to_string());
             }
             _ => {
-                current_part.push_str(&token_to_string_simple(&token.token));
+                current_part.push_str(&format_token_sql(&token.token));
                 seen_content_in_part = true;
             }
         }
@@ -1780,11 +1780,6 @@ fn is_table_level_constraint_ahead(tokens: &[sqlparser::tokenizer::TokenWithSpan
     }
 
     false
-}
-
-/// Convert a token back to its string representation
-fn token_to_string_simple(token: &sqlparser::tokenizer::Token) -> String {
-    format_token_sql(token)
 }
 
 /// Simple character-based splitting (fallback)
