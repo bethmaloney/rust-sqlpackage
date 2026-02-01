@@ -38,6 +38,7 @@ pub(crate) fn write_procedure<W: Write>(
     writer: &mut Writer<W>,
     proc: &ProcedureElement,
     model: &DatabaseModel,
+    default_schema: &str,
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", proc.schema, proc.name);
 
@@ -95,9 +96,9 @@ pub(crate) fn write_procedure<W: Write>(
     write_body_dependencies(writer, &body_deps)?;
 
     // Write DynamicObjects relationship for TVP parameters and CTEs
-    // NOTE: Use "dbo" as default_schema for unqualified table resolution, NOT the procedure's schema.
-    // DotNet always resolves unqualified table names to [dbo], regardless of the containing object's schema.
-    write_all_dynamic_objects(writer, &full_name, &body, "dbo", &tvp_params)?;
+    // NOTE: Use project's default_schema for unqualified table resolution, NOT the procedure's schema.
+    // DotNet resolves unqualified table names to the project's default schema (typically [dbo]).
+    write_all_dynamic_objects(writer, &full_name, &body, default_schema, &tvp_params)?;
 
     // Write Parameters relationship
     if !params.is_empty() {
@@ -181,6 +182,7 @@ pub(crate) fn write_function<W: Write>(
     writer: &mut Writer<W>,
     func: &FunctionElement,
     model: &DatabaseModel,
+    default_schema: &str,
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", func.schema, func.name);
     let type_name = match func.function_type {
@@ -216,19 +218,20 @@ pub(crate) fn write_function<W: Write>(
 
     // Write DynamicObjects relationship for CTEs, temp tables, and table variables
     // Functions don't have TVP parameters like procedures, so we pass an empty slice
-    // NOTE: Use "dbo" as default_schema for unqualified table resolution, NOT the function's schema.
-    // DotNet always resolves unqualified table names to [dbo], regardless of the containing object's schema.
+    // NOTE: Use project's default_schema for unqualified table resolution, NOT the function's schema.
+    // DotNet resolves unqualified table names to the project's default schema (typically [dbo]).
     let empty_tvp_params: Vec<(&ProcedureParameter, Option<&UserDefinedTypeElement>)> = Vec::new();
-    write_all_dynamic_objects(writer, &full_name, &body, "dbo", &empty_tvp_params)?;
+    write_all_dynamic_objects(writer, &full_name, &body, default_schema, &empty_tvp_params)?;
 
     // For inline TVFs, write Columns relationship (after BodyDependencies, before FunctionBody)
-    // NOTE: Use "dbo" as default_schema for unqualified table resolution, NOT the function's schema.
-    // DotNet always resolves unqualified table names to [dbo], regardless of the containing object's schema.
+    // NOTE: Use project's default_schema for unqualified table resolution, NOT the function's schema.
+    // DotNet resolves unqualified table names to the project's default schema (typically [dbo]).
     if matches!(
         func.function_type,
         crate::model::FunctionType::InlineTableValued
     ) {
-        let inline_tvf_columns = extract_inline_tvf_columns(&body, &full_name, "dbo", model);
+        let inline_tvf_columns =
+            extract_inline_tvf_columns(&body, &full_name, default_schema, model);
         if !inline_tvf_columns.is_empty() {
             write_view_columns(writer, &full_name, &inline_tvf_columns)?;
         }

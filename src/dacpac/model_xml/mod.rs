@@ -192,7 +192,7 @@ pub fn generate_model_xml<W: Write>(
                 db_options_written = true;
             }
         }
-        write_element(&mut xml_writer, element, model)?;
+        write_element(&mut xml_writer, element, model, &project.default_schema)?;
     }
 
     // Write SqlDatabaseOptions at the end if not yet written (happens when all elements
@@ -214,13 +214,14 @@ fn write_element<W: Write>(
     writer: &mut Writer<W>,
     element: &ModelElement,
     model: &DatabaseModel,
+    default_schema: &str,
 ) -> anyhow::Result<()> {
     match element {
         ModelElement::Schema(s) => write_schema(writer, s),
         ModelElement::Table(t) => write_table(writer, t),
-        ModelElement::View(v) => write_view(writer, v, model),
-        ModelElement::Procedure(p) => write_procedure(writer, p, model),
-        ModelElement::Function(f) => write_function(writer, f, model),
+        ModelElement::View(v) => write_view(writer, v, model, default_schema),
+        ModelElement::Procedure(p) => write_procedure(writer, p, model, default_schema),
+        ModelElement::Function(f) => write_function(writer, f, model, default_schema),
         ModelElement::Index(i) => write_index(writer, i),
         ModelElement::FullTextIndex(f) => write_fulltext_index(writer, f),
         ModelElement::FullTextCatalog(c) => write_fulltext_catalog(writer, c),
@@ -230,7 +231,7 @@ fn write_element<W: Write>(
         ModelElement::ScalarType(s) => write_scalar_type(writer, s),
         ModelElement::ExtendedProperty(e) => write_extended_property(writer, e),
         ModelElement::Trigger(t) => write_trigger(writer, t),
-        ModelElement::Raw(r) => write_raw(writer, r, model),
+        ModelElement::Raw(r) => write_raw(writer, r, model, default_schema),
     }
 }
 
@@ -3462,10 +3463,11 @@ fn write_raw<W: Write>(
     writer: &mut Writer<W>,
     raw: &RawElement,
     model: &DatabaseModel,
+    default_schema: &str,
 ) -> anyhow::Result<()> {
     // Handle SqlView specially to get full property/relationship support
     if raw.sql_type == "SqlView" {
-        return write_raw_view(writer, raw, model);
+        return write_raw_view(writer, raw, model, default_schema);
     }
 
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);

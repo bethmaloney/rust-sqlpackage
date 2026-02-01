@@ -9,7 +9,6 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Remaining Work:**
 - Phase 22.4.4: Disambiguator numbering (lower priority - dacpac functions correctly)
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
-- Phase 35.4: Thread project default schema through call chain (lower priority - dbo works for most cases)
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -142,15 +141,33 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 | 35.3.1 | Run parity tests for body_dependencies_aliases fixture | ✅ | All parity tests pass |
 | 35.3.2 | Validate deployment succeeds for InstrumentWithTagsUnqualified | ✅ | No unresolved reference errors |
 
-### Phase 35.4: Thread Project Default Schema Through Call Chain (Deferred)
+### Phase 35.4: Thread Project Default Schema Through Call Chain ✅
+
+**Status:** COMPLETED (2026-02-01)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 35.4.1 | Pass `project.default_schema` to `write_view()` and `write_raw_view()` | ⬜ | Currently not available in writer context |
-| 35.4.2 | Pass `project.default_schema` to `write_procedure()` and `write_function()` | ⬜ | Thread through programmability_writer |
-| 35.4.3 | Update `TableAliasTokenParser::new()` to accept project default schema | ⬜ | Replace hardcoded "dbo" in body_deps.rs |
+| 35.4.1 | Pass `project.default_schema` to `write_view()` and `write_raw_view()` | ✅ | Added `default_schema: &str` parameter to view_writer.rs functions |
+| 35.4.2 | Pass `project.default_schema` to `write_procedure()` and `write_function()` | ✅ | Added `default_schema: &str` parameter to programmability_writer.rs functions |
+| 35.4.3 | Update `write_element()` to pass project default schema | ✅ | Updated model_xml/mod.rs to accept and thread `default_schema` parameter |
 
-**Note:** Phase 35.4 is deferred as lower priority. The `.sqlproj` file can specify `<DefaultSchema>` (parsed in `sqlproj_parser.rs:208`), but this value is not currently threaded through to the body dependency extraction. Projects using non-dbo default schemas (e.g., `app`, `core`) would need this for correct unqualified name resolution. However, the vast majority of SQL Server projects use `dbo` as the default schema, so hardcoding `"dbo"` matches DotNet behavior for the common case.
+**Implementation Details:**
+- Added `default_schema: &str` parameter to `write_view()` and `write_raw_view()` in view_writer.rs
+- Added `default_schema: &str` parameter to `write_procedure()` and `write_function()` in programmability_writer.rs
+- Updated `write_element()` in model_xml/mod.rs to accept `default_schema: &str` and pass it to writers
+- Updated `generate_model_xml()` to pass `project.default_schema` to `write_element()`
+- Updated `write_raw()` to accept and pass `default_schema` to `write_raw_view()`
+- Replaced all hardcoded "dbo" with the `default_schema` parameter
+
+**Files Changed:**
+- `src/dacpac/model_xml/view_writer.rs`: Lines 37-41, 79-81, 88-90, 105-109, 159-162, 169-171
+- `src/dacpac/model_xml/programmability_writer.rs`: Lines 37-41, 98-101, 180-184, 219-222, 225-234
+- `src/dacpac/model_xml/mod.rs`: Lines 195, 213-235, 3462-3470
+
+**Results:**
+- All 500 unit tests pass
+- All 117 e2e tests pass
+- All 46/48 parity tests pass (unchanged from before)
 
 ---
 
@@ -336,7 +353,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 | Phase 32 | Fix CTE column resolution in body dependencies | Complete |
 | Phase 33 | Fix comma-less table type PRIMARY KEY constraint parsing | 1/1 |
 | Phase 34 | Fix APPLY subquery column resolution | 4/4 |
-| Phase 35 | Fix default schema resolution for unqualified table names | Complete |
+| Phase 35 | Fix default schema resolution for unqualified table names | 9/9 |
 | Phase 36 | DacMetadata.xml dynamic properties (DacVersion, DacDescription) | 8/8 |
 | Phase 37 | Derive CollationLcid and CollationCaseSensitive from collation name | 10/10 |
 | Phase 38 | Fix CollationCaseSensitive to always output "True" | Complete |
