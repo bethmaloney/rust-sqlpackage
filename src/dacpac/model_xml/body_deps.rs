@@ -143,6 +143,26 @@ pub(crate) enum BodyDepToken {
     SingleUnbracketed(String),
 }
 
+/// A token with its byte position in the original SQL text.
+/// Used for scope-aware column resolution in APPLY subqueries.
+#[derive(Debug, Clone)]
+pub(crate) struct BodyDepTokenWithPos {
+    pub token: BodyDepToken,
+    pub byte_pos: usize,
+}
+
+/// Represents an APPLY subquery scope with its byte range and internal tables.
+/// Used to resolve unqualified columns to the correct table based on scope.
+#[derive(Debug, Clone)]
+pub(crate) struct ApplySubqueryScope {
+    /// Byte position where the APPLY subquery starts (after opening paren)
+    pub start_pos: usize,
+    /// Byte position where the APPLY subquery ends (at closing paren)
+    pub end_pos: usize,
+    /// Tables referenced inside this APPLY subquery (in order of appearance)
+    pub tables: Vec<String>,
+}
+
 /// Token-based scanner for body dependency extraction.
 /// Replaces TOKEN_RE regex with proper tokenization for handling whitespace, comments,
 /// and SQL syntax correctly.
@@ -401,6 +421,44 @@ impl BodyDependencyTokenScanner {
         } else {
             false
         }
+    }
+
+    /// Get the byte offset of the current token in the original SQL text.
+    /// Uses line/column info from tokenizer to compute byte offset.
+    fn current_byte_offset(&self, line_offsets: &[usize]) -> usize {
+        if let Some(token) = self.current_token() {
+            let loc = &token.span.start;
+            location_to_byte_offset(line_offsets, loc.line, loc.column)
+        } else {
+            0
+        }
+    }
+
+    /// Scan the body and return all matched tokens with their byte positions.
+    /// This is used for scope-aware column resolution in APPLY subqueries.
+    pub fn scan_with_positions(&mut self, sql: &str) -> Vec<BodyDepTokenWithPos> {
+        let line_offsets = compute_line_offsets(sql);
+        let mut results = Vec::new();
+
+        while !self.is_at_end() {
+            self.skip_whitespace();
+            if self.is_at_end() {
+                break;
+            }
+
+            // Get byte position before scanning the token
+            let byte_pos = self.current_byte_offset(&line_offsets);
+
+            // Try to match patterns in order of specificity
+            if let Some(token) = self.try_scan_token() {
+                results.push(BodyDepTokenWithPos { token, byte_pos });
+            } else {
+                // No pattern matched, advance to next token
+                self.advance();
+            }
+        }
+
+        results
     }
 }
 
@@ -822,13 +880,20 @@ pub(crate) fn extract_body_dependencies(
     // This handles whitespace (tabs, multiple spaces, newlines) correctly and is more robust
     let table_refs = extract_table_refs_tokenized(body, &table_aliases, &subquery_aliases);
 
+    // Phase 34: Extract APPLY subquery scopes for scope-aware column resolution
+    // Each scope contains the byte range and tables within that APPLY subquery
+    let apply_scopes = extract_apply_subquery_scopes(body);
+
     // Scan body sequentially for all references in order of appearance using token-based scanner
     // Note: DotNet has a complex ordering that depends on SQL clause structure (FROM first, etc.)
     // We process in textual order which may differ from DotNet's order but contains the same refs
     // Phase 20.2.1: Replaced TOKEN_RE regex with BodyDependencyTokenScanner for robust whitespace handling
 
     if let Some(mut scanner) = BodyDependencyTokenScanner::new(body) {
-        for token in scanner.scan() {
+        // Phase 34: Use position-aware scanning for scope-aware column resolution
+        for token_with_pos in scanner.scan_with_positions(body) {
+            let token = token_with_pos.token;
+            let byte_pos = token_with_pos.byte_pos;
             match token {
                 BodyDepToken::Parameter(param_name) => {
                     // Pattern 1: Parameter reference: @param
@@ -983,17 +1048,19 @@ pub(crate) fn extract_body_dependencies(
                             || t.starts_with(&format!("[{}].", ident))
                     });
 
-                    // If not a table/schema, treat as unqualified column -> resolve against first table
+                    // If not a table/schema, treat as unqualified column -> resolve against scope table
+                    // Phase 34: Use APPLY subquery scope if token is inside one, otherwise use first table
                     if !is_table_or_schema {
-                        if let Some(first_table) = table_refs.first() {
+                        let resolve_table = find_scope_table(byte_pos, &apply_scopes, &table_refs);
+                        if let Some(target_table) = resolve_table {
                             // First emit the table reference if not seen (DotNet deduplicates tables)
-                            if !seen_tables.contains(first_table) {
-                                seen_tables.insert(first_table.clone());
-                                deps.push(BodyDependency::ObjectRef(first_table.clone()));
+                            if !seen_tables.contains(target_table) {
+                                seen_tables.insert(target_table.clone());
+                                deps.push(BodyDependency::ObjectRef(target_table.clone()));
                             }
 
                             // Direct column refs (single bracketed) ARE deduplicated by DotNet
-                            let col_ref = format!("{}.[{}]", first_table, ident);
+                            let col_ref = format!("{}.[{}]", target_table, ident);
                             if !seen_direct_columns.contains(&col_ref) {
                                 seen_direct_columns.insert(col_ref.clone());
                                 deps.push(BodyDependency::ObjectRef(col_ref));
@@ -1063,17 +1130,19 @@ pub(crate) fn extract_body_dependencies(
                             || t_lower.starts_with(&format!("[{}].", ident_lower))
                     });
 
-                    // If not a table/schema, treat as unqualified column -> resolve against first table
+                    // If not a table/schema, treat as unqualified column -> resolve against scope table
+                    // Phase 34: Use APPLY subquery scope if token is inside one, otherwise use first table
                     if !is_table_or_schema {
-                        if let Some(first_table) = table_refs.first() {
+                        let resolve_table = find_scope_table(byte_pos, &apply_scopes, &table_refs);
+                        if let Some(target_table) = resolve_table {
                             // First emit the table reference if not seen (DotNet deduplicates tables)
-                            if !seen_tables.contains(first_table) {
-                                seen_tables.insert(first_table.clone());
-                                deps.push(BodyDependency::ObjectRef(first_table.clone()));
+                            if !seen_tables.contains(target_table) {
+                                seen_tables.insert(target_table.clone());
+                                deps.push(BodyDependency::ObjectRef(target_table.clone()));
                             }
 
                             // Direct column refs (single unbracketed) ARE deduplicated by DotNet
-                            let col_ref = format!("{}.[{}]", first_table, ident);
+                            let col_ref = format!("{}.[{}]", target_table, ident);
                             if !seen_direct_columns.contains(&col_ref) {
                                 seen_direct_columns.insert(col_ref.clone());
                                 deps.push(BodyDependency::ObjectRef(col_ref));
@@ -1111,6 +1180,38 @@ pub(crate) fn extract_table_aliases_for_body_deps(
         None => return,
     };
     parser.extract_all_aliases(table_aliases, subquery_aliases);
+}
+
+/// Extract APPLY subquery scopes with their byte ranges and internal tables.
+/// This is used to resolve unqualified columns to the correct table when
+/// they appear inside APPLY subqueries.
+pub(crate) fn extract_apply_subquery_scopes(body: &str) -> Vec<ApplySubqueryScope> {
+    let mut parser = match TableAliasTokenParser::new(body) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    parser.extract_apply_scopes(body)
+}
+
+/// Find the appropriate table to resolve an unqualified column against.
+/// If the byte position is inside an APPLY subquery scope, use that scope's first table.
+/// Otherwise, fall back to the first table in the overall table refs.
+fn find_scope_table<'a>(
+    byte_pos: usize,
+    apply_scopes: &'a [ApplySubqueryScope],
+    table_refs: &'a [String],
+) -> Option<&'a String> {
+    // Check if position falls within any APPLY subquery scope
+    for scope in apply_scopes {
+        if byte_pos >= scope.start_pos && byte_pos <= scope.end_pos {
+            // Position is inside this APPLY subquery - use its first table
+            if let Some(first_scope_table) = scope.tables.first() {
+                return Some(first_scope_table);
+            }
+        }
+    }
+    // Not inside any APPLY scope - use the first table from overall refs
+    table_refs.first()
 }
 
 /// Token-based parser for extracting table aliases from SQL body text.
@@ -1303,6 +1404,118 @@ impl TableAliasTokenParser {
             } else {
                 self.advance();
             }
+        }
+    }
+
+    /// Extract APPLY subquery scopes with their byte ranges and internal tables.
+    /// Returns a list of scopes, each containing start/end positions and the tables within.
+    pub fn extract_apply_scopes(&mut self, sql: &str) -> Vec<ApplySubqueryScope> {
+        let line_offsets = compute_line_offsets(sql);
+        let mut scopes = Vec::new();
+
+        self.pos = 0;
+
+        while !self.is_at_end() {
+            self.skip_whitespace();
+
+            // Look for CROSS/OUTER APPLY patterns
+            if self.check_word_ci("CROSS") || self.check_word_ci("OUTER") {
+                let saved_pos = self.pos;
+                self.advance();
+                self.skip_whitespace();
+
+                if self.check_keyword(Keyword::APPLY) || self.check_word_ci("APPLY") {
+                    self.advance();
+                    self.skip_whitespace();
+
+                    // Check if followed by opening paren (subquery)
+                    if self.check_token(&Token::LParen) {
+                        // Get byte position of opening paren
+                        let start_byte_pos = self.get_current_byte_offset(&line_offsets);
+
+                        self.advance(); // Move past opening paren
+
+                        // Find balanced end and collect tables inside
+                        let mut tables_in_scope = Vec::new();
+                        let mut depth = 1;
+
+                        while !self.is_at_end() && depth > 0 {
+                            if self.check_token(&Token::LParen) {
+                                depth += 1;
+                                self.advance();
+                            } else if self.check_token(&Token::RParen) {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                                self.advance();
+                            } else if self.check_keyword(Keyword::FROM) && depth == 1 {
+                                // Extract table ref after FROM at top level of APPLY
+                                self.advance();
+                                self.skip_whitespace();
+                                if let Some((schema, table_name)) = self.parse_table_name() {
+                                    let table_ref = format!("[{}].[{}]", schema, table_name);
+                                    if !tables_in_scope.contains(&table_ref) {
+                                        tables_in_scope.push(table_ref);
+                                    }
+                                }
+                            } else if self.is_join_keyword() && depth == 1 {
+                                // Extract table ref after JOIN at top level
+                                self.skip_join_keywords();
+                                self.skip_whitespace();
+                                if !self.check_token(&Token::LParen) {
+                                    if let Some((schema, table_name)) = self.parse_table_name() {
+                                        let table_ref = format!("[{}].[{}]", schema, table_name);
+                                        if !tables_in_scope.contains(&table_ref) {
+                                            tables_in_scope.push(table_ref);
+                                        }
+                                    }
+                                }
+                            } else {
+                                self.advance();
+                            }
+                        }
+
+                        // Get byte position of closing paren
+                        let end_byte_pos = self.get_current_byte_offset(&line_offsets);
+
+                        if !tables_in_scope.is_empty() {
+                            scopes.push(ApplySubqueryScope {
+                                start_pos: start_byte_pos,
+                                end_pos: end_byte_pos,
+                                tables: tables_in_scope,
+                            });
+                        }
+
+                        // Continue past the closing paren
+                        if !self.is_at_end() {
+                            self.advance();
+                        }
+                    }
+                } else {
+                    // Not an APPLY, restore and continue
+                    self.pos = saved_pos;
+                    self.advance();
+                }
+            } else {
+                self.advance();
+            }
+        }
+
+        scopes
+    }
+
+    /// Get the byte offset of the current token position
+    fn get_current_byte_offset(&self, line_offsets: &[usize]) -> usize {
+        if let Some(token) = self.tokens.get(self.pos) {
+            let loc = &token.span.start;
+            location_to_byte_offset(line_offsets, loc.line, loc.column)
+        } else if let Some(last_token) = self.tokens.last() {
+            // If past end, return position after last token
+            let loc = &last_token.span.end;
+            location_to_byte_offset(line_offsets, loc.line, loc.column)
+        } else {
+            0
         }
     }
 
@@ -4690,5 +4903,116 @@ mod tests {
         assert_eq!(table_vars.len(), 1);
         assert_eq!(table_vars[0].name, "@MyTable");
         assert_eq!(table_vars[0].columns.len(), 2);
+    }
+
+    // ============================================================================
+    // Phase 34: APPLY subquery scope tests
+    // ============================================================================
+
+    #[test]
+    fn test_extract_apply_scopes_cross_apply() {
+        let sql = r#"
+            SELECT a.Id
+            FROM [dbo].[Account] a
+            CROSS APPLY (
+                SELECT COUNT(*) AS TagCount
+                FROM [dbo].[AccountTag]
+                WHERE AccountId = a.Id
+            ) d
+        "#;
+        let scopes = extract_apply_subquery_scopes(sql);
+        assert_eq!(scopes.len(), 1, "Should find 1 APPLY scope");
+        assert_eq!(
+            scopes[0].tables,
+            vec!["[dbo].[AccountTag]".to_string()],
+            "APPLY scope should contain AccountTag table"
+        );
+    }
+
+    #[test]
+    fn test_extract_apply_scopes_outer_apply() {
+        let sql = r#"
+            SELECT a.Id
+            FROM [dbo].[Account] a
+            OUTER APPLY (
+                SELECT TOP 1 tag.[Name]
+                FROM [dbo].[AccountTag] at
+                INNER JOIN [dbo].[Tag] tag ON at.TagId = tag.Id
+                WHERE at.AccountId = a.Id
+            ) t
+        "#;
+        let scopes = extract_apply_subquery_scopes(sql);
+        assert_eq!(scopes.len(), 1, "Should find 1 APPLY scope");
+        assert!(
+            scopes[0].tables.contains(&"[dbo].[AccountTag]".to_string()),
+            "APPLY scope should contain AccountTag"
+        );
+        assert!(
+            scopes[0].tables.contains(&"[dbo].[Tag]".to_string()),
+            "APPLY scope should contain Tag"
+        );
+    }
+
+    #[test]
+    fn test_apply_subquery_unqualified_column_resolution() {
+        // Test that unqualified columns inside APPLY subqueries resolve to inner table
+        let sql = r#"
+            SELECT a.Id
+            FROM [dbo].[Account] a
+            CROSS APPLY (
+                SELECT COUNT(*) AS TagCount
+                FROM [dbo].[AccountTag]
+                WHERE AccountId = a.Id
+            ) d
+        "#;
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+
+        // Should have [dbo].[AccountTag].[AccountId] (AccountId resolves to inner table)
+        let has_accounttag_accountid = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[AccountTag].[AccountId]",
+            _ => false,
+        });
+        assert!(
+            has_accounttag_accountid,
+            "AccountId should resolve to [dbo].[AccountTag].[AccountId], not [dbo].[Account].[AccountId]. Got deps: {:?}",
+            deps
+        );
+
+        // Should NOT have [dbo].[Account].[AccountId] (Account doesn't have AccountId column)
+        let has_account_accountid = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Account].[AccountId]",
+            _ => false,
+        });
+        assert!(
+            !has_account_accountid,
+            "Should NOT have [dbo].[Account].[AccountId] - that's a wrong resolution. Got deps: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn test_apply_subquery_qualified_column_still_resolves_outer() {
+        // Test that qualified columns like a.Id still resolve to outer table
+        let sql = r#"
+            SELECT a.Id
+            FROM [dbo].[Account] a
+            CROSS APPLY (
+                SELECT COUNT(*) AS TagCount
+                FROM [dbo].[AccountTag]
+                WHERE AccountId = a.Id
+            ) d
+        "#;
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+
+        // Should have [dbo].[Account].[Id] (qualified ref a.Id resolves to outer alias)
+        let has_account_id = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Account].[Id]",
+            _ => false,
+        });
+        assert!(
+            has_account_id,
+            "Qualified a.Id should resolve to [dbo].[Account].[Id]. Got deps: {:?}",
+            deps
+        );
     }
 }
