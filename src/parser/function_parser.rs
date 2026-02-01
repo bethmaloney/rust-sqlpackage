@@ -21,9 +21,10 @@
 //! - Inline table-valued functions (RETURNS TABLE)
 //! - Multi-statement table-valued functions (RETURNS @var TABLE)
 
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use sqlparser::tokenizer::Token;
+
+use super::token_parser_base::TokenParser;
 
 /// Result of parsing a function definition using tokens
 #[derive(Debug, Clone, Default)]
@@ -63,58 +64,54 @@ pub enum TokenParsedFunctionType {
 
 /// Token-based function definition parser
 pub struct FunctionTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl FunctionTokenParser {
     /// Create a new parser for a function definition string
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(sql)?,
+        })
     }
 
     /// Parse CREATE FUNCTION and return complete function info
     pub fn parse_create_function(&mut self) -> Option<TokenParsedFunction> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect CREATE keyword
-        if !self.check_keyword(Keyword::CREATE) {
+        if !self.base.check_keyword(Keyword::CREATE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Check for optional OR ALTER
-        if self.check_keyword(Keyword::OR) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_keyword(Keyword::OR) {
+            self.base.advance();
+            self.base.skip_whitespace();
 
-            if !self.check_keyword(Keyword::ALTER) {
+            if !self.base.check_keyword(Keyword::ALTER) {
                 return None;
             }
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Expect FUNCTION keyword
-        if !self.check_keyword(Keyword::FUNCTION) {
+        if !self.base.check_keyword(Keyword::FUNCTION) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse the schema-qualified name
-        let (schema, name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Parse parameters (if present)
         let parameters = self.parse_parameters();
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Parse RETURNS clause
         let (return_type, function_type) = self.parse_returns_clause();
@@ -130,29 +127,29 @@ impl FunctionTokenParser {
 
     /// Parse ALTER FUNCTION and return complete function info
     pub fn parse_alter_function(&mut self) -> Option<TokenParsedFunction> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect ALTER keyword
-        if !self.check_keyword(Keyword::ALTER) {
+        if !self.base.check_keyword(Keyword::ALTER) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect FUNCTION keyword
-        if !self.check_keyword(Keyword::FUNCTION) {
+        if !self.base.check_keyword(Keyword::FUNCTION) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse the schema-qualified name
-        let (schema, name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Parse parameters (if present)
         let parameters = self.parse_parameters();
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Parse RETURNS clause
         let (return_type, function_type) = self.parse_returns_clause();
@@ -166,39 +163,20 @@ impl FunctionTokenParser {
         })
     }
 
-    /// Parse a schema-qualified name: [schema].[name] or schema.name or [name] or name
-    fn parse_schema_qualified_name(&mut self) -> Option<(String, String)> {
-        let first_ident = self.parse_identifier()?;
-        self.skip_whitespace();
-
-        // Check if there's a dot (schema.name pattern)
-        if self.check_token(&Token::Period) {
-            self.advance();
-            self.skip_whitespace();
-
-            let second_ident = self.parse_identifier()?;
-
-            Some((first_ident, second_ident))
-        } else {
-            // No dot - just a name, default schema to "dbo"
-            Some(("dbo".to_string(), first_ident))
-        }
-    }
-
     /// Parse function parameters: (@param1 TYPE, @param2 TYPE = default, ...)
     fn parse_parameters(&mut self) -> Vec<TokenParsedParameter> {
         let mut params = Vec::new();
 
         // Expect opening parenthesis
-        if !self.check_token(&Token::LParen) {
+        if !self.base.check_token(&Token::LParen) {
             return params;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Handle empty parameter list
-        if self.check_token(&Token::RParen) {
-            self.advance();
+        if self.base.check_token(&Token::RParen) {
+            self.base.advance();
             return params;
         }
 
@@ -211,20 +189,20 @@ impl FunctionTokenParser {
                 self.skip_to_param_delimiter();
             }
 
-            self.skip_whitespace();
+            self.base.skip_whitespace();
 
             // Check for comma (more parameters) or closing paren (end)
-            if self.check_token(&Token::Comma) {
-                self.advance();
-                self.skip_whitespace();
-            } else if self.check_token(&Token::RParen) {
-                self.advance();
+            if self.base.check_token(&Token::Comma) {
+                self.base.advance();
+                self.base.skip_whitespace();
+            } else if self.base.check_token(&Token::RParen) {
+                self.base.advance();
                 break;
             } else {
                 // Unexpected token, try to recover by finding closing paren
-                self.skip_to_token(&Token::RParen);
-                if self.check_token(&Token::RParen) {
-                    self.advance();
+                self.base.skip_to_token(&Token::RParen);
+                if self.base.check_token(&Token::RParen) {
+                    self.base.advance();
                 }
                 break;
             }
@@ -238,16 +216,16 @@ impl FunctionTokenParser {
         // Parameter name should be a Word starting with @
         // MsSqlDialect tokenizes @name as a single Word token
         let name = self.parse_parameter_name()?;
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Parse data type
         let data_type = self.parse_data_type()?;
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Check for default value (= ...)
-        let default_value = if self.check_token(&Token::Eq) {
-            self.advance();
-            self.skip_whitespace();
+        let default_value = if self.base.check_token(&Token::Eq) {
+            self.base.advance();
+            self.base.skip_whitespace();
             Some(self.parse_default_value())
         } else {
             None
@@ -262,16 +240,16 @@ impl FunctionTokenParser {
 
     /// Parse parameter name (@name)
     fn parse_parameter_name(&mut self) -> Option<String> {
-        if self.is_at_end() {
+        if self.base.is_at_end() {
             return None;
         }
 
-        let token = self.current_token()?;
+        let token = self.base.current_token()?;
         match &token.token {
             // MsSqlDialect tokenizes @name as a Word
             Token::Word(w) if w.value.starts_with('@') => {
                 let name = w.value.clone();
-                self.advance();
+                self.base.advance();
                 Some(name)
             }
             _ => None,
@@ -283,19 +261,19 @@ impl FunctionTokenParser {
         let mut result = String::new();
 
         // Get base type name
-        let type_name = self.parse_identifier()?;
+        let type_name = self.base.parse_identifier()?;
         result.push_str(&type_name.to_uppercase());
 
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Check for type parameters in parentheses
-        if self.check_token(&Token::LParen) {
+        if self.base.check_token(&Token::LParen) {
             result.push('(');
-            self.advance();
+            self.base.advance();
 
             let mut depth = 1;
-            while !self.is_at_end() && depth > 0 {
-                if let Some(token) = self.current_token() {
+            while !self.base.is_at_end() && depth > 0 {
+                if let Some(token) = self.base.current_token() {
                     match &token.token {
                         Token::LParen => {
                             depth += 1;
@@ -311,10 +289,10 @@ impl FunctionTokenParser {
                             // Minimal whitespace handling in type
                         }
                         _ => {
-                            result.push_str(&self.token_to_string(&token.token));
+                            result.push_str(&TokenParser::token_to_string(&token.token));
                         }
                     }
-                    self.advance();
+                    self.base.advance();
                 }
             }
             result.push(')');
@@ -328,13 +306,13 @@ impl FunctionTokenParser {
         let mut result = String::new();
         let mut depth = 0;
 
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
+        while !self.base.is_at_end() {
+            if let Some(token) = self.base.current_token() {
                 match &token.token {
                     Token::LParen => {
                         depth += 1;
                         result.push('(');
-                        self.advance();
+                        self.base.advance();
                     }
                     Token::RParen => {
                         if depth == 0 {
@@ -342,17 +320,17 @@ impl FunctionTokenParser {
                         }
                         depth -= 1;
                         result.push(')');
-                        self.advance();
+                        self.base.advance();
                     }
                     Token::Comma if depth == 0 => {
                         break; // Next parameter
                     }
                     Token::Whitespace(_) => {
-                        self.advance();
+                        self.base.advance();
                     }
                     _ => {
-                        result.push_str(&self.token_to_string(&token.token));
-                        self.advance();
+                        result.push_str(&TokenParser::token_to_string(&token.token));
+                        self.base.advance();
                     }
                 }
             } else {
@@ -366,22 +344,22 @@ impl FunctionTokenParser {
     /// Parse RETURNS clause and determine function type
     fn parse_returns_clause(&mut self) -> (Option<String>, TokenParsedFunctionType) {
         // Find RETURNS keyword
-        while !self.is_at_end() {
-            if self.check_word_ci("RETURNS") {
-                self.advance();
-                self.skip_whitespace();
+        while !self.base.is_at_end() {
+            if self.base.check_word_ci("RETURNS") {
+                self.base.advance();
+                self.base.skip_whitespace();
                 break;
             }
-            self.advance();
+            self.base.advance();
         }
 
-        if self.is_at_end() {
+        if self.base.is_at_end() {
             return (None, TokenParsedFunctionType::Scalar);
         }
 
         // Check for TABLE (inline TVF)
-        if self.check_keyword(Keyword::TABLE) {
-            self.advance();
+        if self.base.check_keyword(Keyword::TABLE) {
+            self.base.advance();
             return (
                 Some("TABLE".to_string()),
                 TokenParsedFunctionType::InlineTableValued,
@@ -389,7 +367,7 @@ impl FunctionTokenParser {
         }
 
         // Check for @var TABLE (multi-statement TVF)
-        if let Some(token) = self.current_token() {
+        if let Some(token) = self.base.current_token() {
             if let Token::Word(w) = &token.token {
                 if w.value.starts_with('@') {
                     // Multi-statement TVF: RETURNS @var TABLE (...)
@@ -413,44 +391,11 @@ impl FunctionTokenParser {
     // Helper methods
     // ========================================================================
 
-    /// Parse an identifier (bracketed or unbracketed)
-    fn parse_identifier(&mut self) -> Option<String> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Word(w) => {
-                let name = w.value.clone();
-                self.advance();
-                Some(name)
-            }
-            _ => None,
-        }
-    }
-
-    /// Skip whitespace tokens
-    fn skip_whitespace(&mut self) {
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
-                match &token.token {
-                    Token::Whitespace(_) => {
-                        self.advance();
-                    }
-                    _ => break,
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
     /// Skip to next parameter delimiter (comma or closing paren)
     fn skip_to_param_delimiter(&mut self) {
         let mut depth = 0;
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
+        while !self.base.is_at_end() {
+            if let Some(token) = self.base.current_token() {
                 match &token.token {
                     Token::LParen => depth += 1,
                     Token::RParen if depth > 0 => depth -= 1,
@@ -458,84 +403,10 @@ impl FunctionTokenParser {
                     Token::Comma if depth == 0 => return,
                     _ => {}
                 }
-                self.advance();
+                self.base.advance();
             } else {
                 break;
             }
-        }
-    }
-
-    /// Skip to a specific token
-    fn skip_to_token(&mut self, target: &Token) {
-        while !self.is_at_end() {
-            if self.check_token(target) {
-                return;
-            }
-            self.advance();
-        }
-    }
-
-    /// Convert a token to its string representation
-    fn token_to_string(&self, token: &Token) -> String {
-        match token {
-            Token::Word(w) => w.value.clone(),
-            Token::Number(n, _) => n.clone(),
-            Token::SingleQuotedString(s) => format!("'{}'", s),
-            Token::NationalStringLiteral(s) => format!("N'{}'", s),
-            Token::Comma => ",".to_string(),
-            Token::Period => ".".to_string(),
-            Token::LParen => "(".to_string(),
-            Token::RParen => ")".to_string(),
-            Token::Eq => "=".to_string(),
-            Token::Minus => "-".to_string(),
-            Token::Plus => "+".to_string(),
-            Token::Mul => "*".to_string(),
-            Token::Div => "/".to_string(),
-            _ => String::new(),
-        }
-    }
-
-    /// Check if at end of tokens
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-    }
-
-    /// Get current token without consuming
-    fn current_token(&self) -> Option<&TokenWithSpan> {
-        self.tokens.get(self.pos)
-    }
-
-    /// Advance to next token
-    fn advance(&mut self) {
-        if !self.is_at_end() {
-            self.pos += 1;
-        }
-    }
-
-    /// Check if current token is a specific keyword
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token is a word matching (case-insensitive)
-    fn check_word_ci(&self, word: &str) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word))
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token matches a specific token type
-    fn check_token(&self, expected: &Token) -> bool {
-        if let Some(token) = self.current_token() {
-            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
-        } else {
-            false
         }
     }
 }
