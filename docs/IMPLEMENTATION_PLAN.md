@@ -14,7 +14,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.5 complete: SQL keyword detection (6/6 tasks)
 - ✅ Phase 20.6 complete: Semicolon and whitespace handling (3/3 tasks)
 - ✅ Phase 20.7 complete: CTE and subquery pattern matching (4/4 tasks)
-- 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (10/11 tasks)
+- ✅ Phase 20.8 complete: Fix alias resolution bugs in BodyDependencies (11/11 tasks)
 
 **Upcoming: Phase 21 - Split model_xml.rs into Submodules** (0/10 tasks)
 - Target: Break 9,790-line file into ~9 logical submodules
@@ -133,7 +133,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Implementation Approach:** All patterns replaced with token-based parsing using `TableAliasTokenParser` struct and sqlparser-rs tokenizer. CTE extraction runs as first pass, followed by table/subquery alias extraction in second pass.
 
-### Phase 20.8: Fix Alias Resolution Bugs in BodyDependencies (10/11)
+### Phase 20.8: Fix Alias Resolution Bugs in BodyDependencies (11/11) ✅
 
 **Location:** `src/dacpac/model_xml.rs` - `extract_table_aliases_for_body_deps()` and related functions
 
@@ -153,7 +153,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 | 20.8.8 | Fix CASE expression subquery alias extraction | ✅ | `test_case_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
 | 20.8.9 | Fix derived table chain alias extraction | ✅ | `test_derived_table_chain_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
 | 20.8.10 | Exclude recursive CTE self-references from dependencies | ✅ | `test_recursive_cte_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.11 | Fix MERGE TARGET/SOURCE alias handling | ⬜ | `test_merge_alias_resolution` | MERGE aliases and keywords parsed incorrectly |
+| 20.8.11 | Fix MERGE TARGET/SOURCE alias handling | ✅ | `test_merge_alias_resolution` | Added MERGE keyword detection to `TableAliasTokenParser::extract_all_aliases()`. Extracts `MERGE INTO [table] AS [alias]` for TARGET alias. USING subquery alias captured by existing `) AS alias` pattern. Inner FROM/JOIN clauses properly scanned. |
 
 **Fix Applied (20.8.1-20.8.10):**
 
@@ -161,9 +161,13 @@ The fix was implemented in the `extract_all_column_references()` function in `sr
 
 **Solution:** Before treating a `SingleBracketed` token as a column reference, the function now checks if the identifier (case-insensitively) matches any known table alias in the `alias_names` set. If it matches a table alias, it is skipped rather than being added as a column reference. This prevents table aliases from being misinterpreted as column dependencies.
 
-**Remaining Issue (20.8.11):**
+**Fix Applied (20.8.11 - MERGE alias handling):**
 
-The MERGE statement uses TARGET and SOURCE as implicit aliases, but these are not currently tracked by the alias extraction logic. The MERGE syntax also differs from standard SELECT/INSERT/UPDATE/DELETE patterns.
+The fix for MERGE statements was implemented in `TableAliasTokenParser::extract_all_aliases()` in `src/dacpac/model_xml.rs`:
+1. Added MERGE keyword detection to identify MERGE statements
+2. Extracts `MERGE INTO [table] AS [alias]` pattern to capture the TARGET alias as a table alias
+3. The `USING (subquery) AS [alias]` pattern is handled by the existing `) AS alias` pattern handler which captures the SOURCE alias
+4. Inner FROM/JOIN clauses inside the USING subquery are properly scanned and their aliases are captured by the main loop
 
 **Original Implementation Approach (for reference):**
 
@@ -176,7 +180,7 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 
 ...are not added to the alias map. When `[ALIAS].[Column]` is encountered, the alias lookup fails and the reference is incorrectly constructed.
 
-**Validation:** 10 of 11 tests now pass. Only `test_merge_alias_resolution` (20.8.11) remains to be fixed.
+**Validation:** All 11 tests pass. Phase 20.8 is complete.
 
 ---
 

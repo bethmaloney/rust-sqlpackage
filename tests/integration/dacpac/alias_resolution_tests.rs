@@ -827,7 +827,6 @@ fn test_delete_from_alias_resolution() {
 // ============================================================================
 
 #[test]
-#[ignore] // Known bug - remove this when fixed
 fn test_merge_alias_resolution() {
     // Test aliases in MERGE statements (TARGET and SOURCE)
     let ctx = TestContext::with_fixture("body_dependencies_aliases");

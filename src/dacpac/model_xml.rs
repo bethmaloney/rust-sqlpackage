@@ -3680,6 +3680,77 @@ impl TableAliasTokenParser {
                     self.pos = saved_pos;
                     self.advance();
                 }
+            } else if self.check_keyword(Keyword::MERGE) || self.check_word_ci("MERGE") {
+                // Handle MERGE INTO [table] AS [alias] pattern
+                // This extracts the TARGET alias which is the alias for the target table
+                self.advance();
+                self.skip_whitespace();
+
+                // Skip optional INTO keyword
+                if self.check_keyword(Keyword::INTO) || self.check_word_ci("INTO") {
+                    self.advance();
+                    self.skip_whitespace();
+                }
+
+                // Parse the target table name
+                if let Some((schema, table_name)) = self.parse_table_name() {
+                    self.skip_whitespace();
+
+                    // Check for AS keyword (optional)
+                    if self.check_keyword(Keyword::AS) {
+                        self.advance();
+                        self.skip_whitespace();
+                    }
+
+                    // Try to get alias
+                    if let Some(alias) = self.try_parse_table_alias() {
+                        let alias_lower = alias.to_lowercase();
+                        if !Self::is_alias_keyword(&alias_lower)
+                            && !table_aliases.contains_key(&alias_lower)
+                        {
+                            let table_ref = format!("[{}].[{}]", schema, table_name);
+                            table_aliases.insert(alias_lower, table_ref);
+                        }
+                    }
+                }
+            } else if self.check_word_ci("USING") {
+                // Handle USING ... pattern in MERGE statements
+                // For USING (subquery) AS alias - the subquery alias will be captured by
+                // the RParen handler when it sees ) AS alias pattern.
+                // For USING table AS alias - we handle it here as a table alias.
+                self.advance();
+                self.skip_whitespace();
+
+                // Check if followed by opening paren (subquery)
+                if self.check_token(&Token::LParen) {
+                    // Don't skip balanced parens - let the main loop continue scanning
+                    // the subquery contents. FROM/JOIN inside will be captured.
+                    // The ) AS alias pattern will be captured by the RParen handler.
+                    self.advance();
+                } else {
+                    // USING references a table directly (less common but valid)
+                    // Parse table name and optional alias
+                    if let Some((schema, table_name)) = self.parse_table_name() {
+                        self.skip_whitespace();
+
+                        // Check for AS keyword (optional)
+                        if self.check_keyword(Keyword::AS) {
+                            self.advance();
+                            self.skip_whitespace();
+                        }
+
+                        // Try to get alias
+                        if let Some(alias) = self.try_parse_table_alias() {
+                            let alias_lower = alias.to_lowercase();
+                            if !Self::is_alias_keyword(&alias_lower)
+                                && !table_aliases.contains_key(&alias_lower)
+                            {
+                                let table_ref = format!("[{}].[{}]", schema, table_name);
+                                table_aliases.insert(alias_lower, table_ref);
+                            }
+                        }
+                    }
+                }
             } else if self.check_token(&Token::RParen) {
                 // After closing paren, check for subquery alias pattern: ) AS alias or ) alias
                 self.advance();
@@ -13071,6 +13142,272 @@ LEFT JOIN (
             all_refs.iter().any(|r| r == "[dbo].[Tag].[Name]"),
             "Expected [dbo].[Tag].[Name]. Got: {:?}",
             all_refs
+        );
+    }
+
+    // ============================================================================
+    // Tests for MERGE statement alias extraction (Phase 20.8.11)
+    // ============================================================================
+
+    #[test]
+    fn test_extract_merge_target_alias() {
+        use std::collections::{HashMap, HashSet};
+
+        // Test MERGE INTO [table] AS [alias] pattern
+        let sql = r#"
+MERGE INTO [dbo].[AccountTag] AS [TARGET]
+USING (
+    SELECT A.Id AS AccountId, T.Id AS TagId
+    FROM [dbo].[Account] A
+    CROSS JOIN [dbo].[Tag] T
+) AS [SOURCE]
+ON [TARGET].AccountId = [SOURCE].AccountId
+WHEN NOT MATCHED BY TARGET THEN
+    INSERT (AccountId, TagId)
+    VALUES ([SOURCE].AccountId, [SOURCE].TagId);
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        println!("Table aliases: {:?}", table_aliases);
+        println!("Subquery aliases: {:?}", subquery_aliases);
+
+        // 'TARGET' should be a table alias for [dbo].[AccountTag]
+        assert_eq!(
+            table_aliases.get("target"),
+            Some(&"[dbo].[AccountTag]".to_string()),
+            "Expected 'TARGET' -> [dbo].[AccountTag]"
+        );
+
+        // 'SOURCE' should be a subquery alias
+        assert!(
+            subquery_aliases.contains("source"),
+            "Expected 'SOURCE' to be in subquery_aliases: {:?}",
+            subquery_aliases
+        );
+    }
+
+    #[test]
+    fn test_extract_merge_target_alias_without_brackets() {
+        use std::collections::{HashMap, HashSet};
+
+        // Test MERGE INTO table AS alias pattern without brackets
+        let sql = r#"
+MERGE INTO dbo.AccountTag AS TARGET
+USING (
+    SELECT Id FROM dbo.Account
+) AS SOURCE
+ON TARGET.AccountId = SOURCE.Id
+WHEN NOT MATCHED THEN
+    INSERT (AccountId) VALUES (SOURCE.Id);
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        println!("Table aliases: {:?}", table_aliases);
+        println!("Subquery aliases: {:?}", subquery_aliases);
+
+        // 'TARGET' should be a table alias for [dbo].[AccountTag]
+        assert_eq!(
+            table_aliases.get("target"),
+            Some(&"[dbo].[AccountTag]".to_string()),
+            "Expected 'TARGET' -> [dbo].[AccountTag]"
+        );
+
+        // 'SOURCE' should be a subquery alias
+        assert!(
+            subquery_aliases.contains("source"),
+            "Expected 'SOURCE' to be in subquery_aliases: {:?}",
+            subquery_aliases
+        );
+    }
+
+    #[test]
+    fn test_extract_merge_without_into_keyword() {
+        use std::collections::{HashMap, HashSet};
+
+        // Test MERGE [table] AS [alias] pattern without INTO
+        let sql = r#"
+MERGE [dbo].[AccountTag] AS TARGET
+USING dbo.Account AS SOURCE
+ON TARGET.AccountId = SOURCE.Id
+WHEN MATCHED THEN
+    UPDATE SET TARGET.AccountId = SOURCE.Id;
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        println!("Table aliases: {:?}", table_aliases);
+        println!("Subquery aliases: {:?}", subquery_aliases);
+
+        // 'TARGET' should be a table alias for [dbo].[AccountTag]
+        assert_eq!(
+            table_aliases.get("target"),
+            Some(&"[dbo].[AccountTag]".to_string()),
+            "Expected 'TARGET' -> [dbo].[AccountTag]"
+        );
+
+        // When USING references a table directly (not subquery), it's a table alias
+        assert_eq!(
+            table_aliases.get("source"),
+            Some(&"[dbo].[Account]".to_string()),
+            "Expected 'SOURCE' -> [dbo].[Account]"
+        );
+    }
+
+    #[test]
+    fn test_extract_merge_with_inner_from_join() {
+        use std::collections::{HashMap, HashSet};
+
+        // Test MERGE with inner FROM/JOIN inside USING subquery
+        let sql = r#"
+MERGE INTO [dbo].[AccountTag] AS [TARGET]
+USING (
+    SELECT A.Id AS AccountId, T.Id AS TagId
+    FROM [dbo].[Account] A
+    CROSS JOIN [dbo].[Tag] T
+    WHERE A.Id = @AccountId AND T.Id = @TagId
+) AS [SOURCE]
+ON [TARGET].AccountId = [SOURCE].AccountId
+WHEN MATCHED THEN
+    UPDATE SET [TARGET].AccountId = [SOURCE].AccountId;
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        println!("Table aliases: {:?}", table_aliases);
+        println!("Subquery aliases: {:?}", subquery_aliases);
+
+        // 'TARGET' should be a table alias for [dbo].[AccountTag]
+        assert_eq!(
+            table_aliases.get("target"),
+            Some(&"[dbo].[AccountTag]".to_string()),
+            "Expected 'TARGET' -> [dbo].[AccountTag]"
+        );
+
+        // 'A' should be a table alias for [dbo].[Account] (inside USING subquery)
+        assert_eq!(
+            table_aliases.get("a"),
+            Some(&"[dbo].[Account]".to_string()),
+            "Expected 'A' -> [dbo].[Account]"
+        );
+
+        // 'T' should be a table alias for [dbo].[Tag] (inside USING subquery)
+        assert_eq!(
+            table_aliases.get("t"),
+            Some(&"[dbo].[Tag]".to_string()),
+            "Expected 'T' -> [dbo].[Tag]"
+        );
+
+        // 'SOURCE' should be a subquery alias
+        assert!(
+            subquery_aliases.contains("source"),
+            "Expected 'SOURCE' to be in subquery_aliases: {:?}",
+            subquery_aliases
+        );
+    }
+
+    #[test]
+    fn test_body_dependencies_merge_alias_resolution() {
+        // Test that MERGE aliases are resolved correctly in body deps
+        // References like [TARGET].[Column] should resolve to [dbo].[AccountTag].[Column]
+        // References like [SOURCE].[Column] should be skipped (subquery alias)
+        let sql = r#"
+MERGE INTO [dbo].[AccountTag] AS [TARGET]
+USING (
+    SELECT A.Id AS AccountId, T.Id AS TagId
+    FROM [dbo].[Account] A
+    CROSS JOIN [dbo].[Tag] T
+    WHERE A.Id = @AccountId AND T.Id = @TagId
+) AS [SOURCE]
+ON [TARGET].AccountId = [SOURCE].AccountId
+    AND [TARGET].TagId = [SOURCE].TagId
+WHEN NOT MATCHED BY TARGET THEN
+    INSERT (AccountId, TagId)
+    VALUES ([SOURCE].AccountId, [SOURCE].TagId)
+WHEN MATCHED THEN
+    UPDATE SET [TARGET].AccountId = [SOURCE].AccountId;
+"#;
+        let params = vec!["AccountId".to_string(), "TagId".to_string()];
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &params);
+
+        println!("Body dependencies:");
+        for d in &deps {
+            println!("  {:?}", d);
+        }
+
+        // Should contain [dbo].[AccountTag] (the TARGET table)
+        let has_account_tag = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[AccountTag]",
+            _ => false,
+        });
+        assert!(
+            has_account_tag,
+            "Expected [dbo].[AccountTag] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should contain [dbo].[Account] (from USING subquery)
+        let has_account = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Account]",
+            _ => false,
+        });
+        assert!(
+            has_account,
+            "Expected [dbo].[Account] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should contain [dbo].[Tag] (from USING subquery)
+        let has_tag = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Tag]",
+            _ => false,
+        });
+        assert!(
+            has_tag,
+            "Expected [dbo].[Tag] in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should NOT contain [TARGET].* as a schema reference
+        let has_target = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r.starts_with("[TARGET]") || r.contains("[TARGET]"),
+            _ => false,
+        });
+        assert!(
+            !has_target,
+            "Should NOT have [TARGET].* in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should NOT contain [SOURCE].* as a schema reference
+        let has_source = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r.starts_with("[SOURCE]") || r.contains("[SOURCE]"),
+            _ => false,
+        });
+        assert!(
+            !has_source,
+            "Should NOT have [SOURCE].* in body deps. Got: {:?}",
+            deps
+        );
+
+        // Should contain resolved column reference [dbo].[AccountTag].[AccountId]
+        let has_account_id = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[AccountTag].[AccountId]",
+            _ => false,
+        });
+        assert!(
+            has_account_id,
+            "Expected [dbo].[AccountTag].[AccountId] in body deps. Got: {:?}",
+            deps
         );
     }
 }
