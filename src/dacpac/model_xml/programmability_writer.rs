@@ -439,7 +439,10 @@ fn write_dynamic_columns<W: Write>(
 // CTE DynamicObjects Writing (Phase 24.1.3)
 // =============================================================================
 
-use super::{extract_cte_definitions, extract_temp_table_definitions, CteColumn, TempTableColumn};
+use super::{
+    extract_cte_definitions, extract_table_variable_definitions, extract_temp_table_definitions,
+    CteColumn, TableVariableColumn, TempTableColumn,
+};
 
 /// Write Columns relationship for a CTE SqlDynamicColumnSource.
 /// Each column is a SqlComputedColumn with ExpressionDependencies.
@@ -610,7 +613,49 @@ fn parse_temp_table_data_type(data_type: &str) -> (String, Option<i32>, Option<i
     (data_type.to_string(), None, None)
 }
 
-/// Extract CTE definitions and temp tables, write combined DynamicObjects (TVPs, CTEs, and temp tables)
+// =============================================================================
+// Table Variable DynamicObjects Writing (Phase 24.3.2)
+// =============================================================================
+
+/// Write Columns relationship for a table variable SqlDynamicColumnSource.
+/// Each column is a SqlSimpleColumn with TypeSpecifier.
+/// This follows the same pattern as temp table columns.
+fn write_table_variable_columns<W: Write>(
+    writer: &mut Writer<W>,
+    table_var_source_name: &str,
+    columns: &[TableVariableColumn],
+) -> anyhow::Result<()> {
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
+    writer.write_event(Event::Start(rel))?;
+
+    for col in columns {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let col_full_name = format!("{}.[{}]", table_var_source_name, col.name);
+        let col_elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlSimpleColumn"),
+            ("Name", col_full_name.as_str()),
+        ]);
+        writer.write_event(Event::Start(col_elem))?;
+
+        // Write IsNullable property
+        if !col.is_nullable {
+            write_property(writer, "IsNullable", "False")?;
+        }
+
+        // Write TypeSpecifier relationship for the column's data type
+        // Reuse the same type specifier writer as temp tables since they have the same format
+        write_temp_table_column_type_specifier(writer, &col.data_type)?;
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Extract CTE definitions, temp tables, and table variables, write combined DynamicObjects
 pub(crate) fn write_all_dynamic_objects<W: Write>(
     writer: &mut Writer<W>,
     full_name: &str,
@@ -624,8 +669,15 @@ pub(crate) fn write_all_dynamic_objects<W: Write>(
     // Extract temp tables from body (Phase 24.2)
     let temp_table_defs = extract_temp_table_definitions(body);
 
-    // If no TVPs, CTEs, or temp tables, nothing to write
-    if tvp_params.is_empty() && cte_defs.is_empty() && temp_table_defs.is_empty() {
+    // Extract table variables from body (Phase 24.3)
+    let table_var_defs = extract_table_variable_definitions(body);
+
+    // If no TVPs, CTEs, temp tables, or table variables, nothing to write
+    if tvp_params.is_empty()
+        && cte_defs.is_empty()
+        && temp_table_defs.is_empty()
+        && table_var_defs.is_empty()
+    {
         return Ok(());
     }
 
@@ -697,6 +749,30 @@ pub(crate) fn write_all_dynamic_objects<W: Write>(
 
         if !temp_table.columns.is_empty() {
             write_temp_table_columns(writer, &temp_table_source_name, &temp_table.columns)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    // Write table variable entries (Phase 24.3)
+    for table_var in &table_var_defs {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        // Format: [schema].[proc].[TableVariable1].[@VarName]
+        let table_var_source_name = format!(
+            "{}.[TableVariable{}].[{}]",
+            full_name, table_var.table_variable_number, table_var.name
+        );
+
+        let elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlDynamicColumnSource"),
+            ("Name", table_var_source_name.as_str()),
+        ]);
+        writer.write_event(Event::Start(elem))?;
+
+        if !table_var.columns.is_empty() {
+            write_table_variable_columns(writer, &table_var_source_name, &table_var.columns)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("Element")))?;

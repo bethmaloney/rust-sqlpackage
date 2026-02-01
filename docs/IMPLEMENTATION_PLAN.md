@@ -24,7 +24,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Added MAX keyword detection in scalar type parser
 
 **Remaining Parity Issues (Phases 24-25):**
-- Phase 24: Dynamic column sources in procedures (5/8) - CTE and temp table extraction complete, table variables remaining
+- Phase 24: Dynamic column sources in procedures (7/8) - CTE, temp table, and table variable extraction complete; integration pending
 - Phase 25: ALTER TABLE constraints (0/6) - 14 PKs, 19 FKs missing
 
 **Phase 26 Complete: APPLY Subquery Alias Capture (4/4) ✅**
@@ -126,7 +126,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 24: Track Dynamic Column Sources in Procedure Bodies (5/8)
+## Phase 24: Track Dynamic Column Sources in Procedure Bodies (7/8)
 
 **Goal:** Generate `SqlDynamicColumnSource` elements for CTEs, temp tables, and table variables.
 
@@ -166,12 +166,22 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 **Note:** INSERT...SELECT column inference not implemented (would require complex type resolution from source tables). Temp tables with explicit column definitions are fully supported.
 
-### Phase 24.3: Table Variable Column Source Extraction (0/2)
+### Phase 24.3: Table Variable Column Source Extraction (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 24.3.1 | Extract table variable definitions | ⬜ | `DECLARE @name TABLE(...)` |
-| 24.3.2 | Write `SqlDynamicColumnSource` for table variables | ⬜ | With `SqlTypeSpecifier` |
+| 24.3.1 | Extract table variable definitions | ✅ | Added `TableVariableDefinition`, `TableVariableColumn` structs; `extract_table_variable_definitions()`, `extract_table_variable_name()`, `extract_table_variable_columns()` in body_deps.rs |
+| 24.3.2 | Write `SqlDynamicColumnSource` for table variables | ✅ | Added `write_table_variable_columns()` in programmability_writer.rs; integrated into `write_all_dynamic_objects()` |
+
+**Unit Tests Added (body_deps.rs):**
+- `test_extract_table_variable_single_table` - Single table variable with basic columns
+- `test_extract_table_variable_with_varchar_lengths` - VARCHAR/NVARCHAR with lengths and MAX
+- `test_extract_table_variable_with_decimal` - DECIMAL/NUMERIC with precision/scale
+- `test_extract_table_variable_multiple_variables` - Multiple table variables in one body
+- `test_extract_table_variable_no_table_variable` - Body without table variables
+- `test_extract_table_variable_with_constraint` - Table variable with table-level constraint
+- `test_extract_table_variable_with_primary_key_inline` - Inline PRIMARY KEY on column
+- `test_extract_table_variable_mixed_with_regular_declare` - Mixed with regular DECLARE statements
 
 ### Phase 24.4: Integration (0/1)
 

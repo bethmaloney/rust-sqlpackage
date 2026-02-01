@@ -79,6 +79,32 @@ pub(crate) struct TempTableDefinition {
 }
 
 // =============================================================================
+// Table Variable Extraction (Phase 24.3)
+// =============================================================================
+
+/// Represents a column extracted from a DECLARE @name TABLE definition
+#[derive(Debug, Clone)]
+pub(crate) struct TableVariableColumn {
+    /// Column name
+    pub name: String,
+    /// Data type (e.g., "int", "varchar(50)")
+    pub data_type: String,
+    /// Whether the column is nullable (defaults to true)
+    pub is_nullable: bool,
+}
+
+/// Represents a table variable extracted from a DECLARE @name TABLE statement
+#[derive(Debug, Clone)]
+pub(crate) struct TableVariableDefinition {
+    /// Table variable name (including the @ prefix, e.g., "@OrderItems")
+    pub name: String,
+    /// Table variable sequence number within the procedure (TableVariable1, TableVariable2, etc.)
+    pub table_variable_number: u32,
+    /// Columns in this table variable
+    pub columns: Vec<TableVariableColumn>,
+}
+
+// =============================================================================
 // Body Dependency Token Scanner (Phase 20.2.1)
 // =============================================================================
 // Replaces TOKEN_RE regex with tokenizer-based scanning for body dependency extraction.
@@ -3443,6 +3469,313 @@ fn is_data_type_name(word: &str) -> bool {
 }
 
 // =============================================================================
+// Table Variable Definition Extraction (Phase 24.3.1)
+// =============================================================================
+
+/// Extract table variable definitions from a SQL body (procedure or function).
+/// Returns a list of table variable definitions with their columns.
+///
+/// Pattern: DECLARE @name TABLE (column definitions)
+///
+/// # Arguments
+/// * `sql` - The SQL body text containing DECLARE @name TABLE statements
+///
+/// # Returns
+/// Vector of TableVariableDefinition structs, one per table variable found in the body
+pub(crate) fn extract_table_variable_definitions(sql: &str) -> Vec<TableVariableDefinition> {
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, sql).tokenize_with_location() {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut table_variables = Vec::new();
+    let mut table_variable_number = 0u32;
+    let mut pos = 0;
+
+    while pos < tokens.len() {
+        // Skip whitespace
+        while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+            pos += 1;
+        }
+        if pos >= tokens.len() {
+            break;
+        }
+
+        // Look for DECLARE keyword
+        if matches!(tokens[pos].token, Token::Word(ref w) if w.keyword == Keyword::DECLARE) {
+            pos += 1;
+
+            // Skip whitespace
+            while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                pos += 1;
+            }
+
+            // Look for @name pattern (variable name starting with @)
+            let var_name = extract_table_variable_name(&tokens, &mut pos);
+            if let Some(name) = var_name {
+                // Skip whitespace
+                while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                    pos += 1;
+                }
+
+                // Check for TABLE keyword
+                if pos < tokens.len()
+                    && matches!(tokens[pos].token, Token::Word(ref w) if w.keyword == Keyword::TABLE)
+                {
+                    pos += 1;
+
+                    // Skip whitespace
+                    while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                        pos += 1;
+                    }
+
+                    // Expect opening paren for column definitions
+                    if pos < tokens.len() && matches!(tokens[pos].token, Token::LParen) {
+                        let columns_start = pos + 1;
+
+                        // Find matching closing paren
+                        let mut depth = 1;
+                        pos += 1;
+                        while pos < tokens.len() && depth > 0 {
+                            match tokens[pos].token {
+                                Token::LParen => depth += 1,
+                                Token::RParen => depth -= 1,
+                                _ => {}
+                            }
+                            pos += 1;
+                        }
+                        let columns_end = pos - 1;
+
+                        // Extract columns from the definition
+                        if columns_start < columns_end {
+                            let column_tokens = &tokens[columns_start..columns_end];
+                            let columns = extract_table_variable_columns(column_tokens);
+
+                            if !columns.is_empty() {
+                                table_variable_number += 1;
+                                table_variables.push(TableVariableDefinition {
+                                    name,
+                                    table_variable_number,
+                                    columns,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            pos += 1;
+        }
+    }
+
+    table_variables
+}
+
+/// Extract table variable name from tokens (handles @name pattern)
+fn extract_table_variable_name(
+    tokens: &[sqlparser::tokenizer::TokenWithSpan],
+    pos: &mut usize,
+) -> Option<String> {
+    if *pos >= tokens.len() {
+        return None;
+    }
+
+    // MsSqlDialect tokenizes @name as a single Word token with @ included
+    // But sometimes it can be tokenized as separate tokens
+    if let Token::Word(w) = &tokens[*pos].token {
+        if w.value.starts_with('@') {
+            *pos += 1;
+            return Some(w.value.clone());
+        }
+    }
+
+    // Handle case where @ might be a separate token (Placeholder token)
+    if matches!(tokens[*pos].token, Token::Placeholder(_)) {
+        // Get the placeholder value
+        if let Token::Placeholder(ref p) = tokens[*pos].token {
+            if p.starts_with('@') {
+                *pos += 1;
+                return Some(p.clone());
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract column definitions from table variable DECLARE TABLE tokens
+/// This follows the same pattern as extract_temp_table_columns
+fn extract_table_variable_columns(
+    tokens: &[sqlparser::tokenizer::TokenWithSpan],
+) -> Vec<TableVariableColumn> {
+    let mut columns = Vec::new();
+    let mut pos = 0;
+
+    while pos < tokens.len() {
+        // Skip whitespace
+        while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+            pos += 1;
+        }
+        if pos >= tokens.len() {
+            break;
+        }
+
+        // Check for CONSTRAINT keyword (skip constraint definitions)
+        if matches!(&tokens[pos].token, Token::Word(w) if w.keyword == Keyword::CONSTRAINT) {
+            // Skip to next comma or end
+            while pos < tokens.len() && !matches!(tokens[pos].token, Token::Comma) {
+                // Handle nested parentheses in constraint definitions
+                if matches!(tokens[pos].token, Token::LParen) {
+                    let mut depth = 1;
+                    pos += 1;
+                    while pos < tokens.len() && depth > 0 {
+                        match tokens[pos].token {
+                            Token::LParen => depth += 1,
+                            Token::RParen => depth -= 1,
+                            _ => {}
+                        }
+                        pos += 1;
+                    }
+                } else {
+                    pos += 1;
+                }
+            }
+            // Skip comma
+            if pos < tokens.len() && matches!(tokens[pos].token, Token::Comma) {
+                pos += 1;
+            }
+            continue;
+        }
+
+        // Check for PRIMARY, FOREIGN, UNIQUE, CHECK keywords (table-level constraints)
+        if matches!(&tokens[pos].token, Token::Word(w) if matches!(w.keyword,
+            Keyword::PRIMARY | Keyword::FOREIGN | Keyword::UNIQUE | Keyword::CHECK))
+        {
+            // Skip to next comma or end
+            while pos < tokens.len() && !matches!(tokens[pos].token, Token::Comma) {
+                if matches!(tokens[pos].token, Token::LParen) {
+                    let mut depth = 1;
+                    pos += 1;
+                    while pos < tokens.len() && depth > 0 {
+                        match tokens[pos].token {
+                            Token::LParen => depth += 1,
+                            Token::RParen => depth -= 1,
+                            _ => {}
+                        }
+                        pos += 1;
+                    }
+                } else {
+                    pos += 1;
+                }
+            }
+            if pos < tokens.len() && matches!(tokens[pos].token, Token::Comma) {
+                pos += 1;
+            }
+            continue;
+        }
+
+        // Try to extract column name
+        let column_name = match &tokens[pos].token {
+            Token::Word(w) => {
+                // Skip if it's a keyword that starts a constraint
+                if matches!(
+                    w.keyword,
+                    Keyword::PRIMARY
+                        | Keyword::FOREIGN
+                        | Keyword::UNIQUE
+                        | Keyword::CHECK
+                        | Keyword::INDEX
+                        | Keyword::CONSTRAINT
+                ) {
+                    pos += 1;
+                    continue;
+                }
+                pos += 1;
+                w.value.clone()
+            }
+            Token::SingleQuotedString(s) | Token::DoubleQuotedString(s) => {
+                pos += 1;
+                s.clone()
+            }
+            _ => {
+                pos += 1;
+                continue;
+            }
+        };
+
+        // Skip whitespace
+        while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+            pos += 1;
+        }
+
+        // Extract data type (reuse the same function as temp tables)
+        let (data_type, new_pos) = extract_column_data_type(tokens, pos);
+        pos = new_pos;
+
+        // Look for NULL/NOT NULL and skip to end of column definition
+        let mut is_nullable = true;
+        while pos < tokens.len() && !matches!(tokens[pos].token, Token::Comma) {
+            match &tokens[pos].token {
+                Token::Word(w) if w.keyword == Keyword::NOT => {
+                    // Check if followed by NULL
+                    let mut check_pos = pos + 1;
+                    while check_pos < tokens.len()
+                        && matches!(tokens[check_pos].token, Token::Whitespace(_))
+                    {
+                        check_pos += 1;
+                    }
+                    if check_pos < tokens.len() {
+                        if let Token::Word(w2) = &tokens[check_pos].token {
+                            if w2.keyword == Keyword::NULL {
+                                is_nullable = false;
+                                pos = check_pos + 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                Token::Word(w) if w.keyword == Keyword::NULL => {
+                    is_nullable = true;
+                }
+                Token::LParen => {
+                    // Skip nested parentheses (e.g., DEFAULT expressions, constraints)
+                    let mut depth = 1;
+                    pos += 1;
+                    while pos < tokens.len() && depth > 0 {
+                        match tokens[pos].token {
+                            Token::LParen => depth += 1,
+                            Token::RParen => depth -= 1,
+                            _ => {}
+                        }
+                        pos += 1;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            pos += 1;
+        }
+
+        // Add column if we have a data type
+        if !data_type.is_empty() {
+            columns.push(TableVariableColumn {
+                name: column_name,
+                data_type,
+                is_nullable,
+            });
+        }
+
+        // Skip comma
+        if pos < tokens.len() && matches!(tokens[pos].token, Token::Comma) {
+            pos += 1;
+        }
+    }
+
+    columns
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -4121,5 +4454,164 @@ mod tests {
         // First column should still be extracted even with inline PRIMARY KEY
         assert_eq!(temp_tables[0].columns[0].name, "Id");
         assert!(!temp_tables[0].columns[0].is_nullable);
+    }
+
+    // ============================================================================
+    // Table Variable Extraction tests (Phase 24.3)
+    // ============================================================================
+
+    #[test]
+    fn test_extract_table_variable_single_table() {
+        let sql = r#"
+            DECLARE @OrderItems TABLE (
+                ItemId INT NOT NULL,
+                ProductId INT,
+                Quantity INT
+            )
+        "#;
+        let table_vars = extract_table_variable_definitions(sql);
+        assert_eq!(table_vars.len(), 1);
+        assert_eq!(table_vars[0].name, "@OrderItems");
+        assert_eq!(table_vars[0].table_variable_number, 1);
+        assert_eq!(table_vars[0].columns.len(), 3);
+
+        assert_eq!(table_vars[0].columns[0].name, "ItemId");
+        assert_eq!(table_vars[0].columns[0].data_type, "INT");
+        assert!(!table_vars[0].columns[0].is_nullable);
+
+        assert_eq!(table_vars[0].columns[1].name, "ProductId");
+        assert_eq!(table_vars[0].columns[1].data_type, "INT");
+        assert!(table_vars[0].columns[1].is_nullable);
+
+        assert_eq!(table_vars[0].columns[2].name, "Quantity");
+        assert_eq!(table_vars[0].columns[2].data_type, "INT");
+        assert!(table_vars[0].columns[2].is_nullable);
+    }
+
+    #[test]
+    fn test_extract_table_variable_with_varchar_lengths() {
+        let sql = r#"
+            DECLARE @Results TABLE (
+                Id INT,
+                Name VARCHAR(100),
+                Email NVARCHAR(255) NOT NULL,
+                Notes NVARCHAR(MAX)
+            )
+        "#;
+        let table_vars = extract_table_variable_definitions(sql);
+        assert_eq!(table_vars.len(), 1);
+        assert_eq!(table_vars[0].columns.len(), 4);
+
+        assert_eq!(table_vars[0].columns[1].name, "Name");
+        assert_eq!(table_vars[0].columns[1].data_type, "VARCHAR(100)");
+
+        assert_eq!(table_vars[0].columns[2].name, "Email");
+        assert_eq!(table_vars[0].columns[2].data_type, "NVARCHAR(255)");
+        assert!(!table_vars[0].columns[2].is_nullable);
+
+        assert_eq!(table_vars[0].columns[3].name, "Notes");
+        assert_eq!(table_vars[0].columns[3].data_type, "NVARCHAR(MAX)");
+    }
+
+    #[test]
+    fn test_extract_table_variable_with_decimal() {
+        let sql = r#"
+            DECLARE @Amounts TABLE (
+                Id INT,
+                Amount DECIMAL(18,2) NOT NULL,
+                Rate NUMERIC(10,4)
+            )
+        "#;
+        let table_vars = extract_table_variable_definitions(sql);
+        assert_eq!(table_vars.len(), 1);
+        assert_eq!(table_vars[0].columns.len(), 3);
+
+        assert_eq!(table_vars[0].columns[1].name, "Amount");
+        assert_eq!(table_vars[0].columns[1].data_type, "DECIMAL(18,2)");
+        assert!(!table_vars[0].columns[1].is_nullable);
+
+        assert_eq!(table_vars[0].columns[2].name, "Rate");
+        assert_eq!(table_vars[0].columns[2].data_type, "NUMERIC(10,4)");
+    }
+
+    #[test]
+    fn test_extract_table_variable_multiple_variables() {
+        let sql = r#"
+            DECLARE @First TABLE (
+                Id INT
+            )
+
+            SELECT * FROM @First
+
+            DECLARE @Second TABLE (
+                Name VARCHAR(50)
+            )
+        "#;
+        let table_vars = extract_table_variable_definitions(sql);
+        assert_eq!(table_vars.len(), 2);
+        assert_eq!(table_vars[0].name, "@First");
+        assert_eq!(table_vars[0].table_variable_number, 1);
+        assert_eq!(table_vars[1].name, "@Second");
+        assert_eq!(table_vars[1].table_variable_number, 2);
+    }
+
+    #[test]
+    fn test_extract_table_variable_no_table_variable() {
+        let sql = r#"
+            SELECT * FROM [dbo].[Orders]
+            WHERE OrderDate > GETDATE()
+        "#;
+        let table_vars = extract_table_variable_definitions(sql);
+        assert!(table_vars.is_empty());
+    }
+
+    #[test]
+    fn test_extract_table_variable_with_constraint() {
+        let sql = r#"
+            DECLARE @Items TABLE (
+                Id INT NOT NULL,
+                Name VARCHAR(50),
+                CONSTRAINT PK_Items PRIMARY KEY (Id)
+            )
+        "#;
+        let table_vars = extract_table_variable_definitions(sql);
+        assert_eq!(table_vars.len(), 1);
+        // Should only have 2 columns, not the constraint
+        assert_eq!(table_vars[0].columns.len(), 2);
+        assert_eq!(table_vars[0].columns[0].name, "Id");
+        assert_eq!(table_vars[0].columns[1].name, "Name");
+    }
+
+    #[test]
+    fn test_extract_table_variable_with_primary_key_inline() {
+        let sql = r#"
+            DECLARE @Items TABLE (
+                Id INT NOT NULL PRIMARY KEY,
+                Name VARCHAR(50)
+            )
+        "#;
+        let table_vars = extract_table_variable_definitions(sql);
+        assert_eq!(table_vars.len(), 1);
+        assert_eq!(table_vars[0].columns.len(), 2);
+        // First column should still be extracted even with inline PRIMARY KEY
+        assert_eq!(table_vars[0].columns[0].name, "Id");
+        assert!(!table_vars[0].columns[0].is_nullable);
+    }
+
+    #[test]
+    fn test_extract_table_variable_mixed_with_regular_declare() {
+        // Ensure we don't confuse regular DECLARE statements with table variables
+        let sql = r#"
+            DECLARE @MyInt INT
+            DECLARE @MyTable TABLE (
+                Id INT,
+                Value VARCHAR(50)
+            )
+            DECLARE @MyString NVARCHAR(100)
+        "#;
+        let table_vars = extract_table_variable_definitions(sql);
+        assert_eq!(table_vars.len(), 1);
+        assert_eq!(table_vars[0].name, "@MyTable");
+        assert_eq!(table_vars[0].columns.len(), 2);
     }
 }
