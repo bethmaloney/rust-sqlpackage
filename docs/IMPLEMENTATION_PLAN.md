@@ -4,11 +4,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-20 complete (250 tasks). Full parity achieved.**
+**Phases 1-23 complete (268 tasks). Full parity achieved.**
 
-**Phase 21 Complete: Split model_xml.rs into Submodules** (8/10 tasks)
-- ✅ Phase 21.1-21.5.1 complete: Module structure, element writers, body_deps, other_writers extracted
-- ⬜ Phase 21.4.2 optional: qualified_name.rs (already integrated in body_deps.rs)
+**Phase 22 In Progress:** Layer 7 Canonical XML parity (6 tasks remaining: 22.2.2 + 22.4.1-22.4.5)
 
 **Discovered: Phase 22 - Layer 7 Canonical XML Parity** (4.5/7 tasks)
 - Layer 7 now performs true 1-1 XML comparison (no sorting/normalization)
@@ -21,10 +19,17 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Fixed TVF column and scalar type MAX handling to write `IsMax="True"` instead of invalid Length values
 - Added MAX keyword detection in scalar type parser
 
-**Remaining Issues (Phases 24-26):**
+**Remaining Parity Issues (Phases 24-26):**
 - Phase 24: Dynamic column sources in procedures (0/8) - 177 missing elements
 - Phase 25: ALTER TABLE constraints (0/6) - 14 PKs, 19 FKs missing
 - Phase 26: APPLY subquery alias capture (0/4) - Deployment failures from unresolved references
+
+**Code Simplification (Phases 27-31):**
+- Phase 27: Parser token helper consolidation (0/4) - ~400-500 lines reduction
+- Phase 28: Test infrastructure simplification (0/3) - ~560 lines reduction
+- Phase 29: Test dacpac parsing helper (0/2) - ~150-200 lines reduction
+- Phase 30: Model builder constraint helper (0/2) - ~200 lines reduction
+- Phase 31: Project parser helpers (0/2) - ~50 lines reduction
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -45,81 +50,13 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 21: Split model_xml.rs into Submodules (8/10) ✅
+## Phase 22: Layer 7 Canonical XML Parity (Remaining: 6 tasks)
 
-**Location:** `src/dacpac/model_xml/mod.rs` (~7,520 lines after 21.5.1)
-
-**Goal:** Break up the largest file in the codebase into logical submodules for improved maintainability, faster compilation, and easier navigation.
-
-<details>
-<summary>Completed: Phase 21.1-21.4.1 (7 tasks)</summary>
-
-### Phase 21.1: Create Module Structure (2/2) ✅
+### Phase 22.2.2: Verify CustomData Elements (0/1)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 21.1.1 | Create `src/dacpac/model_xml/` directory with `mod.rs` | ✅ | Moved model_xml.rs to model_xml/mod.rs |
-| 21.1.2 | Move `generate_model_xml()` entry point to mod.rs | ✅ | Entry point remains in mod.rs |
-
-### Phase 21.2: Extract XML Writing Helpers (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 21.2.1 | Create `xml_helpers.rs` with low-level XML utilities | ✅ | 244 lines including 9 unit tests |
-| 21.2.2 | Create `header.rs` with header/metadata writing | ✅ | 324 lines including 9 unit tests |
-
-### Phase 21.3: Extract Element Writers (3/3) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 21.3.1 | Create `table_writer.rs` for table/column XML | ✅ | 650 lines including 10 unit tests |
-| 21.3.2 | Create `view_writer.rs` for view XML | ✅ | 574 lines including 8 unit tests |
-| 21.3.3 | Create `programmability_writer.rs` for procs/functions | ✅ | 1838 lines including 35 unit tests |
-
-### Phase 21.4.1: Create body_deps.rs ✅
-
-Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScanner, TableAliasTokenParser, QualifiedName, extract_body_dependencies, and helper functions. ~2,200 lines including tests.
-
-</details>
-
-### Phase 21.4: Extract Body Dependencies (1/2)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 21.4.1 | Create `body_deps.rs` for dependency extraction | ✅ | ~2,200 lines including tests |
-| 21.4.2 | Create `qualified_name.rs` for name parsing | ⬜ | **Optional:** QualifiedName already integrated in body_deps.rs (~130 lines) |
-
-### Phase 21.5: Extract Remaining Writers (1/1) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 21.5.1 | Create `other_writers.rs` for remaining elements | ✅ | Extracted `write_index`, `write_fulltext_*`, `write_sequence`, `write_extended_property` (~555 lines). Remaining functions (`write_constraint`, `write_trigger`, `write_user_defined_type`, etc.) still in mod.rs due to complex dependencies. |
-
----
-
-## Phase 22: Layer 7 Canonical XML Parity (4/7)
-
-**Goal:** Achieve byte-level XML matching between rust-sqlpackage and DotNet DacFx output.
-
-### Phase 22.1: Fix CollationCaseSensitive Attribute (1/1) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 22.1.1 | Set CollationCaseSensitive="True" to match DotNet | ✅ | DataSchemaModel root element attribute |
-
-### Phase 22.2: Fix Missing CustomData Elements (1/2)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 22.2.1 | Add empty SqlCmdVariables CustomData element | ✅ | Emitted even when no SQLCMD variables defined |
 | 22.2.2 | Verify other CustomData elements match DotNet | ⬜ | Check for other missing CustomData categories |
-
-### Phase 22.3: Fix Element/Property Ordering (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 22.3.1 | Audit element ordering against DotNet output | ✅ | Fixed PK/Unique constraint relationship ordering (ColumnSpecifications before DefiningTable). Fixed table SqlInlineConstraintAnnotation - only added when table has BOTH inline AND named constraints. Layer 7 pass rate improved from 2/48 (4.2%) to 10/48 (20.8%). |
-| 22.3.2 | Fix AttachedAnnotation capture in Layer 7 canonicalization | ✅ | **TEST INFRASTRUCTURE FIX:** The canonicalization code was only looking for `Annotation` elements, not `AttachedAnnotation` elements. This was a bug in the test comparison logic, not the main code. |
 
 ### Phase 22.4: Align Constraint Annotation Behavior with DotNet SDK (0/5) - COMPLEX
 
@@ -170,34 +107,6 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 | Layer 7 (Canonical XML) | 10/48 (20.8%) | 48/48 (100%) |
 
 **NOTE:** This is more complex than initially understood. May require multiple iterations.
-
----
-
-## Phase 23: Fix IsMax Property for MAX Types (4/4) ✅
-
-**Goal:** Fix deployment failure: `Length="4294967295"` → `IsMax="True"` for MAX types.
-
-**Error:** `The value of the property type Int32 is formatted incorrectly.`
-
-### Phase 23.1: Fix TVF Column IsMax (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 23.1.1 | Add IsMax check in `write_tvf_columns()` | ✅ | Checks `col.length == Some(u32::MAX)`, writes `IsMax="True"` |
-| 23.1.2 | Add unit tests for TVF MAX column output | ✅ | Tests already existed in `tvf_column_tests.rs` |
-
-### Phase 23.2: Fix ScalarType IsMax (2/2) ✅
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 23.2.1 | Add IsMax check in `write_scalar_type()` | ✅ | Checks `scalar.length == Some(-1)`, writes `IsMax="True"` |
-| 23.2.2 | Add unit tests for scalar type MAX output | ✅ | Created `scalar_type_tests.rs`, added `LongText.sql` fixture |
-
-**Implementation Notes:**
-- `write_tvf_columns()` (programmability_writer.rs:1284): Added check for `u32::MAX`
-- `write_scalar_type()` (mod.rs:2945): Added check for `-1`
-- `extract_scalar_type_info()` (tsql_parser.rs:1192): Added `MAX` keyword detection in type parsing
-- Reference: Pattern from `table_writer.rs` lines 344-350
 
 ---
 
@@ -309,6 +218,132 @@ WHERE Column = AliasName.Id  -- Should NOT emit [AliasName].[Id] as a dependency
 
 ---
 
+## Phase 27: Parser Token Helper Consolidation (0/4) - HIGH PRIORITY
+
+**Goal:** Eliminate ~400-500 lines of duplicated helper methods across 12 parser files.
+
+**Problem:** Every `*TokenParser` struct reimplements identical methods: `skip_whitespace()`, `check_keyword()`, `parse_identifier()`, `is_at_end()`, `current_token()`, `advance()`, `check_token()`, `check_word_ci()`, `parse_schema_qualified_name()`.
+
+**Files Affected:**
+- `procedure_parser.rs`, `function_parser.rs`, `column_parser.rs`, `constraint_parser.rs`
+- `statement_parser.rs`, `trigger_parser.rs`, `sequence_parser.rs`, `index_parser.rs`
+- `table_type_parser.rs`, `fulltext_parser.rs`, `extended_property_parser.rs`, `preprocess_parser.rs`
+
+### Phase 27.1: Create Base TokenParser (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 27.1.1 | Create `src/parser/token_parser_base.rs` with shared `TokenParser` struct | ⬜ | Contains tokens vec, pos, and all common helper methods |
+| 27.1.2 | Add `new(sql: &str) -> Option<Self>` constructor with MsSqlDialect tokenization | ⬜ | Shared tokenization logic |
+
+### Phase 27.2: Migrate Parsers to Use Base (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 27.2.1 | Refactor all `*TokenParser` structs to use composition with base `TokenParser` | ⬜ | Each parser wraps `TokenParser` instead of reimplementing |
+| 27.2.2 | Remove duplicate `token_to_string()` implementations, use `identifier_utils::format_token()` | ⬜ | 6+ files have redundant implementations |
+
+**Estimated Impact:** ~400-500 lines removed, improved maintainability.
+
+---
+
+## Phase 28: Test Infrastructure Simplification (0/3) - HIGH PRIORITY
+
+**Goal:** Reduce ~560 lines of duplicated test setup boilerplate.
+
+**Problem:** This 4-line pattern appears ~140 times across integration tests:
+```rust
+let ctx = TestContext::with_fixture("fixture_name");
+let result = ctx.build();
+assert!(result.success, "Build failed: {:?}", result.errors);
+let dacpac_path = result.dacpac_path.unwrap();
+```
+
+### Phase 28.1: Add TestContext Helper (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 28.1.1 | Add `TestContext::build_successfully(&self) -> PathBuf` method | ⬜ | Combines build + assert + unwrap |
+| 28.1.2 | Update integration tests in `tests/integration/build_tests.rs` | ⬜ | ~27 occurrences |
+| 28.1.3 | Update integration tests in `tests/integration/dacpac/` modules | ⬜ | ~100+ occurrences |
+
+**Estimated Impact:** ~560 lines removed (4 lines × 140 occurrences).
+
+---
+
+## Phase 29: Test Dacpac Parsing Helper (0/2) - MEDIUM PRIORITY
+
+**Goal:** Reduce ~150-200 lines of duplicated XML parsing chains.
+
+**Problem:** This 3-line pattern appears repeatedly:
+```rust
+let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+let model_xml = info.model_xml_content.expect("Should have model XML");
+let doc = parse_model_xml(&model_xml);
+```
+
+### Phase 29.1: Add Parsing Helper (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 29.1.1 | Add `parse_dacpac_model(dacpac_path: &Path) -> roxmltree::Document` in `tests/integration/dacpac/mod.rs` | ⬜ | Consolidates 3-line chain |
+| 29.1.2 | Update dacpac test modules to use helper | ⬜ | column_tests, constraint_tests, element_tests, index_tests |
+
+**Estimated Impact:** ~150-200 lines removed.
+
+---
+
+## Phase 30: Model Builder Constraint Helper (0/2) - MEDIUM PRIORITY
+
+**Goal:** Reduce ~200 lines of duplicated `ConstraintElement` creation boilerplate.
+
+**Problem:** 14+ instances create `ConstraintElement` with mostly identical field patterns in `src/model/builder.rs`.
+
+**Location:** Lines 288-301, 313-326, 462-475, 537-550, 564-577, 585-598, and functions `constraint_from_extracted` (1307-1391), `constraint_from_table_constraint` (1468-1593).
+
+### Phase 30.1: Extract Builder Function (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 30.1.1 | Create `create_inline_constraint()` helper function | ⬜ | Takes name, schema, table, type, columns, definition, emit_name |
+| 30.1.2 | Refactor constraint creation sites to use helper | ⬜ | 14+ call sites in builder.rs |
+
+**Additional Cleanup:**
+- Remove duplicate comment on lines 440-441
+- Remove unused `_schema` and `_table_name` parameters in `column_from_def` and `column_from_fallback_table`
+
+**Estimated Impact:** ~200 lines removed, clearer intent.
+
+---
+
+## Phase 31: Project Parser Helpers (0/2) - MEDIUM PRIORITY
+
+**Goal:** Reduce ~50 lines of duplicated boolean property parsing.
+
+**Problem:** `parse_database_options()` in `src/project/sqlproj_parser.rs` repeats this pattern 6 times:
+```rust
+if let Some(val) = find_property_value(root, "PropertyName") {
+    options.property_name = val.eq_ignore_ascii_case("true");
+}
+```
+
+**Location:** Lines 281-309 in `sqlproj_parser.rs`.
+
+### Phase 31.1: Extract Helpers (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 31.1.1 | Create `parse_bool_option(root, property_name, default) -> bool` helper | ⬜ | Combines find + parse + default |
+| 31.1.2 | Create `find_child_text(node, tag_name) -> Option<String>` helper | ⬜ | Used in dacpac refs, package refs, sqlcmd vars |
+
+**Additional Cleanup:**
+- Remove dead `extract_lcid_from_collation()` function (always returns 1033)
+- Simplify `extract_version_from_dsp()` with array iteration
+
+**Estimated Impact:** ~50 lines removed, improved readability.
+
+---
+
 ## Known Issues
 
 | Issue | Location | Phase |
@@ -317,10 +352,20 @@ WHERE Column = AliasName.Id  -- Should NOT emit [AliasName].[Id] as a dependency
 | Missing constraints from ALTER TABLE | parser/builder | Phase 25 |
 | APPLY subquery aliases not captured | body_deps.rs | Phase 26 |
 
+## Code Simplification Opportunities
+
+| Issue | Location | Phase | Impact |
+|-------|----------|-------|--------|
+| Duplicated token parser helper methods | src/parser/*.rs (12 files) | Phase 27 | ~400-500 lines |
+| Test setup boilerplate (4 lines × 140 occurrences) | tests/integration/ | Phase 28 | ~560 lines |
+| Dacpac XML parsing chain duplication | tests/integration/dacpac/ | Phase 29 | ~150-200 lines |
+| ConstraintElement creation boilerplate | src/model/builder.rs | Phase 30 | ~200 lines |
+| Boolean property parsing duplication | src/project/sqlproj_parser.rs | Phase 31 | ~50 lines |
+
 ---
 
 <details>
-<summary>Completed Phases Summary (Phases 1-20)</summary>
+<summary>Completed Phases Summary (Phases 1-23)</summary>
 
 ## Phase Overview
 
@@ -338,6 +383,39 @@ WHERE Column = AliasName.Id  -- Should NOT emit [AliasName].[Id] as a dependency
 | Phase 18 | BodyDependencies alias resolution: fix table alias handling | 15/15 |
 | Phase 19 | Whitespace-agnostic trim patterns: token-based TVP parsing | 3/3 |
 | Phase 20 | Replace remaining regex with tokenization/AST | 43/43 |
+| Phase 21 | Split model_xml.rs into submodules | 10/10 |
+| Phase 22.1-22.3 | Layer 7 XML parity (CollationCaseSensitive, CustomData, ordering) | 4/5 |
+| Phase 23 | Fix IsMax property for MAX types | 4/4 |
+
+## Phase 21: Split model_xml.rs into Submodules (10/10) ✅
+
+Split the largest file (~7,520 lines) into logical submodules for improved maintainability.
+
+**Submodules created:**
+- `xml_helpers.rs` - Low-level XML utilities (244 lines, 9 tests)
+- `header.rs` - Header/metadata writing (324 lines, 9 tests)
+- `table_writer.rs` - Table/column XML (650 lines, 10 tests)
+- `view_writer.rs` - View XML (574 lines, 8 tests)
+- `programmability_writer.rs` - Procs/functions (1838 lines, 35 tests)
+- `body_deps.rs` - Dependency extraction (~2,200 lines)
+- `other_writers.rs` - Index, fulltext, sequence, extended property (~555 lines)
+
+## Phase 22.1-22.3: Layer 7 Canonical XML Parity (4/5) ✅
+
+- 22.1.1: Set `CollationCaseSensitive="True"` on DataSchemaModel root
+- 22.2.1: Add empty SqlCmdVariables CustomData element
+- 22.3.1: Fixed PK/Unique constraint relationship ordering (ColumnSpecifications before DefiningTable)
+- 22.3.2: Fixed AttachedAnnotation capture in test canonicalization
+- Layer 7 pass rate: 2/48 → 10/48 (20.8%)
+- Note: 22.2.2 (verify other CustomData) still pending
+
+## Phase 23: Fix IsMax Property for MAX Types (4/4) ✅
+
+Fixed deployment failure where `Length="4294967295"` caused Int32 format errors.
+
+- `write_tvf_columns()`: Checks `col.length == Some(u32::MAX)`, writes `IsMax="True"`
+- `write_scalar_type()`: Checks `scalar.length == Some(-1)`, writes `IsMax="True"`
+- `extract_scalar_type_info()`: Added MAX keyword detection in type parsing
 
 ## Phase 20: Replace Remaining Regex with Tokenization/AST (43/43) ✅
 
