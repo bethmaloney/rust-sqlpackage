@@ -27,6 +27,24 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - All 48 fixtures fail with systematic differences (CollationCaseSensitive, missing CustomData elements)
 - See Phase 22 section below for detailed task breakdown
 
+**Discovered: Phase 23 - Fix IsMax Property for MAX Types** (0/4 tasks)
+- Deployment fails with "The value of the property type Int32 is formatted incorrectly"
+- TVF columns emit `Length="4294967295"` instead of `IsMax="True"`
+- ScalarType elements emit `Length="-1"` instead of `IsMax="True"`
+- See Phase 23 section below for detailed task breakdown
+
+**Discovered: Phase 24 - Track Dynamic Column Sources in Procedure Bodies** (0/8 tasks)
+- Real-world comparison reveals 177 missing SqlDynamicColumnSource elements
+- CTEs, temp tables (#tables), and table variables inside procedures not tracked
+- Related: 181 missing SqlSimpleColumn and 181 missing SqlTypeSpecifier for internal columns
+- See Phase 24 section below for detailed task breakdown
+
+**Discovered: Phase 25 - Fix Missing Constraints from ALTER TABLE Statements** (0/6 tasks)
+- 14 missing PKs and 19 missing FKs from real-world comparison
+- Root cause: ALTER TABLE...ADD CONSTRAINT not parsed, `GO;` separator not handled
+- Affects tables using ALTER TABLE constraint patterns or `GO;` batch separators
+- See Phase 25 section below for detailed task breakdown
+
 | Layer | Passing | Rate |
 |-------|---------|------|
 | Layer 1 (Inventory) | 48/48 | 100% |
@@ -398,8 +416,258 @@ Replaced regex-based parameter parsing with token-based approach for procedures 
 
 </details>
 
+## Phase 23: Fix IsMax Property for MAX Types (0/4)
+
+**Location:** `src/dacpac/model_xml/programmability_writer.rs`, `src/dacpac/model_xml/mod.rs`
+
+**Goal:** Fix deployment failure caused by `Length="4294967295"` being written instead of `IsMax="True"` for MAX type columns.
+
+**Background:** When deploying a rust-sqlpackage built dacpac, sqlpackage fails with:
+```
+The value of the property type Int32 is formatted incorrectly.
+```
+
+The root cause is that MAX types (nvarchar(max), varchar(max), varbinary(max)) are being output as `Length="4294967295"` (u32::MAX) or `Length="-1"` instead of `IsMax="True"`. The value 4294967295 exceeds Int32.MaxValue (2147483647), causing the sqlpackage Int32 parser to fail.
+
+**Affected Patterns:**
+- TVF return columns with `NVARCHAR(MAX)` type
+- TVF return columns with `VARCHAR(MAX)` type
+- TVF return columns with `VARBINARY(MAX)` type
+- Scalar types created with `FROM NVARCHAR(MAX)` etc.
+
+### Phase 23.1: Fix TVF Column IsMax (0/2)
+
+**Location:** `src/dacpac/model_xml/programmability_writer.rs`
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 23.1.1 | Add IsMax check in `write_tvf_columns()` | ⬜ | Lines 1284-1286: Check if `col.length == Some(u32::MAX)` and emit `IsMax="True"` instead of `Length="4294967295"` |
+| 23.1.2 | Add unit tests for TVF MAX column output | ⬜ | Test that nvarchar(max), varchar(max), varbinary(max) TVF columns emit `IsMax="True"` property |
+
+**Current Code (lines 1284-1286):**
+```rust
+if let Some(length) = col.length {
+    write_property(writer, "Length", &length.to_string())?;
+}
+```
+
+**Fix:**
+```rust
+if let Some(length) = col.length {
+    if length == u32::MAX {
+        write_property(writer, "IsMax", "True")?;
+    } else {
+        write_property(writer, "Length", &length.to_string())?;
+    }
+}
+```
+
+### Phase 23.2: Fix ScalarType IsMax (0/2)
+
+**Location:** `src/dacpac/model_xml/mod.rs`
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 23.2.1 | Add IsMax check in `write_scalar_type()` | ⬜ | Lines 5207-5209: Check if `scalar.length == Some(-1)` and emit `IsMax="True"` instead of `Length="-1"` |
+| 23.2.2 | Add unit tests for scalar type MAX output | ⬜ | Test that `CREATE TYPE [dbo].[MyType] FROM NVARCHAR(MAX)` emits `IsMax="True"` property |
+
+**Current Code (lines 5207-5209):**
+```rust
+if let Some(length) = scalar.length {
+    write_property(writer, "Length", &length.to_string())?;
+}
+```
+
+**Fix:**
+```rust
+if let Some(length) = scalar.length {
+    if length == -1 {
+        write_property(writer, "IsMax", "True")?;
+    } else {
+        write_property(writer, "Length", &length.to_string())?;
+    }
+}
+```
+
+**Validation:**
+1. Build a project containing TVFs with MAX type columns
+2. Deploy with sqlpackage - should no longer fail with Int32 error
+3. Verify model.xml contains `IsMax="True"` for MAX columns (not `Length="4294967295"`)
+
+**Reference Implementation:** See `table_writer.rs` lines 344-350 which correctly handles this pattern:
+```rust
+if let Some(len) = max_length {
+    if len == -1 {
+        write_property(writer, "IsMax", "True")?;
+    } else {
+        write_property(writer, "Length", &len.to_string())?;
+    }
+}
+```
+
+---
+
+## Phase 24: Track Dynamic Column Sources in Procedure Bodies (0/8)
+
+**Location:** `src/dacpac/model_xml/body_deps.rs`, `src/dacpac/model_xml/programmability_writer.rs`
+
+**Goal:** Generate `SqlDynamicColumnSource` elements for CTEs, temp tables (#tables), and table variables inside stored procedures and functions to match DotNet DacFx output.
+
+**Background:** Comparison with DotNet DacFx reveals missing `SqlDynamicColumnSource`, `SqlSimpleColumn`, and `SqlTypeSpecifier` elements. These represent internal/transient objects defined within procedure bodies:
+
+- **CTEs**: `[dbo].[udf_SplitString].[CTE1].[Items]` with computed columns `[Start]`, `[End]`, `[Seq]`
+- **Temp tables**: `[dbo].[usp_GenerateReport].[#TempResults]` with columns from INSERT...SELECT
+- **Table variables**: `[dbo].[udf_ParseList].[@Items]` with columns defined in DECLARE
+
+**Impact:** Medium - affects deployment comparison and reference tracking. Does not prevent deployment but causes model.xml size difference.
+
+**DotNet Output Example:**
+```xml
+<Relationship Name="DynamicObjects">
+  <Entry>
+    <Element Type="SqlDynamicColumnSource" Name="[dbo].[udf_SplitString].[CTE1].[Items]">
+      <Relationship Name="Columns">
+        <Entry>
+          <Element Type="SqlComputedColumn" Name="[dbo].[udf_SplitString].[CTE1].[Items].[Start]" />
+        </Entry>
+        <Entry>
+          <Element Type="SqlComputedColumn" Name="[dbo].[udf_SplitString].[CTE1].[Items].[End]" />
+        </Entry>
+      </Relationship>
+    </Element>
+  </Entry>
+</Relationship>
+```
+
+### Phase 24.1: CTE Column Source Extraction (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 24.1.1 | Create `DynamicColumnSource` struct for tracking transient objects | ⬜ | Fields: name, source_type (CTE/TempTable/TableVar), columns (Vec of column name + type) |
+| 24.1.2 | Extract CTE definitions from procedure/function bodies | ⬜ | Parse `WITH cte_name AS (SELECT ...)` to extract CTE name and column aliases from SELECT list |
+| 24.1.3 | Write `SqlDynamicColumnSource` elements for CTEs | ⬜ | Add to `DynamicObjects` relationship, with `SqlComputedColumn` for each derived column |
+
+### Phase 24.2: Temp Table Column Source Extraction (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 24.2.1 | Extract temp table definitions from CREATE TABLE #name statements | ⬜ | Parse column definitions, handle INSERT...SELECT column inference |
+| 24.2.2 | Write `SqlDynamicColumnSource` elements for temp tables | ⬜ | Include `SqlSimpleColumn` or `SqlComputedColumn` based on derivation |
+
+### Phase 24.3: Table Variable Column Source Extraction (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 24.3.1 | Extract table variable definitions from DECLARE @name TABLE(...) | ⬜ | Parse column definitions including type specifiers |
+| 24.3.2 | Write `SqlDynamicColumnSource` elements for table variables | ⬜ | Include `SqlSimpleColumn` with `SqlTypeSpecifier` for each column |
+
+### Phase 24.4: Integration and Validation (0/1)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 24.4.1 | Add dynamic column source extraction to procedure/function writers | ⬜ | Integrate into `write_procedure()` and `write_function()`, add to DynamicObjects relationship |
+
+**Implementation Approach:**
+
+1. Extend `BodyDependencyTokenScanner` to detect CTE/temp table/table variable definitions
+2. Create `extract_dynamic_column_sources()` function that returns `Vec<DynamicColumnSource>`
+3. For CTEs: Parse the SELECT list to determine column names (explicit aliases or inferred from expressions)
+4. For temp tables: Parse CREATE TABLE or infer from INSERT...SELECT patterns
+5. For table variables: Parse DECLARE @var TABLE (...) column definitions
+6. Add `write_dynamic_column_sources()` function to emit the `DynamicObjects` relationship
+
+**Validation:**
+1. Compare model.xml element counts before/after
+2. Target: SqlDynamicColumnSource count within 10% of DotNet (currently 0 vs 177)
+3. Run parity tests to verify no regressions
+
+**Expected Result:**
+- SqlDynamicColumnSource elements generated for CTEs, temp tables, and table variables
+- Corresponding SqlSimpleColumn/SqlComputedColumn elements for internal columns
+- SqlTypeSpecifier elements for column types
+- model.xml size closer to DotNet output
+
+---
+
+## Phase 25: Fix Missing Constraints from ALTER TABLE Statements (0/6)
+
+**Location:** `src/model/builder.rs`, `src/parser/`
+
+**Goal:** Parse primary keys and foreign keys defined via `ALTER TABLE...ADD CONSTRAINT` statements, and fix edge cases in inline constraint parsing.
+
+**Background:** Real-world testing reveals missing constraints in certain patterns:
+- Missing SqlPrimaryKeyConstraint elements
+- Missing SqlForeignKeyConstraint elements
+- Missing SqlDefaultConstraint elements
+
+**Affected Patterns:**
+- Tables with PK/FKs defined via ALTER TABLE after CREATE TABLE with `GO;` separator
+- Tables with inline PK using `CONSTRAINT [PK_X] PRIMARY KEY CLUSTERED ([Col] ASC)` syntax
+- Tables with FKs using separate CHECK CONSTRAINT statements
+
+**Root Causes Identified:**
+
+1. **ALTER TABLE...ADD CONSTRAINT PRIMARY KEY not parsed** - Files using:
+   ```sql
+   CREATE TABLE [dbo].[X] (...);
+   GO;
+   ALTER TABLE [dbo].[X] ADD CONSTRAINT [PK_X] PRIMARY KEY ([Id]);
+   ```
+
+2. **`GO;` (semicolon after GO) batch separator** - Non-standard but used in some files
+
+3. **ALTER TABLE...ADD CONSTRAINT FOREIGN KEY with CHECK CONSTRAINT** - Pattern:
+   ```sql
+   ALTER TABLE [dbo].[X] ADD CONSTRAINT [FK_X_Y] FOREIGN KEY([Col]) REFERENCES [dbo].[Y] ([Id])
+   GO
+   ALTER TABLE [dbo].[X] CHECK CONSTRAINT [FK_X_Y]
+   ```
+
+### Phase 25.1: Parse ALTER TABLE Constraints (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 25.1.1 | Handle `GO;` batch separator in tsql_parser | ⬜ | Treat `GO;` same as `GO` - semicolon after GO is non-standard but valid |
+| 25.1.2 | Parse `ALTER TABLE...ADD CONSTRAINT PRIMARY KEY` statements | ⬜ | Extract table name, constraint name, column(s) from ALTER TABLE pattern |
+| 25.1.3 | Parse `ALTER TABLE...ADD CONSTRAINT FOREIGN KEY` statements | ⬜ | Handle FK definition with separate CHECK CONSTRAINT statement |
+
+### Phase 25.2: Fix Inline Constraint Edge Cases (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 25.2.1 | Debug inline PK parsing edge cases | ⬜ | `CONSTRAINT [PK_X] PRIMARY KEY CLUSTERED ([Col] ASC)` not captured despite similar pattern working elsewhere |
+| 25.2.2 | Add tests for inline constraint variations | ⬜ | Test different whitespace, casing, CLUSTERED/NONCLUSTERED options |
+
+### Phase 25.3: Validation (0/1)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 25.3.1 | Validate constraint counts match DotNet | ⬜ | Target: SqlPrimaryKeyConstraint 667/667, SqlForeignKeyConstraint 2316/2316 |
+
+**Implementation Approach:**
+
+1. Update `split_batches()` in tsql_parser.rs to handle `GO;` pattern
+2. Add `parse_alter_table_constraint()` function to extract constraints from ALTER statements
+3. Integrate ALTER TABLE constraint parsing into model builder
+4. Debug why specific inline PKs are not captured (compare with working examples)
+
+**Validation:**
+1. Build a project containing ALTER TABLE constraint patterns
+2. Compare constraint counts between rust-sqlpackage and DotNet DacFx
+3. Verify tables with ALTER TABLE constraints have all their constraints
+
+**Expected Result:**
+- All ALTER TABLE...ADD CONSTRAINT PRIMARY KEY statements parsed
+- All ALTER TABLE...ADD CONSTRAINT FOREIGN KEY statements parsed
+- Inline constraint edge cases handled correctly
+- `GO;` batch separator treated same as `GO`
+
+---
+
 ## Known Issues
 
 | Issue | Location | Description | Status |
 |-------|----------|-------------|--------|
-| TVF MAX column IsMax property | Integration tests `tvf_column_tests` | Tests `test_tvf_column_nvarchar_max_property`, `test_tvf_column_varchar_max_property`, `test_tvf_column_varbinary_max_property` fail - IsMax=True not being set despite commit c2e9b32 claiming to fix it | ⬜ Needs investigation |
+| TVF MAX column IsMax property | Integration tests `tvf_column_tests` | Tests `test_tvf_column_nvarchar_max_property`, `test_tvf_column_varchar_max_property`, `test_tvf_column_varbinary_max_property` fail - IsMax=True not being set despite commit c2e9b32 claiming to fix it | ⬜ See Phase 23 |
+| Missing SqlDynamicColumnSource elements | Real-world comparison | CTEs, temp tables, table variables in procedure bodies not tracked | ⬜ See Phase 24 |
+| Missing constraints from ALTER TABLE | Real-world comparison | Some PKs/FKs/defaults missing - ALTER TABLE...ADD CONSTRAINT not parsed, `GO;` separator issue | ⬜ See Phase 25 |
