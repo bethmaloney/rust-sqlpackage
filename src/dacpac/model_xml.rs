@@ -45,9 +45,8 @@ const BUILTIN_SCHEMAS: &[&str] = &[
 // These static patterns are compiled once and reused across all function calls,
 // providing significant performance improvement over repeated Regex::new() calls.
 
-/// Parse qualified table name: [schema].[table]
-static QUALIFIED_TABLE_NAME_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\[([^\]]+)\]\.\[([^\]]+)\]$").unwrap());
+// Note: QUALIFIED_TABLE_NAME_RE has been removed and replaced with token-based parsing in Phase 20.4.3.
+// Qualified table name parsing now uses parse_qualified_name_tokenized() via parse_qualified_table_name().
 
 /// Multi-statement TVF detection: RETURNS @var TABLE (
 static MULTI_STMT_TVF_RE: LazyLock<Regex> =
@@ -90,14 +89,11 @@ static GROUP_TERMINATOR_RE: LazyLock<Regex> =
 // Note: DECLARE_TYPE_RE has been removed and replaced with token-based parsing in Phase 20.3.1.
 // DECLARE type extraction now uses extract_declare_types_tokenized().
 
-/// Bracketed table reference: [schema].[table]
-static BRACKETED_TABLE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]").unwrap());
+// Note: BRACKETED_TABLE_RE has been removed and replaced with token-based parsing in Phase 20.4.3.
+// Bracketed table reference extraction now uses extract_table_refs_tokenized() with BodyDependencyTokenScanner.
 
-/// Unbracketed table reference: schema.table
-static UNBRACKETED_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)").unwrap()
-});
+// Note: UNBRACKETED_TABLE_RE has been removed and replaced with token-based parsing in Phase 20.4.3.
+// Unbracketed table reference extraction now uses extract_table_refs_tokenized() with BodyDependencyTokenScanner.
 
 // Note: TOKEN_RE has been replaced with BodyDependencyTokenScanner in Phase 20.2.1
 // The token-based scanner handles whitespace (tabs, multiple spaces, newlines) correctly.
@@ -694,10 +690,13 @@ fn write_computed_column<W: Write>(
 
 /// Parse a qualified table name like "[dbo].[Employees]" into schema and table components.
 /// Returns (schema, table) without brackets.
+///
+/// Uses token-based parsing (Phase 20.4.3) to handle whitespace and various quote styles correctly.
 fn parse_qualified_table_name(qualified_name: &str) -> Option<(String, String)> {
-    // Match pattern: [schema].[table]
-    let caps = QUALIFIED_TABLE_NAME_RE.captures(qualified_name)?;
-    Some((caps[1].to_string(), caps[2].to_string()))
+    // Use token-based parsing instead of regex (replaces QUALIFIED_TABLE_NAME_RE)
+    let qn = parse_qualified_name_tokenized(qualified_name)?;
+    qn.schema_and_table()
+        .map(|(s, t)| (s.to_string(), t.to_string()))
 }
 
 /// Check if a reference string represents a built-in SQL type (e.g., "[nvarchar]", "[int]")
@@ -3343,43 +3342,10 @@ fn extract_body_dependencies(
     // Extract column aliases (SELECT expr AS alias patterns)
     extract_column_aliases_for_body_deps(body, &mut column_aliases);
 
-    // First pass: collect all table references - both bracketed and unbracketed
-    // Patterns: [schema].[table] or schema.table
-    // But don't add them to deps yet - we'll process everything in order of appearance
-    // Estimate ~5 table references typical
-    let mut table_refs: Vec<String> = Vec::with_capacity(5);
-
-    // Match bracketed table refs: [schema].[table]
-    for cap in BRACKETED_TABLE_RE.captures_iter(body) {
-        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        if !schema.starts_with('@') && !name.starts_with('@') {
-            let table_ref = format!("[{}].[{}]", schema, name);
-            if !table_refs.contains(&table_ref) {
-                table_refs.push(table_ref);
-            }
-        }
-    }
-
-    // Match unbracketed table refs: schema.table (identifier.identifier not preceded by @)
-    // This must be a word boundary followed by identifier.identifier
-    for cap in UNBRACKETED_TABLE_RE.captures_iter(body) {
-        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        // Skip if schema is a keyword (like FROM.something)
-        if is_sql_keyword(&schema.to_uppercase()) {
-            continue;
-        }
-        // Skip if the "schema" is actually a table alias (e.g., A.Id where A is an alias)
-        // This prevents alias.column references from being treated as schema.table
-        if table_aliases.contains_key(&schema.to_lowercase()) {
-            continue;
-        }
-        let table_ref = format!("[{}].[{}]", schema, name);
-        if !table_refs.contains(&table_ref) {
-            table_refs.push(table_ref);
-        }
-    }
+    // First pass: collect all table references using token-based extraction
+    // Phase 20.4.3: Replaced BRACKETED_TABLE_RE and UNBRACKETED_TABLE_RE with tokenization
+    // This handles whitespace (tabs, multiple spaces, newlines) correctly and is more robust
+    let table_refs = extract_table_refs_tokenized(body, &table_aliases);
 
     // Scan body sequentially for all references in order of appearance using token-based scanner
     // Note: DotNet has a complex ordering that depends on SQL clause structure (FROM first, etc.)
@@ -4633,6 +4599,111 @@ impl BodyDependencyTokenScanner {
             false
         }
     }
+}
+
+// =============================================================================
+// Table Reference Extraction (Phase 20.4.3)
+// =============================================================================
+// Token-based extraction of table references from SQL body text.
+// Replaces BRACKETED_TABLE_RE and UNBRACKETED_TABLE_RE regex patterns.
+
+/// Extract all two-part table references from SQL body text using tokenization.
+///
+/// This function scans the body and extracts references in both formats:
+/// - Bracketed: `[schema].[table]`
+/// - Unbracketed: `schema.table`
+///
+/// It filters out:
+/// - Parameter references (starting with @)
+/// - SQL keywords as schema names (FROM.something)
+/// - Table alias references (alias.column)
+///
+/// Returns a deduplicated list of table references in `[schema].[table]` format.
+///
+/// This replaces the BRACKETED_TABLE_RE and UNBRACKETED_TABLE_RE regex patterns
+/// for more robust parsing that handles whitespace, comments, and edge cases correctly.
+pub(crate) fn extract_table_refs_tokenized(
+    body: &str,
+    table_aliases: &std::collections::HashMap<String, String>,
+) -> Vec<String> {
+    let mut table_refs: Vec<String> = Vec::with_capacity(5);
+
+    let Some(mut scanner) = BodyDependencyTokenScanner::new(body) else {
+        return table_refs;
+    };
+
+    for token in scanner.scan() {
+        match token {
+            BodyDepToken::TwoPartBracketed { first, second } => {
+                // [schema].[table] pattern - equivalent to BRACKETED_TABLE_RE
+                // Skip if either part starts with @ (parameter)
+                if !first.starts_with('@') && !second.starts_with('@') {
+                    let table_ref = format!("[{}].[{}]", first, second);
+                    if !table_refs.contains(&table_ref) {
+                        table_refs.push(table_ref);
+                    }
+                }
+            }
+            BodyDepToken::TwoPartUnbracketed { first, second } => {
+                // schema.table pattern - equivalent to UNBRACKETED_TABLE_RE
+                // Skip if first part is a SQL keyword (like FROM.something)
+                if is_sql_keyword(&first.to_uppercase()) {
+                    continue;
+                }
+                // Skip if first part is a table alias (alias.column reference)
+                if table_aliases.contains_key(&first.to_lowercase()) {
+                    continue;
+                }
+                let table_ref = format!("[{}].[{}]", first, second);
+                if !table_refs.contains(&table_ref) {
+                    table_refs.push(table_ref);
+                }
+            }
+            BodyDepToken::AliasDotBracketedColumn { alias, column } => {
+                // alias.[column] pattern - could be schema.[table] if alias is not a known alias
+                if is_sql_keyword(&alias.to_uppercase()) {
+                    continue;
+                }
+                // If not a known alias, treat as potential schema.table reference
+                if !table_aliases.contains_key(&alias.to_lowercase()) {
+                    let table_ref = format!("[{}].[{}]", alias, column);
+                    if !table_refs.contains(&table_ref) {
+                        table_refs.push(table_ref);
+                    }
+                }
+            }
+            BodyDepToken::BracketedAliasDotColumn { alias, column } => {
+                // [alias].column pattern - could be [schema].table if alias is not a known alias
+                if !alias.starts_with('@') {
+                    if is_sql_keyword(&alias.to_uppercase()) {
+                        continue;
+                    }
+                    // If not a known alias, treat as potential schema.table reference
+                    if !table_aliases.contains_key(&alias.to_lowercase()) {
+                        let table_ref = format!("[{}].[{}]", alias, column);
+                        if !table_refs.contains(&table_ref) {
+                            table_refs.push(table_ref);
+                        }
+                    }
+                }
+            }
+            BodyDepToken::ThreePartBracketed { schema, table, .. } => {
+                // [schema].[table].[column] - extract the table part
+                if !schema.starts_with('@') && !table.starts_with('@') {
+                    let table_ref = format!("[{}].[{}]", schema, table);
+                    if !table_refs.contains(&table_ref) {
+                        table_refs.push(table_ref);
+                    }
+                }
+            }
+            // Skip single identifiers and parameters - they're not table references
+            BodyDepToken::SingleBracketed(_)
+            | BodyDepToken::SingleUnbracketed(_)
+            | BodyDepToken::Parameter(_) => {}
+        }
+    }
+
+    table_refs
 }
 
 // =============================================================================
@@ -10201,5 +10272,236 @@ FROM [dbo].[Account] A
         let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
         assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
         assert_eq!(alias_map.get("c"), Some(&"[dbo].[Categories]".to_string()));
+    }
+
+    // =============================================================================
+    // Phase 20.4.3: extract_table_refs_tokenized() Tests
+    // =============================================================================
+
+    #[test]
+    fn test_extract_table_refs_tokenized_bracketed() {
+        // Basic bracketed table reference
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized("SELECT * FROM [dbo].[Employees]", &aliases);
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_unbracketed() {
+        // Basic unbracketed table reference
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized("SELECT * FROM dbo.Employees", &aliases);
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_mixed() {
+        // Mix of bracketed and unbracketed
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized(
+            "SELECT * FROM [dbo].[Employees] e JOIN sales.Orders o ON e.Id = o.EmployeeId",
+            &aliases,
+        );
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+        assert!(refs.contains(&"[sales].[Orders]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_skip_aliases() {
+        // Should skip alias.column references
+        let mut aliases = std::collections::HashMap::new();
+        aliases.insert("e".to_string(), "[dbo].[Employees]".to_string());
+        let refs = extract_table_refs_tokenized("SELECT e.Name FROM [dbo].[Employees] e", &aliases);
+        // Should contain the table but not treat e.Name as a table
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+        assert!(!refs.contains(&"[e].[Name]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_skip_parameters() {
+        // Should skip @ prefixed identifiers
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized(
+            "SELECT * FROM [dbo].[Employees] WHERE [@Schema].[@Table] = 1",
+            &aliases,
+        );
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+        // Parameters with @ should be excluded
+        assert!(!refs.iter().any(|r| r.contains("@")));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_skip_keywords() {
+        // Should skip keyword.something patterns like FROM.anything
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized("SELECT * FROM dbo.Employees", &aliases);
+        // Should not treat FROM as a schema
+        assert!(!refs.contains(&"[FROM].[dbo]".to_string()));
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_whitespace() {
+        // Handles whitespace between parts
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized("SELECT * FROM [dbo] . [Employees]", &aliases);
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_tabs() {
+        // Handles tabs and newlines
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized("SELECT * FROM [dbo]\t.\n[Employees]", &aliases);
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_three_part() {
+        // Extracts table from three-part references [schema].[table].[column]
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized(
+            "SELECT [dbo].[Employees].[Name] FROM [dbo].[Employees]",
+            &aliases,
+        );
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_deduplicates() {
+        // Deduplicates repeated references
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized(
+            "SELECT * FROM [dbo].[Employees] WHERE EXISTS (SELECT 1 FROM [dbo].[Employees])",
+            &aliases,
+        );
+        // Should only appear once
+        assert_eq!(refs.iter().filter(|r| *r == "[dbo].[Employees]").count(), 1);
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_multiple_tables() {
+        // Multiple different tables
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized(
+            "SELECT * FROM [dbo].[Employees] e
+             JOIN [dbo].[Departments] d ON e.DeptId = d.Id
+             JOIN [hr].[Managers] m ON d.ManagerId = m.Id",
+            &aliases,
+        );
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+        assert!(refs.contains(&"[dbo].[Departments]".to_string()));
+        assert!(refs.contains(&"[hr].[Managers]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_alias_dot_bracketed() {
+        // alias.[column] pattern - should not be treated as table if alias is known
+        let mut aliases = std::collections::HashMap::new();
+        aliases.insert("e".to_string(), "[dbo].[Employees]".to_string());
+        let refs = extract_table_refs_tokenized(
+            "SELECT e.[Name], e.[Age] FROM [dbo].[Employees] e",
+            &aliases,
+        );
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+        // e.[Name] should NOT be treated as a table reference
+        assert!(!refs.contains(&"[e].[Name]".to_string()));
+        assert!(!refs.contains(&"[e].[Age]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_bracketed_alias_dot_column() {
+        // [alias].column pattern - should not be treated as table if alias is known
+        let mut aliases = std::collections::HashMap::new();
+        aliases.insert("e".to_string(), "[dbo].[Employees]".to_string());
+        let refs = extract_table_refs_tokenized(
+            "SELECT [e].Name, [e].Age FROM [dbo].[Employees] e",
+            &aliases,
+        );
+        assert!(refs.contains(&"[dbo].[Employees]".to_string()));
+        // [e].Name should NOT be treated as a table reference
+        assert!(!refs.contains(&"[e].[Name]".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_empty() {
+        // Empty body
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized("", &aliases);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_table_refs_tokenized_no_tables() {
+        // SQL with no table references
+        let aliases = std::collections::HashMap::new();
+        let refs = extract_table_refs_tokenized("SELECT 1 + 2 AS Result", &aliases);
+        assert!(refs.is_empty());
+    }
+
+    // =============================================================================
+    // Phase 20.4.3: parse_qualified_table_name() Tests (Tokenized Version)
+    // =============================================================================
+
+    #[test]
+    fn test_parse_qualified_table_name_tokenized_basic() {
+        // Basic bracketed qualified name
+        let result = parse_qualified_table_name("[dbo].[Employees]");
+        assert_eq!(result, Some(("dbo".to_string(), "Employees".to_string())));
+    }
+
+    #[test]
+    fn test_parse_qualified_table_name_tokenized_whitespace() {
+        // With whitespace between parts
+        let result = parse_qualified_table_name("[dbo] . [Employees]");
+        assert_eq!(result, Some(("dbo".to_string(), "Employees".to_string())));
+    }
+
+    #[test]
+    fn test_parse_qualified_table_name_tokenized_tabs() {
+        // With tabs and newlines
+        let result = parse_qualified_table_name("[dbo]\t.\n[Employees]");
+        assert_eq!(result, Some(("dbo".to_string(), "Employees".to_string())));
+    }
+
+    #[test]
+    fn test_parse_qualified_table_name_tokenized_unbracketed() {
+        // Unbracketed identifiers work too
+        let result = parse_qualified_table_name("dbo.Employees");
+        assert_eq!(result, Some(("dbo".to_string(), "Employees".to_string())));
+    }
+
+    #[test]
+    fn test_parse_qualified_table_name_tokenized_mixed() {
+        // Mixed bracketed/unbracketed
+        let result = parse_qualified_table_name("[dbo].Employees");
+        assert_eq!(result, Some(("dbo".to_string(), "Employees".to_string())));
+    }
+
+    #[test]
+    fn test_parse_qualified_table_name_tokenized_single() {
+        // Single part returns None (needs two parts)
+        let result = parse_qualified_table_name("[Employees]");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_qualified_table_name_tokenized_three_part() {
+        // Three-part name - returns schema and table (ignores column)
+        let result = parse_qualified_table_name("[dbo].[Employees].[Name]");
+        // schema_and_table returns first two parts
+        assert_eq!(result, Some(("dbo".to_string(), "Employees".to_string())));
+    }
+
+    #[test]
+    fn test_parse_qualified_table_name_tokenized_empty() {
+        let result = parse_qualified_table_name("");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_qualified_table_name_tokenized_whitespace_only() {
+        let result = parse_qualified_table_name("   \t\n   ");
+        assert_eq!(result, None);
     }
 }

@@ -10,7 +10,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.1 complete: Token-based parameter parsing (3/3 tasks)
 - ✅ Phase 20.2 complete: Body dependency token extraction (8/8 tasks)
 - ✅ Phase 20.3 complete: Type and declaration parsing (4/4 tasks)
-- 🔄 Phase 20.4-20.7: Table, keyword, and CTE parsing (19 tasks remaining)
+- 🔄 Phase 20.4: Table and alias pattern matching (5/7 tasks)
+- 🔄 Phase 20.5-20.7: Keyword, semicolon, and CTE parsing (13 tasks remaining)
 - 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (11 tasks)
 
 **Upcoming: Phase 21 - Split model_xml.rs into Submodules** (0/10 tasks)
@@ -72,7 +73,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Implementation Approach:** Parse DECLARE, CAST, and type definitions using sqlparser-rs AST or tokenizer. Extract type names as tokens rather than string manipulation.
 
-### Phase 20.4: Table and Alias Pattern Matching (2/7)
+### Phase 20.4: Table and Alias Pattern Matching (5/7)
 
 **Location:** `src/dacpac/model_xml.rs`
 
@@ -82,9 +83,9 @@ These test Rust's ability to build projects that DotNet cannot handle.
 |----|------|--------|-------|
 | 20.4.1 | Replace TABLE_ALIAS_RE with tokenizer | ✅ | Reused TableAliasTokenParser with new `extract_aliases_with_table_names()` method. Added `default_schema` field to parser. Removed TABLE_ALIAS_RE regex and related helper functions. |
 | 20.4.2 | Replace TRIGGER_ALIAS_RE with tokenizer | ✅ | Reused `TableAliasTokenParser::extract_aliases_with_table_names()` in `extract_trigger_body_dependencies()`. Removed TRIGGER_ALIAS_RE regex. Handles whitespace (tabs/spaces/newlines), bracketed and unbracketed table names, AS keyword, and multiple JOINs. 17 unit tests. |
-| 20.4.3 | Replace BRACKETED_TABLE_RE with tokenizer | ⬜ | Line 94-96: `[schema].[table]` pattern |
-| 20.4.4 | Replace UNBRACKETED_TABLE_RE with tokenizer | ⬜ | Line 98-100: `schema.table` pattern |
-| 20.4.5 | Replace QUALIFIED_TABLE_NAME_RE with tokenizer | ⬜ | Line 49-51: `^\[schema\]\.\[table\]$` |
+| 20.4.3 | Replace BRACKETED_TABLE_RE with tokenizer | ✅ | Created `extract_table_refs_tokenized()` using `BodyDependencyTokenScanner`. Extracts `[schema].[table]` patterns via `BodyDepToken::TwoPartBracketed`. Handles whitespace (tabs/spaces/newlines), filters @ parameters. Updated `extract_body_dependencies()` to use tokenized extraction. Removed BRACKETED_TABLE_RE regex. 15 unit tests. |
+| 20.4.4 | Replace UNBRACKETED_TABLE_RE with tokenizer | ✅ | Same `extract_table_refs_tokenized()` handles `schema.table` patterns via `BodyDepToken::TwoPartUnbracketed`. Filters SQL keywords and table aliases. Removed UNBRACKETED_TABLE_RE regex. |
+| 20.4.5 | Replace QUALIFIED_TABLE_NAME_RE with tokenizer | ✅ | Updated `parse_qualified_table_name()` to use `parse_qualified_name_tokenized()`. Handles whitespace between parts, tabs, newlines. Removed QUALIFIED_TABLE_NAME_RE regex. 9 unit tests. |
 | 20.4.6 | Replace INSERT_SELECT_RE with tokenizer | ⬜ | Line 121-129: Complex INSERT...SELECT pattern |
 | 20.4.7 | Replace UPDATE_ALIAS_RE with tokenizer | ⬜ | Line 137-143: UPDATE with JOIN pattern |
 
