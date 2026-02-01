@@ -16,9 +16,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.7 complete: CTE and subquery pattern matching (4/4 tasks)
 - ✅ Phase 20.8 complete: Fix alias resolution bugs in BodyDependencies (11/11 tasks)
 
-**Current Focus: Phase 21 - Split model_xml.rs into Submodules** (3/10 tasks)
+**Current Focus: Phase 21 - Split model_xml.rs into Submodules** (4/10 tasks)
 - ✅ Phase 21.1 complete: Create module structure (2/2 tasks)
-- ✅ Phase 21.2.1 complete: Create xml_helpers.rs (1/2 tasks)
+- ✅ Phase 21.2 complete: Extract XML Writing Helpers (2/2 tasks)
 - Target: Break 13,413-line file into ~9 logical submodules
 
 | Layer | Passing | Rate |
@@ -186,9 +186,9 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 
 ---
 
-## Phase 21: Split model_xml.rs into Submodules (3/10)
+## Phase 21: Split model_xml.rs into Submodules (4/10)
 
-**Location:** `src/dacpac/model_xml/mod.rs` (13,269 lines after 21.2.1)
+**Location:** `src/dacpac/model_xml/mod.rs` (12,948 lines after 21.2.2)
 
 **Goal:** Break up the largest file in the codebase into logical submodules for improved maintainability, faster compilation, and easier navigation.
 
@@ -201,12 +201,12 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 | 21.1.1 | Create `src/dacpac/model_xml/` directory with `mod.rs` | ✅ | Moved model_xml.rs to model_xml/mod.rs. Public API (generate_model_xml) is re-exported from dacpac/mod.rs. |
 | 21.1.2 | Move `generate_model_xml()` entry point to mod.rs | ✅ | Entry point remains in mod.rs. All 492 unit tests + 116 e2e tests pass. |
 
-### Phase 21.2: Extract XML Writing Helpers (1/2)
+### Phase 21.2: Extract XML Writing Helpers (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 21.2.1 | Create `xml_helpers.rs` with low-level XML utilities | ✅ | Created with `write_property`, `write_script_property`, `write_relationship`, `write_builtin_type_relationship`, `write_schema_relationship`, `write_type_specifier_builtin`, `normalize_script_content`, `is_builtin_schema`, `BUILTIN_SCHEMAS`. 244 lines including 9 unit tests. |
-| 21.2.2 | Create `header.rs` with header/metadata writing | ⬜ | `write_header`, `write_custom_data`, `write_database_options`, `write_package_reference`, `write_sqlcmd_variables` (~400 lines) |
+| 21.2.2 | Create `header.rs` with header/metadata writing | ✅ | Created with `write_header`, `write_custom_data`, `write_database_options`, `write_package_reference`, `write_sqlcmd_variables`, `extract_dacpac_name`. 324 lines including 9 unit tests. |
 
 ### Phase 21.3: Extract Element Writers (0/3)
 
