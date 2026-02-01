@@ -2942,8 +2942,13 @@ fn write_scalar_type<W: Write>(
     }
 
     // Length for string types
+    // For MAX types (-1), write IsMax=True instead of Length=-1
     if let Some(length) = scalar.length {
-        write_property(writer, "Length", &length.to_string())?;
+        if length == -1 {
+            write_property(writer, "IsMax", "True")?;
+        } else {
+            write_property(writer, "Length", &length.to_string())?;
+        }
     }
 
     // Relationship to schema

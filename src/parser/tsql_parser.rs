@@ -1189,11 +1189,12 @@ fn extract_scalar_type_info(sql: &str, _sql_upper: &str) -> Option<ScalarTypeInf
         _ => return None,
     };
 
-    // Check for size specification: (length) or (precision, scale)
+    // Check for size specification: (length), (MAX), or (precision, scale)
     let (length, precision, scale) = if after_from_tokens.len() > 1 {
         if matches!(after_from_tokens.get(1), Some(Token::LParen)) {
-            // Parse numbers inside parentheses
+            // Parse numbers or MAX keyword inside parentheses
             let mut numbers: Vec<i32> = Vec::new();
+            let mut is_max = false;
             for token in after_from_tokens.iter().skip(2) {
                 match token {
                     Token::Number(n, _) => {
@@ -1201,12 +1202,19 @@ fn extract_scalar_type_info(sql: &str, _sql_upper: &str) -> Option<ScalarTypeInf
                             numbers.push(num);
                         }
                     }
+                    Token::Word(w) if w.keyword == Keyword::MAX => {
+                        // MAX keyword indicates maximum length for variable-length types
+                        is_max = true;
+                    }
                     Token::RParen => break,
                     _ => {}
                 }
             }
 
-            if numbers.len() == 2 {
+            if is_max {
+                // MAX type - use -1 to indicate MAX (matches DotNet convention)
+                (Some(-1), None, None)
+            } else if numbers.len() == 2 {
                 // Two numbers: precision and scale (e.g., DECIMAL(18,4))
                 (None, Some(numbers[0] as u8), Some(numbers[1] as u8))
             } else if numbers.len() == 1 {

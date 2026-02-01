@@ -9,6 +9,7 @@ mod element_tests;
 mod index_tests;
 mod metadata_tests;
 mod model_xml_tests;
+mod scalar_type_tests;
 mod structure_tests;
 mod tvf_column_tests;
 

@@ -16,8 +16,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Phase 22.4 added: New DotNet SDK (8.0.417) constraint annotation behavior changes
 - See Phase 22 section below for detailed task breakdown
 
-**Discovered Issues (Phases 23-25):**
-- Phase 23: IsMax property for MAX types (0/4) - deployment failure
+**Phase 23 Complete: IsMax property for MAX types (4/4) ✅**
+- Fixed TVF column and scalar type MAX handling to write `IsMax="True"` instead of invalid Length values
+- Added MAX keyword detection in scalar type parser
+
+**Remaining Issues (Phases 24-25):**
 - Phase 24: Dynamic column sources in procedures (0/8) - 177 missing elements
 - Phase 25: ALTER TABLE constraints (0/6) - 14 PKs, 19 FKs missing
 
@@ -144,27 +147,31 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 
 ---
 
-## Phase 23: Fix IsMax Property for MAX Types (0/4)
+## Phase 23: Fix IsMax Property for MAX Types (4/4) ✅
 
 **Goal:** Fix deployment failure: `Length="4294967295"` → `IsMax="True"` for MAX types.
 
 **Error:** `The value of the property type Int32 is formatted incorrectly.`
 
-### Phase 23.1: Fix TVF Column IsMax (0/2)
+### Phase 23.1: Fix TVF Column IsMax (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 23.1.1 | Add IsMax check in `write_tvf_columns()` | ⬜ | Check `col.length == Some(u32::MAX)` |
-| 23.1.2 | Add unit tests for TVF MAX column output | ⬜ | nvarchar(max), varchar(max), varbinary(max) |
+| 23.1.1 | Add IsMax check in `write_tvf_columns()` | ✅ | Checks `col.length == Some(u32::MAX)`, writes `IsMax="True"` |
+| 23.1.2 | Add unit tests for TVF MAX column output | ✅ | Tests already existed in `tvf_column_tests.rs` |
 
-### Phase 23.2: Fix ScalarType IsMax (0/2)
+### Phase 23.2: Fix ScalarType IsMax (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 23.2.1 | Add IsMax check in `write_scalar_type()` | ⬜ | Check `scalar.length == Some(-1)` |
-| 23.2.2 | Add unit tests for scalar type MAX output | ⬜ | `CREATE TYPE ... FROM NVARCHAR(MAX)` |
+| 23.2.1 | Add IsMax check in `write_scalar_type()` | ✅ | Checks `scalar.length == Some(-1)`, writes `IsMax="True"` |
+| 23.2.2 | Add unit tests for scalar type MAX output | ✅ | Created `scalar_type_tests.rs`, added `LongText.sql` fixture |
 
-**Reference:** See `table_writer.rs` lines 344-350 for correct pattern.
+**Implementation Notes:**
+- `write_tvf_columns()` (programmability_writer.rs:1284): Added check for `u32::MAX`
+- `write_scalar_type()` (mod.rs:2945): Added check for `-1`
+- `extract_scalar_type_info()` (tsql_parser.rs:1192): Added `MAX` keyword detection in type parsing
+- Reference: Pattern from `table_writer.rs` lines 344-350
 
 ---
 
@@ -237,7 +244,6 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 
 | Issue | Location | Phase |
 |-------|----------|-------|
-| TVF MAX column IsMax property | `programmability_writer.rs` | Phase 23 |
 | Missing SqlDynamicColumnSource elements | procedure bodies | Phase 24 |
 | Missing constraints from ALTER TABLE | parser/builder | Phase 25 |
 

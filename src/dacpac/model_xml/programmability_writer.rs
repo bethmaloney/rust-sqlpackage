@@ -1281,8 +1281,13 @@ fn write_tvf_columns<W: Write>(
         writer.write_event(Event::Start(spec_elem))?;
 
         // Write Length or Precision/Scale properties if present
+        // For MAX types (u32::MAX), write IsMax=True instead of Length=4294967295
         if let Some(length) = col.length {
-            write_property(writer, "Length", &length.to_string())?;
+            if length == u32::MAX {
+                write_property(writer, "IsMax", "True")?;
+            } else {
+                write_property(writer, "Length", &length.to_string())?;
+            }
         }
         if let Some(precision) = col.precision {
             write_property(writer, "Precision", &precision.to_string())?;
