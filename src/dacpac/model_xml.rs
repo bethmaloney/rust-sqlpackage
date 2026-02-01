@@ -113,21 +113,8 @@ static AS_KEYWORD_RE: LazyLock<Regex> =
 // SINGLE_BRACKET_RE removed - replaced by extract_single_bracketed_identifiers() (Phase 20.2.6)
 // ALIAS_COL_RE removed - replaced by extract_alias_column_refs_tokenized() (Phase 20.2.5)
 
-/// INSERT SELECT pattern (without JOIN)
-static INSERT_SELECT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?is)INSERT\s+INTO\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*SELECT\s+(.+?)\s+FROM\s+(inserted|deleted)\s*;",
-    )
-    .unwrap()
-});
-
-/// INSERT SELECT with JOIN pattern
-static INSERT_SELECT_JOIN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?is)INSERT\s+INTO\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\(([^)]+)\)\s*SELECT\s+(.+?)\s+FROM\s+(inserted|deleted)\s+(\w+)\s+(?:INNER\s+)?JOIN\s+(inserted|deleted)\s+(\w+)\s+ON\s+(.+?);",
-    )
-    .unwrap()
-});
+// INSERT_SELECT_RE removed - replaced by InsertSelectTokenParser (Phase 20.4.6)
+// INSERT_SELECT_JOIN_RE removed - replaced by InsertSelectTokenParser (Phase 20.4.6)
 
 /// UPDATE with alias pattern
 static UPDATE_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -4302,6 +4289,427 @@ impl TableAliasTokenParser {
 }
 
 // =============================================================================
+// INSERT SELECT Token Parser (Phase 20.4.6)
+// =============================================================================
+// Replaces INSERT_SELECT_RE and INSERT_SELECT_JOIN_RE regex patterns with
+// tokenizer-based parsing. Handles INSERT INTO ... SELECT FROM inserted/deleted
+// statements in trigger bodies, with or without JOIN clauses.
+
+/// Represents a parsed INSERT...SELECT statement from a trigger body
+#[derive(Debug, Clone)]
+pub(crate) struct InsertSelectStatement {
+    /// Schema of the target table
+    pub schema: String,
+    /// Name of the target table
+    pub table: String,
+    /// Column list in the INSERT clause (raw text between parens)
+    pub column_list: String,
+    /// SELECT expression (raw text between SELECT and FROM)
+    pub select_expr: String,
+    /// Whether this has a JOIN clause
+    pub has_join: bool,
+    /// First alias (for JOIN case: alias of first inserted/deleted)
+    pub alias1: Option<String>,
+    /// Second alias (for JOIN case: alias of second inserted/deleted)
+    pub alias2: Option<String>,
+    /// ON clause content (for JOIN case)
+    pub on_clause: Option<String>,
+}
+
+/// Token-based parser for INSERT...SELECT statements in trigger bodies.
+/// Replaces INSERT_SELECT_RE and INSERT_SELECT_JOIN_RE regex patterns.
+pub(crate) struct InsertSelectTokenParser {
+    tokens: Vec<sqlparser::tokenizer::TokenWithSpan>,
+    pos: usize,
+    source: String,           // Keep source for extracting raw text segments
+    line_offsets: Vec<usize>, // For converting token locations to byte offsets
+}
+
+impl InsertSelectTokenParser {
+    /// Create a new parser for SQL body text
+    pub fn new(sql: &str) -> Option<Self> {
+        let dialect = MsSqlDialect {};
+        let tokens = Tokenizer::new(&dialect, sql)
+            .tokenize_with_location()
+            .ok()?;
+        let line_offsets = compute_line_offsets(sql);
+        Some(Self {
+            tokens,
+            pos: 0,
+            source: sql.to_string(),
+            line_offsets,
+        })
+    }
+
+    /// Extract all INSERT...SELECT statements from the SQL body
+    pub fn extract_statements(&mut self) -> Vec<InsertSelectStatement> {
+        let mut statements = Vec::new();
+
+        while !self.is_at_end() {
+            self.skip_whitespace();
+
+            // Look for INSERT keyword
+            if self.check_keyword(Keyword::INSERT) {
+                if let Some(stmt) = self.try_parse_insert_select() {
+                    statements.push(stmt);
+                } else {
+                    self.advance();
+                }
+            } else {
+                self.advance();
+            }
+        }
+
+        statements
+    }
+
+    /// Try to parse an INSERT...SELECT FROM inserted/deleted statement
+    fn try_parse_insert_select(&mut self) -> Option<InsertSelectStatement> {
+        let start_pos = self.pos;
+
+        // Expect INSERT
+        if !self.check_keyword(Keyword::INSERT) {
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Expect INTO
+        if !self.check_keyword(Keyword::INTO) {
+            self.pos = start_pos;
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Parse target table: [schema].[table]
+        let (schema, table) = self.parse_bracketed_table_name()?;
+
+        self.skip_whitespace();
+
+        // Expect column list in parentheses
+        if !self.check_token(&Token::LParen) {
+            self.pos = start_pos;
+            return None;
+        }
+
+        let column_list = self.extract_balanced_parens_content()?;
+
+        self.skip_whitespace();
+
+        // Expect SELECT keyword
+        if !self.check_keyword(Keyword::SELECT) {
+            self.pos = start_pos;
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Extract SELECT expression (everything until FROM)
+        let select_start = self.current_byte_offset();
+        if !self.scan_until_keyword(Keyword::FROM) {
+            self.pos = start_pos;
+            return None;
+        }
+        let select_end = self.current_byte_offset();
+        let select_expr = self.source[select_start..select_end].trim().to_string();
+
+        // Now at FROM keyword - advance past it
+        self.advance();
+        self.skip_whitespace();
+
+        // Check if next token is "inserted" or "deleted"
+        if !self.check_inserted_or_deleted() {
+            self.pos = start_pos;
+            return None;
+        }
+        self.advance(); // past inserted/deleted
+        self.skip_whitespace();
+
+        // Check for alias (word that's not a semicolon or keyword)
+        // Pattern 1: FROM inserted; (no alias, no JOIN)
+        // Pattern 2: FROM inserted alias JOIN deleted alias2 ON ...;
+        if self.check_token(&Token::SemiColon) {
+            // Simple case: no alias, no JOIN
+            return Some(InsertSelectStatement {
+                schema,
+                table,
+                column_list,
+                select_expr,
+                has_join: false,
+                alias1: None,
+                alias2: None,
+                on_clause: None,
+            });
+        }
+
+        // Check for alias
+        let alias1 = self.try_parse_identifier();
+        self.skip_whitespace();
+
+        // Check for JOIN (or INNER JOIN)
+        let has_inner = self.check_keyword(Keyword::INNER);
+        if has_inner {
+            self.advance();
+            self.skip_whitespace();
+        }
+
+        if !self.check_keyword(Keyword::JOIN) {
+            // No JOIN - this is the simple form with just FROM inserted/deleted
+            // Could have alias or not
+            return Some(InsertSelectStatement {
+                schema,
+                table,
+                column_list,
+                select_expr,
+                has_join: false,
+                alias1: None,
+                alias2: None,
+                on_clause: None,
+            });
+        }
+
+        // JOIN case - advance past JOIN
+        self.advance();
+        self.skip_whitespace();
+
+        // Check for second inserted/deleted
+        if !self.check_inserted_or_deleted() {
+            self.pos = start_pos;
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Parse second alias
+        let alias2 = self.try_parse_identifier();
+        self.skip_whitespace();
+
+        // Expect ON keyword
+        if !self.check_keyword(Keyword::ON) {
+            self.pos = start_pos;
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Extract ON clause (everything until semicolon)
+        let on_start = self.current_byte_offset();
+        while !self.is_at_end() && !self.check_token(&Token::SemiColon) {
+            self.advance();
+        }
+        let on_end = self.current_byte_offset();
+        let on_clause = self.source[on_start..on_end].trim().to_string();
+
+        Some(InsertSelectStatement {
+            schema,
+            table,
+            column_list,
+            select_expr,
+            has_join: true,
+            alias1,
+            alias2,
+            on_clause: Some(on_clause),
+        })
+    }
+
+    /// Parse a bracketed table name: [schema].[table]
+    fn parse_bracketed_table_name(&mut self) -> Option<(String, String)> {
+        // First part: [schema]
+        let schema = self.parse_bracketed_identifier()?;
+        self.skip_whitespace();
+
+        // Expect period
+        if !self.check_token(&Token::Period) {
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Second part: [table]
+        let table = self.parse_bracketed_identifier()?;
+
+        Some((schema, table))
+    }
+
+    /// Parse a bracketed identifier like [Name]
+    fn parse_bracketed_identifier(&mut self) -> Option<String> {
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                if w.quote_style == Some('[') {
+                    let name = w.value.clone();
+                    self.advance();
+                    return Some(name);
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract content inside balanced parentheses (consuming the parens)
+    fn extract_balanced_parens_content(&mut self) -> Option<String> {
+        if !self.check_token(&Token::LParen) {
+            return None;
+        }
+
+        self.advance(); // Past opening paren
+        self.skip_whitespace();
+
+        // Record start position (after opening paren and whitespace)
+        let start = self.current_byte_offset();
+
+        let mut depth = 1;
+        let mut end = start;
+        while !self.is_at_end() && depth > 0 {
+            if self.check_token(&Token::LParen) {
+                depth += 1;
+                self.advance();
+            } else if self.check_token(&Token::RParen) {
+                depth -= 1;
+                if depth == 0 {
+                    // Record end before the closing paren
+                    end = self.current_byte_offset();
+                    self.advance(); // Past closing paren
+                    break;
+                }
+                self.advance();
+            } else {
+                self.advance();
+            }
+        }
+
+        if start < end && end <= self.source.len() {
+            Some(self.source[start..end].trim().to_string())
+        } else if start < self.source.len() {
+            Some(self.source[start..].trim().to_string())
+        } else {
+            Some(String::new())
+        }
+    }
+
+    /// Scan tokens until we find a specific keyword, returning true if found
+    fn scan_until_keyword(&mut self, keyword: Keyword) -> bool {
+        while !self.is_at_end() {
+            if self.check_keyword(keyword) {
+                return true;
+            }
+            self.advance();
+        }
+        false
+    }
+
+    /// Check if current token is "inserted" or "deleted" (case-insensitive)
+    fn check_inserted_or_deleted(&self) -> bool {
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                return w.value.eq_ignore_ascii_case("inserted")
+                    || w.value.eq_ignore_ascii_case("deleted");
+            }
+        }
+        false
+    }
+
+    /// Try to parse an identifier (not a keyword)
+    fn try_parse_identifier(&mut self) -> Option<String> {
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                // Skip SQL keywords that would terminate the expression
+                let upper = w.value.to_uppercase();
+                if matches!(
+                    upper.as_str(),
+                    "INNER" | "JOIN" | "ON" | "WHERE" | "AND" | "OR" | "ORDER" | "GROUP"
+                ) {
+                    return None;
+                }
+                // Also check sqlparser keyword enum
+                if matches!(
+                    w.keyword,
+                    Keyword::INNER
+                        | Keyword::JOIN
+                        | Keyword::ON
+                        | Keyword::WHERE
+                        | Keyword::AND
+                        | Keyword::OR
+                        | Keyword::ORDER
+                        | Keyword::GROUP
+                ) {
+                    return None;
+                }
+
+                let ident = w.value.clone();
+                self.advance();
+                return Some(ident);
+            }
+        }
+        None
+    }
+
+    /// Get current byte offset in source text
+    fn current_byte_offset(&self) -> usize {
+        if let Some(token) = self.current_token() {
+            // Convert line/column to byte offset
+            location_to_byte_offset(
+                &self.line_offsets,
+                token.span.start.line,
+                token.span.start.column,
+            )
+        } else {
+            self.source.len()
+        }
+    }
+
+    /// Skip whitespace tokens
+    fn skip_whitespace(&mut self) {
+        while !self.is_at_end() {
+            if let Some(token) = self.current_token() {
+                if matches!(&token.token, Token::Whitespace(_)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Check if at end of tokens
+    fn is_at_end(&self) -> bool {
+        self.pos >= self.tokens.len()
+    }
+
+    /// Get current token without consuming
+    fn current_token(&self) -> Option<&sqlparser::tokenizer::TokenWithSpan> {
+        self.tokens.get(self.pos)
+    }
+
+    /// Advance to next token
+    fn advance(&mut self) {
+        if !self.is_at_end() {
+            self.pos += 1;
+        }
+    }
+
+    /// Check if current token is a specific keyword
+    fn check_keyword(&self, keyword: Keyword) -> bool {
+        if let Some(token) = self.current_token() {
+            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
+        } else {
+            false
+        }
+    }
+
+    /// Check if current token matches a specific token type
+    fn check_token(&self, expected: &Token) -> bool {
+        if let Some(token) = self.current_token() {
+            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
+        } else {
+            false
+        }
+    }
+}
+
+// =============================================================================
 // Body Dependency Token Scanner (Phase 20.2.1)
 // =============================================================================
 // Replaces TOKEN_RE regex with tokenizer-based scanning for body dependency extraction.
@@ -7251,111 +7659,99 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
     }
 
-    // Process INSERT statements with SELECT FROM inserted/deleted (without JOIN)
-    // Pattern: INSERT INTO [schema].[table] ([cols]) SELECT ... FROM inserted|deleted;
-    // The negative lookahead (?!\s+\w+\s+(?:INNER\s+)?JOIN) ensures we don't match JOIN cases
-    for cap in INSERT_SELECT_RE.captures_iter(body) {
-        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let col_list = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-        let select_cols = cap.get(4).map(|m| m.as_str()).unwrap_or("");
+    // Process INSERT statements with SELECT FROM inserted/deleted
+    // Uses tokenized parsing (Phase 20.4.6) instead of INSERT_SELECT_RE and INSERT_SELECT_JOIN_RE regex
+    if let Some(mut parser) = InsertSelectTokenParser::new(body) {
+        for stmt in parser.extract_statements() {
+            let table_ref = format!("[{}].[{}]", stmt.schema, stmt.table);
 
-        let table_ref = format!("[{}].[{}]", schema, table);
+            if stmt.has_join {
+                // JOIN case: INSERT INTO ... SELECT ... FROM inserted alias JOIN deleted alias ON ...
 
-        // Emit table reference first
-        if !seen.contains(&table_ref) {
-            seen.insert(table_ref.clone());
-            deps.push(BodyDependency::ObjectRef(table_ref.clone()));
-        }
+                // Skip if already processed
+                if seen.contains(&table_ref) {
+                    continue;
+                }
 
-        // Emit each column reference from the INSERT column list
-        // Use tokenized extraction instead of SINGLE_BRACKET_RE regex (Phase 20.2.6)
-        for col in extract_single_bracketed_identifiers(col_list) {
-            let col_ref = format!("{}.[{}]", table_ref, col);
-            if !seen.contains(&col_ref) {
-                seen.insert(col_ref.clone());
-                deps.push(BodyDependency::ObjectRef(col_ref));
-            }
-        }
+                // Emit table reference first
+                seen.insert(table_ref.clone());
+                deps.push(BodyDependency::ObjectRef(table_ref.clone()));
 
-        // Emit column references from SELECT clause - these come from inserted/deleted (parent)
-        // Use tokenized extraction instead of SINGLE_BRACKET_RE regex (Phase 20.2.6)
-        for col in extract_single_bracketed_identifiers(select_cols) {
-            // These columns come from inserted/deleted, resolve to parent
-            let col_ref = format!("{}.[{}]", parent_ref, col);
-            // Deduplicate - DotNet doesn't emit the same column twice from inserted/deleted
-            if !seen.contains(&col_ref) {
-                seen.insert(col_ref.clone());
-                deps.push(BodyDependency::ObjectRef(col_ref));
-            }
-        }
-    }
+                // Emit each column reference from the INSERT column list (no dedup - DotNet preserves order)
+                for col in extract_single_bracketed_identifiers(&stmt.column_list) {
+                    let col_ref = format!("{}.[{}]", table_ref, col);
+                    deps.push(BodyDependency::ObjectRef(col_ref));
+                }
 
-    // Process INSERT statements with SELECT FROM inserted/deleted with JOIN
-    // Pattern: INSERT INTO [schema].[table] ([cols]) SELECT expr FROM inserted alias JOIN deleted alias ON ...;
-    for cap in INSERT_SELECT_JOIN_RE.captures_iter(body) {
-        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let col_list = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-        let select_expr = cap.get(4).map(|m| m.as_str()).unwrap_or("");
-        let alias1 = cap.get(6).map(|m| m.as_str()).unwrap_or("");
-        let alias2 = cap.get(8).map(|m| m.as_str()).unwrap_or("");
-        let on_clause = cap.get(9).map(|m| m.as_str()).unwrap_or("");
+                // Add aliases for the JOIN tables (both map to parent)
+                if let Some(ref alias1) = stmt.alias1 {
+                    table_aliases.insert(alias1.to_lowercase(), parent_ref.to_string());
+                }
+                if let Some(ref alias2) = stmt.alias2 {
+                    table_aliases.insert(alias2.to_lowercase(), parent_ref.to_string());
+                }
 
-        let table_ref = format!("[{}].[{}]", schema, table);
+                // DotNet processes ON clause first, then SELECT columns (skipping duplicates)
+                let mut emitted: std::collections::HashSet<(String, String)> =
+                    std::collections::HashSet::new();
 
-        // Skip if already processed by the simpler insert_select pattern
-        if seen.contains(&table_ref) {
-            continue;
-        }
+                // 1. Emit column references from ON clause first (no dedup within ON)
+                if let Some(ref on_clause) = stmt.on_clause {
+                    for (alias, col) in extract_alias_column_refs_tokenized(on_clause) {
+                        let alias_lower = alias.to_lowercase();
 
-        // Emit table reference first
-        seen.insert(table_ref.clone());
-        deps.push(BodyDependency::ObjectRef(table_ref.clone()));
+                        if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                            let col_ref = format!("{}.[{}]", resolved_table, col);
+                            emitted.insert((alias_lower.clone(), col.to_lowercase()));
+                            deps.push(BodyDependency::ObjectRef(col_ref));
+                        }
+                    }
+                }
 
-        // Emit each column reference from the INSERT column list (no dedup - DotNet preserves order)
-        // Use tokenized extraction instead of SINGLE_BRACKET_RE regex (Phase 20.2.6)
-        for col in extract_single_bracketed_identifiers(col_list) {
-            let col_ref = format!("{}.[{}]", table_ref, col);
-            deps.push(BodyDependency::ObjectRef(col_ref));
-        }
+                // 2. Emit column references from SELECT clause (skip if already in ON clause with same alias)
+                for (alias, col) in extract_alias_column_refs_tokenized(&stmt.select_expr) {
+                    let alias_lower = alias.to_lowercase();
+                    let key = (alias_lower.clone(), col.to_lowercase());
 
-        // Add aliases for the JOIN tables (both map to parent)
-        table_aliases.insert(alias1.to_lowercase(), parent_ref.to_string());
-        table_aliases.insert(alias2.to_lowercase(), parent_ref.to_string());
+                    // Skip if this exact alias.column was already emitted from ON clause
+                    if emitted.contains(&key) {
+                        continue;
+                    }
 
-        // DotNet processes ON clause first, then SELECT columns (skipping duplicates)
-        // Track what's been emitted to skip duplicates from SELECT
-        let mut emitted: std::collections::HashSet<(String, String)> =
-            std::collections::HashSet::new();
+                    // Resolve alias to table reference
+                    if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                        let col_ref = format!("{}.[{}]", resolved_table, col);
+                        deps.push(BodyDependency::ObjectRef(col_ref));
+                    }
+                }
+            } else {
+                // Simple case: INSERT INTO ... SELECT ... FROM inserted|deleted;
 
-        // 1. Emit column references from ON clause first (no dedup within ON)
-        // Use tokenized extraction instead of ALIAS_COL_RE regex
-        for (alias, col) in extract_alias_column_refs_tokenized(on_clause) {
-            let alias_lower = alias.to_lowercase();
+                // Emit table reference first
+                if !seen.contains(&table_ref) {
+                    seen.insert(table_ref.clone());
+                    deps.push(BodyDependency::ObjectRef(table_ref.clone()));
+                }
 
-            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
-                let col_ref = format!("{}.[{}]", resolved_table, col);
-                emitted.insert((alias_lower.clone(), col.to_lowercase()));
-                deps.push(BodyDependency::ObjectRef(col_ref));
-            }
-        }
+                // Emit each column reference from the INSERT column list
+                for col in extract_single_bracketed_identifiers(&stmt.column_list) {
+                    let col_ref = format!("{}.[{}]", table_ref, col);
+                    if !seen.contains(&col_ref) {
+                        seen.insert(col_ref.clone());
+                        deps.push(BodyDependency::ObjectRef(col_ref));
+                    }
+                }
 
-        // 2. Emit column references from SELECT clause (skip if already in ON clause with same alias)
-        // Use tokenized extraction instead of ALIAS_COL_RE regex
-        for (alias, col) in extract_alias_column_refs_tokenized(select_expr) {
-            let alias_lower = alias.to_lowercase();
-            let key = (alias_lower.clone(), col.to_lowercase());
-
-            // Skip if this exact alias.column was already emitted from ON clause
-            if emitted.contains(&key) {
-                continue;
-            }
-
-            // Resolve alias to table reference
-            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
-                let col_ref = format!("{}.[{}]", resolved_table, col);
-                deps.push(BodyDependency::ObjectRef(col_ref));
+                // Emit column references from SELECT clause - these come from inserted/deleted (parent)
+                for col in extract_single_bracketed_identifiers(&stmt.select_expr) {
+                    // These columns come from inserted/deleted, resolve to parent
+                    let col_ref = format!("{}.[{}]", parent_ref, col);
+                    // Deduplicate - DotNet doesn't emit the same column twice from inserted/deleted
+                    if !seen.contains(&col_ref) {
+                        seen.insert(col_ref.clone());
+                        deps.push(BodyDependency::ObjectRef(col_ref));
+                    }
+                }
             }
         }
     }
@@ -10503,5 +10899,242 @@ FROM [dbo].[Account] A
     fn test_parse_qualified_table_name_tokenized_whitespace_only() {
         let result = parse_qualified_table_name("   \t\n   ");
         assert_eq!(result, None);
+    }
+
+    // =============================================================================
+    // Phase 20.4.6: InsertSelectTokenParser Tests
+    // =============================================================================
+    // Tests for token-based INSERT...SELECT parsing (replaces INSERT_SELECT_RE and
+    // INSERT_SELECT_JOIN_RE regex patterns).
+
+    #[test]
+    fn test_insert_select_parser_simple() {
+        // Simple INSERT INTO ... SELECT FROM inserted;
+        let sql = r#"
+            INSERT INTO [dbo].[Products] ([Id], [Name], [Price])
+            SELECT [Id], [Name], [Price]
+            FROM inserted;
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.schema, "dbo");
+        assert_eq!(stmt.table, "Products");
+        assert!(stmt.column_list.contains("[Id]"));
+        assert!(stmt.column_list.contains("[Name]"));
+        assert!(!stmt.has_join);
+        assert!(stmt.alias1.is_none());
+        assert!(stmt.alias2.is_none());
+        assert!(stmt.on_clause.is_none());
+    }
+
+    #[test]
+    fn test_insert_select_parser_with_join() {
+        // INSERT INTO ... SELECT FROM inserted i INNER JOIN deleted d ON ...;
+        let sql = r#"
+            INSERT INTO [dbo].[ProductHistory] ([ProductId], [Action], [OldName], [NewName])
+            SELECT i.[Id], 'UPDATE', d.[Name], i.[Name]
+            FROM inserted i
+            INNER JOIN deleted d ON i.[Id] = d.[Id];
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.schema, "dbo");
+        assert_eq!(stmt.table, "ProductHistory");
+        assert!(stmt.has_join);
+        assert_eq!(stmt.alias1.as_deref(), Some("i"));
+        assert_eq!(stmt.alias2.as_deref(), Some("d"));
+        assert!(stmt.on_clause.is_some());
+        let on_clause = stmt.on_clause.as_ref().unwrap();
+        assert!(on_clause.contains("i.[Id]") || on_clause.contains("[Id]"));
+    }
+
+    #[test]
+    fn test_insert_select_parser_join_without_inner() {
+        // INSERT INTO ... SELECT FROM inserted i JOIN deleted d ON ...;
+        let sql = r#"
+            INSERT INTO [dbo].[AuditLog] ([Id], [Change])
+            SELECT i.[Id], d.[Value]
+            FROM inserted i
+            JOIN deleted d ON i.[Id] = d.[Id];
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert!(stmt.has_join);
+        assert_eq!(stmt.alias1.as_deref(), Some("i"));
+        assert_eq!(stmt.alias2.as_deref(), Some("d"));
+    }
+
+    #[test]
+    fn test_insert_select_parser_from_deleted() {
+        // INSERT INTO ... SELECT FROM deleted;
+        let sql = r#"
+            INSERT INTO [dbo].[DeletedHistory] ([Id], [Name])
+            SELECT [Id], [Name]
+            FROM deleted;
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.schema, "dbo");
+        assert_eq!(stmt.table, "DeletedHistory");
+        assert!(!stmt.has_join);
+    }
+
+    #[test]
+    fn test_insert_select_parser_multiple_statements() {
+        // Multiple INSERT statements in trigger body
+        let sql = r#"
+            INSERT INTO [dbo].[Products] ([Id], [Name])
+            SELECT [Id], [Name]
+            FROM inserted;
+
+            INSERT INTO [dbo].[ProductHistory] ([ProductId], [Action])
+            SELECT [Id], 'INSERT'
+            FROM inserted;
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 2);
+        assert_eq!(stmts[0].table, "Products");
+        assert_eq!(stmts[1].table, "ProductHistory");
+    }
+
+    #[test]
+    fn test_insert_select_parser_with_whitespace() {
+        // Varying whitespace (tabs, multiple spaces, newlines)
+        let sql = "INSERT  \t INTO\t[dbo] . [Products]\n([Id],[Name])\nSELECT  [Id],[Name]\n\tFROM   inserted\t;";
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.schema, "dbo");
+        assert_eq!(stmt.table, "Products");
+    }
+
+    #[test]
+    fn test_insert_select_parser_case_insensitive() {
+        // Case insensitive keywords
+        let sql = r#"
+            insert INTO [dbo].[Products] ([Id])
+            SELECT [Id]
+            from INSERTED;
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+    }
+
+    #[test]
+    fn test_insert_select_parser_empty() {
+        // Empty body
+        let mut parser = InsertSelectTokenParser::new("").unwrap();
+        let stmts = parser.extract_statements();
+        assert!(stmts.is_empty());
+    }
+
+    #[test]
+    fn test_insert_select_parser_no_insert_select() {
+        // Body without INSERT...SELECT
+        let sql = "UPDATE [dbo].[Products] SET [Name] = 'Test';";
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert!(stmts.is_empty());
+    }
+
+    #[test]
+    fn test_insert_select_parser_insert_values_not_matched() {
+        // INSERT with VALUES (not SELECT) should not match
+        let sql = "INSERT INTO [dbo].[Products] ([Id]) VALUES (1);";
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert!(stmts.is_empty());
+    }
+
+    #[test]
+    fn test_insert_select_parser_insert_from_regular_table() {
+        // INSERT SELECT from regular table (not inserted/deleted) should not match
+        let sql = r#"
+            INSERT INTO [dbo].[Products] ([Id])
+            SELECT [Id]
+            FROM [dbo].[OtherTable];
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert!(stmts.is_empty());
+    }
+
+    #[test]
+    fn test_insert_select_parser_nested_parens_in_select() {
+        // SELECT with function calls and parentheses (but not nested SELECTs)
+        // Note: Nested SELECT inside expressions is a complex edge case not typically
+        // found in trigger INSERT statements that reference inserted/deleted.
+        let sql = r#"
+            INSERT INTO [dbo].[Results] ([Value])
+            SELECT COALESCE([Val], 0)
+            FROM inserted;
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        assert!(stmts[0].select_expr.contains("COALESCE"));
+    }
+
+    #[test]
+    fn test_insert_select_parser_complex_column_list() {
+        // Column list with special characters
+        let sql = r#"
+            INSERT INTO [dbo].[Data] ([Id], [User Name], [Price$])
+            SELECT [Id], [User Name], [Price$]
+            FROM inserted;
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert!(stmt.column_list.contains("[User Name]"));
+        assert!(stmt.column_list.contains("[Price$]"));
+    }
+
+    #[test]
+    fn test_insert_select_parser_complex_on_clause() {
+        // Complex ON clause with multiple conditions
+        let sql = r#"
+            INSERT INTO [dbo].[History] ([Id], [OldVal], [NewVal])
+            SELECT i.[Id], d.[Value], i.[Value]
+            FROM inserted i
+            INNER JOIN deleted d ON i.[Id] = d.[Id] AND i.[Type] = d.[Type];
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert!(stmt.has_join);
+        let on_clause = stmt.on_clause.as_ref().unwrap();
+        // The ON clause should have the AND condition
+        assert!(on_clause.contains("AND") || on_clause.len() > 20);
+    }
+
+    #[test]
+    fn test_insert_select_parser_alias_extraction() {
+        // Verify alias extraction for both inserted and deleted
+        let sql = r#"
+            INSERT INTO [dbo].[Log] ([A])
+            SELECT ins.[A]
+            FROM inserted ins
+            INNER JOIN deleted del ON ins.[Id] = del.[Id];
+        "#;
+        let mut parser = InsertSelectTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.alias1.as_deref(), Some("ins"));
+        assert_eq!(stmt.alias2.as_deref(), Some("del"));
     }
 }
