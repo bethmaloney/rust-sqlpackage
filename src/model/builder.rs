@@ -1220,31 +1220,44 @@ fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
                 }
             }
 
-            // Split attached annotations based on position relative to annotated constraint
+            // Split attached annotations based on median disambiguator value
+            // DotNet splits AttachedAnnotations around the median: higher values go before
+            // the Annotation (descending), lower values go after (ascending).
             if let Some(attached_list) = table_attached.get(&table_key) {
-                if let Some(&(_, annotated_idx)) = table_annotation.get(&table_key) {
-                    // Constraints after annotated_idx go before the Annotation (descending order)
-                    let mut after: Vec<u32> = attached_list
-                        .iter()
-                        .filter(|(_, c_idx)| *c_idx > annotated_idx)
-                        .map(|(d, _)| *d)
-                        .collect();
-                    after.sort_by(|a, b| b.cmp(a)); // Descending
+                if !attached_list.is_empty() {
+                    // Collect all disambiguator values
+                    let mut disambiguators: Vec<u32> =
+                        attached_list.iter().map(|(d, _)| *d).collect();
+                    disambiguators.sort();
 
-                    // Constraints before annotated_idx go after the Annotation (ascending order)
-                    let mut before: Vec<u32> = attached_list
-                        .iter()
-                        .filter(|(_, c_idx)| *c_idx < annotated_idx)
-                        .map(|(d, _)| *d)
-                        .collect();
-                    before.sort(); // Ascending
+                    // Calculate median threshold
+                    let median = if disambiguators.len() % 2 == 0 {
+                        // Even count: average of two middle values
+                        let mid = disambiguators.len() / 2;
+                        (disambiguators[mid - 1] + disambiguators[mid]) as f64 / 2.0
+                    } else {
+                        // Odd count: middle value
+                        disambiguators[disambiguators.len() / 2] as f64
+                    };
 
-                    table.attached_annotations_before_annotation = after;
-                    table.attached_annotations_after_annotation = before;
-                } else {
-                    // No annotated constraint (single constraint case), all go before
-                    let all: Vec<u32> = attached_list.iter().map(|(d, _)| *d).collect();
-                    table.attached_annotations_before_annotation = all;
+                    // Split: disambiguators > median go before Annotation (descending order)
+                    let mut before_annotation: Vec<u32> = disambiguators
+                        .iter()
+                        .filter(|&&d| d as f64 > median)
+                        .copied()
+                        .collect();
+                    before_annotation.sort_by(|a, b| b.cmp(a)); // Descending
+
+                    // Disambiguators <= median go after Annotation (ascending order)
+                    let mut after_annotation: Vec<u32> = disambiguators
+                        .iter()
+                        .filter(|&&d| d as f64 <= median)
+                        .copied()
+                        .collect();
+                    after_annotation.sort(); // Ascending
+
+                    table.attached_annotations_before_annotation = before_annotation;
+                    table.attached_annotations_after_annotation = after_annotation;
                 }
             }
 

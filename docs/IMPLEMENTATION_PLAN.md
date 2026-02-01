@@ -7,7 +7,6 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phases 1-38 complete. Full parity: 46/48 (95.8%).**
 
 **Remaining Work:**
-- Phase 22.4.4: Disambiguator numbering (lower priority - dacpac functions correctly)
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
 
 | Layer | Passing | Rate |
@@ -18,9 +17,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Relationships | 47/48 | 97.9% |
 | Layer 4 (Ordering) | 48/48 | 100% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 10/48 | 20.8% |
+| Layer 7 (Canonical XML) | 11/48 | 22.9% |
 
-**Note:** Full parity (46/48, 95.8%) represents fixtures passing all layers. Remaining Layer 7 differences are due to disambiguator numbering (Phase 22.4.4).
+**Note:** Full parity (46/48, 95.8%) represents fixtures passing all layers. Phase 22.4.4 (disambiguator numbering) is now complete.
 
 ### Excluded Fixtures
 
@@ -31,7 +30,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 22: Layer 7 Canonical XML Parity (Remaining: 5 tasks)
+## Phase 22: Layer 7 Canonical XML Parity (Remaining: 4 tasks)
 
 ### Phase 22.2.2: Verify CustomData Elements (1/1) ✅
 
@@ -45,7 +44,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 - Added `extract_database_name()` helper function to extract database name from package name
 - All CustomData categories now match DotNet format: AnsiNulls, QuotedIdentifier, CompatibilityMode, Reference, SqlCmdVariables
 
-### Phase 22.4: Align Constraint Annotation Behavior with DotNet SDK (4/5) - FUNCTIONAL
+### Phase 22.4: Align Constraint Annotation Behavior with DotNet SDK (5/5) ✅
 
 **Background:** The annotation pattern is based on the NUMBER of constraints per table, not just whether they're inline or named.
 
@@ -91,7 +90,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 | 22.4.1 | Determine exact constraint count threshold | ✅ | Single constraint = table gets Annotation; multiple = most constraints get Annotation |
 | 22.4.2 | Single-constraint tables: table gets Annotation, constraint gets AttachedAnnotation | ✅ | Implemented correct behavior |
 | 22.4.3 | Multi-constraint tables: constraints get Annotation, table gets AttachedAnnotation | ✅ | Each constraint gets unique disambiguator |
-| 22.4.4 | Fix disambiguator numbering to match DotNet order | 🔶 | **Partial:** Disambiguators now assigned in sorted element order (matching DotNet). Remaining issue: AttachedAnnotation ordering on multi-constraint tables differs from DotNet. |
+| 22.4.4 | Fix disambiguator numbering to match DotNet order | ✅ | DotNet splits AttachedAnnotations around the median disambiguator value - higher values go before the Annotation (descending), lower values go after (ascending). `all_constraints` fixture now passes Layer 7. |
 | 22.4.5 | Column AttachedAnnotation for inline defaults | ✅ | Columns with inline defaults correctly reference their DEFAULT constraint |
 
 **Validation:** Run `cargo test --test e2e_tests test_parity_all_fixtures` - all constraint tests pass.
@@ -100,19 +99,19 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 | Layer | Status | Notes |
 |-------|--------|-------|
-| Layer 7 (Canonical XML) | 10/48 (20.8%) | Functionally correct, byte-level parity blocked by disambiguator numbering |
+| Layer 7 (Canonical XML) | 11/48 (22.9%) | Functionally correct, byte-level parity achieved for fixtures with constraints |
 
-**NOTE:** The annotation pattern is now functionally correct. Layer 7 byte-level parity requires disambiguator values to match DotNet's XML-output-order assignment. This is a lower priority improvement since the dacpac functions correctly - deployments succeed and all constraints are properly represented.
+**NOTE:** The annotation pattern is now functionally correct and achieves byte-level parity with DotNet.
 
 **Progress (2026-02-01):**
 - Refactored `assign_inline_constraint_disambiguators()` to assign disambiguators in sorted element order
 - Disambiguator values now match DotNet (e.g., Categories table gets 3, CK_Products_Price gets 4, etc.)
 - Split `attached_annotations` into `attached_annotations_before_annotation` and `attached_annotations_after_annotation` to support DotNet's interleaved output order
-- Remaining issue: DotNet's AttachedAnnotation ordering within multi-constraint tables is complex:
-  - AttachedAnnotations for constraints appearing AFTER the annotated constraint (by element index) come first, in descending disambiguator order
-  - Then the Annotation
-  - Then AttachedAnnotations for constraints appearing BEFORE, in ascending order
-- This affects fixtures with multiple named constraints per table but doesn't affect functionality
+- Implemented DotNet's median-based AttachedAnnotation ordering:
+  - DotNet splits AttachedAnnotations around the median disambiguator value
+  - AttachedAnnotations with disambiguators higher than the median go before the Annotation (in descending order)
+  - AttachedAnnotations with disambiguators lower than or equal to the median go after the Annotation (in ascending order)
+- `all_constraints` fixture now passes Layer 7 parity
 
 ---
 
