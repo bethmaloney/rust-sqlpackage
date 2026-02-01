@@ -8,6 +8,19 @@ use std::path::Path;
 
 use super::types::{extract_model_xml, CanonicalXmlError};
 
+/// Represents a canonicalized annotation (Annotation or AttachedAnnotation)
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CanonicalAnnotation {
+    /// Whether this is an AttachedAnnotation (true) or Annotation (false)
+    is_attached: bool,
+    /// Type attribute for Annotation elements (e.g., "SqlInlineConstraintAnnotation")
+    annotation_type: Option<String>,
+    /// Disambiguator value
+    disambiguator: Option<String>,
+    /// Properties (if any)
+    properties: Vec<(String, String)>,
+}
+
 /// Represents a canonicalized element for sorting and serialization
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct CanonicalElement {
@@ -19,8 +32,10 @@ struct CanonicalElement {
     properties: Vec<(String, String)>,
     /// Sorted relationships
     relationships: Vec<CanonicalRelationship>,
-    /// Nested child elements (recursively canonicalized)
+    /// Nested child elements (recursively canonicalized) - only used for inline Element children
     children: Vec<CanonicalElement>,
+    /// Annotation and AttachedAnnotation children
+    annotations: Vec<CanonicalAnnotation>,
 }
 
 /// Represents a canonicalized relationship for sorting
@@ -133,11 +148,18 @@ fn canonicalize_element(node: &roxmltree::Node) -> CanonicalElement {
         .map(|rel_node| canonicalize_relationship(&rel_node))
         .collect();
 
-    // Collect direct child elements (preserve original ordering) (for Annotation elements)
+    // Collect direct child Element elements (preserve original ordering)
     let children: Vec<CanonicalElement> = node
         .children()
-        .filter(|n| n.has_tag_name("Annotation"))
-        .map(|n| canonicalize_annotation(&n))
+        .filter(|n| n.has_tag_name("Element"))
+        .map(|n| canonicalize_element(&n))
+        .collect();
+
+    // Collect Annotation and AttachedAnnotation elements (preserve original ordering)
+    let annotations: Vec<CanonicalAnnotation> = node
+        .children()
+        .filter(|n| n.has_tag_name("Annotation") || n.has_tag_name("AttachedAnnotation"))
+        .map(|n| canonicalize_annotation_node(&n))
         .collect();
 
     CanonicalElement {
@@ -146,6 +168,7 @@ fn canonicalize_element(node: &roxmltree::Node) -> CanonicalElement {
         properties,
         relationships,
         children,
+        annotations,
     }
 }
 
@@ -178,13 +201,14 @@ fn canonicalize_relationship(node: &roxmltree::Node) -> CanonicalRelationship {
     }
 }
 
-/// Convert an Annotation element into a canonical representation
-fn canonicalize_annotation(node: &roxmltree::Node) -> CanonicalElement {
-    let element_type = node.attribute("Type").unwrap_or("Annotation").to_string();
-    let disambiguator = node.attribute("Disambiguator").unwrap_or("").to_string();
+/// Convert an Annotation or AttachedAnnotation element into a canonical representation
+fn canonicalize_annotation_node(node: &roxmltree::Node) -> CanonicalAnnotation {
+    let is_attached = node.tag_name().name() == "AttachedAnnotation";
+    let annotation_type = node.attribute("Type").map(|s| s.to_string());
+    let disambiguator = node.attribute("Disambiguator").map(|s| s.to_string());
 
     // Collect properties (preserve original ordering)
-    let mut properties: Vec<(String, String)> = node
+    let properties: Vec<(String, String)> = node
         .children()
         .filter(|n| n.has_tag_name("Property"))
         .filter_map(|n| {
@@ -201,17 +225,11 @@ fn canonicalize_annotation(node: &roxmltree::Node) -> CanonicalElement {
         })
         .collect();
 
-    // Add disambiguator as a property if present
-    if !disambiguator.is_empty() {
-        properties.push(("Disambiguator".to_string(), disambiguator));
-    }
-
-    CanonicalElement {
-        element_type,
-        name: String::new(),
+    CanonicalAnnotation {
+        is_attached,
+        annotation_type,
+        disambiguator,
         properties,
-        relationships: Vec::new(),
-        children: Vec::new(),
     }
 }
 
@@ -284,10 +302,11 @@ fn serialize_canonical_element(element: &CanonicalElement, output: &mut String, 
         format!(" Name=\"{}\"", escape_xml_attr(&element.name))
     };
 
-    // Check if element is empty (no properties, relationships, or children)
+    // Check if element is empty (no properties, relationships, children, or annotations)
     let is_empty = element.properties.is_empty()
         && element.relationships.is_empty()
-        && element.children.is_empty();
+        && element.children.is_empty()
+        && element.annotations.is_empty();
 
     if is_empty {
         output.push_str(&format!(
@@ -330,9 +349,14 @@ fn serialize_canonical_element(element: &CanonicalElement, output: &mut String, 
         serialize_canonical_relationship(rel, output, indent + 1);
     }
 
-    // Serialize child annotations
+    // Serialize nested child Element elements
     for child in &element.children {
-        serialize_canonical_annotation(child, output, indent + 1);
+        serialize_canonical_element(child, output, indent + 1);
+    }
+
+    // Serialize Annotation and AttachedAnnotation elements
+    for annotation in &element.annotations {
+        serialize_canonical_annotation(annotation, output, indent + 1);
     }
 
     output.push_str(&format!("{}</Element>\n", indent_str));
@@ -387,58 +411,65 @@ fn serialize_canonical_relationship(
 }
 
 /// Serialize a canonical annotation to XML
-fn serialize_canonical_annotation(element: &CanonicalElement, output: &mut String, indent: usize) {
+fn serialize_canonical_annotation(
+    annotation: &CanonicalAnnotation,
+    output: &mut String,
+    indent: usize,
+) {
     let indent_str = "  ".repeat(indent);
 
-    // Check for Disambiguator in properties
-    let disambiguator = element
-        .properties
-        .iter()
-        .find(|(k, _)| k == "Disambiguator")
-        .map(|(_, v)| v.clone());
-
-    // Filter out Disambiguator from serialized properties
-    let props_without_disambiguator: Vec<_> = element
-        .properties
-        .iter()
-        .filter(|(k, _)| k != "Disambiguator")
-        .collect();
-
-    let disamb_attr = disambiguator
+    let disamb_attr = annotation
+        .disambiguator
+        .as_ref()
         .map(|d| format!(" Disambiguator=\"{}\"", d))
         .unwrap_or_default();
 
-    if props_without_disambiguator.is_empty() {
+    if annotation.is_attached {
+        // AttachedAnnotation has no Type attribute, just Disambiguator
         output.push_str(&format!(
-            "{}<Annotation Type=\"{}\"{} />\n",
-            indent_str, element.element_type, disamb_attr
+            "{}<AttachedAnnotation{}/>\n",
+            indent_str, disamb_attr
         ));
     } else {
-        output.push_str(&format!(
-            "{}<Annotation Type=\"{}\"{}>\n",
-            indent_str, element.element_type, disamb_attr
-        ));
-        for (prop_name, prop_value) in props_without_disambiguator {
-            if needs_cdata(prop_value) {
-                output.push_str(&format!(
-                    "{}  <Property Name=\"{}\">\n",
-                    indent_str, prop_name
-                ));
-                output.push_str(&format!(
-                    "{}    <Value><![CDATA[{}]]></Value>\n",
-                    indent_str, prop_value
-                ));
-                output.push_str(&format!("{}  </Property>\n", indent_str));
-            } else {
-                output.push_str(&format!(
-                    "{}  <Property Name=\"{}\" Value=\"{}\" />\n",
-                    indent_str,
-                    prop_name,
-                    escape_xml_attr(prop_value)
-                ));
+        // Regular Annotation has Type attribute
+        let type_attr = annotation
+            .annotation_type
+            .as_ref()
+            .map(|t| format!(" Type=\"{}\"", t))
+            .unwrap_or_default();
+
+        if annotation.properties.is_empty() {
+            output.push_str(&format!(
+                "{}<Annotation{}{}/>\n",
+                indent_str, type_attr, disamb_attr
+            ));
+        } else {
+            output.push_str(&format!(
+                "{}<Annotation{}{}>\n",
+                indent_str, type_attr, disamb_attr
+            ));
+            for (prop_name, prop_value) in &annotation.properties {
+                if needs_cdata(prop_value) {
+                    output.push_str(&format!(
+                        "{}  <Property Name=\"{}\">\n",
+                        indent_str, prop_name
+                    ));
+                    output.push_str(&format!(
+                        "{}    <Value><![CDATA[{}]]></Value>\n",
+                        indent_str, prop_value
+                    ));
+                    output.push_str(&format!("{}  </Property>\n", indent_str));
+                } else {
+                    output.push_str(&format!(
+                        "{}  <Property Name=\"{}\" Value=\"{}\" />\n",
+                        indent_str,
+                        prop_name,
+                        escape_xml_attr(prop_value)
+                    ));
+                }
             }
+            output.push_str(&format!("{}</Annotation>\n", indent_str));
         }
-        output.push_str(&format!("{}</Annotation>\n", indent_str));
     }
 }
 

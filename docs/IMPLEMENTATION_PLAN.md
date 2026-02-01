@@ -10,10 +10,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 21.1-21.4.1 complete: Module structure, element writers, body_deps extracted
 - ⬜ Phase 21.4.2, 21.5.1 remaining: qualified_name.rs (optional), other_writers.rs
 
-**Phase 22 - Layer 7 Canonical XML Parity** (3/5 tasks)
-- ✅ CollationCaseSensitive, SqlCmdVariables, constraint ordering fixed
-- ⬜ CustomData verification, SqlInlineConstraintAnnotation order remaining
-- Layer 7: 10/48 (20.8%)
+**Discovered: Phase 22 - Layer 7 Canonical XML Parity** (4/7 tasks)
+- Layer 7 now performs true 1-1 XML comparison (no sorting/normalization)
+- Phase 22.3.2 fixed: AttachedAnnotation capture bug was in TEST infrastructure, not main code
+- Phase 22.4 added: New DotNet SDK (8.0.417) constraint annotation behavior changes
+- See Phase 22 section below for detailed task breakdown
 
 **Discovered Issues (Phases 23-25):**
 - Phase 23: IsMax property for MAX types (0/4) - deployment failure
@@ -91,7 +92,7 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 
 ---
 
-## Phase 22: Layer 7 Canonical XML Parity (3/5)
+## Phase 22: Layer 7 Canonical XML Parity (4/7)
 
 **Goal:** Achieve byte-level XML matching between rust-sqlpackage and DotNet DacFx output.
 
@@ -108,12 +109,38 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 | 22.2.1 | Add empty SqlCmdVariables CustomData element | ✅ | Emitted even when no SQLCMD variables defined |
 | 22.2.2 | Verify other CustomData elements match DotNet | ⬜ | Check for other missing CustomData categories |
 
-### Phase 22.3: Fix Element/Property Ordering (1/2)
+### Phase 22.3: Fix Element/Property Ordering (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 22.3.1 | Audit element ordering against DotNet output | ✅ | Fixed PK/Unique constraint relationship ordering. Layer 7: 2/48 → 10/48 |
-| 22.3.2 | Fix SqlInlineConstraintAnnotation/AttachedAnnotation order | ⬜ | DotNet assigns based on element ordering |
+| 22.3.1 | Audit element ordering against DotNet output | ✅ | Fixed PK/Unique constraint relationship ordering (ColumnSpecifications before DefiningTable). Fixed table SqlInlineConstraintAnnotation - only added when table has BOTH inline AND named constraints. Layer 7 pass rate improved from 2/48 (4.2%) to 10/48 (20.8%). |
+| 22.3.2 | Fix AttachedAnnotation capture in Layer 7 canonicalization | ✅ | **TEST INFRASTRUCTURE FIX:** The canonicalization code was only looking for `Annotation` elements, not `AttachedAnnotation` elements. This was a bug in the test comparison logic, not the main code. |
+
+### Phase 22.4: Align Constraint Annotation Behavior with New DotNet SDK (0/3)
+
+**Background:** The latest DotNet SDK (8.0.417) produces SIGNIFICANTLY more `SqlInlineConstraintAnnotation` elements than previous versions. The git-tracked fixture dacpacs in `tests/fixtures/*/bin/Debug/` were built with an older SDK and are now stale. When tests rebuild DotNet dacpacs, they get the new behavior.
+
+**DotNet SDK Behavior Changes Discovered:**
+- ALL constraints (not just inline ones) now get `SqlInlineConstraintAnnotation`
+- Named table-level constraints (CHECK, FK, PK, UQ) all get `Annotation` elements
+- Named constraints on tables that also have inline constraints get `AttachedAnnotation` referencing the table's disambiguator
+- Tables with ANY constraint get `Annotation` (not just tables with BOTH inline AND named constraints as previously understood)
+
+**Important:** The git-tracked fixture dacpacs in `tests/fixtures/*/bin/Debug/` are now stale and need to be rebuilt with the current DotNet SDK to match test behavior.
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 22.4.1 | All constraints get SqlInlineConstraintAnnotation | ⬜ | Current implementation only adds annotations for truly inline constraints. DotNet now adds annotations for ALL constraints. |
+| 22.4.2 | Named constraints get AttachedAnnotation linking to table disambiguator | ⬜ | When a table has any constraint, named constraints should reference the table's disambiguator via AttachedAnnotation. |
+| 22.4.3 | Every table with constraints gets table-level Annotation | ⬜ | Tables with ANY constraint (not just both inline and named) should get table-level Annotation element. |
+
+**Validation:** Run `cargo test --test e2e_tests test_parity_all_fixtures` and verify Layer 7 pass rate increases.
+
+**Expected Result:**
+
+| Layer | Before | After |
+|-------|--------|-------|
+| Layer 7 (Canonical XML) | 10/48 (20.8%) | 48/48 (100%) |
 
 ---
 
