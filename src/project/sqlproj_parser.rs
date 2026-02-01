@@ -208,20 +208,14 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
     let default_schema =
         find_property_value(&root, "DefaultSchema").unwrap_or_else(|| "dbo".to_string());
 
-    // Parse collation LCID
-    let collation_lcid = find_property_value(&root, "DefaultCollation")
-        .and_then(|c| extract_lcid_from_collation(&c))
-        .unwrap_or(1033); // Default to US English
+    // Collation LCID is always 1033 (US English) - actual collation name is in database_options
+    let collation_lcid = 1033;
 
     // Parse ANSI_NULLS setting (default: true)
-    let ansi_nulls = find_property_value(&root, "AnsiNulls")
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(true);
+    let ansi_nulls = parse_bool_property(&root, "AnsiNulls", true);
 
     // Parse QUOTED_IDENTIFIER setting (default: true)
-    let quoted_identifier = find_property_value(&root, "QuotedIdentifier")
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(true);
+    let quoted_identifier = parse_bool_property(&root, "QuotedIdentifier", true);
 
     // Parse database options
     let database_options = parse_database_options(&root);
@@ -263,50 +257,24 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
 fn parse_database_options(root: &roxmltree::Node) -> DatabaseOptions {
     let mut options = DatabaseOptions::default();
 
-    // DefaultCollation (e.g., "Latin1_General_CI_AS")
+    // String properties - override defaults if specified
     if let Some(collation) = find_property_value(root, "DefaultCollation") {
         options.collation = Some(collation);
     }
-
-    // PageVerify (e.g., "CHECKSUM", "TORN_PAGE_DETECTION", "NONE")
     if let Some(page_verify) = find_property_value(root, "PageVerify") {
         options.page_verify = Some(page_verify);
     }
-
-    // DefaultFilegroup (e.g., "PRIMARY")
     if let Some(filegroup) = find_property_value(root, "DefaultFilegroup") {
         options.default_filegroup = Some(filegroup);
     }
 
-    // AnsiNullDefaultOn (default: true)
-    if let Some(val) = find_property_value(root, "AnsiNullDefaultOn") {
-        options.ansi_null_default_on = val.eq_ignore_ascii_case("true");
-    }
-
-    // AnsiNullsOn (default: true)
-    if let Some(val) = find_property_value(root, "AnsiNullsOn") {
-        options.ansi_nulls_on = val.eq_ignore_ascii_case("true");
-    }
-
-    // AnsiWarningsOn (default: true)
-    if let Some(val) = find_property_value(root, "AnsiWarningsOn") {
-        options.ansi_warnings_on = val.eq_ignore_ascii_case("true");
-    }
-
-    // ArithAbortOn (default: true)
-    if let Some(val) = find_property_value(root, "ArithAbortOn") {
-        options.arith_abort_on = val.eq_ignore_ascii_case("true");
-    }
-
-    // ConcatNullYieldsNullOn (default: true)
-    if let Some(val) = find_property_value(root, "ConcatNullYieldsNullOn") {
-        options.concat_null_yields_null_on = val.eq_ignore_ascii_case("true");
-    }
-
-    // FullTextEnabled (default: false)
-    if let Some(val) = find_property_value(root, "FullTextEnabled") {
-        options.full_text_enabled = val.eq_ignore_ascii_case("true");
-    }
+    // Boolean properties - use helper to reduce boilerplate
+    options.ansi_null_default_on = parse_bool_property(root, "AnsiNullDefaultOn", true);
+    options.ansi_nulls_on = parse_bool_property(root, "AnsiNullsOn", true);
+    options.ansi_warnings_on = parse_bool_property(root, "AnsiWarningsOn", true);
+    options.arith_abort_on = parse_bool_property(root, "ArithAbortOn", true);
+    options.concat_null_yields_null_on = parse_bool_property(root, "ConcatNullYieldsNullOn", true);
+    options.full_text_enabled = parse_bool_property(root, "FullTextEnabled", true);
 
     options
 }
@@ -320,23 +288,32 @@ fn find_property_value(root: &roxmltree::Node, property_name: &str) -> Option<St
     None
 }
 
-fn extract_version_from_dsp(dsp: &str) -> Option<SqlServerVersion> {
-    if dsp.contains("Sql160") {
-        Some(SqlServerVersion::Sql160)
-    } else if dsp.contains("Sql150") {
-        Some(SqlServerVersion::Sql150)
-    } else if dsp.contains("Sql140") {
-        Some(SqlServerVersion::Sql140)
-    } else if dsp.contains("Sql130") {
-        Some(SqlServerVersion::Sql130)
-    } else {
-        None
-    }
+/// Parse a boolean property from the project file, returning `default` if not found.
+fn parse_bool_property(root: &roxmltree::Node, property_name: &str, default: bool) -> bool {
+    find_property_value(root, property_name)
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(default)
 }
 
-fn extract_lcid_from_collation(_collation: &str) -> Option<u32> {
-    // Common collations and their LCIDs
-    Some(1033) // Default to US English
+/// Find the text content of a child element by tag name.
+fn find_child_text(node: &roxmltree::Node, tag_name: &str) -> Option<String> {
+    node.children()
+        .find(|n| n.tag_name().name() == tag_name)
+        .and_then(|n| n.text())
+        .map(|s| s.to_string())
+}
+
+fn extract_version_from_dsp(dsp: &str) -> Option<SqlServerVersion> {
+    const VERSION_MAP: &[(&str, SqlServerVersion)] = &[
+        ("Sql160", SqlServerVersion::Sql160),
+        ("Sql150", SqlServerVersion::Sql150),
+        ("Sql140", SqlServerVersion::Sql140),
+        ("Sql130", SqlServerVersion::Sql130),
+    ];
+    VERSION_MAP
+        .iter()
+        .find(|(pattern, _)| dsp.contains(pattern))
+        .map(|(_, version)| *version)
 }
 
 fn find_sql_files(root: &roxmltree::Node, project_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -432,24 +409,10 @@ fn find_dacpac_references(root: &roxmltree::Node, project_dir: &Path) -> Vec<Dac
         if node.tag_name().name() == "ArtifactReference" {
             if let Some(include) = node.attribute("Include") {
                 let path = project_dir.join(include.replace('\\', "/"));
-
-                let database_variable = node
-                    .children()
-                    .find(|n| n.tag_name().name() == "DatabaseVariableLiteralValue")
-                    .and_then(|n| n.text())
-                    .map(|s| s.to_string());
-
-                let server_variable = node
-                    .children()
-                    .find(|n| n.tag_name().name() == "ServerVariableLiteralValue")
-                    .and_then(|n| n.text())
-                    .map(|s| s.to_string());
-
-                let suppress = node
-                    .children()
-                    .find(|n| n.tag_name().name() == "SuppressMissingDependenciesErrors")
-                    .and_then(|n| n.text())
-                    .map(|s| s.to_lowercase() == "true")
+                let database_variable = find_child_text(&node, "DatabaseVariableLiteralValue");
+                let server_variable = find_child_text(&node, "ServerVariableLiteralValue");
+                let suppress = find_child_text(&node, "SuppressMissingDependenciesErrors")
+                    .map(|s| s.eq_ignore_ascii_case("true"))
                     .unwrap_or(false);
 
                 references.push(DacpacReference {
@@ -477,12 +440,7 @@ fn find_package_references(root: &roxmltree::Node) -> Vec<PackageReference> {
                 let version = node
                     .attribute("Version")
                     .map(|s| s.to_string())
-                    .or_else(|| {
-                        node.children()
-                            .find(|n| n.tag_name().name() == "Version")
-                            .and_then(|n| n.text())
-                            .map(|s| s.to_string())
-                    })
+                    .or_else(|| find_child_text(&node, "Version"))
                     .unwrap_or_else(|| "0.0.0".to_string());
 
                 references.push(PackageReference {
@@ -510,26 +468,10 @@ fn find_sqlcmd_variables(root: &roxmltree::Node) -> Vec<SqlCmdVariable> {
     for node in root.descendants() {
         if node.tag_name().name() == "SqlCmdVariable" {
             if let Some(name) = node.attribute("Include") {
-                // Get the Value child element
-                let value = node
-                    .children()
-                    .find(|n| n.tag_name().name() == "Value")
-                    .and_then(|n| n.text())
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-
-                // Get the DefaultValue child element
-                let default_value = node
-                    .children()
-                    .find(|n| n.tag_name().name() == "DefaultValue")
-                    .and_then(|n| n.text())
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-
                 variables.push(SqlCmdVariable {
                     name: name.to_string(),
-                    value,
-                    default_value,
+                    value: find_child_text(&node, "Value").unwrap_or_default(),
+                    default_value: find_child_text(&node, "DefaultValue").unwrap_or_default(),
                 });
             }
         }

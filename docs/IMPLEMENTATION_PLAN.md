@@ -36,7 +36,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Phase 28: Test infrastructure simplification (3/3) ✅ - ~560 lines reduction (complete)
 - Phase 29: Test dacpac parsing helper (2/2) ✅ - ~120 lines reduction (complete)
 - Phase 30: Model builder constraint helper (2/2) ✅ - ConstraintBuilder pattern (complete)
-- Phase 31: Project parser helpers (0/2) - ~50 lines reduction
+- Phase 31: Project parser helpers (2/2) ✅ - ~58 lines reduction (complete)
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -422,7 +422,7 @@ let doc = parse_model_xml(&model_xml);
 
 ---
 
-## Phase 31: Project Parser Helpers (0/2) - MEDIUM PRIORITY
+## Phase 31: Project Parser Helpers (2/2) ✅ COMPLETE
 
 **Goal:** Reduce ~50 lines of duplicated boolean property parsing.
 
@@ -435,18 +435,18 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 
 **Location:** Lines 281-309 in `sqlproj_parser.rs`.
 
-### Phase 31.1: Extract Helpers (0/2)
+### Phase 31.1: Extract Helpers (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 31.1.1 | Create `parse_bool_option(root, property_name, default) -> bool` helper | ⬜ | Combines find + parse + default |
-| 31.1.2 | Create `find_child_text(node, tag_name) -> Option<String>` helper | ⬜ | Used in dacpac refs, package refs, sqlcmd vars |
+| 31.1.1 | Create `parse_bool_property(root, property_name, default) -> bool` helper | ✅ | Combines find + parse + default |
+| 31.1.2 | Create `find_child_text(node, tag_name) -> Option<String>` helper | ✅ | Used in dacpac refs, package refs, sqlcmd vars |
 
 **Additional Cleanup:**
-- Remove dead `extract_lcid_from_collation()` function (always returns 1033)
-- Simplify `extract_version_from_dsp()` with array iteration
+- ✅ Removed dead `extract_lcid_from_collation()` function (always returned 1033)
+- ✅ Simplified `extract_version_from_dsp()` with const array iteration
 
-**Estimated Impact:** ~50 lines removed, improved readability.
+**Actual Impact:** ~58 lines removed (exceeds estimated ~50 lines), improved readability.
 
 ---
 
@@ -468,7 +468,7 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 | Test setup boilerplate (4 lines × 140 occurrences) | tests/integration/ | Phase 28 ✅ | ~560 lines |
 | Dacpac XML parsing chain duplication | tests/integration/dacpac/ | Phase 29 ✅ | ~120 lines |
 | ConstraintElement creation boilerplate | src/model/builder.rs | Phase 30 ✅ | ~200 lines |
-| Boolean property parsing duplication | src/project/sqlproj_parser.rs | Phase 31 | ~50 lines |
+| Boolean property parsing duplication | src/project/sqlproj_parser.rs | Phase 31 ✅ | ~58 lines |
 
 ---
 
