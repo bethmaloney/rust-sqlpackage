@@ -4,7 +4,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-20.7 complete (239 tasks). Full parity achieved.**
+**Phases 1-20.8 complete (250 tasks). Full parity achieved.**
 
 **Current Focus: Phase 20 - Replace Remaining Regex with Tokenization/AST**
 - ✅ Phase 20.1 complete: Token-based parameter parsing (3/3 tasks)
@@ -16,8 +16,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.7 complete: CTE and subquery pattern matching (4/4 tasks)
 - ✅ Phase 20.8 complete: Fix alias resolution bugs in BodyDependencies (11/11 tasks)
 
-**Upcoming: Phase 21 - Split model_xml.rs into Submodules** (0/10 tasks)
-- Target: Break 9,790-line file into ~9 logical submodules
+**Current Focus: Phase 21 - Split model_xml.rs into Submodules** (2/10 tasks)
+- ✅ Phase 21.1 complete: Create module structure (2/2 tasks)
+- Target: Break 13,413-line file into ~9 logical submodules
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -184,20 +185,20 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 
 ---
 
-## Phase 21: Split model_xml.rs into Submodules (0/10)
+## Phase 21: Split model_xml.rs into Submodules (2/10)
 
-**Location:** `src/dacpac/model_xml.rs` (9,790 lines)
+**Location:** `src/dacpac/model_xml/mod.rs` (13,413 lines)
 
 **Goal:** Break up the largest file in the codebase into logical submodules for improved maintainability, faster compilation, and easier navigation.
 
-**Background:** The `model_xml.rs` file has grown to nearly 10,000 lines containing XML generation, SQL parsing helpers, body dependency extraction, type handling, and 2,400+ lines of tests. These are distinct concerns that should be separated.
+**Background:** The `model_xml.rs` file has grown to 13,413 lines containing XML generation, SQL parsing helpers, body dependency extraction, type handling, and ~4,600 lines of tests. These are distinct concerns that should be separated.
 
-### Phase 21.1: Create Module Structure (0/2)
+### Phase 21.1: Create Module Structure (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 21.1.1 | Create `src/dacpac/model_xml/` directory with `mod.rs` | ⬜ | Re-export public API from mod.rs |
-| 21.1.2 | Move `generate_model_xml()` entry point to mod.rs | ⬜ | Keep main entry point in mod.rs, delegate to submodules |
+| 21.1.1 | Create `src/dacpac/model_xml/` directory with `mod.rs` | ✅ | Moved model_xml.rs to model_xml/mod.rs. Public API (generate_model_xml) is re-exported from dacpac/mod.rs. |
+| 21.1.2 | Move `generate_model_xml()` entry point to mod.rs | ✅ | Entry point remains in mod.rs. All 492 unit tests + 116 e2e tests pass. |
 
 ### Phase 21.2: Extract XML Writing Helpers (0/2)
 
