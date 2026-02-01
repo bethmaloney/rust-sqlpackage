@@ -130,9 +130,7 @@ static TRIGGER_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Single bracketed identifier: [name]
 static SINGLE_BRACKET_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]").unwrap());
 
-/// Alias.column pattern: alias.[column]
-static ALIAS_COL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\]").unwrap());
+// ALIAS_COL_RE removed - replaced by extract_alias_column_refs_tokenized() (Phase 20.2.5)
 
 /// INSERT SELECT pattern (without JOIN)
 static INSERT_SELECT_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -1847,6 +1845,32 @@ fn extract_column_refs_tokenized(sql: &str) -> Vec<String> {
 
             if let Some(r) = ref_str {
                 refs.push(r);
+            }
+        }
+    }
+
+    refs
+}
+
+/// Extract alias.[column] patterns from a SQL clause using token-based scanning.
+/// Replaces ALIAS_COL_RE regex with proper tokenization for whitespace/comment handling.
+/// Returns Vec of (alias, column) tuples in order of appearance.
+///
+/// This function specifically handles the `alias.[column]` pattern where:
+/// - The alias is an unbracketed identifier (e.g., `i`, `d`, `t1`)
+/// - The column is a bracketed identifier (e.g., `[Id]`, `[Name]`)
+///
+/// Used in trigger body dependency extraction to find column references like:
+/// - `i.[Id]` (from inserted.Id)
+/// - `d.[Name]` (from deleted.Name)
+fn extract_alias_column_refs_tokenized(sql: &str) -> Vec<(String, String)> {
+    let mut refs = Vec::new();
+
+    if let Some(mut scanner) = BodyDependencyTokenScanner::new(sql) {
+        for token in scanner.scan() {
+            // Only extract AliasDotBracketedColumn patterns (alias.[column])
+            if let BodyDepToken::AliasDotBracketedColumn { alias, column } = token {
+                refs.push((alias, column));
             }
         }
     }
@@ -6638,9 +6662,8 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
             std::collections::HashSet::new();
 
         // 1. Emit column references from ON clause first (no dedup within ON)
-        for col_match in ALIAS_COL_RE.captures_iter(on_clause) {
-            let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
-            let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
+        // Use tokenized extraction instead of ALIAS_COL_RE regex
+        for (alias, col) in extract_alias_column_refs_tokenized(on_clause) {
             let alias_lower = alias.to_lowercase();
 
             if let Some(resolved_table) = table_aliases.get(&alias_lower) {
@@ -6651,9 +6674,8 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
 
         // 2. Emit column references from SELECT clause (skip if already in ON clause with same alias)
-        for col_match in ALIAS_COL_RE.captures_iter(select_expr) {
-            let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
-            let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
+        // Use tokenized extraction instead of ALIAS_COL_RE regex
+        for (alias, col) in extract_alias_column_refs_tokenized(select_expr) {
             let alias_lower = alias.to_lowercase();
             let key = (alias_lower.clone(), col.to_lowercase());
 
@@ -6694,9 +6716,8 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
 
         // Process ON clause FIRST - extract alias.[col] patterns (these can be duplicated)
-        for col_match in ALIAS_COL_RE.captures_iter(on_clause) {
-            let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
-            let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
+        // Use tokenized extraction instead of ALIAS_COL_RE regex
+        for (alias, col) in extract_alias_column_refs_tokenized(on_clause) {
             let alias_lower = alias.to_lowercase();
 
             if let Some(resolved_table) = table_aliases.get(&alias_lower) {
@@ -6707,9 +6728,8 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
 
         // Process SET clause - extract alias.[col] = patterns
-        for col_match in ALIAS_COL_RE.captures_iter(set_clause) {
-            let alias = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
-            let col = col_match.get(2).map(|m| m.as_str()).unwrap_or("");
+        // Use tokenized extraction instead of ALIAS_COL_RE regex
+        for (alias, col) in extract_alias_column_refs_tokenized(set_clause) {
             let alias_lower = alias.to_lowercase();
 
             if let Some(resolved_table) = table_aliases.get(&alias_lower) {
@@ -8334,5 +8354,150 @@ FROM [dbo].[Account] A
         let idents = extract_bracketed_identifiers_tokenized("[a] . [b]");
         // These are still part of a qualified name despite whitespace
         assert!(idents.is_empty());
+    }
+
+    // ============================================================================
+    // Tests for extract_alias_column_refs_tokenized (Phase 20.2.5)
+    // ============================================================================
+
+    #[test]
+    fn test_alias_col_simple() {
+        // Basic alias.[column] pattern
+        let refs = extract_alias_column_refs_tokenized("i.[Id]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], ("i".to_string(), "Id".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_multiple() {
+        // Multiple alias.[column] patterns
+        let refs = extract_alias_column_refs_tokenized("i.[Id] = d.[Id]");
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0], ("i".to_string(), "Id".to_string()));
+        assert_eq!(refs[1], ("d".to_string(), "Id".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_with_whitespace() {
+        // Whitespace around dot
+        let refs = extract_alias_column_refs_tokenized("alias . [Column]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], ("alias".to_string(), "Column".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_with_tabs() {
+        // Tabs instead of spaces
+        let refs = extract_alias_column_refs_tokenized("alias\t.\t[Column]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], ("alias".to_string(), "Column".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_trigger_on_clause() {
+        // Typical trigger ON clause
+        let refs = extract_alias_column_refs_tokenized("i.[ProductId] = d.[ProductId]");
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0], ("i".to_string(), "ProductId".to_string()));
+        assert_eq!(refs[1], ("d".to_string(), "ProductId".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_trigger_select() {
+        // SELECT clause in trigger
+        let refs = extract_alias_column_refs_tokenized("d.[Id], i.[Name], d.[Value]");
+        assert_eq!(refs.len(), 3);
+        assert_eq!(refs[0], ("d".to_string(), "Id".to_string()));
+        assert_eq!(refs[1], ("i".to_string(), "Name".to_string()));
+        assert_eq!(refs[2], ("d".to_string(), "Value".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_update_set() {
+        // SET clause in UPDATE
+        let refs = extract_alias_column_refs_tokenized("t.[Quantity] = i.[Quantity]");
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0], ("t".to_string(), "Quantity".to_string()));
+        assert_eq!(refs[1], ("i".to_string(), "Quantity".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_empty() {
+        let refs = extract_alias_column_refs_tokenized("");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_alias_col_whitespace_only() {
+        let refs = extract_alias_column_refs_tokenized("   \t\n   ");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_alias_col_no_match() {
+        // No alias.[column] patterns - should return empty
+        let refs = extract_alias_column_refs_tokenized("[schema].[table].[column]");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_alias_col_skip_bracketed_alias() {
+        // [alias].[column] is a different pattern (TwoPartBracketed)
+        let refs = extract_alias_column_refs_tokenized("[t].[Column]");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_alias_col_underscore_alias() {
+        // Alias starting with underscore
+        let refs = extract_alias_column_refs_tokenized("_temp.[Value]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], ("_temp".to_string(), "Value".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_long_alias() {
+        // Longer alias name
+        let refs = extract_alias_column_refs_tokenized("inserted.[ProductId]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], ("inserted".to_string(), "ProductId".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_special_chars_in_column() {
+        // Column name with spaces and special chars in brackets
+        let refs = extract_alias_column_refs_tokenized("t.[Column Name]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], ("t".to_string(), "Column Name".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_mixed_patterns() {
+        // Mix of alias.[col] with other patterns - only alias.[col] extracted
+        let refs = extract_alias_column_refs_tokenized("t.[Id] AND [schema].[table] AND u.[Name]");
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0], ("t".to_string(), "Id".to_string()));
+        assert_eq!(refs[1], ("u".to_string(), "Name".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_with_newlines() {
+        // Newlines in the SQL
+        let refs = extract_alias_column_refs_tokenized("i.[Id]\nAND\nd.[Name]");
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0], ("i".to_string(), "Id".to_string()));
+        assert_eq!(refs[1], ("d".to_string(), "Name".to_string()));
+    }
+
+    #[test]
+    fn test_alias_col_complex_expression() {
+        // Complex expression with multiple patterns
+        let refs = extract_alias_column_refs_tokenized(
+            "CASE WHEN i.[Status] = 1 THEN d.[OldValue] ELSE i.[NewValue] END",
+        );
+        assert_eq!(refs.len(), 3);
+        assert_eq!(refs[0], ("i".to_string(), "Status".to_string()));
+        assert_eq!(refs[1], ("d".to_string(), "OldValue".to_string()));
+        assert_eq!(refs[2], ("i".to_string(), "NewValue".to_string()));
     }
 }
