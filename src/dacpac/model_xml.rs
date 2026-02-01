@@ -4342,6 +4342,7 @@ impl QualifiedName {
     }
 
     /// Formats as a bracketed reference: [first].[second] or [first].[second].[third]
+    #[cfg(test)]
     pub fn to_bracketed(&self) -> String {
         match (&self.second, &self.third) {
             (Some(second), Some(third)) => {
