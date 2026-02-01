@@ -36,15 +36,15 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Status:** Phase 20.1 complete (parameter parsing). Phases 20.2-20.7 remain.
 
-### Phase 20.2: Body Dependency Token Extraction (1/8)
+### Phase 20.2: Body Dependency Token Extraction (3/8)
 
 **Location:** `src/dacpac/model_xml.rs`
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 20.2.1 | Replace TOKEN_RE with tokenizer-based scanning | ✅ | Lines 129-134: Massive regex with 17 capture groups |
-| 20.2.2 | Replace COL_REF_RE with tokenizer | ⬜ | Line 77-78: `alias.column` or `schema.table.column` |
-| 20.2.3 | Replace BARE_COL_RE with tokenizer | ⬜ | Line 88-89: `[ColumnName]` not preceded by dot |
+| 20.2.2 | Replace COL_REF_RE with tokenizer | ✅ | Replaced with `extract_column_refs_tokenized()` using `BodyDependencyTokenScanner` |
+| 20.2.3 | Replace BARE_COL_RE with tokenizer | ✅ | Handled by `BodyDepToken::SingleBracketed` in `extract_all_column_references()` |
 | 20.2.4 | Replace BRACKETED_IDENT_RE with tokenizer | ⬜ | Line 137-138: `[Name]` pattern |
 | 20.2.5 | Replace ALIAS_COL_RE with tokenizer | ⬜ | Line 157-158: `alias.[column]` pattern |
 | 20.2.6 | Replace SINGLE_BRACKET_RE with tokenizer | ⬜ | Line 154: `[name]` single identifier |

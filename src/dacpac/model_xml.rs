@@ -75,9 +75,11 @@ static ON_TERMINATOR_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap()
 });
 
-/// Column reference pattern: alias.column or schema.table.column
-static COL_REF_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\[?\w+\]?)\.(\[?\w+\]?)(?:\.(\[?\w+\]?))?").unwrap());
+// Note: COL_REF_RE has been removed and replaced with token-based parsing in Phase 20.2.2.
+// Column reference extraction now uses extract_column_refs_tokenized() with BodyDependencyTokenScanner.
+
+// Note: BARE_COL_RE has been removed and replaced with token-based parsing in Phase 20.2.2.
+// Single bracketed column detection now uses BodyDepToken::SingleBracketed in extract_all_column_references().
 
 /// GROUP BY keyword pattern
 static GROUP_BY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bGROUP\s+BY\s+").unwrap());
@@ -85,10 +87,6 @@ static GROUP_BY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bGROUP\
 /// Terminator pattern for GROUP BY clause
 static GROUP_TERMINATOR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(?:HAVING|ORDER|UNION|;|$)").unwrap());
-
-/// Bare column pattern: [ColumnName] not preceded by dot
-static BARE_COL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?:^|[^.\w])\[(\w+)\](?:[^.\w]|$)").unwrap());
 
 // Note: PROC_PARAM_RE has been removed and replaced with token-based parsing in Phase 20.1.3.
 // Procedure parameter extraction now uses extract_procedure_parameters_tokens() from procedure_parser.rs.
@@ -1802,6 +1800,61 @@ fn extract_column_name_from_expr_simple(expr: &str) -> String {
     trimmed.trim_matches(|c| c == '[' || c == ']').to_string()
 }
 
+/// Extract column references from a SQL clause using token-based scanning.
+/// Replaces COL_REF_RE regex with proper tokenization for whitespace/comment handling.
+/// Returns raw column reference strings (e.g., "alias.column", "[schema].[table].[column]")
+/// that can be passed to resolve_column_reference.
+fn extract_column_refs_tokenized(sql: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+
+    if let Some(mut scanner) = BodyDependencyTokenScanner::new(sql) {
+        for token in scanner.scan() {
+            // Only process tokens that represent column references (dotted identifiers)
+            // Skip single identifiers and parameters as they're handled separately
+            let ref_str = match token {
+                // Three-part: [schema].[table].[column]
+                BodyDepToken::ThreePartBracketed {
+                    schema,
+                    table,
+                    column,
+                } => Some(format!("[{}].[{}].[{}]", schema, table, column)),
+
+                // Two-part bracketed: [alias].[column] or [schema].[table]
+                BodyDepToken::TwoPartBracketed { first, second } => {
+                    Some(format!("[{}].[{}]", first, second))
+                }
+
+                // alias.[column] - unbracketed alias with bracketed column
+                BodyDepToken::AliasDotBracketedColumn { alias, column } => {
+                    Some(format!("{}.[{}]", alias, column))
+                }
+
+                // [alias].column - bracketed alias with unbracketed column
+                BodyDepToken::BracketedAliasDotColumn { alias, column } => {
+                    Some(format!("[{}].{}", alias, column))
+                }
+
+                // schema.table - unbracketed two-part
+                BodyDepToken::TwoPartUnbracketed { first, second } => {
+                    Some(format!("{}.{}", first, second))
+                }
+
+                // Single identifiers and parameters are not column references
+                // (they're handled elsewhere or need alias resolution separately)
+                BodyDepToken::SingleBracketed(_)
+                | BodyDepToken::SingleUnbracketed(_)
+                | BodyDepToken::Parameter(_) => None,
+            };
+
+            if let Some(r) = ref_str {
+                refs.push(r);
+            }
+        }
+    }
+
+    refs
+}
+
 /// Resolve a column reference to its full [schema].[table].[column] form
 /// Returns None for aggregate/function expressions or complex expressions (CASE, etc.)
 fn resolve_column_reference(
@@ -1896,12 +1949,10 @@ fn extract_join_on_columns(
 
         let clause_text = &remaining[..end];
 
-        // Extract column references from the ON clause
-        for col_cap in COL_REF_RE.captures_iter(clause_text) {
-            let full_match = col_cap.get(0).map(|m| m.as_str()).unwrap_or("");
-
+        // Phase 20.2.2: Use token-based extraction instead of COL_REF_RE regex
+        for col_ref in extract_column_refs_tokenized(clause_text) {
             if let Some(resolved) =
-                resolve_column_reference(full_match, table_aliases, default_schema)
+                resolve_column_reference(&col_ref, table_aliases, default_schema)
             {
                 if !refs.contains(&resolved) {
                     refs.push(resolved);
@@ -1934,12 +1985,10 @@ fn extract_group_by_columns(
 
         let clause_text = &remaining[..end];
 
-        // Extract column references from the GROUP BY clause
-        for col_cap in COL_REF_RE.captures_iter(clause_text) {
-            let full_match = col_cap.get(0).map(|m| m.as_str()).unwrap_or("");
-
+        // Phase 20.2.2: Use token-based extraction instead of COL_REF_RE regex
+        for col_ref in extract_column_refs_tokenized(clause_text) {
             if let Some(resolved) =
-                resolve_column_reference(full_match, table_aliases, default_schema)
+                resolve_column_reference(&col_ref, table_aliases, default_schema)
             {
                 // No dedup within GROUP BY - preserve order
                 refs.push(resolved);
@@ -1958,36 +2007,54 @@ fn extract_all_column_references(
 ) -> Vec<String> {
     let mut refs = Vec::new();
 
-    // Find all column-like references: alias.column or [schema].[table].[column]
-    // Pattern matches: word.word, [word].[word], word.[word], etc.
-    for cap in COL_REF_RE.captures_iter(query) {
-        let full_match = cap.get(0).map(|m| m.as_str()).unwrap_or("");
+    // Phase 20.2.2: Use token-based extraction instead of COL_REF_RE and BARE_COL_RE regex
+    // This handles both dotted references (alias.column) and single bracketed identifiers
+    if let Some(mut scanner) = BodyDependencyTokenScanner::new(query) {
+        for token in scanner.scan() {
+            let col_ref = match token {
+                // Three-part: [schema].[table].[column]
+                BodyDepToken::ThreePartBracketed {
+                    schema,
+                    table,
+                    column,
+                } => Some(format!("[{}].[{}].[{}]", schema, table, column)),
 
-        // Skip if it looks like a function call argument position
-        if full_match.contains("(") || full_match.contains(")") {
-            continue;
-        }
+                // Two-part bracketed: [alias].[column] or [schema].[table]
+                BodyDepToken::TwoPartBracketed { first, second } => {
+                    Some(format!("[{}].[{}]", first, second))
+                }
 
-        // Try to resolve to full column reference
-        if let Some(resolved) = resolve_column_reference(full_match, table_aliases, default_schema)
-        {
-            if !refs.contains(&resolved) {
-                refs.push(resolved);
-            }
-        }
-    }
+                // alias.[column] - unbracketed alias with bracketed column
+                BodyDepToken::AliasDotBracketedColumn { alias, column } => {
+                    Some(format!("{}.[{}]", alias, column))
+                }
 
-    // Also find bare bracketed column names (e.g., [IsActive] in WHERE clause)
-    // that aren't part of a dotted reference
-    for cap in BARE_COL_RE.captures_iter(query) {
-        if let Some(col_match) = cap.get(1) {
-            let col_name = col_match.as_str();
-            // Resolve using first table alias (for single-table queries)
-            if let Some(resolved) =
-                resolve_column_reference(col_name, table_aliases, default_schema)
-            {
-                if !refs.contains(&resolved) {
-                    refs.push(resolved);
+                // [alias].column - bracketed alias with unbracketed column
+                BodyDepToken::BracketedAliasDotColumn { alias, column } => {
+                    Some(format!("[{}].{}", alias, column))
+                }
+
+                // schema.table - unbracketed two-part
+                BodyDepToken::TwoPartUnbracketed { first, second } => {
+                    Some(format!("{}.{}", first, second))
+                }
+
+                // Single bracketed identifier (e.g., [IsActive] in WHERE clause)
+                // This replaces BARE_COL_RE functionality
+                BodyDepToken::SingleBracketed(ident) => Some(ident),
+
+                // Skip parameters and single unbracketed identifiers
+                BodyDepToken::SingleUnbracketed(_) | BodyDepToken::Parameter(_) => None,
+            };
+
+            if let Some(ref_str) = col_ref {
+                // Try to resolve to full column reference
+                if let Some(resolved) =
+                    resolve_column_reference(&ref_str, table_aliases, default_schema)
+                {
+                    if !refs.contains(&resolved) {
+                        refs.push(resolved);
+                    }
                 }
             }
         }
@@ -7924,5 +7991,119 @@ FROM [dbo].[Account] A
         let mut scanner = BodyDependencyTokenScanner::new("   \t\n   ").unwrap();
         let tokens = scanner.scan();
         assert!(tokens.is_empty());
+    }
+
+    // Phase 20.2.2: Tests for extract_column_refs_tokenized (replacing COL_REF_RE)
+
+    #[test]
+    fn test_extract_col_refs_two_part_bracketed() {
+        let refs = extract_column_refs_tokenized("[alias].[column]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], "[alias].[column]");
+    }
+
+    #[test]
+    fn test_extract_col_refs_three_part_bracketed() {
+        let refs = extract_column_refs_tokenized("[dbo].[Users].[Id]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], "[dbo].[Users].[Id]");
+    }
+
+    #[test]
+    fn test_extract_col_refs_alias_dot_bracketed() {
+        let refs = extract_column_refs_tokenized("u.[Name]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], "u.[Name]");
+    }
+
+    #[test]
+    fn test_extract_col_refs_bracketed_dot_unbracketed() {
+        let refs = extract_column_refs_tokenized("[u].Name");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], "[u].Name");
+    }
+
+    #[test]
+    fn test_extract_col_refs_unbracketed_two_part() {
+        let refs = extract_column_refs_tokenized("alias.column");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], "alias.column");
+    }
+
+    #[test]
+    fn test_extract_col_refs_with_whitespace() {
+        // Token-based extraction handles variable whitespace
+        let refs = extract_column_refs_tokenized("[alias]  .  [column]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], "[alias].[column]");
+    }
+
+    #[test]
+    fn test_extract_col_refs_with_tabs() {
+        let refs = extract_column_refs_tokenized("[alias]\t.\t[column]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], "[alias].[column]");
+    }
+
+    #[test]
+    fn test_extract_col_refs_multiple_refs() {
+        let refs = extract_column_refs_tokenized("a.[x] = b.[y] AND [dbo].[Users].[Id] = c.Id");
+        assert_eq!(refs.len(), 4);
+        assert!(refs.contains(&"a.[x]".to_string()));
+        assert!(refs.contains(&"b.[y]".to_string()));
+        assert!(refs.contains(&"[dbo].[Users].[Id]".to_string()));
+        assert!(refs.contains(&"c.Id".to_string()));
+    }
+
+    #[test]
+    fn test_extract_col_refs_on_clause() {
+        // Simulating ON clause text
+        let refs = extract_column_refs_tokenized("t1.Id = t2.UserId");
+        assert_eq!(refs.len(), 2);
+        assert!(refs.contains(&"t1.Id".to_string()));
+        assert!(refs.contains(&"t2.UserId".to_string()));
+    }
+
+    #[test]
+    fn test_extract_col_refs_group_by_clause() {
+        // Simulating GROUP BY clause text
+        let refs = extract_column_refs_tokenized("u.Department, u.Status");
+        assert_eq!(refs.len(), 2);
+        assert!(refs.contains(&"u.Department".to_string()));
+        assert!(refs.contains(&"u.Status".to_string()));
+    }
+
+    #[test]
+    fn test_extract_col_refs_skips_single_idents() {
+        // Single identifiers are not column references (no dot)
+        let refs = extract_column_refs_tokenized("column_name");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_col_refs_skips_parameters() {
+        // Parameters are not column references
+        let refs = extract_column_refs_tokenized("@userId");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_col_refs_empty_input() {
+        let refs = extract_column_refs_tokenized("");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_col_refs_whitespace_only() {
+        let refs = extract_column_refs_tokenized("   \t\n   ");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_extract_col_refs_special_chars_in_brackets() {
+        // Identifiers with spaces and special chars
+        let refs = extract_column_refs_tokenized("[My Schema].[My Table]");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], "[My Schema].[My Table]");
     }
 }
