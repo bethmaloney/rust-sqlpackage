@@ -922,6 +922,9 @@ fn resolve_udt_nullability(elements: &mut [ModelElement]) {
 fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
     use std::collections::HashMap;
 
+    // Type alias to reduce complexity
+    type TableConstraintMap = HashMap<(String, String), Vec<(usize, u32, bool)>>;
+
     // DotNet starts disambiguator values at 3
     let mut next_disambiguator: u32 = 3;
 
@@ -930,7 +933,7 @@ fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
 
     // Map: (table_schema, table_name) -> Vec<(constraint_index, disambiguator, is_inline)>
     // Track all constraints per table
-    let mut table_constraints: HashMap<(String, String), Vec<(usize, u32, bool)>> = HashMap::new();
+    let mut table_constraints: TableConstraintMap = HashMap::new();
 
     // First pass: Assign unique disambiguators to ALL constraints
     for (idx, element) in elements.iter_mut().enumerate() {
