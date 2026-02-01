@@ -36,7 +36,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Status:** Phase 20.1 complete (parameter parsing). Phases 20.2-20.7 remain.
 
-### Phase 20.2: Body Dependency Token Extraction (5/8)
+### Phase 20.2: Body Dependency Token Extraction (6/8)
 
 **Location:** `src/dacpac/model_xml.rs`
 
@@ -47,7 +47,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 | 20.2.3 | Replace BARE_COL_RE with tokenizer | ✅ | Handled by `BodyDepToken::SingleBracketed` in `extract_all_column_references()` |
 | 20.2.4 | Replace BRACKETED_IDENT_RE with tokenizer | ✅ | Replaced with `extract_bracketed_identifiers_tokenized()` function. Used in `extract_filter_predicate_columns` and `extract_expression_column_references`. |
 | 20.2.5 | Replace ALIAS_COL_RE with tokenizer | ✅ | Replaced with `extract_alias_column_refs_tokenized()` using `BodyDepToken::AliasDotBracketedColumn`. Used in `extract_trigger_body_dependencies()` for ON/SET/SELECT clauses. 17 unit tests. |
-| 20.2.6 | Replace SINGLE_BRACKET_RE with tokenizer | ⬜ | Line 131: `[name]` single identifier |
+| 20.2.6 | Replace SINGLE_BRACKET_RE with tokenizer | ✅ | Replaced with `extract_single_bracketed_identifiers()` using `BodyDepToken::SingleBracketed`. Used in `extract_trigger_body_dependencies()` for INSERT column lists. 17 unit tests. |
 | 20.2.7 | Replace COLUMN_ALIAS_RE with tokenizer | ⬜ | Line 3469: Column alias detection |
 | 20.2.8 | Replace split('.') with qualified name parser | ⬜ | Lines 1563, 1578-1580, 1819, 1848, 2333: Use tokenizer for dotted names |
 

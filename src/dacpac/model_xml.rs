@@ -127,9 +127,7 @@ static TRIGGER_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:FROM|JOIN)\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+([A-Za-z_]\w*)").unwrap()
 });
 
-/// Single bracketed identifier: [name]
-static SINGLE_BRACKET_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]").unwrap());
-
+// SINGLE_BRACKET_RE removed - replaced by extract_single_bracketed_identifiers() (Phase 20.2.6)
 // ALIAS_COL_RE removed - replaced by extract_alias_column_refs_tokenized() (Phase 20.2.5)
 
 /// INSERT SELECT pattern (without JOIN)
@@ -1876,6 +1874,33 @@ fn extract_alias_column_refs_tokenized(sql: &str) -> Vec<(String, String)> {
     }
 
     refs
+}
+
+/// Extract single bracketed identifiers from SQL text using tokenization.
+///
+/// This function scans SQL and returns all `[identifier]` patterns that are not
+/// part of multi-part names (e.g., standalone `[Col1]` but not `[schema].[table]`).
+///
+/// Used for extracting column names from INSERT column lists like `([Col1], [Col2], [Col3])`.
+///
+/// # Arguments
+/// * `sql` - SQL text to scan (e.g., column list or SELECT clause)
+///
+/// # Returns
+/// A vector of identifier names (without brackets) in order of appearance.
+fn extract_single_bracketed_identifiers(sql: &str) -> Vec<String> {
+    let mut results = Vec::new();
+
+    if let Some(mut scanner) = BodyDependencyTokenScanner::new(sql) {
+        for token in scanner.scan() {
+            // Only extract SingleBracketed patterns (standalone [ident])
+            if let BodyDepToken::SingleBracketed(ident) = token {
+                results.push(ident);
+            }
+        }
+    }
+
+    results
 }
 
 /// Resolve a column reference to its full [schema].[table].[column] form
@@ -6601,8 +6626,8 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
 
         // Emit each column reference from the INSERT column list
-        for col_match in SINGLE_BRACKET_RE.captures_iter(col_list) {
-            let col = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
+        // Use tokenized extraction instead of SINGLE_BRACKET_RE regex (Phase 20.2.6)
+        for col in extract_single_bracketed_identifiers(col_list) {
             let col_ref = format!("{}.[{}]", table_ref, col);
             if !seen.contains(&col_ref) {
                 seen.insert(col_ref.clone());
@@ -6611,8 +6636,8 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         }
 
         // Emit column references from SELECT clause - these come from inserted/deleted (parent)
-        for col_match in SINGLE_BRACKET_RE.captures_iter(select_cols) {
-            let col = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
+        // Use tokenized extraction instead of SINGLE_BRACKET_RE regex (Phase 20.2.6)
+        for col in extract_single_bracketed_identifiers(select_cols) {
             // These columns come from inserted/deleted, resolve to parent
             let col_ref = format!("{}.[{}]", parent_ref, col);
             // Deduplicate - DotNet doesn't emit the same column twice from inserted/deleted
@@ -6646,8 +6671,8 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
         deps.push(BodyDependency::ObjectRef(table_ref.clone()));
 
         // Emit each column reference from the INSERT column list (no dedup - DotNet preserves order)
-        for col_match in SINGLE_BRACKET_RE.captures_iter(col_list) {
-            let col = col_match.get(1).map(|m| m.as_str()).unwrap_or("");
+        // Use tokenized extraction instead of SINGLE_BRACKET_RE regex (Phase 20.2.6)
+        for col in extract_single_bracketed_identifiers(col_list) {
             let col_ref = format!("{}.[{}]", table_ref, col);
             deps.push(BodyDependency::ObjectRef(col_ref));
         }
@@ -8499,5 +8524,162 @@ FROM [dbo].[Account] A
         assert_eq!(refs[0], ("i".to_string(), "Status".to_string()));
         assert_eq!(refs[1], ("d".to_string(), "OldValue".to_string()));
         assert_eq!(refs[2], ("i".to_string(), "NewValue".to_string()));
+    }
+
+    // ============================================================================
+    // Tests for extract_single_bracketed_identifiers (Phase 20.2.6)
+    // ============================================================================
+
+    #[test]
+    fn test_single_bracketed_simple() {
+        // Single bracketed identifier
+        let idents = extract_single_bracketed_identifiers("[Column1]");
+        assert_eq!(idents.len(), 1);
+        assert_eq!(idents[0], "Column1");
+    }
+
+    #[test]
+    fn test_single_bracketed_multiple() {
+        // Multiple bracketed identifiers in a column list
+        let idents = extract_single_bracketed_identifiers("[Col1], [Col2], [Col3]");
+        assert_eq!(idents.len(), 3);
+        assert_eq!(idents[0], "Col1");
+        assert_eq!(idents[1], "Col2");
+        assert_eq!(idents[2], "Col3");
+    }
+
+    #[test]
+    fn test_single_bracketed_with_spaces() {
+        // Spaces between columns
+        let idents = extract_single_bracketed_identifiers("[Id]  ,  [Name]  ,  [Value]");
+        assert_eq!(idents.len(), 3);
+        assert_eq!(idents[0], "Id");
+        assert_eq!(idents[1], "Name");
+        assert_eq!(idents[2], "Value");
+    }
+
+    #[test]
+    fn test_single_bracketed_with_tabs() {
+        // Tabs between columns
+        let idents = extract_single_bracketed_identifiers("[Id]\t,\t[Name]\t,\t[Value]");
+        assert_eq!(idents.len(), 3);
+        assert_eq!(idents[0], "Id");
+        assert_eq!(idents[1], "Name");
+        assert_eq!(idents[2], "Value");
+    }
+
+    #[test]
+    fn test_single_bracketed_with_newlines() {
+        // Newlines in the SQL
+        let idents = extract_single_bracketed_identifiers("[Col1],\n[Col2],\n[Col3]");
+        assert_eq!(idents.len(), 3);
+        assert_eq!(idents[0], "Col1");
+        assert_eq!(idents[1], "Col2");
+        assert_eq!(idents[2], "Col3");
+    }
+
+    #[test]
+    fn test_single_bracketed_special_chars() {
+        // Column name with spaces in brackets
+        let idents = extract_single_bracketed_identifiers("[Column Name], [Another Column]");
+        assert_eq!(idents.len(), 2);
+        assert_eq!(idents[0], "Column Name");
+        assert_eq!(idents[1], "Another Column");
+    }
+
+    #[test]
+    fn test_single_bracketed_empty() {
+        let idents = extract_single_bracketed_identifiers("");
+        assert!(idents.is_empty());
+    }
+
+    #[test]
+    fn test_single_bracketed_whitespace_only() {
+        let idents = extract_single_bracketed_identifiers("   \t\n   ");
+        assert!(idents.is_empty());
+    }
+
+    #[test]
+    fn test_single_bracketed_skip_two_part() {
+        // Two-part bracketed names should NOT produce SingleBracketed tokens
+        // [schema].[table] produces TwoPartBracketed, not two SingleBracketed
+        let idents = extract_single_bracketed_identifiers("[dbo].[Users]");
+        assert!(idents.is_empty());
+    }
+
+    #[test]
+    fn test_single_bracketed_skip_three_part() {
+        // Three-part names should NOT produce SingleBracketed tokens
+        let idents = extract_single_bracketed_identifiers("[dbo].[Users].[Id]");
+        assert!(idents.is_empty());
+    }
+
+    #[test]
+    fn test_single_bracketed_skip_alias_dot_column() {
+        // alias.[column] produces AliasDotBracketedColumn, not SingleBracketed
+        let idents = extract_single_bracketed_identifiers("t.[Column]");
+        assert!(idents.is_empty());
+    }
+
+    #[test]
+    fn test_single_bracketed_insert_column_list() {
+        // Typical INSERT column list
+        let idents =
+            extract_single_bracketed_identifiers("[ProductId], [ProductName], [Price], [Stock]");
+        assert_eq!(idents.len(), 4);
+        assert_eq!(idents[0], "ProductId");
+        assert_eq!(idents[1], "ProductName");
+        assert_eq!(idents[2], "Price");
+        assert_eq!(idents[3], "Stock");
+    }
+
+    #[test]
+    fn test_single_bracketed_mixed_pattern() {
+        // Mix of single bracketed with other patterns - only extract singles
+        let idents =
+            extract_single_bracketed_identifiers("[Col1], alias.[Col2], [Col3], [dbo].[Table]");
+        // [Col1] and [Col3] are single, alias.[Col2] is AliasDotBracketed, [dbo].[Table] is TwoPartBracketed
+        assert_eq!(idents.len(), 2);
+        assert_eq!(idents[0], "Col1");
+        assert_eq!(idents[1], "Col3");
+    }
+
+    #[test]
+    fn test_single_bracketed_select_clause() {
+        // SELECT clause - typical trigger usage
+        let idents = extract_single_bracketed_identifiers("SELECT [Id], [Name], [Value]");
+        assert_eq!(idents.len(), 3);
+        assert_eq!(idents[0], "Id");
+        assert_eq!(idents[1], "Name");
+        assert_eq!(idents[2], "Value");
+    }
+
+    #[test]
+    fn test_single_bracketed_preserves_order() {
+        // Order should be preserved
+        let idents = extract_single_bracketed_identifiers("[Z], [A], [M], [B]");
+        assert_eq!(idents.len(), 4);
+        assert_eq!(idents[0], "Z");
+        assert_eq!(idents[1], "A");
+        assert_eq!(idents[2], "M");
+        assert_eq!(idents[3], "B");
+    }
+
+    #[test]
+    fn test_single_bracketed_numeric_name() {
+        // Numeric-looking column name
+        let idents = extract_single_bracketed_identifiers("[123], [456]");
+        assert_eq!(idents.len(), 2);
+        assert_eq!(idents[0], "123");
+        assert_eq!(idents[1], "456");
+    }
+
+    #[test]
+    fn test_single_bracketed_unicode() {
+        // Unicode in column name
+        let idents = extract_single_bracketed_identifiers("[名前], [価格]");
+        assert_eq!(idents.len(), 2);
+        assert_eq!(idents[0], "名前");
+        assert_eq!(idents[1], "価格");
     }
 }
