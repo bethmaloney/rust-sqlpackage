@@ -192,7 +192,15 @@ LEFT JOIN (
 | 35.3.1 | Run parity tests for body_dependencies_aliases fixture | ⬜ | Should reduce relationship errors |
 | 35.3.2 | Validate deployment succeeds for InstrumentWithTagsUnqualified | ⬜ | No unresolved reference errors |
 
-**Note:** Consider using project.default_schema instead of hardcoded "dbo" for projects that configure a different default schema.
+### Phase 35.4: Thread Project Default Schema Through Call Chain (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 35.4.1 | Pass `project.default_schema` to `write_view()` and `write_raw_view()` | ⬜ | Currently not available in writer context |
+| 35.4.2 | Pass `project.default_schema` to `write_procedure()` and `write_function()` | ⬜ | Thread through programmability_writer |
+| 35.4.3 | Update `TableAliasTokenParser::new()` to accept project default schema | ⬜ | Replace hardcoded "dbo" in body_deps.rs |
+
+**Background:** The `.sqlproj` file can specify `<DefaultSchema>` (parsed in `sqlproj_parser.rs:208`), but this value is not currently threaded through to the body dependency extraction. Projects using non-dbo default schemas (e.g., `app`, `core`) would need this for correct unqualified name resolution.
 
 ---
 
