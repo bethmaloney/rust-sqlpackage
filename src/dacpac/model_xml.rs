@@ -56,13 +56,8 @@ static MULTI_STMT_TVF_RE: LazyLock<Regex> =
 // Note: TVF_COL_TYPE_RE has been removed and replaced with token-based parsing in Phase 20.3.2.
 // TVF column type extraction now uses parse_tvf_column_type_tokenized() with sqlparser-rs tokenizer.
 
-/// Extract table aliases from FROM/JOIN clauses
-static TABLE_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+(\[?[^\]\s]+\]?\.\[?[^\]\s]+\]?|\[?[^\]\s;]+\]?)\s*(?:AS\s+)?(\w+)?",
-    )
-    .unwrap()
-});
+// Note: TABLE_ALIAS_RE has been removed and replaced with token-based parsing in Phase 20.4.1.
+// Table alias extraction now uses TableAliasTokenParser::extract_aliases_with_table_names().
 
 /// ON keyword pattern for join clause parsing
 static ON_KEYWORD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bON\s+").unwrap());
@@ -1470,93 +1465,16 @@ fn is_precision_scale_type(data_type: &str) -> bool {
 
 /// Extract table aliases from FROM and JOIN clauses
 /// Returns a map of alias -> full table reference (e.g., "p" -> "[dbo].[Products]")
+/// Uses token-based parsing for robust handling of whitespace, comments, and edge cases.
 fn extract_table_aliases(query: &str, default_schema: &str) -> Vec<(String, String)> {
-    let mut aliases = Vec::new();
+    // Use token-based parser for robust extraction
+    let mut parser = match TableAliasTokenParser::with_default_schema(query, default_schema) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
 
-    // Regex to find table references with optional aliases
-    // Matches patterns like:
-    // - FROM [dbo].[Products] p
-    // - FROM [dbo].[Products] AS p
-    // - JOIN [dbo].[Categories] c ON
-    // - FROM Products (without schema)
-    // - FROM [dbo].[Products]; (with trailing semicolon)
-    for cap in TABLE_ALIAS_RE.captures_iter(query) {
-        let table_name = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let alias = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-
-        // Clean up any trailing semicolons or whitespace
-        let table_name_cleaned = table_name.trim_end_matches([';', ' ']);
-
-        let full_table_ref = normalize_table_reference(table_name_cleaned, default_schema);
-
-        if !alias.is_empty() {
-            let alias_upper = alias.to_uppercase();
-            // Skip if alias is actually a keyword
-            if !matches!(
-                alias_upper.as_str(),
-                "ON" | "WHERE"
-                    | "INNER"
-                    | "LEFT"
-                    | "RIGHT"
-                    | "OUTER"
-                    | "CROSS"
-                    | "GROUP"
-                    | "ORDER"
-                    | "HAVING"
-                    | "UNION"
-                    | "WITH"
-                    | "AS"
-            ) {
-                aliases.push((alias.to_string(), full_table_ref.clone()));
-            }
-        }
-
-        // Also add the table name itself as an alias (for unaliased references)
-        let simple_name = extract_simple_table_name(&full_table_ref);
-        if !simple_name.is_empty() {
-            aliases.push((simple_name, full_table_ref));
-        }
-    }
-
-    aliases
+    parser.extract_aliases_with_table_names()
 }
-
-/// Extract simple table name from full reference like "[dbo].[Products]" -> "Products"
-/// Uses token-based parsing for proper handling of whitespace and various bracket styles.
-fn extract_simple_table_name(full_ref: &str) -> String {
-    // Use tokenized parsing to handle qualified names properly
-    if let Some(qn) = parse_qualified_name_tokenized(full_ref) {
-        // Return the last part (table name for 2-part, or name for 1-part)
-        qn.last_part().to_string()
-    } else {
-        // Fallback: if tokenization fails, treat entire string as name
-        full_ref
-            .trim()
-            .trim_matches(|c| c == '[' || c == ']')
-            .to_string()
-    }
-}
-
-/// Normalize a table reference to [schema].[table] format.
-/// Uses token-based parsing for proper handling of whitespace and various bracket styles.
-fn normalize_table_reference(table_name: &str, default_schema: &str) -> String {
-    let cleaned = table_name.trim();
-
-    // Use tokenized parsing to handle qualified names properly
-    if let Some(qn) = parse_qualified_name_tokenized(cleaned) {
-        if let Some((schema, table)) = qn.schema_and_table() {
-            // Already has schema, normalize to bracketed format
-            return format!("[{}].[{}]", schema, table);
-        }
-        // Single part - use default schema
-        return format!("[{}].[{}]", default_schema, qn.first);
-    }
-
-    // Fallback: if tokenization fails, treat as simple name
-    let table = cleaned.trim_matches(|c| c == '[' || c == ']');
-    format!("[{}].[{}]", default_schema, table)
-}
-
 /// Extract SELECT column expressions from the query
 fn extract_select_columns(query: &str) -> Vec<String> {
     let mut columns = Vec::new();
@@ -3762,16 +3680,26 @@ fn extract_table_aliases_for_body_deps(
 struct TableAliasTokenParser {
     tokens: Vec<sqlparser::tokenizer::TokenWithSpan>,
     pos: usize,
+    default_schema: String,
 }
 
 impl TableAliasTokenParser {
     /// Create a new parser for SQL body text
     fn new(sql: &str) -> Option<Self> {
+        Self::with_default_schema(sql, "dbo")
+    }
+
+    /// Create a new parser with a custom default schema
+    fn with_default_schema(sql: &str, default_schema: &str) -> Option<Self> {
         let dialect = MsSqlDialect {};
         let tokens = Tokenizer::new(&dialect, sql)
             .tokenize_with_location()
             .ok()?;
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            tokens,
+            pos: 0,
+            default_schema: default_schema.to_string(),
+        })
     }
 
     /// Extract all aliases from the SQL body
@@ -3836,6 +3764,104 @@ impl TableAliasTokenParser {
             } else {
                 self.advance();
             }
+        }
+    }
+
+    /// Extract aliases with table names for view column resolution.
+    /// Returns Vec of (alias/table_name, full_table_ref) pairs.
+    /// Unlike `extract_all_aliases`, this also includes the table name itself as a lookup key.
+    fn extract_aliases_with_table_names(&mut self) -> Vec<(String, String)> {
+        let mut result = Vec::new();
+        let mut seen_tables: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // First pass: extract CTE aliases into a set (to exclude them from table references)
+        let mut cte_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        self.extract_cte_aliases(&mut cte_names);
+
+        // Reset position for second pass
+        self.pos = 0;
+
+        // Second pass: extract table aliases and table names
+        while !self.is_at_end() {
+            self.skip_whitespace();
+
+            // Look for FROM, JOIN variants, or APPLY keywords
+            if self.check_keyword(Keyword::FROM) {
+                self.advance();
+                self.extract_table_with_alias(&mut result, &mut seen_tables, &cte_names);
+            } else if self.is_join_keyword() {
+                self.skip_join_keywords();
+                self.extract_table_with_alias(&mut result, &mut seen_tables, &cte_names);
+            } else if self.check_word_ci("CROSS") || self.check_word_ci("OUTER") {
+                // Check for APPLY
+                let saved_pos = self.pos;
+                self.advance();
+                self.skip_whitespace();
+                if self.check_keyword(Keyword::APPLY) || self.check_word_ci("APPLY") {
+                    self.advance();
+                    // APPLY subquery - don't extract here, continue scanning
+                } else {
+                    self.pos = saved_pos;
+                    self.advance();
+                }
+            } else {
+                self.advance();
+            }
+        }
+
+        result
+    }
+
+    /// Extract table reference and alias after FROM/JOIN, adding both to result.
+    fn extract_table_with_alias(
+        &mut self,
+        result: &mut Vec<(String, String)>,
+        seen_tables: &mut std::collections::HashSet<String>,
+        cte_names: &std::collections::HashSet<String>,
+    ) {
+        self.skip_whitespace();
+
+        // Check if it's a subquery (starts with paren)
+        if self.check_token(&Token::LParen) {
+            return;
+        }
+
+        // Parse table name (could be qualified or unqualified)
+        let (schema, table_name) = match self.parse_table_name() {
+            Some(t) => t,
+            None => return,
+        };
+
+        let table_ref = format!("[{}].[{}]", schema, table_name);
+
+        // Skip if this is a CTE name (not a real table)
+        let table_name_lower = table_name.to_lowercase();
+        if cte_names.contains(&table_name_lower) {
+            return;
+        }
+
+        self.skip_whitespace();
+
+        // Check for AS keyword (optional)
+        if self.check_keyword(Keyword::AS) {
+            self.advance();
+            self.skip_whitespace();
+        }
+
+        // Check for alias
+        if let Some(alias) = self.try_parse_table_alias() {
+            let alias_lower = alias.to_lowercase();
+
+            // Skip if alias is a SQL keyword
+            if !Self::is_alias_keyword(&alias_lower) {
+                result.push((alias, table_ref.clone()));
+            }
+        }
+
+        // Always add the table name itself as an alias (for unaliased references like Products.Name)
+        if !seen_tables.contains(&table_name_lower) {
+            seen_tables.insert(table_name_lower);
+            result.push((table_name, table_ref));
         }
     }
 
@@ -3965,12 +3991,12 @@ impl TableAliasTokenParser {
 
             Some((first_ident, second_ident))
         } else {
-            // Unqualified table - use dbo as default schema
+            // Unqualified table - use default schema
             // Skip if table name is a SQL keyword
             if is_sql_keyword(&first_ident.to_uppercase()) {
                 return None;
             }
-            Some(("dbo".to_string(), first_ident))
+            Some((self.default_schema.clone(), first_ident))
         }
     }
 
@@ -9487,62 +9513,6 @@ FROM [dbo].[Account] A
     fn test_qualified_name_parameter_returns_none() {
         // Parameters are not qualified names
         assert!(parse_qualified_name_tokenized("@param").is_none());
-    }
-
-    // ============================================================================
-    // Tests for functions that use parse_qualified_name_tokenized
-    // ============================================================================
-
-    #[test]
-    fn test_extract_simple_table_name_two_part() {
-        assert_eq!(extract_simple_table_name("[dbo].[Products]"), "Products");
-    }
-
-    #[test]
-    fn test_extract_simple_table_name_single_part() {
-        assert_eq!(extract_simple_table_name("[Products]"), "Products");
-    }
-
-    #[test]
-    fn test_extract_simple_table_name_unbracketed() {
-        assert_eq!(extract_simple_table_name("dbo.Products"), "Products");
-    }
-
-    #[test]
-    fn test_extract_simple_table_name_with_whitespace() {
-        assert_eq!(extract_simple_table_name("[dbo] . [Products]"), "Products");
-    }
-
-    #[test]
-    fn test_normalize_table_reference_two_part() {
-        assert_eq!(
-            normalize_table_reference("[dbo].[Products]", "dbo"),
-            "[dbo].[Products]"
-        );
-    }
-
-    #[test]
-    fn test_normalize_table_reference_single_part() {
-        assert_eq!(
-            normalize_table_reference("[Products]", "dbo"),
-            "[dbo].[Products]"
-        );
-    }
-
-    #[test]
-    fn test_normalize_table_reference_unbracketed() {
-        assert_eq!(
-            normalize_table_reference("schema.table", "dbo"),
-            "[schema].[table]"
-        );
-    }
-
-    #[test]
-    fn test_normalize_table_reference_single_unbracketed() {
-        assert_eq!(
-            normalize_table_reference("Products", "dbo"),
-            "[dbo].[Products]"
-        );
     }
 
     #[test]

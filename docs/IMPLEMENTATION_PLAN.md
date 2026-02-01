@@ -10,7 +10,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.1 complete: Token-based parameter parsing (3/3 tasks)
 - ✅ Phase 20.2 complete: Body dependency token extraction (8/8 tasks)
 - ✅ Phase 20.3 complete: Type and declaration parsing (4/4 tasks)
-- 🔄 Phase 20.4-20.7: Table, keyword, and CTE parsing (20 tasks remaining)
+- 🔄 Phase 20.4-20.7: Table, keyword, and CTE parsing (19 tasks remaining)
 - 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (11 tasks)
 
 **Upcoming: Phase 21 - Split model_xml.rs into Submodules** (0/10 tasks)
@@ -72,7 +72,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Implementation Approach:** Parse DECLARE, CAST, and type definitions using sqlparser-rs AST or tokenizer. Extract type names as tokens rather than string manipulation.
 
-### Phase 20.4: Table and Alias Pattern Matching (0/7)
+### Phase 20.4: Table and Alias Pattern Matching (1/7)
 
 **Location:** `src/dacpac/model_xml.rs`
 
@@ -80,7 +80,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 20.4.1 | Replace TABLE_ALIAS_RE with tokenizer | ⬜ | Completed in Phase 18.6.5 - reuse that approach |
+| 20.4.1 | Replace TABLE_ALIAS_RE with tokenizer | ✅ | Reused TableAliasTokenParser with new `extract_aliases_with_table_names()` method. Added `default_schema` field to parser. Removed TABLE_ALIAS_RE regex and related helper functions. |
 | 20.4.2 | Replace TRIGGER_ALIAS_RE with tokenizer | ⬜ | Line 149-151: Trigger table aliases |
 | 20.4.3 | Replace BRACKETED_TABLE_RE with tokenizer | ⬜ | Line 110-111: `[schema].[table]` pattern |
 | 20.4.4 | Replace UNBRACKETED_TABLE_RE with tokenizer | ⬜ | Line 114-116: `schema.table` pattern |
