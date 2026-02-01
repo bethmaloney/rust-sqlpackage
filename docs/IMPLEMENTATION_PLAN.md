@@ -6,9 +6,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 **Phases 1-20 complete (250 tasks). Full parity achieved.**
 
-**Current Focus: Phase 21 - Split model_xml.rs into Submodules** (7/10 tasks)
-- ✅ Phase 21.1-21.4.1 complete: Module structure, element writers, body_deps extracted
-- ⬜ Phase 21.4.2, 21.5.1 remaining: qualified_name.rs (optional), other_writers.rs
+**Phase 21 Complete: Split model_xml.rs into Submodules** (8/10 tasks)
+- ✅ Phase 21.1-21.5.1 complete: Module structure, element writers, body_deps, other_writers extracted
+- ⬜ Phase 21.4.2 optional: qualified_name.rs (already integrated in body_deps.rs)
 
 **Discovered: Phase 22 - Layer 7 Canonical XML Parity** (4/7 tasks)
 - Layer 7 now performs true 1-1 XML comparison (no sorting/normalization)
@@ -43,9 +43,9 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 21: Split model_xml.rs into Submodules (7/10)
+## Phase 21: Split model_xml.rs into Submodules (8/10) ✅
 
-**Location:** `src/dacpac/model_xml/mod.rs` (~12,600 lines after 21.3.1)
+**Location:** `src/dacpac/model_xml/mod.rs` (~7,520 lines after 21.5.1)
 
 **Goal:** Break up the largest file in the codebase into logical submodules for improved maintainability, faster compilation, and easier navigation.
 
@@ -87,11 +87,11 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 | 21.4.1 | Create `body_deps.rs` for dependency extraction | ✅ | ~2,200 lines including tests |
 | 21.4.2 | Create `qualified_name.rs` for name parsing | ⬜ | **Optional:** QualifiedName already integrated in body_deps.rs (~130 lines) |
 
-### Phase 21.5: Extract Remaining Writers (0/1)
+### Phase 21.5: Extract Remaining Writers (1/1) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 21.5.1 | Create `other_writers.rs` for remaining elements | ⬜ | `write_index`, `write_constraint`, `write_sequence`, `write_trigger`, etc. (~1,200 lines) |
+| 21.5.1 | Create `other_writers.rs` for remaining elements | ✅ | Extracted `write_index`, `write_fulltext_*`, `write_sequence`, `write_extended_property` (~555 lines). Remaining functions (`write_constraint`, `write_trigger`, `write_user_defined_type`, etc.) still in mod.rs due to complex dependencies. |
 
 ---
 
@@ -119,23 +119,35 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 | 22.3.1 | Audit element ordering against DotNet output | ✅ | Fixed PK/Unique constraint relationship ordering (ColumnSpecifications before DefiningTable). Fixed table SqlInlineConstraintAnnotation - only added when table has BOTH inline AND named constraints. Layer 7 pass rate improved from 2/48 (4.2%) to 10/48 (20.8%). |
 | 22.3.2 | Fix AttachedAnnotation capture in Layer 7 canonicalization | ✅ | **TEST INFRASTRUCTURE FIX:** The canonicalization code was only looking for `Annotation` elements, not `AttachedAnnotation` elements. This was a bug in the test comparison logic, not the main code. |
 
-### Phase 22.4: Align Constraint Annotation Behavior with New DotNet SDK (0/3)
+### Phase 22.4: Align Constraint Annotation Behavior with DotNet SDK (0/5) - COMPLEX
 
-**Background:** The latest DotNet SDK (8.0.417) produces SIGNIFICANTLY more `SqlInlineConstraintAnnotation` elements than previous versions. The git-tracked fixture dacpacs in `tests/fixtures/*/bin/Debug/` were built with an older SDK and are now stale. When tests rebuild DotNet dacpacs, they get the new behavior.
+**Background:** The annotation pattern is based on the NUMBER of constraints per table, not just whether they're inline or named.
 
-**DotNet SDK Behavior Changes Discovered:**
-- ALL constraints (not just inline ones) now get `SqlInlineConstraintAnnotation`
-- Named table-level constraints (CHECK, FK, PK, UQ) all get `Annotation` elements
-- Named constraints on tables that also have inline constraints get `AttachedAnnotation` referencing the table's disambiguator
-- Tables with ANY constraint get `Annotation` (not just tables with BOTH inline AND named constraints as previously understood)
+**Detailed DotNet Annotation Behavior (2026-02 findings):**
 
-**Important:** The git-tracked fixture dacpacs in `tests/fixtures/*/bin/Debug/` are now stale and need to be rebuilt with the current DotNet SDK to match test behavior.
+**Single-constraint tables** (like Categories with only PK):
+- TABLE gets `<Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="N" />`
+- CONSTRAINT gets `<AttachedAnnotation Disambiguator="N" />` (same N, linking to table)
+
+**Multi-constraint tables** (like Products with PK, FK, UQ, CK, DF):
+- Each CONSTRAINT gets `<Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="N" />`
+- TABLE gets multiple `<AttachedAnnotation Disambiguator="N" />` elements (linking to constraints)
+- TABLE also gets ONE `<Annotation Type="SqlInlineConstraintAnnotation">` (for UNIQUE constraint only)
+- Columns with inline defaults get `<AttachedAnnotation>` linking to their DEFAULT constraint
+
+**Current Rust Behavior (incorrect):**
+- Named table-level constraints incorrectly get `AttachedAnnotation` instead of `Annotation`
+- Disambiguator values don't match DotNet's numbering scheme
+
+**Important:** The git-tracked fixture dacpacs in `tests/fixtures/*/bin/Debug/` are stale.
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 22.4.1 | All constraints get SqlInlineConstraintAnnotation | ⬜ | Current implementation only adds annotations for truly inline constraints. DotNet now adds annotations for ALL constraints. |
-| 22.4.2 | Named constraints get AttachedAnnotation linking to table disambiguator | ⬜ | When a table has any constraint, named constraints should reference the table's disambiguator via AttachedAnnotation. |
-| 22.4.3 | Every table with constraints gets table-level Annotation | ⬜ | Tables with ANY constraint (not just both inline and named) should get table-level Annotation element. |
+| 22.4.1 | Determine exact constraint count threshold | ⬜ | Single vs multi-constraint table behavior differs |
+| 22.4.2 | Single-constraint tables: table gets Annotation, constraint gets AttachedAnnotation | ⬜ | Reverse of current behavior |
+| 22.4.3 | Multi-constraint tables: constraints get Annotation, table gets AttachedAnnotation | ⬜ | Each constraint needs its own disambiguator |
+| 22.4.4 | Fix disambiguator numbering to match DotNet order | ⬜ | Values must be sequential per DotNet's element ordering |
+| 22.4.5 | Column AttachedAnnotation for inline defaults | ⬜ | Columns with defaults reference the default constraint |
 
 **Validation:** Run `cargo test --test e2e_tests test_parity_all_fixtures` and verify Layer 7 pass rate increases.
 
@@ -144,6 +156,8 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 | Layer | Before | After |
 |-------|--------|-------|
 | Layer 7 (Canonical XML) | 10/48 (20.8%) | 48/48 (100%) |
+
+**NOTE:** This is more complex than initially understood. May require multiple iterations.
 
 ---
 

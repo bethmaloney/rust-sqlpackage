@@ -2,6 +2,7 @@
 
 mod body_deps;
 mod header;
+mod other_writers;
 mod programmability_writer;
 mod table_writer;
 mod view_writer;
@@ -15,10 +16,9 @@ use sqlparser::tokenizer::{Token, Tokenizer};
 use std::io::Write;
 
 use crate::model::{
-    ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType, DatabaseModel,
-    ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement, IndexElement,
-    ModelElement, RawElement, ScalarTypeElement, SchemaElement, SequenceElement, SortDirection,
-    TableTypeColumnElement, TableTypeConstraint, TriggerElement, UserDefinedTypeElement,
+    ConstraintColumn, ConstraintElement, ConstraintType, DatabaseModel, ModelElement, RawElement,
+    ScalarTypeElement, SchemaElement, SortDirection, TableTypeColumnElement, TableTypeConstraint,
+    TriggerElement, UserDefinedTypeElement,
 };
 use crate::parser::identifier_utils::format_word;
 use crate::project::SqlProject;
@@ -26,7 +26,7 @@ use crate::project::SqlProject;
 // Re-export XML helper functions for use within this module
 use xml_helpers::{
     is_builtin_schema, write_property, write_relationship, write_schema_relationship,
-    write_script_property, write_type_specifier_builtin,
+    write_script_property,
 };
 
 // Re-export header functions for use within this module
@@ -40,6 +40,12 @@ use view_writer::{write_raw_view, write_view};
 
 // Re-export programmability writer functions for use within this module
 use programmability_writer::{write_function, write_procedure};
+
+// Re-export other writers functions for use within this module
+use other_writers::{
+    write_extended_property, write_fulltext_catalog, write_fulltext_index, write_index,
+    write_sequence,
+};
 
 // Re-export body dependency extraction functions and types
 use body_deps::{
@@ -2416,249 +2422,7 @@ pub(crate) fn parse_data_type(data_type: &str) -> (String, Option<i32>, Option<i
     }
 }
 
-fn write_index<W: Write>(writer: &mut Writer<W>, index: &IndexElement) -> anyhow::Result<()> {
-    let full_name = format!(
-        "[{}].[{}].[{}]",
-        index.table_schema, index.table_name, index.name
-    );
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let elem = BytesStart::new("Element")
-        .with_attributes([("Type", "SqlIndex"), ("Name", full_name.as_str())]);
-    writer.write_event(Event::Start(elem))?;
-
-    if index.is_unique {
-        write_property(writer, "IsUnique", "True")?;
-    }
-
-    if index.is_clustered {
-        write_property(writer, "IsClustered", "True")?;
-    }
-
-    if let Some(fill_factor) = index.fill_factor {
-        write_property(writer, "FillFactor", &fill_factor.to_string())?;
-    }
-
-    // Write FilterPredicate property for filtered indexes (before relationships)
-    // DotNet emits this as a CDATA script property
-    if let Some(ref filter_predicate) = index.filter_predicate {
-        write_script_property(writer, "FilterPredicate", filter_predicate)?;
-    }
-
-    // Reference to table
-    let table_ref = format!("[{}].[{}]", index.table_schema, index.table_name);
-
-    // Write BodyDependencies for filtered indexes (column references from filter predicate)
-    // DotNet emits this before ColumnSpecifications
-    if let Some(ref filter_predicate) = index.filter_predicate {
-        let body_deps = extract_filter_predicate_columns(filter_predicate, &table_ref);
-        if !body_deps.is_empty() {
-            let body_deps: Vec<BodyDependency> = body_deps
-                .into_iter()
-                .map(BodyDependency::ObjectRef)
-                .collect();
-            write_body_dependencies(writer, &body_deps)?;
-        }
-    }
-
-    // Write ColumnSpecifications for key columns
-    if !index.columns.is_empty() {
-        write_index_column_specifications(writer, index, &table_ref)?;
-    }
-
-    // Write DataCompressionOptions relationship if index has compression
-    if let Some(ref compression) = index.data_compression {
-        write_data_compression_options(writer, compression)?;
-    }
-
-    // Write IncludedColumns relationship if present
-    if !index.include_columns.is_empty() {
-        let include_refs: Vec<String> = index
-            .include_columns
-            .iter()
-            .map(|col| format!("{}.[{}]", table_ref, col))
-            .collect();
-        let include_refs: Vec<&str> = include_refs.iter().map(|s| s.as_str()).collect();
-        write_relationship(writer, "IncludedColumns", &include_refs)?;
-    }
-
-    // IndexedObject relationship comes after ColumnSpecifications and IncludedColumns
-    write_relationship(writer, "IndexedObject", &[&table_ref])?;
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    Ok(())
-}
-
-fn write_index_column_specifications<W: Write>(
-    writer: &mut Writer<W>,
-    index: &IndexElement,
-    table_ref: &str,
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", "ColumnSpecifications")]);
-    writer.write_event(Event::Start(rel))?;
-
-    for (i, col) in index.columns.iter().enumerate() {
-        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-        let spec_name = format!(
-            "[{}].[{}].[{}].[{}]",
-            index.table_schema, index.table_name, index.name, i
-        );
-
-        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-        let elem = BytesStart::new("Element").with_attributes([
-            ("Type", "SqlIndexedColumnSpecification"),
-            ("Name", spec_name.as_str()),
-        ]);
-        writer.write_event(Event::Start(elem))?;
-
-        // Reference to the column
-        let col_ref = format!("{}.[{}]", table_ref, col);
-        write_relationship(writer, "Column", &[&col_ref])?;
-
-        writer.write_event(Event::End(BytesEnd::new("Element")))?;
-        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    }
-
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-    Ok(())
-}
-
-/// Write DataCompressionOptions relationship for indexes with data compression
-fn write_data_compression_options<W: Write>(
-    writer: &mut Writer<W>,
-    compression: &DataCompressionType,
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", "DataCompressionOptions")]);
-    writer.write_event(Event::Start(rel))?;
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlDataCompressionOption")]);
-    writer.write_event(Event::Start(elem))?;
-
-    // Write CompressionLevel property
-    write_property(
-        writer,
-        "CompressionLevel",
-        &compression.compression_level().to_string(),
-    )?;
-
-    // Write PartitionNumber property (always 1 for single-partition indexes)
-    write_property(writer, "PartitionNumber", "1")?;
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-    Ok(())
-}
-
-fn write_fulltext_index<W: Write>(
-    writer: &mut Writer<W>,
-    fulltext: &FullTextIndexElement,
-) -> anyhow::Result<()> {
-    // Full-text index name format: [schema].[table] (same as table name)
-    let full_name = format!("[{}].[{}]", fulltext.table_schema, fulltext.table_name);
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    // Conditional Disambiguator attribute requires separate handling
-    let elem = if let Some(disambiguator) = fulltext.disambiguator {
-        let disamb_str = disambiguator.to_string();
-        BytesStart::new("Element").with_attributes([
-            ("Type", "SqlFullTextIndex"),
-            ("Name", full_name.as_str()),
-            ("Disambiguator", disamb_str.as_str()),
-        ])
-    } else {
-        BytesStart::new("Element")
-            .with_attributes([("Type", "SqlFullTextIndex"), ("Name", full_name.as_str())])
-    };
-    writer.write_event(Event::Start(elem))?;
-
-    // Reference to full-text catalog if specified
-    if let Some(catalog) = &fulltext.catalog {
-        let catalog_ref = format!("[{}]", catalog);
-        write_relationship(writer, "Catalog", &[&catalog_ref])?;
-    }
-
-    // Write Columns for full-text columns
-    let table_ref = format!("[{}].[{}]", fulltext.table_schema, fulltext.table_name);
-    if !fulltext.columns.is_empty() {
-        write_fulltext_column_specifications(writer, fulltext, &table_ref)?;
-    }
-
-    // Reference to table (IndexedObject)
-    write_relationship(writer, "IndexedObject", &[&table_ref])?;
-
-    // Reference to the unique key index (KeyName)
-    // Key reference format: [schema].[constraint_name]
-    let key_index_ref = format!("[{}].[{}]", fulltext.table_schema, fulltext.key_index);
-    write_relationship(writer, "KeyName", &[&key_index_ref])?;
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    Ok(())
-}
-
-fn write_fulltext_column_specifications<W: Write>(
-    writer: &mut Writer<W>,
-    fulltext: &FullTextIndexElement,
-    table_ref: &str,
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
-    writer.write_event(Event::Start(rel))?;
-
-    for col in fulltext.columns.iter() {
-        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-        // DotNet uses anonymous elements (no Name attribute) for column specifiers
-        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-        let elem = BytesStart::new("Element")
-            .with_attributes([("Type", "SqlFullTextIndexColumnSpecifier")]);
-        writer.write_event(Event::Start(elem))?;
-
-        // Add LanguageId property if specified
-        if let Some(lang_id) = col.language_id {
-            write_property(writer, "LanguageId", &lang_id.to_string())?;
-        }
-
-        // Reference to the column
-        let col_ref = format!("{}.[{}]", table_ref, col.name);
-        write_relationship(writer, "Column", &[&col_ref])?;
-
-        writer.write_event(Event::End(BytesEnd::new("Element")))?;
-        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    }
-
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-    Ok(())
-}
-
-fn write_fulltext_catalog<W: Write>(
-    writer: &mut Writer<W>,
-    catalog: &FullTextCatalogElement,
-) -> anyhow::Result<()> {
-    let full_name = format!("[{}]", catalog.name);
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let elem = BytesStart::new("Element")
-        .with_attributes([("Type", "SqlFullTextCatalog"), ("Name", full_name.as_str())]);
-    writer.write_event(Event::Start(elem))?;
-
-    // Add IsDefault property if this is the default catalog
-    if catalog.is_default {
-        write_property(writer, "IsDefault", "True")?;
-    }
-
-    // Fulltext catalogs have an Authorizer relationship (defaults to dbo)
-    write_authorizer_relationship(writer, "dbo")?;
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    Ok(())
-}
+// Note: write_index, write_fulltext_index, write_fulltext_catalog have been moved to other_writers.rs
 
 fn write_constraint<W: Write>(
     writer: &mut Writer<W>,
@@ -2853,63 +2617,7 @@ fn write_constraint<W: Write>(
     Ok(())
 }
 
-fn write_sequence<W: Write>(writer: &mut Writer<W>, seq: &SequenceElement) -> anyhow::Result<()> {
-    let full_name = format!("[{}].[{}]", seq.schema, seq.name);
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let elem = BytesStart::new("Element")
-        .with_attributes([("Type", "SqlSequence"), ("Name", full_name.as_str())]);
-    writer.write_event(Event::Start(elem))?;
-
-    // Properties in DotNet order: IsCycling, HasNoMaxValue, HasNoMinValue, MinValue, MaxValue, Increment, StartValue
-    if seq.is_cycling {
-        write_property(writer, "IsCycling", "True")?;
-    }
-
-    // HasNoMaxValue and HasNoMinValue
-    let has_no_max = seq.has_no_max_value || seq.max_value.is_none();
-    let has_no_min = seq.has_no_min_value || seq.min_value.is_none();
-    write_property(
-        writer,
-        "HasNoMaxValue",
-        if has_no_max { "True" } else { "False" },
-    )?;
-    write_property(
-        writer,
-        "HasNoMinValue",
-        if has_no_min { "True" } else { "False" },
-    )?;
-
-    // MinValue and MaxValue
-    if let Some(min) = seq.min_value {
-        write_property(writer, "MinValue", &min.to_string())?;
-    }
-    if let Some(max) = seq.max_value {
-        write_property(writer, "MaxValue", &max.to_string())?;
-    }
-
-    // Increment
-    if let Some(inc) = seq.increment_value {
-        write_property(writer, "Increment", &inc.to_string())?;
-    }
-
-    // StartValue
-    if let Some(start) = seq.start_value {
-        write_property(writer, "StartValue", &start.to_string())?;
-    }
-
-    // Relationship to schema
-    write_schema_relationship(writer, &seq.schema)?;
-
-    // TypeSpecifier relationship for data type
-    if let Some(ref data_type) = seq.data_type {
-        let type_name = format!("[{}]", data_type.to_lowercase());
-        write_type_specifier_builtin(writer, &type_name)?;
-    }
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    Ok(())
-}
+// Note: write_sequence has been moved to other_writers.rs
 
 /// Write SqlUserDefinedDataType element for scalar types (alias types)
 /// e.g., CREATE TYPE [dbo].[PhoneNumber] FROM VARCHAR(20) NOT NULL
@@ -3773,47 +3481,7 @@ fn write_raw<W: Write>(
     Ok(())
 }
 
-/// Write an extended property element
-/// Format:
-/// ```xml
-/// <Element Type="SqlExtendedProperty" Name="[dbo].[Table].[MS_Description]">
-///   <Property Name="Value">
-///     <Value><![CDATA[Description text]]></Value>
-///   </Property>
-///   <Relationship Name="Host">
-///     <Entry>
-///       <References Name="[dbo].[Table]"/>
-///     </Entry>
-///   </Relationship>
-/// </Element>
-/// ```
-fn write_extended_property<W: Write>(
-    writer: &mut Writer<W>,
-    ext_prop: &ExtendedPropertyElement,
-) -> anyhow::Result<()> {
-    let full_name = ext_prop.full_name();
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let elem = BytesStart::new("Element").with_attributes([
-        ("Type", "SqlExtendedProperty"),
-        ("Name", full_name.as_str()),
-    ]);
-    writer.write_event(Event::Start(elem))?;
-
-    // Write Value property with CDATA (SqlScriptProperty format)
-    // The value must be wrapped with N'...' for proper SQL string literal escaping
-    // Any single quotes in the value must be doubled for SQL escaping
-    let escaped_value = ext_prop.property_value.replace('\'', "''");
-    let quoted_value = format!("N'{}'", escaped_value);
-    write_script_property(writer, "Value", &quoted_value)?;
-
-    // Write Host relationship pointing to the target object (table or column)
-    let extends_ref = ext_prop.extends_object_ref();
-    write_relationship(writer, "Host", &[&extends_ref])?;
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    Ok(())
-}
+// Note: write_extended_property has been moved to other_writers.rs
 
 #[cfg(test)]
 mod tests {
