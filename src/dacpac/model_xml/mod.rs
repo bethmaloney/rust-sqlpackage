@@ -1,6 +1,7 @@
 //! Generate model.xml for dacpac
 
 mod header;
+mod table_writer;
 mod xml_helpers;
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
@@ -13,24 +14,30 @@ use std::io::Write;
 use std::sync::LazyLock;
 
 use crate::model::{
-    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType,
-    DatabaseModel, ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement,
-    FunctionElement, IndexElement, ModelElement, ProcedureElement, RawElement, ScalarTypeElement,
-    SchemaElement, SequenceElement, SortDirection, TableElement, TableTypeColumnElement,
-    TableTypeConstraint, TriggerElement, UserDefinedTypeElement, ViewElement,
+    ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType, DatabaseModel,
+    ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement, FunctionElement,
+    IndexElement, ModelElement, ProcedureElement, RawElement, ScalarTypeElement, SchemaElement,
+    SequenceElement, SortDirection, TableTypeColumnElement, TableTypeConstraint, TriggerElement,
+    UserDefinedTypeElement, ViewElement,
 };
-use crate::parser::identifier_utils::{format_word, normalize_identifier};
+use crate::parser::identifier_utils::format_word;
 use crate::parser::{extract_function_parameters_tokens, extract_procedure_parameters_tokens};
 use crate::project::SqlProject;
 
 // Re-export XML helper functions for use within this module
 use xml_helpers::{
-    is_builtin_schema, write_builtin_type_relationship, write_property, write_relationship,
-    write_schema_relationship, write_script_property, write_type_specifier_builtin,
+    is_builtin_schema, write_property, write_relationship, write_schema_relationship,
+    write_script_property, write_type_specifier_builtin,
 };
 
 // Re-export header functions for use within this module
 use header::{write_database_options, write_header};
+
+// Re-export table writer functions for use within this module
+use table_writer::{
+    parse_qualified_table_name, write_column_type_specifier, write_table,
+    write_table_type_column_with_annotation, write_table_type_relationship,
+};
 
 const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
 
@@ -245,381 +252,6 @@ fn write_authorizer_relationship<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
     Ok(())
-}
-
-fn write_table<W: Write>(writer: &mut Writer<W>, table: &TableElement) -> anyhow::Result<()> {
-    let full_name = format!("[{}].[{}]", table.schema, table.name);
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let elem = BytesStart::new("Element")
-        .with_attributes([("Type", "SqlTable"), ("Name", full_name.as_str())]);
-    writer.write_event(Event::Start(elem))?;
-
-    // Write IsAnsiNullsOn property (always true for tables - ANSI_NULLS ON is default)
-    write_property(writer, "IsAnsiNullsOn", "True")?;
-
-    // Relationship to columns
-    if !table.columns.is_empty() {
-        let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
-        writer.write_event(Event::Start(rel))?;
-
-        for col in &table.columns {
-            write_column(writer, col, &full_name)?;
-        }
-
-        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-    }
-
-    // Relationship to schema (comes after Columns in DotNet output)
-    write_schema_relationship(writer, &table.schema)?;
-
-    // Write SqlInlineConstraintAnnotation if table has inline constraints
-    // DotNet assigns a disambiguator to tables with inline constraints
-    if let Some(disambiguator) = table.inline_constraint_disambiguator {
-        let disamb_str = disambiguator.to_string();
-        let annotation = BytesStart::new("Annotation").with_attributes([
-            ("Type", "SqlInlineConstraintAnnotation"),
-            ("Disambiguator", disamb_str.as_str()),
-        ]);
-        writer.write_event(Event::Empty(annotation))?;
-    }
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    Ok(())
-}
-
-fn write_column<W: Write>(
-    writer: &mut Writer<W>,
-    column: &ColumnElement,
-    table_name: &str,
-) -> anyhow::Result<()> {
-    // Check if this is a computed column
-    if column.computed_expression.is_some() {
-        write_computed_column(writer, column, table_name)
-    } else {
-        write_column_with_type(writer, column, table_name, "SqlSimpleColumn")
-    }
-}
-
-/// Write a computed column element (SqlComputedColumn)
-fn write_computed_column<W: Write>(
-    writer: &mut Writer<W>,
-    column: &ColumnElement,
-    table_name: &str,
-) -> anyhow::Result<()> {
-    let col_name = format!("{}.[{}]", table_name, column.name);
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let elem = BytesStart::new("Element")
-        .with_attributes([("Type", "SqlComputedColumn"), ("Name", col_name.as_str())]);
-    writer.write_event(Event::Start(elem))?;
-
-    // SqlComputedColumn does NOT support IsNullable property (unlike SqlSimpleColumn)
-    // DotNet property order: ExpressionScript, IsPersisted (if true)
-
-    // Write expression script first (DotNet order)
-    if let Some(ref expr) = column.computed_expression {
-        write_script_property(writer, "ExpressionScript", expr)?;
-    }
-
-    if column.is_persisted {
-        write_property(writer, "IsPersisted", "True")?;
-    }
-
-    // Write ExpressionDependencies relationship for column references in the expression
-    if let Some(ref expr) = column.computed_expression {
-        // Parse schema and table name from qualified table_name like "[dbo].[Employees]"
-        if let Some((schema, tbl)) = parse_qualified_table_name(table_name) {
-            let deps = extract_computed_expression_columns(expr, &schema, &tbl);
-            if !deps.is_empty() {
-                write_expression_dependencies(writer, &deps)?;
-            }
-        }
-    }
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    Ok(())
-}
-
-/// Parse a qualified table name like "[dbo].[Employees]" into schema and table components.
-/// Returns (schema, table) without brackets.
-///
-/// Uses token-based parsing (Phase 20.4.3) to handle whitespace and various quote styles correctly.
-fn parse_qualified_table_name(qualified_name: &str) -> Option<(String, String)> {
-    // Use token-based parsing instead of regex (replaces QUALIFIED_TABLE_NAME_RE)
-    let qn = parse_qualified_name_tokenized(qualified_name)?;
-    qn.schema_and_table()
-        .map(|(s, t)| (s.to_string(), t.to_string()))
-}
-
-/// Check if a reference string represents a built-in SQL type (e.g., "[nvarchar]", "[int]")
-fn is_builtin_type_reference(dep: &str) -> bool {
-    // Built-in types are single-part references like "[nvarchar]", not qualified like "[dbo].[Table].[Column]"
-    // They have exactly one set of brackets
-    let bracket_count = dep.matches('[').count();
-    if bracket_count != 1 {
-        return false;
-    }
-
-    // Extract the type name without brackets using centralized identifier normalization
-    let type_name = normalize_identifier(dep).to_lowercase();
-
-    matches!(
-        type_name.as_str(),
-        "int"
-            | "bigint"
-            | "smallint"
-            | "tinyint"
-            | "bit"
-            | "decimal"
-            | "numeric"
-            | "money"
-            | "smallmoney"
-            | "float"
-            | "real"
-            | "datetime"
-            | "datetime2"
-            | "date"
-            | "time"
-            | "datetimeoffset"
-            | "smalldatetime"
-            | "char"
-            | "varchar"
-            | "text"
-            | "nchar"
-            | "nvarchar"
-            | "ntext"
-            | "binary"
-            | "varbinary"
-            | "image"
-            | "uniqueidentifier"
-            | "xml"
-            | "sql_variant"
-            | "geography"
-            | "geometry"
-            | "hierarchyid"
-            | "sysname"
-    )
-}
-
-/// Write ExpressionDependencies relationship for computed columns
-fn write_expression_dependencies<W: Write>(
-    writer: &mut Writer<W>,
-    dependencies: &[String],
-) -> anyhow::Result<()> {
-    if dependencies.is_empty() {
-        return Ok(());
-    }
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", "ExpressionDependencies")]);
-    writer.write_event(Event::Start(rel))?;
-
-    for dep in dependencies {
-        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-        // Conditional attribute - use with_attributes with appropriate attributes
-        let refs = if is_builtin_type_reference(dep) {
-            BytesStart::new("References")
-                .with_attributes([("ExternalSource", "BuiltIns"), ("Name", dep.as_str())])
-        } else {
-            BytesStart::new("References").with_attributes([("Name", dep.as_str())])
-        };
-        writer.write_event(Event::Empty(refs))?;
-
-        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    }
-
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-
-    Ok(())
-}
-
-/// Write a table type column (uses SqlTableTypeSimpleColumn for user-defined table types)
-/// Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn, so we don't either
-fn write_table_type_column_with_annotation<W: Write>(
-    writer: &mut Writer<W>,
-    column: &TableTypeColumnElement,
-    type_name: &str,
-    disambiguator: Option<u32>,
-) -> anyhow::Result<()> {
-    let col_name = format!("{}.[{}]", type_name, column.name);
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let elem = BytesStart::new("Element").with_attributes([
-        ("Type", "SqlTableTypeSimpleColumn"),
-        ("Name", col_name.as_str()),
-    ]);
-    writer.write_event(Event::Start(elem))?;
-
-    // Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn
-    // regardless of whether the column is nullable or not, so we omit it
-
-    // Data type relationship
-    write_type_specifier(
-        writer,
-        &column.data_type,
-        column.max_length,
-        column.precision,
-        column.scale,
-    )?;
-
-    // SqlInlineConstraintAnnotation for columns with default values
-    if let Some(disam) = disambiguator {
-        let disamb_str = disam.to_string();
-        let annotation = BytesStart::new("Annotation").with_attributes([
-            ("Type", "SqlInlineConstraintAnnotation"),
-            ("Disambiguator", disamb_str.as_str()),
-        ]);
-        writer.write_event(Event::Empty(annotation))?;
-    }
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    Ok(())
-}
-
-fn write_column_with_type<W: Write>(
-    writer: &mut Writer<W>,
-    column: &ColumnElement,
-    parent_name: &str,
-    column_type: &str,
-) -> anyhow::Result<()> {
-    let col_name = format!("{}.[{}]", parent_name, column.name);
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let elem = BytesStart::new("Element")
-        .with_attributes([("Type", column_type), ("Name", col_name.as_str())]);
-    writer.write_event(Event::Start(elem))?;
-
-    // Properties - only emit IsNullable="False" for NOT NULL columns
-    // DotNet never emits IsNullable="True" for nullable columns (explicit or implicit)
-    if matches!(column.nullability, Some(false)) {
-        write_property(writer, "IsNullable", "False")?;
-    }
-
-    if column.is_identity {
-        write_property(writer, "IsIdentity", "True")?;
-    }
-
-    if column.is_filestream {
-        write_property(writer, "IsFileStream", "True")?;
-    }
-
-    // Data type relationship
-    write_type_specifier(
-        writer,
-        &column.data_type,
-        column.max_length,
-        column.precision,
-        column.scale,
-    )?;
-
-    // Write AttachedAnnotation elements linking column to inline constraints
-    // DotNet uses <AttachedAnnotation Disambiguator="X" /> (no Type attribute)
-    for disambiguator in &column.attached_annotations {
-        let disamb_str = disambiguator.to_string();
-        let annotation = BytesStart::new("AttachedAnnotation")
-            .with_attributes([("Disambiguator", disamb_str.as_str())]);
-        writer.write_event(Event::Empty(annotation))?;
-    }
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    Ok(())
-}
-
-fn write_type_specifier<W: Write>(
-    writer: &mut Writer<W>,
-    data_type: &str,
-    max_length: Option<i32>,
-    precision: Option<u8>,
-    scale: Option<u8>,
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", "TypeSpecifier")]);
-    writer.write_event(Event::Start(rel))?;
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
-    writer.write_event(Event::Start(elem))?;
-
-    // DotNet order: Properties first, then Type relationship
-    // Properties order: Scale, Precision, Length/IsMax
-    if let Some(s) = scale {
-        write_property(writer, "Scale", &s.to_string())?;
-    }
-
-    if let Some(p) = precision {
-        write_property(writer, "Precision", &p.to_string())?;
-    }
-
-    if let Some(len) = max_length {
-        if len == -1 {
-            write_property(writer, "IsMax", "True")?;
-        } else {
-            write_property(writer, "Length", &len.to_string())?;
-        }
-    }
-
-    // Write type reference based on data type (with ExternalSource for built-ins)
-    let type_ref = sql_type_to_reference(data_type);
-    write_builtin_type_relationship(writer, "Type", &type_ref)?;
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-    Ok(())
-}
-
-fn sql_type_to_reference(data_type: &str) -> String {
-    // Extract base type name
-    let base_type = data_type
-        .split('(')
-        .next()
-        .unwrap_or(data_type)
-        .trim()
-        .to_lowercase();
-
-    match base_type.as_str() {
-        "int" => "[int]",
-        "bigint" => "[bigint]",
-        "smallint" => "[smallint]",
-        "tinyint" => "[tinyint]",
-        "bit" => "[bit]",
-        "decimal" | "numeric" => "[decimal]",
-        "money" => "[money]",
-        "smallmoney" => "[smallmoney]",
-        "float" => "[float]",
-        "real" => "[real]",
-        "datetime" => "[datetime]",
-        "datetime2" => "[datetime2]",
-        "date" => "[date]",
-        "time" => "[time]",
-        "datetimeoffset" => "[datetimeoffset]",
-        "smalldatetime" => "[smalldatetime]",
-        "char" => "[char]",
-        "varchar" => "[varchar]",
-        "text" => "[text]",
-        "nchar" => "[nchar]",
-        "nvarchar" => "[nvarchar]",
-        "ntext" => "[ntext]",
-        "binary" => "[binary]",
-        "varbinary" => "[varbinary]",
-        "image" => "[image]",
-        "uniqueidentifier" => "[uniqueidentifier]",
-        "xml" => "[xml]",
-        _ => "[sql_variant]",
-    }
-    .to_string()
 }
 
 fn write_view<W: Write>(
@@ -2417,7 +2049,7 @@ fn find_table_type_for_parameter<'a>(
 
 /// Normalize a type name to [schema].[name] format.
 /// Uses token-based parsing for proper handling of various identifier formats.
-fn normalize_type_name(type_name: &str) -> String {
+pub(crate) fn normalize_type_name(type_name: &str) -> String {
     let trimmed = type_name.trim();
 
     // Already in [schema].[name] format
@@ -2516,92 +2148,6 @@ fn write_dynamic_columns<W: Write>(
     }
 
     writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-    Ok(())
-}
-
-/// Write TypeSpecifier relationship for a column
-fn write_column_type_specifier<W: Write>(
-    writer: &mut Writer<W>,
-    data_type: &str,
-    precision: Option<u8>,
-    scale: Option<u8>,
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", "TypeSpecifier")]);
-    writer.write_event(Event::Start(rel))?;
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let type_spec = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
-    writer.write_event(Event::Start(type_spec))?;
-
-    // Write Scale before Precision (DotNet order)
-    if let Some(sc) = scale {
-        write_property(writer, "Scale", &sc.to_string())?;
-    }
-    if let Some(prec) = precision {
-        write_property(writer, "Precision", &prec.to_string())?;
-    }
-
-    // Write Type relationship
-    let (base_type, _, _, _) = parse_data_type(data_type);
-    let type_ref = format!("[{}]", base_type.to_lowercase());
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let type_rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
-    writer.write_event(Event::Start(type_rel))?;
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let refs = BytesStart::new("References")
-        .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_ref.as_str())]);
-    writer.write_event(Event::Empty(refs))?;
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-
-    Ok(())
-}
-
-/// Write Type relationship for a table type parameter (no ExternalSource attribute)
-fn write_table_type_relationship<W: Write>(
-    writer: &mut Writer<W>,
-    data_type: &str,
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
-    writer.write_event(Event::Start(rel))?;
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
-    writer.write_event(Event::Start(elem))?;
-
-    // Write the type reference (no ExternalSource for user-defined types)
-    let type_ref = normalize_type_name(data_type);
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let type_rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
-    writer.write_event(Event::Start(type_rel))?;
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    // No ExternalSource for user-defined table types
-    let refs = BytesStart::new("References").with_attributes([("Name", type_ref.as_str())]);
-    writer.write_event(Event::Empty(refs))?;
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-
     Ok(())
 }
 
@@ -5933,7 +5479,7 @@ fn extract_filter_predicate_columns(predicate: &str, table_ref: &str) -> Vec<Str
 /// and returns them as fully-qualified references in the format `[schema].[table].[column]`.
 ///
 /// DotNet emits these as the `ExpressionDependencies` relationship.
-fn extract_computed_expression_columns(
+pub(crate) fn extract_computed_expression_columns(
     expression: &str,
     table_schema: &str,
     table_name: &str,
@@ -6555,7 +6101,7 @@ fn write_data_type_relationship<W: Write>(
 }
 
 /// Parse a SQL data type into (base_type, length, precision, scale)
-fn parse_data_type(data_type: &str) -> (String, Option<i32>, Option<i32>, Option<i32>) {
+pub(crate) fn parse_data_type(data_type: &str) -> (String, Option<i32>, Option<i32>, Option<i32>) {
     let dt_upper = data_type.to_uppercase().trim().to_string();
 
     // Handle types with parameters like VARCHAR(50), DECIMAL(10,2), VARCHAR(MAX)
