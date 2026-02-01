@@ -14,10 +14,10 @@ use sqlparser::ast::{
 };
 
 use crate::parser::{
-    ExtractedExtendedProperty, ExtractedFullTextColumn, ExtractedFunctionParameter,
-    ExtractedTableColumn, ExtractedTableConstraint, ExtractedTableTypeColumn,
-    ExtractedTableTypeConstraint, FallbackFunctionType, FallbackStatementType, ParsedStatement,
-    BINARY_MAX_SENTINEL,
+    identifier_utils::normalize_identifier, ExtractedExtendedProperty, ExtractedFullTextColumn,
+    ExtractedFunctionParameter, ExtractedTableColumn, ExtractedTableConstraint,
+    ExtractedTableTypeColumn, ExtractedTableTypeConstraint, FallbackFunctionType,
+    FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL,
 };
 use crate::project::SqlProject;
 
@@ -743,11 +743,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     }
                 };
 
-                // Normalize schema name (remove any remaining brackets)
-                let normalized = schema_name_str
-                    .trim_start_matches('[')
-                    .trim_end_matches(']')
-                    .to_string();
+                // Normalize schema name using centralized identifier normalization
+                let normalized = normalize_identifier(&schema_name_str);
 
                 let schema_name = track_schema(&mut schemas, &normalized);
                 model.add_element(ModelElement::Schema(SchemaElement {

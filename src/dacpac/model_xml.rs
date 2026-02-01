@@ -16,7 +16,7 @@ use crate::model::{
     SchemaElement, SequenceElement, SortDirection, TableElement, TableTypeColumnElement,
     TableTypeConstraint, TriggerElement, UserDefinedTypeElement, ViewElement,
 };
-use crate::parser::identifier_utils::format_word;
+use crate::parser::identifier_utils::{format_word, normalize_identifier};
 use crate::parser::{extract_function_parameters_tokens, extract_procedure_parameters_tokens};
 use crate::project::SqlProject;
 
@@ -717,11 +717,8 @@ fn is_builtin_type_reference(dep: &str) -> bool {
         return false;
     }
 
-    // Extract the type name without brackets
-    let type_name = dep
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_lowercase();
+    // Extract the type name without brackets using centralized identifier normalization
+    let type_name = normalize_identifier(dep).to_lowercase();
 
     matches!(
         type_name.as_str(),

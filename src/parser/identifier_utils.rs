@@ -24,7 +24,8 @@
 
 use std::borrow::Cow;
 
-use sqlparser::tokenizer::Token;
+use sqlparser::dialect::MsSqlDialect;
+use sqlparser::tokenizer::{Token, Tokenizer, Word};
 
 /// Strips brackets `[]` and double quotes `""` from an identifier.
 ///
@@ -110,6 +111,25 @@ pub fn format_word_bracketed(word: &sqlparser::tokenizer::Word) -> String {
     } else {
         word.value.clone()
     }
+}
+
+/// Extracts the inner value from a sqlparser-rs Word token.
+///
+/// The tokenizer automatically strips brackets/quotes from identifiers,
+/// so `Word.value` already contains the bare identifier.
+///
+/// # Examples
+///
+/// ```ignore
+/// use sqlparser::tokenizer::Word;
+///
+/// // Bracketed identifier [MyTable] -> value is "MyTable"
+/// let word = Word { value: "MyTable".to_string(), quote_style: Some('['), keyword: Keyword::NoKeyword };
+/// assert_eq!(extract_word_value(&word), "MyTable");
+/// ```
+#[inline]
+pub fn extract_word_value(word: &Word) -> &str {
+    &word.value
 }
 
 /// Converts a sqlparser-rs Token to a string representation.
@@ -317,30 +337,10 @@ pub fn format_token_sql_cow(token: &Token) -> Cow<'static, str> {
 pub fn normalize_object_name(name: &str, default_schema: &str) -> String {
     let trimmed = name.trim();
 
-    // Already in [schema].[name] format
-    if trimmed.starts_with('[') && trimmed.contains("].[") {
-        // Still normalize to ensure consistent formatting
-        if let Some((schema_part, name_part)) = trimmed.split_once("].[") {
-            let schema = schema_part.trim_start_matches('[');
-            let name = name_part.trim_end_matches(']');
-            return format!("[{}].[{}]", schema, name);
-        }
-        return trimmed.to_string();
-    }
-
-    // Check if it contains a dot (schema.name format)
-    if trimmed.contains('.') {
-        let parts: Vec<&str> = trimmed.splitn(2, '.').collect();
-        if parts.len() == 2 {
-            let schema = normalize_identifier(parts[0]);
-            let obj_name = normalize_identifier(parts[1]);
-            return format!("[{}].[{}]", schema, obj_name);
-        }
-    }
-
-    // No schema specified, use default
-    let obj_name = normalize_identifier(trimmed);
-    format!("[{}].[{}]", default_schema, obj_name)
+    // Use tokenized parsing to extract schema and name parts
+    // The tokenizer automatically handles brackets, quotes, and whitespace
+    let (schema, obj_name) = split_qualified_name(trimmed, default_schema);
+    format!("[{}].[{}]", schema, obj_name)
 }
 
 /// Checks if a string is a bracketed identifier (starts with `[` and ends with `]`).
@@ -398,7 +398,14 @@ pub fn is_qualified_name(name: &str) -> bool {
     false
 }
 
-/// Splits a qualified name into schema and object name parts.
+/// Splits a qualified name into schema and object name parts using tokenization.
+///
+/// Uses sqlparser-rs tokenizer to properly parse identifiers, which handles:
+/// - Bracketed identifiers: `[schema].[name]`
+/// - Quoted identifiers: `"schema"."name"`
+/// - Unbracketed identifiers: `schema.name`
+/// - Mixed formats: `[schema].name`, `schema.[name]`
+/// - Whitespace variations (spaces, tabs)
 ///
 /// Returns `(schema, name)` tuple. If no schema is present, returns
 /// the default schema with the object name.
@@ -413,44 +420,54 @@ pub fn is_qualified_name(name: &str) -> bool {
 pub fn split_qualified_name<'a>(name: &'a str, default_schema: &'a str) -> (String, String) {
     let trimmed = name.trim();
 
-    // Handle [schema].[name] format
-    if trimmed.contains("].[") {
-        if let Some((schema_part, name_part)) = trimmed.split_once("].[") {
-            let schema = schema_part.trim_start_matches('[').to_string();
-            let obj_name = name_part.trim_end_matches(']').to_string();
-            return (schema, obj_name);
-        }
+    // Try tokenized parsing first
+    if let Some((schema, obj_name)) = split_qualified_name_tokenized(trimmed) {
+        return (schema, obj_name);
     }
 
-    // Handle [schema].name format
-    if trimmed.starts_with('[') && trimmed.contains("].") && !trimmed.contains("].[") {
-        if let Some((schema_part, name_part)) = trimmed.split_once("].") {
-            let schema = schema_part.trim_start_matches('[').to_string();
-            let obj_name = normalize_identifier(name_part);
-            return (schema, obj_name);
-        }
-    }
-
-    // Handle schema.[name] format (check this before generic schema.name)
-    if trimmed.contains(".[") {
-        if let Some((schema_part, name_part)) = trimmed.split_once(".[") {
-            let schema = normalize_identifier(schema_part);
-            // Strip the trailing ] from the name part
-            let obj_name = normalize_identifier(name_part);
-            return (schema, obj_name);
-        }
-    }
-
-    // Handle schema.name format (unbracketed)
-    if trimmed.contains('.') && !trimmed.starts_with('[') && !trimmed.contains('[') {
-        let parts: Vec<&str> = trimmed.splitn(2, '.').collect();
-        if parts.len() == 2 {
-            return (parts[0].to_string(), parts[1].to_string());
-        }
-    }
-
-    // No schema, use default
+    // Fallback: single identifier without schema
     (default_schema.to_string(), normalize_identifier(trimmed))
+}
+
+/// Internal tokenized implementation of split_qualified_name.
+///
+/// Uses sqlparser-rs tokenizer to parse qualified names. The tokenizer automatically
+/// extracts the inner value from bracketed/quoted identifiers, eliminating the need
+/// for manual bracket trimming.
+///
+/// Returns `Some((schema, name))` for qualified names, or `None` for single identifiers.
+fn split_qualified_name_tokenized(name: &str) -> Option<(String, String)> {
+    let dialect = MsSqlDialect {};
+    let tokens = Tokenizer::new(&dialect, name).tokenize().ok()?;
+
+    // Filter out whitespace tokens and collect Word tokens
+    let words: Vec<&Word> = tokens
+        .iter()
+        .filter_map(|t| match t {
+            Token::Word(w) => Some(w),
+            _ => None,
+        })
+        .collect();
+
+    // Check for dot separator between identifiers
+    let has_dot = tokens.iter().any(|t| matches!(t, Token::Period));
+
+    match (words.as_slice(), has_dot) {
+        // Two-part qualified name: schema.name or [schema].[name]
+        ([first, second], true) => Some((first.value.clone(), second.value.clone())),
+
+        // Single identifier - return None to let caller use default schema
+        ([_single], false) => None,
+
+        // Edge case: single word but has a dot (shouldn't happen normally)
+        ([_single], true) => None,
+
+        // Multiple parts beyond 2 - take first two (schema.name)
+        (parts, true) if parts.len() >= 2 => Some((parts[0].value.clone(), parts[1].value.clone())),
+
+        // No words found or other cases
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -705,6 +722,82 @@ mod tests {
         assert_eq!(
             format_token_sql_bracketed(&Token::SingleQuotedString("it's".to_string())),
             "'it''s'"
+        );
+    }
+
+    // Tests for tokenized split_qualified_name (Phase 20.3.4)
+
+    #[test]
+    fn test_split_qualified_name_tokenized_double_quoted() {
+        // Double-quoted identifiers should be handled
+        let (schema, name) = split_qualified_name("\"dbo\".\"MyTable\"", "default");
+        assert_eq!(schema, "dbo");
+        assert_eq!(name, "MyTable");
+    }
+
+    #[test]
+    fn test_split_qualified_name_tokenized_whitespace() {
+        // Whitespace between parts should be handled by tokenizer
+        let (schema, name) = split_qualified_name("[dbo] . [MyTable]", "default");
+        assert_eq!(schema, "dbo");
+        assert_eq!(name, "MyTable");
+    }
+
+    #[test]
+    fn test_split_qualified_name_tokenized_tabs() {
+        // Tab characters should be handled
+        let (schema, name) = split_qualified_name("[dbo]\t.\t[MyTable]", "default");
+        assert_eq!(schema, "dbo");
+        assert_eq!(name, "MyTable");
+    }
+
+    #[test]
+    fn test_split_qualified_name_tokenized_identifier_with_spaces() {
+        // Identifiers containing spaces must be bracketed
+        let (schema, name) = split_qualified_name("[My Schema].[My Table]", "default");
+        assert_eq!(schema, "My Schema");
+        assert_eq!(name, "My Table");
+    }
+
+    #[test]
+    fn test_split_qualified_name_tokenized_special_chars() {
+        // Identifiers with special characters
+        let (schema, name) = split_qualified_name("[dbo].[Table$Name]", "default");
+        assert_eq!(schema, "dbo");
+        assert_eq!(name, "Table$Name");
+    }
+
+    #[test]
+    fn test_split_qualified_name_tokenized_single_bracketed() {
+        // Single bracketed identifier uses default schema
+        let (schema, name) = split_qualified_name("[MyTable]", "dbo");
+        assert_eq!(schema, "dbo");
+        assert_eq!(name, "MyTable");
+    }
+
+    #[test]
+    fn test_split_qualified_name_tokenized_leading_trailing_spaces() {
+        // Leading/trailing spaces should be trimmed
+        let (schema, name) = split_qualified_name("  [dbo].[MyTable]  ", "default");
+        assert_eq!(schema, "dbo");
+        assert_eq!(name, "MyTable");
+    }
+
+    #[test]
+    fn test_normalize_object_name_tokenized_whitespace() {
+        // normalize_object_name should use tokenized parsing
+        assert_eq!(
+            normalize_object_name("[dbo] . [Table]", "default"),
+            "[dbo].[Table]"
+        );
+    }
+
+    #[test]
+    fn test_normalize_object_name_tokenized_double_quoted() {
+        // Double-quoted identifiers should be normalized to brackets
+        assert_eq!(
+            normalize_object_name("\"schema\".\"table\"", "default"),
+            "[schema].[table]"
         );
     }
 }
