@@ -5,7 +5,6 @@
 4. When the tests pass, update @docs/IMPLEMENTATION_PLAN.md, then `git add -A` then `git commit` with a message describing the changes.
 
 999. You must implement ONE and only ONE item from the implementation plan
-9999. If there are no further items then check for any failing tests or formatting issues. If you discover any issues add them to the plan and then finish
 99999. Important: If there are no more further items and no other issues then you must reply "ALL TODO ITEMS COMPLETE"
 999999. Important: Single sources of truth, no migrations/adapters. If tests unrelated to your work fail, resolve them as part of the increment.
 9999999. You may add extra logging if required to debug issues.
@@ -13,5 +12,4 @@
 999999999. When you learn something new about how to run the application, update @AGENTS.md using a subagent but keep it brief. For example if you run commands multiple times before learning the correct command then that file should be updated.
 9999999999. For any bugs you notice, resolve them or document them in @docs/IMPLEMENTATION_PLAN.md using a subagent even if it is unrelated to the current piece of work.
 99999999999. Implement functionality completely. Placeholders and stubs waste efforts and time redoing the same work.
-999999999999. When @docs/IMPLEMENTATION_PLAN.md becomes large periodically clean out the items that are completed from the file using a subagent.
 999999999999999. IMPORTANT: Keep @AGENTS.md operational only — status updates and progress notes belong in `IMPLEMENTATION_PLAN.md`. A bloated AGENTS.md pollutes every future loop's context.
