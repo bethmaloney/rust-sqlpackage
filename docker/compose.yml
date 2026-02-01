@@ -4,14 +4,14 @@ services:
     container_name: rust-sqlpackage-sqlserver
     environment:
       ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "Testing123!"
+      MSSQL_SA_PASSWORD: "Password1"
       MSSQL_PID: "Developer"
     ports:
       - "1433:1433"
     volumes:
       - sqlserver-data:/var/opt/mssql
     healthcheck:
-      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "Testing123!" -C -Q "SELECT 1" || exit 1
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "Password1" -C -Q "SELECT 1" || exit 1
       interval: 10s
       timeout: 5s
       retries: 10

@@ -11,7 +11,7 @@
 //! - SQL_SERVER_HOST (default: localhost)
 //! - SQL_SERVER_PORT (default: 1433)
 //! - SQL_SERVER_USER (default: sa)
-//! - SQL_SERVER_PASSWORD (default: Testing123!)
+//! - SQL_SERVER_PASSWORD (default: Password1)
 
 use std::process::Command;
 use std::sync::LazyLock;
@@ -37,8 +37,7 @@ static SQL_CONFIG: LazyLock<SqlServerConfig> = LazyLock::new(|| {
             .and_then(|p| p.parse().ok())
             .unwrap_or(1433),
         user: std::env::var("SQL_SERVER_USER").unwrap_or_else(|_| "sa".to_string()),
-        password: std::env::var("SQL_SERVER_PASSWORD")
-            .unwrap_or_else(|_| "Testing123!".to_string()),
+        password: std::env::var("SQL_SERVER_PASSWORD").unwrap_or_else(|_| "Password1".to_string()),
     }
 });
 

@@ -12,7 +12,7 @@
 podman-compose up -d
 
 # Or without podman-compose
-podman run -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=Testing123!" -e "MSSQL_PID=Developer" \
+podman run -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=Password1" -e "MSSQL_PID=Developer" \
   -p 1433:1433 --name rust-sqlpackage-sqlserver \
   -v sqlserver-data:/var/opt/mssql \
   -d mcr.microsoft.com/mssql/server:2022-latest
@@ -25,7 +25,7 @@ podman run -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=Testing123!" -e "MSSQL_PID=D
 | Host     | localhost |
 | Port     | 1433 |
 | User     | sa |
-| Password | Testing123! |
+| Password | Password1 |
 
 ## Commands
 

@@ -20,9 +20,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Fixed TVF column and scalar type MAX handling to write `IsMax="True"` instead of invalid Length values
 - Added MAX keyword detection in scalar type parser
 
-**Remaining Issues (Phases 24-25):**
+**Remaining Issues (Phases 24-26):**
 - Phase 24: Dynamic column sources in procedures (0/8) - 177 missing elements
 - Phase 25: ALTER TABLE constraints (0/6) - 14 PKs, 19 FKs missing
+- Phase 26: APPLY subquery alias capture (0/4) - Deployment failures from unresolved references
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -254,12 +255,56 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 
 ---
 
+## Phase 26: Fix OUTER/CROSS APPLY Subquery Alias Capture (0/4)
+
+**Goal:** Fix deployment failure caused by unresolved references to APPLY subquery aliases.
+
+**Error:** `The reference to the element that has the name [AliasName].[Column] could not be resolved because no element with that name exists.`
+
+**Root Cause Analysis:**
+- OUTER APPLY and CROSS APPLY create derived table aliases (e.g., `) AliasName`)
+- These aliases should be added to `subquery_aliases` set in `body_deps.rs`
+- Currently, column references like `AliasName.Column` are being treated as `[schema].[table]` references
+- This generates invalid BodyDependencies that cause deployment to fail
+
+**Example Pattern:**
+```sql
+OUTER APPLY (
+    SELECT TOP(1) * FROM SomeTable
+    WHERE ...
+) AliasName  -- This alias should be captured
+
+-- Later in the procedure:
+WHERE Column = AliasName.Id  -- Should NOT emit [AliasName].[Id] as a dependency
+```
+
+### Phase 26.1: Diagnose Alias Capture Failure (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 26.1.1 | Add unit test reproducing APPLY alias not captured | ⬜ | Test `extract_table_aliases_for_body_deps` with OUTER APPLY pattern |
+| 26.1.2 | Debug `try_parse_subquery_alias` after `)` token | ⬜ | Verify tokenization of `) AliasName` pattern works |
+
+### Phase 26.2: Fix Alias Extraction (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 26.2.1 | Fix APPLY subquery alias capture in `TableAliasTokenParser` | ⬜ | Ensure `) alias` pattern after APPLY subquery is captured |
+| 26.2.2 | Add integration test for procedure with APPLY aliases | ⬜ | Verify no invalid references emitted in BodyDependencies |
+
+**Location:** `src/dacpac/model_xml/body_deps.rs` lines 1162-1179 (RParen handling), 1507-1596 (`try_parse_subquery_alias`)
+
+**Validation:** Deploy dacpac to SQL Server without unresolved reference errors.
+
+---
+
 ## Known Issues
 
 | Issue | Location | Phase |
 |-------|----------|-------|
 | Missing SqlDynamicColumnSource elements | procedure bodies | Phase 24 |
 | Missing constraints from ALTER TABLE | parser/builder | Phase 25 |
+| APPLY subquery aliases not captured | body_deps.rs | Phase 26 |
 
 ---
 

@@ -79,7 +79,7 @@ cd docker && podman-compose down
 | Host     | localhost |
 | Port     | 1433 |
 | User     | sa |
-| Password | Testing123! |
+| Password | Password1 |
 
 ## Dacpac File Format
 
