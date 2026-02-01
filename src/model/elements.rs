@@ -510,7 +510,7 @@ pub struct TableTypeColumnElement {
     pub name: String,
     pub data_type: String,
     /// Column nullability: Some(true) = explicit NULL, Some(false) = explicit NOT NULL, None = implicit
-    /// Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn regardless of this value
+    /// DotNet emits IsNullable="True" for nullable columns (Some(true) or None)
     pub nullability: Option<bool>,
     pub default_value: Option<String>,
     pub max_length: Option<i32>,

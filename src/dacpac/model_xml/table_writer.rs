@@ -225,7 +225,7 @@ fn write_expression_dependencies<W: Write>(
 }
 
 /// Write a table type column (uses SqlTableTypeSimpleColumn for user-defined table types)
-/// Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn, so we don't either
+/// Note: DotNet emits IsNullable="True" for nullable columns (explicit NULL or no nullability specified)
 pub(crate) fn write_table_type_column_with_annotation<W: Write>(
     writer: &mut Writer<W>,
     column: &TableTypeColumnElement,
@@ -243,8 +243,11 @@ pub(crate) fn write_table_type_column_with_annotation<W: Write>(
     ]);
     writer.write_event(Event::Start(elem))?;
 
-    // Note: DotNet never emits IsNullable for SqlTableTypeSimpleColumn
-    // regardless of whether the column is nullable or not, so we omit it
+    // DotNet emits IsNullable="True" for nullable columns (explicit NULL or no nullability specified)
+    // For NOT NULL columns, IsNullable is omitted (defaults to False)
+    if column.nullability != Some(false) {
+        write_property(writer, "IsNullable", "True")?;
+    }
 
     // Data type relationship
     write_type_specifier(

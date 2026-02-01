@@ -54,7 +54,7 @@
     {
       "name": "commaless_constraints",
       "layer1_pass": true,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": false,
       "layer4_pass": true,
       "metadata_pass": true
