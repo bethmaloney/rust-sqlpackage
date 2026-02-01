@@ -6,10 +6,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 **Phases 1-17 complete (203 tasks). Full parity achieved.**
 **Phase 18 complete: BodyDependencies alias resolution (15/15 tasks complete).**
-**Phase 19 pending: Whitespace-agnostic trim patterns (0/3 tasks, lower priority).**
+**Phase 19 complete: Whitespace-agnostic trim patterns (3/3 tasks complete).**
 
 **✅ Phase 18.5 complete:** Unqualified table names now work (regex-based fix).
 **✅ Phase 18.6 complete:** Centralized identifier utilities and tokenizer-based alias resolution.
+**✅ Phase 19.1 complete:** Token-based TVP parameter whitespace handling (18 unit tests).
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -345,15 +346,24 @@ The following changes were made to implement alias resolution:
 
 **Location:** `src/dacpac/model_xml.rs` in TVP parameter parsing
 
-### Phase 19.1: TVP Parameter Whitespace Handling (0/3)
+### Phase 19.1: TVP Parameter Whitespace Handling (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 19.1.1 | Fix `trim_end_matches(" READONLY")` | ⬜ | Line ~2728, use token-based detection |
-| 19.1.2 | Fix `trim_end_matches(" NULL")` | ⬜ | Line ~2729, use token-based detection |
-| 19.1.3 | Fix `trim_end_matches(" NOT")` | ⬜ | Line ~2730, use token-based detection |
+| 19.1.1 | Fix `trim_end_matches(" READONLY")` | ✅ | Replaced with token-based detection |
+| 19.1.2 | Fix `trim_end_matches(" NULL")` | ✅ | Replaced with token-based detection |
+| 19.1.3 | Fix `trim_end_matches(" NOT")` | ✅ | Replaced with token-based detection |
 
-**Implementation Approach:** Tokenize the parameter string and check for trailing `READONLY`, `NULL`, or `NOT NULL` tokens rather than using string suffix matching.
+**Implementation Notes (19.1 - Whitespace-Agnostic TVP Parsing):**
+
+The `clean_data_type()` function in `src/dacpac/model_xml.rs` was refactored to use sqlparser-rs tokenization:
+
+1. **Token-based scanning** - Tokenizes the data type string using `MsSqlDialect`
+2. **Trailing keyword detection** - Scans non-whitespace tokens from the end to identify READONLY, NULL, or NOT NULL
+3. **Whitespace-agnostic** - Handles tabs, multiple spaces, mixed whitespace before keywords
+4. **Case-insensitive** - Uses keyword matching (for NULL/NOT) and case-insensitive comparison (for READONLY)
+5. **Preserves schema-qualified types** - Maintains bracket formatting for `[dbo].[TableType]`
+6. **18 unit tests** - Added comprehensive tests covering all whitespace variations
 
 ---
 
@@ -482,7 +492,7 @@ The following changes were made to implement alias resolution:
 ---
 
 <details>
-<summary>Completed Phases Summary (Phases 1-17)</summary>
+<summary>Completed Phases Summary (Phases 1-19)</summary>
 
 ## Phase Overview
 
@@ -497,6 +507,8 @@ The following changes were made to implement alias resolution:
 | Phase 15 | Parser refactoring: replace regex with token-based parsing | 34/34 |
 | Phase 16 | Performance tuning: benchmarks, regex caching, parallelization | 18/18 |
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
+| Phase 18 | BodyDependencies alias resolution: fix table alias handling | 15/15 |
+| Phase 19 | Whitespace-agnostic trim patterns: token-based TVP parsing | 3/3 |
 | Phase 18 | BodyDependencies alias resolution: fix table alias handling | 15/15 |
 | Phase 19 | Whitespace-agnostic trim patterns (lower priority) | 0/3 |
 | Phase 20 | Replace remaining regex with tokenization/AST (cleanup) | 0/35 |

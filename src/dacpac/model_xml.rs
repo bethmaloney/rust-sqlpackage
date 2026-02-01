@@ -2813,24 +2813,120 @@ fn find_standalone_as(s: &str) -> Option<usize> {
     None
 }
 
-/// Clean up a data type string removing trailing keywords
+/// Clean up a data type string removing trailing keywords using tokenizer.
+///
+/// This function uses sqlparser-rs tokenization to handle any whitespace
+/// (spaces, tabs, multiple spaces) before READONLY, NULL, or NOT NULL.
+///
+/// Phase 19.1: Replaced space-only trim_end_matches patterns with token-based parsing.
 fn clean_data_type(dt: &str) -> String {
     let trimmed = dt.trim();
-    // Remove trailing NULL, NOT NULL, READONLY, etc. (case-insensitive)
-    let upper = trimmed.to_uppercase();
-    let cleaned = upper
-        .trim_end_matches(" READONLY")
-        .trim_end_matches(" NULL")
-        .trim_end_matches(" NOT")
-        .trim();
-    // Return with original case preserved for schema-qualified types like [dbo].[TableType]
-    // For built-in types, we uppercase; for schema-qualified, preserve brackets
-    if cleaned.starts_with('[') || cleaned.contains(".[") {
-        // Schema-qualified type - return with proper formatting
-        trimmed[..cleaned.len()].to_string()
-    } else {
-        cleaned.to_string()
+    if trimmed.is_empty() {
+        return String::new();
     }
+
+    // Use tokenizer to find trailing keywords (READONLY, NULL, NOT NULL)
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, trimmed).tokenize() {
+        Ok(t) => t,
+        Err(_) => {
+            // Fallback to original string if tokenization fails
+            return trimmed.to_string();
+        }
+    };
+
+    // Find the position where trailing keywords start by scanning from the end
+    // We need to handle: READONLY, NULL, NOT NULL (in that order)
+    let non_ws_tokens: Vec<(usize, &Token)> = tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| !matches!(t, Token::Whitespace(_)))
+        .collect();
+
+    if non_ws_tokens.is_empty() {
+        return String::new();
+    }
+
+    // Calculate how many trailing tokens to remove
+    let mut tokens_to_remove = 0;
+
+    // Check for trailing READONLY
+    if let Some((_, token)) = non_ws_tokens.last() {
+        if matches!(
+            token,
+            Token::Word(w) if w.keyword == Keyword::NoKeyword && w.value.eq_ignore_ascii_case("READONLY")
+        ) {
+            tokens_to_remove = 1;
+        }
+    }
+
+    // Check for trailing NULL (after potentially removing READONLY)
+    let remaining_count = non_ws_tokens.len() - tokens_to_remove;
+    if remaining_count > 0 {
+        if let Some((_, token)) = non_ws_tokens.get(remaining_count - 1) {
+            if matches!(token, Token::Word(w) if w.keyword == Keyword::NULL) {
+                tokens_to_remove += 1;
+
+                // Check for NOT NULL (NOT precedes NULL)
+                let remaining_count = non_ws_tokens.len() - tokens_to_remove;
+                if remaining_count > 0 {
+                    if let Some((_, token)) = non_ws_tokens.get(remaining_count - 1) {
+                        if matches!(token, Token::Word(w) if w.keyword == Keyword::NOT) {
+                            tokens_to_remove += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If no tokens to remove, return the original (uppercased for built-in types)
+    if tokens_to_remove == 0 {
+        return if trimmed.starts_with('[') || trimmed.contains(".[") {
+            trimmed.to_string()
+        } else {
+            trimmed.to_uppercase()
+        };
+    }
+
+    // Find the last token index to keep (the one just before the removed tokens)
+    let last_keep_idx = non_ws_tokens.len() - tokens_to_remove - 1;
+    let (token_idx, _) = non_ws_tokens[last_keep_idx];
+
+    // Reconstruct the type up to the last kept token
+    let mut result = String::with_capacity(trimmed.len());
+    for (i, token) in tokens.iter().enumerate() {
+        if i > token_idx {
+            // Only include trailing whitespace before the removed keywords
+            if matches!(token, Token::Whitespace(_)) {
+                continue;
+            }
+            break;
+        }
+        match token {
+            Token::Word(w) => {
+                if w.quote_style == Some('[') {
+                    result.push_str(&format!("[{}]", w.value));
+                } else if w.quote_style == Some('"') {
+                    result.push_str(&format!("\"{}\"", w.value));
+                } else {
+                    result.push_str(&w.value.to_uppercase());
+                }
+            }
+            Token::Period => result.push('.'),
+            Token::LParen => result.push('('),
+            Token::RParen => result.push(')'),
+            Token::Comma => result.push(','),
+            Token::Number(n, _) => result.push_str(n),
+            Token::Whitespace(ws) => result.push_str(&ws.to_string()),
+            _ => {
+                // For other tokens, use their debug representation
+                result.push_str(&format!("{token}"));
+            }
+        }
+    }
+
+    result.trim().to_string()
 }
 
 /// Represents a dependency extracted from a procedure/function body
@@ -7206,5 +7302,135 @@ FROM [dbo].[Account] A
             Some(&"[dbo].[Account]".to_string()),
             "Expected 'A' -> [dbo].[Account]"
         );
+    }
+
+    // ============================================================================
+    // Phase 19.1: clean_data_type whitespace handling tests
+    // ============================================================================
+
+    #[test]
+    fn test_clean_data_type_readonly_with_space() {
+        // Standard single space before READONLY
+        let result = clean_data_type("[dbo].[TableType] READONLY");
+        assert_eq!(result, "[dbo].[TableType]");
+    }
+
+    #[test]
+    fn test_clean_data_type_readonly_with_tab() {
+        // Tab before READONLY
+        let result = clean_data_type("[dbo].[TableType]\tREADONLY");
+        assert_eq!(result, "[dbo].[TableType]");
+    }
+
+    #[test]
+    fn test_clean_data_type_readonly_with_multiple_spaces() {
+        // Multiple spaces before READONLY
+        let result = clean_data_type("[dbo].[TableType]   READONLY");
+        assert_eq!(result, "[dbo].[TableType]");
+    }
+
+    #[test]
+    fn test_clean_data_type_readonly_with_mixed_whitespace() {
+        // Mixed tabs and spaces before READONLY
+        let result = clean_data_type("[dbo].[TableType] \t READONLY");
+        assert_eq!(result, "[dbo].[TableType]");
+    }
+
+    #[test]
+    fn test_clean_data_type_null_with_space() {
+        // Standard single space before NULL
+        let result = clean_data_type("INT NULL");
+        assert_eq!(result, "INT");
+    }
+
+    #[test]
+    fn test_clean_data_type_null_with_tab() {
+        // Tab before NULL
+        let result = clean_data_type("INT\tNULL");
+        assert_eq!(result, "INT");
+    }
+
+    #[test]
+    fn test_clean_data_type_null_with_multiple_spaces() {
+        // Multiple spaces before NULL
+        let result = clean_data_type("VARCHAR(100)   NULL");
+        assert_eq!(result, "VARCHAR(100)");
+    }
+
+    #[test]
+    fn test_clean_data_type_not_null_with_space() {
+        // Standard spaces before NOT NULL
+        let result = clean_data_type("DATETIME NOT NULL");
+        assert_eq!(result, "DATETIME");
+    }
+
+    #[test]
+    fn test_clean_data_type_not_null_with_tabs() {
+        // Tabs before NOT NULL
+        let result = clean_data_type("DECIMAL(10,2)\tNOT\tNULL");
+        assert_eq!(result, "DECIMAL(10,2)");
+    }
+
+    #[test]
+    fn test_clean_data_type_not_null_with_mixed_whitespace() {
+        // Mixed whitespace before NOT NULL
+        let result = clean_data_type("BIGINT \t NOT  \t NULL");
+        assert_eq!(result, "BIGINT");
+    }
+
+    #[test]
+    fn test_clean_data_type_qualified_type_no_keywords() {
+        // Schema-qualified type with no trailing keywords
+        let result = clean_data_type("[dbo].[CustomType]");
+        assert_eq!(result, "[dbo].[CustomType]");
+    }
+
+    #[test]
+    fn test_clean_data_type_builtin_type_no_keywords() {
+        // Built-in type with no trailing keywords (should uppercase)
+        let result = clean_data_type("int");
+        assert_eq!(result, "INT");
+    }
+
+    #[test]
+    fn test_clean_data_type_with_precision() {
+        // Type with precision, NULL removed
+        let result = clean_data_type("NVARCHAR(50) NULL");
+        assert_eq!(result, "NVARCHAR(50)");
+    }
+
+    #[test]
+    fn test_clean_data_type_empty_string() {
+        // Empty string should return empty
+        let result = clean_data_type("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_clean_data_type_whitespace_only() {
+        // Whitespace only should return empty
+        let result = clean_data_type("   \t  ");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_clean_data_type_readonly_case_insensitive() {
+        // READONLY in lowercase
+        let result = clean_data_type("[dbo].[Type] readonly");
+        assert_eq!(result, "[dbo].[Type]");
+    }
+
+    #[test]
+    fn test_clean_data_type_null_case_insensitive() {
+        // NULL in mixed case
+        let result = clean_data_type("INT Null");
+        assert_eq!(result, "INT");
+    }
+
+    #[test]
+    fn test_clean_data_type_not_null_case_insensitive() {
+        // NOT NULL in mixed case
+        let result = clean_data_type("VARCHAR(MAX) Not Null");
+        assert_eq!(result, "VARCHAR(MAX)");
     }
 }
