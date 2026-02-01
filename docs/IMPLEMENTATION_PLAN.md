@@ -8,6 +8,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 **Remaining Work:**
 - **Phase 34: Fix APPLY subquery column resolution (HIGH PRIORITY)** - Unqualified columns in APPLY subqueries resolve to wrong table
+- **Phase 35: Fix schema resolution for unqualified tables (HIGH PRIORITY)** - Tables in nested subqueries incorrectly resolve to containing object's schema instead of [dbo]
 - Phase 22.4.4: Disambiguator numbering (lower priority - dacpac functions correctly)
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
 
@@ -131,11 +132,76 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
+## Phase 35: Fix Default Schema Resolution for Unqualified Table Names (HIGH PRIORITY)
+
+**Goal:** Fix unqualified table names resolving to the containing object's schema instead of the default schema ([dbo]).
+
+**Problem:** When a view/procedure/function in a non-dbo schema (e.g., `[reporting]`) references unqualified table names (e.g., `Tag` instead of `[dbo].[Tag]`), the table is incorrectly resolved to the object's schema (`[reporting].[Tag]`) instead of `[dbo].[Tag]`.
+
+**Root Cause:** Multiple call sites incorrectly pass the containing object's schema as the `default_schema` parameter:
+
+| Location | Current (Incorrect) | Should Be |
+|----------|---------------------|-----------|
+| `view_writer.rs:78` | `&view.schema` | `"dbo"` |
+| `view_writer.rs:86` | `&view.schema` | `"dbo"` |
+| `view_writer.rs:156` | `&raw.schema` | `"dbo"` |
+| `view_writer.rs:164` | `&raw.schema` | `"dbo"` |
+| `programmability_writer.rs:98` | `&proc.schema` | `"dbo"` |
+| `programmability_writer.rs:218` | `&func.schema` | `"dbo"` |
+| `programmability_writer.rs:225` | `&func.schema` | `"dbo"` |
+
+**Example (causes deployment failure):**
+```sql
+CREATE VIEW [reporting].[MyView] AS
+SELECT ...
+LEFT JOIN (
+    SELECT STUFF((
+        SELECT ', ' + [ITTAG].[Name]
+        FROM InstrumentTag [IT2]           -- Bug: resolves to [reporting].[InstrumentTag]
+        INNER JOIN Tag [ITTAG] ON ...      -- Bug: resolves to [reporting].[Tag]
+        FOR XML PATH('')
+    ), 1, 2, '') AS TagList
+    FROM ...
+) Tags ON ...
+```
+
+**Impact:** Deployment fails with "The reference to the element ... could not be resolved because no element with that name exists"
+
+**DotNet Behavior:** Always uses `[dbo]` for unqualified table names regardless of the containing object's schema. Verified in fixture test output.
+
+**Fixture:** `tests/fixtures/body_dependencies_aliases/Views/InstrumentWithTagsUnqualified.sql`
+
+### Phase 35.1: Fix View Writer Schema Resolution (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 35.1.1 | Change `extract_view_columns_and_deps` calls to use "dbo" | ⬜ | Lines 78, 156 in view_writer.rs |
+| 35.1.2 | Change `write_view_cte_dynamic_objects` calls to use "dbo" | ⬜ | Lines 86, 164 in view_writer.rs |
+
+### Phase 35.2: Fix Programmability Writer Schema Resolution (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 35.2.1 | Change `write_all_dynamic_objects` calls to use "dbo" | ⬜ | Lines 98, 218 in programmability_writer.rs |
+| 35.2.2 | Change `extract_inline_tvf_columns` call to use "dbo" | ⬜ | Line 225 in programmability_writer.rs |
+
+### Phase 35.3: Validation (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 35.3.1 | Run parity tests for body_dependencies_aliases fixture | ⬜ | Should reduce relationship errors |
+| 35.3.2 | Validate deployment succeeds for InstrumentWithTagsUnqualified | ⬜ | No unresolved reference errors |
+
+**Note:** Consider using project.default_schema instead of hardcoded "dbo" for projects that configure a different default schema.
+
+---
+
 ## Known Issues
 
 | Issue | Location | Phase | Status |
 |-------|----------|-------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | Phase 34 | 61 errors (APPLY subquery column resolution) |
+| Schema resolution for unqualified tables in non-dbo objects | body_deps.rs | Phase 35 | Deployment failure (unresolved references) |
 
 ---
 
