@@ -24,10 +24,10 @@
 //! PRIMARY KEY ([Col1])  -- unnamed
 //! ```
 
-use crate::parser::identifier_utils::format_token;
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use sqlparser::tokenizer::Token;
+
+use super::token_parser_base::TokenParser;
 
 /// Constraint column with sort order
 #[derive(Debug, Clone)]
@@ -76,80 +76,76 @@ pub struct TokenParsedAlterTableConstraint {
 
 /// Token-based constraint parser
 pub struct ConstraintTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl ConstraintTokenParser {
     /// Create a new parser for a SQL string
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(sql)?,
+        })
     }
 
     /// Parse ALTER TABLE ... ADD CONSTRAINT statement
     pub fn parse_alter_table_add_constraint(&mut self) -> Option<TokenParsedAlterTableConstraint> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect ALTER keyword
-        if !self.check_keyword(Keyword::ALTER) {
+        if !self.base.check_keyword(Keyword::ALTER) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect TABLE keyword
-        if !self.check_keyword(Keyword::TABLE) {
+        if !self.base.check_keyword(Keyword::TABLE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse table name (schema-qualified)
-        let (table_schema, table_name) = self.parse_schema_qualified_name()?;
-        self.skip_whitespace();
+        let (table_schema, table_name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Skip optional WITH CHECK or WITH NOCHECK
-        if self.check_keyword(Keyword::WITH) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_keyword(Keyword::WITH) {
+            self.base.advance();
+            self.base.skip_whitespace();
             // Skip CHECK or NOCHECK
-            if self.check_keyword(Keyword::CHECK) || self.check_word_ci("NOCHECK") {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_keyword(Keyword::CHECK) || self.base.check_word_ci("NOCHECK") {
+                self.base.advance();
+                self.base.skip_whitespace();
             }
         }
 
         // Expect ADD keyword
-        if !self.check_keyword(Keyword::ADD) {
+        if !self.base.check_keyword(Keyword::ADD) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect CONSTRAINT keyword
-        if !self.check_keyword(Keyword::CONSTRAINT) {
+        if !self.base.check_keyword(Keyword::CONSTRAINT) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse constraint name
-        let constraint_name = self.parse_identifier()?;
-        self.skip_whitespace();
+        let constraint_name = self.base.parse_identifier()?;
+        self.base.skip_whitespace();
 
         // Determine constraint type
-        let constraint = if self.check_keyword(Keyword::PRIMARY) {
+        let constraint = if self.base.check_keyword(Keyword::PRIMARY) {
             self.parse_primary_key_constraint(constraint_name)?
-        } else if self.check_keyword(Keyword::UNIQUE) {
+        } else if self.base.check_keyword(Keyword::UNIQUE) {
             self.parse_unique_constraint(constraint_name)?
-        } else if self.check_keyword(Keyword::FOREIGN) {
+        } else if self.base.check_keyword(Keyword::FOREIGN) {
             self.parse_foreign_key_constraint(constraint_name)?
-        } else if self.check_keyword(Keyword::CHECK) {
+        } else if self.base.check_keyword(Keyword::CHECK) {
             self.parse_check_constraint(constraint_name)?
         } else {
             return None;
@@ -168,33 +164,33 @@ impl ConstraintTokenParser {
         &mut self,
         default_table_name: &str,
     ) -> Option<TokenParsedConstraint> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Check for optional CONSTRAINT keyword and name
-        let constraint_name = if self.check_keyword(Keyword::CONSTRAINT) {
-            self.advance();
-            self.skip_whitespace();
-            Some(self.parse_identifier()?)
+        let constraint_name = if self.base.check_keyword(Keyword::CONSTRAINT) {
+            self.base.advance();
+            self.base.skip_whitespace();
+            Some(self.base.parse_identifier()?)
         } else {
             None
         };
 
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Determine constraint type
-        if self.check_keyword(Keyword::PRIMARY) {
+        if self.base.check_keyword(Keyword::PRIMARY) {
             let default_name =
                 constraint_name.unwrap_or_else(|| format!("PK_{}", default_table_name));
             self.parse_primary_key_constraint(default_name)
-        } else if self.check_keyword(Keyword::UNIQUE) {
+        } else if self.base.check_keyword(Keyword::UNIQUE) {
             let default_name =
                 constraint_name.unwrap_or_else(|| format!("UQ_{}", default_table_name));
             self.parse_unique_constraint(default_name)
-        } else if self.check_keyword(Keyword::FOREIGN) {
+        } else if self.base.check_keyword(Keyword::FOREIGN) {
             let default_name =
                 constraint_name.unwrap_or_else(|| format!("FK_{}", default_table_name));
             self.parse_foreign_key_constraint(default_name)
-        } else if self.check_keyword(Keyword::CHECK) {
+        } else if self.base.check_keyword(Keyword::CHECK) {
             let default_name =
                 constraint_name.unwrap_or_else(|| format!("CK_{}", default_table_name));
             self.parse_check_constraint(default_name)
@@ -206,28 +202,28 @@ impl ConstraintTokenParser {
     /// Parse PRIMARY KEY constraint
     fn parse_primary_key_constraint(&mut self, name: String) -> Option<TokenParsedConstraint> {
         // Expect PRIMARY keyword
-        if !self.check_keyword(Keyword::PRIMARY) {
+        if !self.base.check_keyword(Keyword::PRIMARY) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect KEY keyword
-        if !self.check_keyword(Keyword::KEY) {
+        if !self.base.check_keyword(Keyword::KEY) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Check for optional CLUSTERED/NONCLUSTERED
         let mut is_clustered = true; // Default is CLUSTERED for PRIMARY KEY
-        if self.check_keyword(Keyword::CLUSTERED) {
-            self.advance();
-            self.skip_whitespace();
-        } else if self.check_word_ci("NONCLUSTERED") {
+        if self.base.check_keyword(Keyword::CLUSTERED) {
+            self.base.advance();
+            self.base.skip_whitespace();
+        } else if self.base.check_word_ci("NONCLUSTERED") {
             is_clustered = false;
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Parse column list with sort order
@@ -243,22 +239,22 @@ impl ConstraintTokenParser {
     /// Parse UNIQUE constraint
     fn parse_unique_constraint(&mut self, name: String) -> Option<TokenParsedConstraint> {
         // Expect UNIQUE keyword
-        if !self.check_keyword(Keyword::UNIQUE) {
+        if !self.base.check_keyword(Keyword::UNIQUE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Check for optional CLUSTERED/NONCLUSTERED
         let mut is_clustered = false; // Default is NONCLUSTERED for UNIQUE
-        if self.check_keyword(Keyword::CLUSTERED) {
+        if self.base.check_keyword(Keyword::CLUSTERED) {
             is_clustered = true;
-            self.advance();
-            self.skip_whitespace();
-        } else if self.check_word_ci("NONCLUSTERED") {
+            self.base.advance();
+            self.base.skip_whitespace();
+        } else if self.base.check_word_ci("NONCLUSTERED") {
             is_clustered = false;
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Parse column list with sort order
@@ -274,34 +270,34 @@ impl ConstraintTokenParser {
     /// Parse FOREIGN KEY constraint
     fn parse_foreign_key_constraint(&mut self, name: String) -> Option<TokenParsedConstraint> {
         // Expect FOREIGN keyword
-        if !self.check_keyword(Keyword::FOREIGN) {
+        if !self.base.check_keyword(Keyword::FOREIGN) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect KEY keyword
-        if !self.check_keyword(Keyword::KEY) {
+        if !self.base.check_keyword(Keyword::KEY) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse FK column list
         let columns = self.parse_simple_column_list()?;
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect REFERENCES keyword
-        if !self.check_keyword(Keyword::REFERENCES) {
+        if !self.base.check_keyword(Keyword::REFERENCES) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse referenced table (schema-qualified)
-        let (ref_schema, ref_table) = self.parse_schema_qualified_name()?;
+        let (ref_schema, ref_table) = self.base.parse_schema_qualified_name()?;
         let referenced_table = format!("[{}].[{}]", ref_schema, ref_table);
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Parse referenced columns
         let referenced_columns = self.parse_simple_column_list()?;
@@ -317,11 +313,11 @@ impl ConstraintTokenParser {
     /// Parse CHECK constraint
     fn parse_check_constraint(&mut self, name: String) -> Option<TokenParsedConstraint> {
         // Expect CHECK keyword
-        if !self.check_keyword(Keyword::CHECK) {
+        if !self.base.check_keyword(Keyword::CHECK) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse expression in parentheses
         let expression = self.parse_parenthesized_expression()?;
@@ -333,29 +329,29 @@ impl ConstraintTokenParser {
     /// Format: ([Col1] [ASC|DESC], [Col2] [ASC|DESC], ...)
     fn parse_constraint_column_list(&mut self) -> Option<Vec<TokenParsedConstraintColumn>> {
         // Expect opening parenthesis
-        if !self.check_token(&Token::LParen) {
+        if !self.base.check_token(&Token::LParen) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         let mut columns = Vec::new();
 
-        while !self.is_at_end() && !self.check_token(&Token::RParen) {
-            self.skip_whitespace();
+        while !self.base.is_at_end() && !self.base.check_token(&Token::RParen) {
+            self.base.skip_whitespace();
 
             // Parse column name
-            let col_name = self.parse_identifier()?;
-            self.skip_whitespace();
+            let col_name = self.base.parse_identifier()?;
+            self.base.skip_whitespace();
 
             // Check for optional ASC/DESC
-            let descending = if self.check_keyword(Keyword::ASC) {
-                self.advance();
-                self.skip_whitespace();
+            let descending = if self.base.check_keyword(Keyword::ASC) {
+                self.base.advance();
+                self.base.skip_whitespace();
                 false
-            } else if self.check_keyword(Keyword::DESC) {
-                self.advance();
-                self.skip_whitespace();
+            } else if self.base.check_keyword(Keyword::DESC) {
+                self.base.advance();
+                self.base.skip_whitespace();
                 true
             } else {
                 false // Default is ASC
@@ -367,20 +363,20 @@ impl ConstraintTokenParser {
             });
 
             // Check for comma (more columns) or right paren (end)
-            if self.check_token(&Token::Comma) {
-                self.advance();
-                self.skip_whitespace();
-            } else if self.check_token(&Token::RParen) {
+            if self.base.check_token(&Token::Comma) {
+                self.base.advance();
+                self.base.skip_whitespace();
+            } else if self.base.check_token(&Token::RParen) {
                 break;
             } else {
                 // Unexpected token, try to continue
-                self.advance();
+                self.base.advance();
             }
         }
 
         // Consume closing parenthesis
-        if self.check_token(&Token::RParen) {
-            self.advance();
+        if self.base.check_token(&Token::RParen) {
+            self.base.advance();
         }
 
         if columns.is_empty() {
@@ -394,41 +390,41 @@ impl ConstraintTokenParser {
     /// Format: ([Col1], [Col2], ...)
     fn parse_simple_column_list(&mut self) -> Option<Vec<String>> {
         // Expect opening parenthesis
-        if !self.check_token(&Token::LParen) {
+        if !self.base.check_token(&Token::LParen) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         let mut columns = Vec::new();
 
-        while !self.is_at_end() && !self.check_token(&Token::RParen) {
-            self.skip_whitespace();
+        while !self.base.is_at_end() && !self.base.check_token(&Token::RParen) {
+            self.base.skip_whitespace();
 
             // Parse column name
-            if let Some(col_name) = self.parse_identifier() {
+            if let Some(col_name) = self.base.parse_identifier() {
                 columns.push(col_name);
             } else {
                 break;
             }
 
-            self.skip_whitespace();
+            self.base.skip_whitespace();
 
             // Check for comma (more columns) or right paren (end)
-            if self.check_token(&Token::Comma) {
-                self.advance();
-                self.skip_whitespace();
-            } else if self.check_token(&Token::RParen) {
+            if self.base.check_token(&Token::Comma) {
+                self.base.advance();
+                self.base.skip_whitespace();
+            } else if self.base.check_token(&Token::RParen) {
                 break;
             } else {
                 // Unexpected token, try to continue
-                self.advance();
+                self.base.advance();
             }
         }
 
         // Consume closing parenthesis
-        if self.check_token(&Token::RParen) {
-            self.advance();
+        if self.base.check_token(&Token::RParen) {
+            self.base.advance();
         }
 
         if columns.is_empty() {
@@ -440,17 +436,17 @@ impl ConstraintTokenParser {
 
     /// Parse a parenthesized expression and return its contents
     fn parse_parenthesized_expression(&mut self) -> Option<String> {
-        if !self.check_token(&Token::LParen) {
+        if !self.base.check_token(&Token::LParen) {
             return None;
         }
 
-        self.advance(); // consume (
+        self.base.advance(); // consume (
 
         let mut depth = 1;
         let mut content = String::new();
 
-        while !self.is_at_end() && depth > 0 {
-            if let Some(token) = self.current_token() {
+        while !self.base.is_at_end() && depth > 0 {
+            if let Some(token) = self.base.current_token() {
                 match &token.token {
                     Token::LParen => {
                         depth += 1;
@@ -463,10 +459,10 @@ impl ConstraintTokenParser {
                         }
                     }
                     _ => {
-                        content.push_str(&self.token_to_string(&token.token));
+                        content.push_str(&TokenParser::token_to_string(&token.token));
                     }
                 }
-                self.advance();
+                self.base.advance();
             }
         }
 
@@ -476,118 +472,6 @@ impl ConstraintTokenParser {
         } else {
             Some(content)
         }
-    }
-
-    /// Parse a schema-qualified name: [schema].[name] or schema.name or [name] or name
-    fn parse_schema_qualified_name(&mut self) -> Option<(String, String)> {
-        let first_ident = self.parse_identifier()?;
-        self.skip_whitespace();
-
-        // Check if there's a dot (schema.name pattern)
-        if self.check_token(&Token::Period) {
-            self.advance();
-            self.skip_whitespace();
-
-            let second_ident = self.parse_identifier()?;
-
-            Some((first_ident, second_ident))
-        } else {
-            // No dot - just a name, default schema to "dbo"
-            Some(("dbo".to_string(), first_ident))
-        }
-    }
-
-    /// Parse an identifier (bracketed or unbracketed)
-    fn parse_identifier(&mut self) -> Option<String> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Word(w) => {
-                let name = w.value.clone();
-                self.advance();
-                Some(name)
-            }
-            _ => None,
-        }
-    }
-
-    // ========================================================================
-    // Helper methods
-    // ========================================================================
-
-    /// Skip whitespace tokens
-    fn skip_whitespace(&mut self) {
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
-                match &token.token {
-                    Token::Whitespace(_) => {
-                        self.advance();
-                    }
-                    _ => break,
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Check if at end of tokens
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-            || matches!(
-                self.tokens.get(self.pos),
-                Some(TokenWithSpan {
-                    token: Token::EOF,
-                    ..
-                })
-            )
-    }
-
-    /// Get current token without consuming
-    fn current_token(&self) -> Option<&TokenWithSpan> {
-        self.tokens.get(self.pos)
-    }
-
-    /// Advance to next token
-    fn advance(&mut self) {
-        if !self.is_at_end() {
-            self.pos += 1;
-        }
-    }
-
-    /// Check if current token is a specific keyword
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token is a word matching (case-insensitive)
-    fn check_word_ci(&self, word: &str) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word))
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token matches a specific token type
-    fn check_token(&self, expected: &Token) -> bool {
-        if let Some(token) = self.current_token() {
-            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
-        } else {
-            false
-        }
-    }
-
-    /// Convert a token back to string for expression reconstruction
-    fn token_to_string(&self, token: &Token) -> String {
-        format_token(token)
     }
 }
 
@@ -611,24 +495,24 @@ pub fn parse_table_constraint_tokens(
 /// Extract schema and table name from ALTER TABLE statement using tokens
 pub fn parse_alter_table_name_tokens(sql: &str) -> Option<(String, String)> {
     let mut parser = ConstraintTokenParser::new(sql)?;
-    parser.skip_whitespace();
+    parser.base.skip_whitespace();
 
     // Expect ALTER keyword
-    if !parser.check_keyword(Keyword::ALTER) {
+    if !parser.base.check_keyword(Keyword::ALTER) {
         return None;
     }
-    parser.advance();
-    parser.skip_whitespace();
+    parser.base.advance();
+    parser.base.skip_whitespace();
 
     // Expect TABLE keyword
-    if !parser.check_keyword(Keyword::TABLE) {
+    if !parser.base.check_keyword(Keyword::TABLE) {
         return None;
     }
-    parser.advance();
-    parser.skip_whitespace();
+    parser.base.advance();
+    parser.base.skip_whitespace();
 
     // Parse table name (schema-qualified)
-    parser.parse_schema_qualified_name()
+    parser.base.parse_schema_qualified_name()
 }
 
 #[cfg(test)]
