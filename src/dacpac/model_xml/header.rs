@@ -69,16 +69,17 @@ pub(crate) fn write_header<W: Write>(
 /// <CustomData Category="Reference" Type="SqlSchema">
 ///   <Metadata Name="FileName" Value="master.dacpac" />
 ///   <Metadata Name="LogicalName" Value="master.dacpac" />
-///   <Metadata Name="SuppressMissingDependenciesErrors" Value="False" />
+///   <Metadata Name="ExternalParts" Value="[master]" />
 /// </CustomData>
 /// ```
 fn write_package_reference<W: Write>(
     writer: &mut Writer<W>,
     pkg_ref: &crate::project::PackageReference,
 ) -> anyhow::Result<()> {
-    // Extract dacpac name from package name
-    // e.g., "Microsoft.SqlServer.Dacpacs.Master" -> "master.dacpac"
+    // Extract dacpac name and database name from package name
+    // e.g., "Microsoft.SqlServer.Dacpacs.Master" -> "master.dacpac", "master"
     let dacpac_name = extract_dacpac_name(&pkg_ref.name);
+    let db_name = extract_database_name(&pkg_ref.name);
 
     // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
     let custom_data = BytesStart::new("CustomData")
@@ -95,12 +96,13 @@ fn write_package_reference<W: Write>(
         .with_attributes([("Name", "LogicalName"), ("Value", dacpac_name.as_str())]);
     writer.write_event(Event::Empty(logical_name))?;
 
-    // SuppressMissingDependenciesErrors metadata - batch attributes
-    let suppress = BytesStart::new("Metadata").with_attributes([
-        ("Name", "SuppressMissingDependenciesErrors"),
-        ("Value", "False"),
+    // ExternalParts metadata - bracketed database name (matches DotNet DacFx output)
+    let external_parts = format!("[{}]", db_name);
+    let external = BytesStart::new("Metadata").with_attributes([
+        ("Name", "ExternalParts"),
+        ("Value", external_parts.as_str()),
     ]);
-    writer.write_event(Event::Empty(suppress))?;
+    writer.write_event(Event::Empty(external))?;
 
     writer.write_event(Event::End(BytesEnd::new("CustomData")))?;
     Ok(())
@@ -154,6 +156,18 @@ fn extract_dacpac_name(package_name: &str) -> String {
         format!("{}.dacpac", last_part.to_lowercase())
     } else {
         format!("{}.dacpac", package_name.to_lowercase())
+    }
+}
+
+/// Extract database name from a package reference name
+/// e.g., "Microsoft.SqlServer.Dacpacs.Master" -> "master"
+/// e.g., "Microsoft.SqlServer.Dacpacs.Msdb" -> "msdb"
+fn extract_database_name(package_name: &str) -> String {
+    // Common pattern: Microsoft.SqlServer.Dacpacs.<DatabaseName>
+    if let Some(last_part) = package_name.split('.').next_back() {
+        last_part.to_lowercase()
+    } else {
+        package_name.to_lowercase()
     }
 }
 
@@ -407,8 +421,20 @@ mod tests {
         assert!(output.contains(r#"<CustomData Category="Reference" Type="SqlSchema">"#));
         assert!(output.contains(r#"<Metadata Name="FileName" Value="master.dacpac"/>"#));
         assert!(output.contains(r#"<Metadata Name="LogicalName" Value="master.dacpac"/>"#));
-        assert!(output
-            .contains(r#"<Metadata Name="SuppressMissingDependenciesErrors" Value="False"/>"#));
+        assert!(output.contains(r#"<Metadata Name="ExternalParts" Value="[master]"/>"#));
+    }
+
+    #[test]
+    fn test_extract_database_name() {
+        assert_eq!(
+            extract_database_name("Microsoft.SqlServer.Dacpacs.Master"),
+            "master"
+        );
+        assert_eq!(
+            extract_database_name("Microsoft.SqlServer.Dacpacs.Msdb"),
+            "msdb"
+        );
+        assert_eq!(extract_database_name("CustomPackage"), "custompackage");
     }
 
     #[test]

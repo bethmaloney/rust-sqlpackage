@@ -6,7 +6,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 **Phases 1-23 complete (268 tasks). Full parity achieved.**
 
-**Phase 22 In Progress:** Layer 7 Canonical XML parity (6 tasks remaining: 22.2.2 + 22.4.1-22.4.5)
+**Phase 22 In Progress:** Layer 7 Canonical XML parity (5 tasks remaining: 22.4.4 disambiguator numbering)
 
 **Discovered: Phase 22 - Layer 7 Canonical XML Parity** (8.5/10 tasks)
 - Layer 7 now performs true 1-1 XML comparison (no sorting/normalization)
@@ -57,13 +57,19 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 22: Layer 7 Canonical XML Parity (Remaining: 6 tasks)
+## Phase 22: Layer 7 Canonical XML Parity (Remaining: 5 tasks)
 
-### Phase 22.2.2: Verify CustomData Elements (0/1)
+### Phase 22.2.2: Verify CustomData Elements (1/1) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 22.2.2 | Verify other CustomData elements match DotNet | ⬜ | Check for other missing CustomData categories |
+| 22.2.2 | Verify other CustomData elements match DotNet | ✅ | Fixed Reference CustomData: replaced `SuppressMissingDependenciesErrors` with `ExternalParts` metadata |
+
+**Fix Applied (2026-02-01):**
+- DotNet Reference CustomData uses `ExternalParts` metadata (e.g., `Value="[master]"`), not `SuppressMissingDependenciesErrors`
+- Updated `write_package_reference()` in `src/dacpac/model_xml/header.rs` to emit `ExternalParts` with bracketed database name
+- Added `extract_database_name()` helper function to extract database name from package name
+- All CustomData categories now match DotNet format: AnsiNulls, QuotedIdentifier, CompatibilityMode, Reference, SqlCmdVariables
 
 ### Phase 22.4: Align Constraint Annotation Behavior with DotNet SDK (4/5) - FUNCTIONAL
 
