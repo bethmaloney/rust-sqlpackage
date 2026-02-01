@@ -38,15 +38,12 @@ struct CanonicalRelationship {
 ///
 /// Canonicalization normalizes the XML structure by:
 /// 1. Parsing the XML into a structured representation
-/// 2. Sorting top-level elements by (Type, Name) - preserving semantic grouping
-/// 3. Sorting properties alphabetically by Name within each element
-/// 4. Sorting relationships alphabetically by Name within each element
-/// 5. Recursively canonicalizing nested elements within relationships
-/// 6. Normalizing whitespace (consistent indentation, no trailing whitespace)
-/// 7. Re-serializing to a deterministic XML string
+/// 2. Preserving original element, property, and relationship ordering
+/// 3. Normalizing whitespace (consistent indentation, no trailing whitespace)
+/// 4. Re-serializing to a normalized XML string
 ///
-/// This allows byte-level comparison of semantically equivalent model.xml files
-/// that may have different element ordering or formatting.
+/// This allows byte-level comparison of model.xml files, catching any
+/// differences in element ordering, property ordering, or content.
 pub fn canonicalize_model_xml(xml: &str) -> Result<String, String> {
     let doc = roxmltree::Document::parse(xml).map_err(|e| format!("Failed to parse XML: {}", e))?;
 
@@ -68,14 +65,13 @@ pub fn canonicalize_model_xml(xml: &str) -> Result<String, String> {
         .ok_or("No Model element found")?;
 
     // Parse and canonicalize all elements
-    let mut canonical_elements: Vec<CanonicalElement> = model_node
+    let canonical_elements: Vec<CanonicalElement> = model_node
         .children()
         .filter(|n| n.has_tag_name("Element"))
         .map(|node| canonicalize_element(&node))
         .collect();
 
-    // Sort elements by (type, name) for deterministic ordering
-    canonical_elements.sort();
+    // Preserve original element ordering from source XML
 
     // Find Header element (if present)
     let header_node = root.children().find(|n| n.has_tag_name("Header"));
@@ -111,7 +107,7 @@ fn canonicalize_element(node: &roxmltree::Node) -> CanonicalElement {
     let name = node.attribute("Name").unwrap_or("").to_string();
 
     // Collect and sort properties
-    let mut properties: Vec<(String, String)> = node
+    let properties: Vec<(String, String)> = node
         .children()
         .filter(|n| n.has_tag_name("Property"))
         .filter_map(|n| {
@@ -129,23 +125,20 @@ fn canonicalize_element(node: &roxmltree::Node) -> CanonicalElement {
             Some((prop_name.to_string(), prop_value))
         })
         .collect();
-    properties.sort();
 
-    // Collect and sort relationships
-    let mut relationships: Vec<CanonicalRelationship> = node
+    // Collect relationships (preserve original ordering)
+    let relationships: Vec<CanonicalRelationship> = node
         .children()
         .filter(|n| n.has_tag_name("Relationship"))
         .map(|rel_node| canonicalize_relationship(&rel_node))
         .collect();
-    relationships.sort();
 
-    // Collect and canonicalize direct child elements (for Annotation elements)
-    let mut children: Vec<CanonicalElement> = node
+    // Collect direct child elements (preserve original ordering) (for Annotation elements)
+    let children: Vec<CanonicalElement> = node
         .children()
         .filter(|n| n.has_tag_name("Annotation"))
         .map(|n| canonicalize_annotation(&n))
         .collect();
-    children.sort();
 
     CanonicalElement {
         element_type,
@@ -176,9 +169,7 @@ fn canonicalize_relationship(node: &roxmltree::Node) -> CanonicalRelationship {
         }
     }
 
-    // Sort references and entries for deterministic ordering
-    references.sort();
-    entries.sort();
+    // Preserve original ordering of references and entries
 
     CanonicalRelationship {
         name,
@@ -192,7 +183,7 @@ fn canonicalize_annotation(node: &roxmltree::Node) -> CanonicalElement {
     let element_type = node.attribute("Type").unwrap_or("Annotation").to_string();
     let disambiguator = node.attribute("Disambiguator").unwrap_or("").to_string();
 
-    // Collect and sort properties
+    // Collect properties (preserve original ordering)
     let mut properties: Vec<(String, String)> = node
         .children()
         .filter(|n| n.has_tag_name("Property"))
@@ -209,12 +200,10 @@ fn canonicalize_annotation(node: &roxmltree::Node) -> CanonicalElement {
             Some((prop_name.to_string(), prop_value))
         })
         .collect();
-    properties.sort();
 
     // Add disambiguator as a property if present
     if !disambiguator.is_empty() {
         properties.push(("Disambiguator".to_string(), disambiguator));
-        properties.sort();
     }
 
     CanonicalElement {
@@ -231,8 +220,8 @@ fn serialize_header(header: &roxmltree::Node, output: &mut String, indent: usize
     let indent_str = "  ".repeat(indent);
     output.push_str(&format!("{}<Header>\n", indent_str));
 
-    // Collect CustomData elements and sort by Category
-    let mut custom_data: Vec<_> = header
+    // Collect CustomData elements (preserve original ordering)
+    let custom_data: Vec<_> = header
         .children()
         .filter(|n| n.has_tag_name("CustomData"))
         .map(|n| {
@@ -255,8 +244,6 @@ fn serialize_header(header: &roxmltree::Node, output: &mut String, indent: usize
             )
         })
         .collect();
-
-    custom_data.sort_by(|a, b| a.0.cmp(&b.0));
 
     for (category, type_attr, metadata) in custom_data {
         let type_str = type_attr

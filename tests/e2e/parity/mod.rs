@@ -92,6 +92,7 @@ pub fn compare_dacpacs(
         check_element_order: false,
         check_metadata_files: false,
         check_deploy_scripts: false,
+        check_canonical: false,
     };
     compare_dacpacs_with_options(rust_dacpac, dotnet_dacpac, &options)
 }
@@ -105,6 +106,7 @@ pub fn compare_dacpacs(
 /// - `check_element_order`: Validate element ordering matches DotNet output (Phase 4)
 /// - `check_metadata_files`: Compare metadata files like [Content_Types].xml (Phase 5)
 /// - `check_deploy_scripts`: Compare pre/post-deploy scripts (Phase 5.4)
+/// - `check_canonical`: Compare canonical XML for byte-level matching (Layer 7)
 pub fn compare_dacpacs_with_options(
     rust_dacpac: &Path,
     dotnet_dacpac: &Path,
@@ -162,6 +164,12 @@ pub fn compare_dacpacs_with_options(
         None
     };
 
+    let layer7_errors = if options.check_canonical {
+        compare_canonical_dacpacs(rust_dacpac, dotnet_dacpac, false).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     Ok(ComparisonResult {
         layer1_errors,
         layer2_errors,
@@ -169,5 +177,6 @@ pub fn compare_dacpacs_with_options(
         layer4_errors,
         metadata_errors,
         layer3_result,
+        layer7_errors,
     })
 }

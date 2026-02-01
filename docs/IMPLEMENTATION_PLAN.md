@@ -22,14 +22,20 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 21.3 complete: Extract Element Writers (3/3 tasks)
 - Target: Break 13,413-line file into ~9 logical submodules (currently ~10,235 lines)
 
+**Discovered: Phase 22 - Layer 7 Canonical XML Parity** (0/4 tasks)
+- Layer 7 now performs true 1-1 XML comparison (no sorting/normalization)
+- All 48 fixtures fail with systematic differences (CollationCaseSensitive, missing CustomData elements)
+- See Phase 22 section below for detailed task breakdown
+
 | Layer | Passing | Rate |
 |-------|---------|------|
-| Layer 1 (Inventory) | 44/44 | 100% |
-| Layer 2 (Properties) | 44/44 | 100% |
-| Layer 3 (SqlPackage) | 44/44 | 100% |
-| Relationships | 44/44 | 100% |
-| Layer 4 (Ordering) | 44/44 | 100% |
-| Metadata | 44/44 | 100% |
+| Layer 1 (Inventory) | 48/48 | 100% |
+| Layer 2 (Properties) | 46/48 | 95.8% |
+| Layer 3 (SqlPackage) | 48/48 | 100% |
+| Relationships | 46/48 | 95.8% |
+| Layer 4 (Ordering) | 48/48 | 100% |
+| Metadata | 48/48 | 100% |
+| Layer 7 (Canonical XML) | 0/48 | 0% |
 
 ### Excluded Fixtures
 
@@ -241,7 +247,53 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 
 **Validation:** All existing tests must pass after each phase. No functional changes.
 
+---
+
+## Phase 22: Layer 7 Canonical XML Parity (0/4)
+
+**Location:** `src/dacpac/model_xml/` - header.rs, mod.rs
+
+**Goal:** Achieve byte-level XML matching between rust-sqlpackage and DotNet DacFx output. Layer 7 compares the actual generated XML without sorting/normalization, catching ordering differences, missing elements, and attribute value mismatches.
+
+**Background:** Layer 7 was previously masking differences by sorting elements/properties before comparison. After fixing to preserve original ordering, all 48 fixtures fail with systematic differences:
+- CollationCaseSensitive attribute value mismatch
+- Missing CustomData elements in Header section
+- Line count differences (Rust outputs fewer lines)
+
+**Discovered Issues (from test output):**
+```
+Line 2: Rust='CollationCaseSensitive="False"', DotNet='CollationCaseSensitive="True"'
+Line 13: Rust='</Header>', DotNet='<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable" />'
+```
+
+### Phase 22.1: Fix CollationCaseSensitive Attribute (0/1)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 22.1.1 | Set CollationCaseSensitive="True" to match DotNet | ⬜ | DataSchemaModel root element attribute. DotNet defaults to True, Rust outputs False. Location: `generate_model_xml()` in mod.rs |
+
+### Phase 22.2: Fix Missing CustomData Elements (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 22.2.1 | Add empty SqlCmdVariables CustomData element | ⬜ | `<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable" />` should be emitted even when no SQLCMD variables are defined. Location: `write_header()` in header.rs |
+| 22.2.2 | Verify other CustomData elements match DotNet | ⬜ | Check for other missing CustomData categories in Header section |
+
+### Phase 22.3: Fix Element/Property Ordering (0/1)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 22.3.1 | Audit element ordering against DotNet output | ⬜ | Compare element order in Model section. May need to reorder schema/table/view/etc. elements to match DotNet |
+
+**Validation:** Run `cargo test --test e2e_tests test_parity_all_fixtures` and verify Layer 7 pass rate increases.
+
 **Expected Result:**
+
+| Layer | Before | After |
+|-------|--------|-------|
+| Layer 7 (Canonical XML) | 0/48 (0%) | 48/48 (100%) |
+
+---
 
 | Module | Estimated Lines | Purpose |
 |--------|-----------------|---------|

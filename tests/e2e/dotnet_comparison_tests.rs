@@ -279,6 +279,10 @@ pub struct ParityTestOptions {
     /// Default: true
     pub check_deploy_scripts: bool,
 
+    /// Compare canonical XML for byte-level matching (Layer 7).
+    /// Default: true
+    pub check_canonical: bool,
+
     /// Target SQL Server platform version (e.g., "Sql150", "Sql160").
     /// Default: "Sql150"
     pub target_platform: String,
@@ -293,6 +297,7 @@ impl Default for ParityTestOptions {
             check_element_order: true,
             check_metadata_files: true,
             check_deploy_scripts: true,
+            check_canonical: true,
             target_platform: "Sql150".to_string(),
         }
     }
@@ -323,6 +328,7 @@ impl ParityTestOptions {
             check_element_order: false,
             check_metadata_files: false,
             check_deploy_scripts: false,
+            check_canonical: false,
             target_platform: "Sql150".to_string(),
         }
     }
@@ -458,6 +464,7 @@ pub fn run_parity_test(
         check_element_order: options.check_element_order,
         check_metadata_files: options.check_metadata_files,
         check_deploy_scripts: options.check_deploy_scripts,
+        check_canonical: options.check_canonical,
     };
 
     compare_dacpacs_with_options(&rust_dacpac, &dotnet_dacpac, &comparison_options)
@@ -985,6 +992,7 @@ fn test_strict_comparison_options() {
         check_element_order: false,
         check_metadata_files: false,
         check_deploy_scripts: false,
+        check_canonical: false,
     };
 
     let result =
@@ -1344,6 +1352,7 @@ fn test_relationship_comparison_options() {
         check_element_order: false,
         check_metadata_files: false,
         check_deploy_scripts: false,
+        check_canonical: false,
     };
 
     let result =
@@ -1498,6 +1507,7 @@ fn test_element_order_comparison_options() {
         check_element_order: true,
         check_metadata_files: false,
         check_deploy_scripts: false,
+        check_canonical: false,
     };
 
     let result =
@@ -1610,6 +1620,7 @@ fn test_content_types_comparison_options() {
         check_element_order: false,
         check_metadata_files: true,
         check_deploy_scripts: false,
+        check_canonical: false,
     };
 
     let result =
@@ -1891,6 +1902,7 @@ fn test_metadata_comparison_includes_dac_metadata() {
         check_element_order: false,
         check_metadata_files: true,
         check_deploy_scripts: false,
+        check_canonical: false,
     };
 
     let result =
@@ -2347,6 +2359,7 @@ fn test_deploy_script_comparison_options() {
         check_element_order: false,
         check_metadata_files: false,
         check_deploy_scripts: true,
+        check_canonical: false,
     };
 
     let result =
@@ -2626,6 +2639,7 @@ fn test_unified_metadata_via_options() {
         check_element_order: false,
         check_metadata_files: true,
         check_deploy_scripts: true,
+        check_canonical: false,
     };
 
     let result = compare_dacpacs_with_options(&rust_dacpac, &dotnet_dacpac, &options)
@@ -3911,6 +3925,7 @@ fn test_parity_all_fixtures() {
     let mut layer1_pass = 0;
     let mut layer2_pass = 0;
     let mut relationship_pass = 0;
+    let mut layer7_pass = 0;
     let mut full_pass = 0;
 
     for fixture in &fixtures {
@@ -3921,6 +3936,7 @@ fn test_parity_all_fixtures() {
                 let l1_ok = result.layer1_errors.is_empty();
                 let l2_ok = result.layer2_errors.is_empty();
                 let rel_ok = result.relationship_errors.is_empty();
+                let l7_ok = result.layer7_errors.is_empty();
 
                 if l1_ok {
                     layer1_pass += 1;
@@ -3931,11 +3947,14 @@ fn test_parity_all_fixtures() {
                 if rel_ok {
                     relationship_pass += 1;
                 }
-                if l1_ok && l2_ok && rel_ok {
+                if l7_ok {
+                    layer7_pass += 1;
+                }
+                if l1_ok && l2_ok && rel_ok && l7_ok {
                     full_pass += 1;
                 }
 
-                let status = if l1_ok && l2_ok && rel_ok {
+                let status = if l1_ok && l2_ok && rel_ok && l7_ok {
                     "✓ PASS"
                 } else if l1_ok {
                     "~ PARTIAL"
@@ -3944,13 +3963,23 @@ fn test_parity_all_fixtures() {
                 };
 
                 println!(
-                    "{:40} {} (L1:{} L2:{} Rel:{})",
+                    "{:40} {} (L1:{} L2:{} Rel:{} L7:{})",
                     fixture,
                     status,
                     result.layer1_errors.len(),
                     result.layer2_errors.len(),
-                    result.relationship_errors.len()
+                    result.relationship_errors.len(),
+                    result.layer7_errors.len()
                 );
+
+                // Print first Layer 7 errors for the first fixture that has them
+                if !result.layer7_errors.is_empty() && total_fixtures == 1 {
+                    println!("\n  First Layer 7 errors for {}:", fixture);
+                    for (i, err) in result.layer7_errors.iter().take(5).enumerate() {
+                        println!("    {}: {}", i + 1, err);
+                    }
+                    println!();
+                }
             }
             Err(e) => {
                 println!("{:40} ✗ ERROR: {}", fixture, e);
@@ -3977,6 +4006,12 @@ fn test_parity_all_fixtures() {
         relationship_pass,
         total_fixtures,
         100.0 * relationship_pass as f64 / total_fixtures as f64
+    );
+    println!(
+        "Layer 7 pass (canonical): {}/{} ({:.1}%)",
+        layer7_pass,
+        total_fixtures,
+        100.0 * layer7_pass as f64 / total_fixtures as f64
     );
     println!(
         "Full parity: {}/{} ({:.1}%)",
@@ -4380,10 +4415,10 @@ fn test_parity_report_error_truncation() {
 
 /// Test that XML canonicalization produces deterministic output.
 ///
-/// This test verifies that:
+///// This test verifies that:
 /// 1. The canonicalize_model_xml function parses XML correctly
-/// 2. Re-canonicalizing the same input produces identical output
-/// 3. Semantically equivalent XML produces the same canonical form
+/// 2. Re-canonicalizing the same input produces identical output (idempotent)
+/// 3. Original element ordering from source XML is preserved
 #[test]
 fn test_canonicalize_model_xml_basic() {
     // Sample model.xml content with deliberately unordered elements
@@ -4413,12 +4448,15 @@ fn test_canonicalize_model_xml_basic() {
         "Canonicalization should be idempotent"
     );
 
-    // Verify elements are sorted by (Type, Name)
-    // SqlDatabaseOptions (unnamed) should come before SqlTable [dbo].[Customers]
-    // SqlTable [dbo].[Customers] should come before SqlTable [dbo].[Products]
+    // Verify elements preserve original order from source XML
+    // Products appears first in input, then DatabaseOptions, then Customers
     let lines: Vec<&str> = canonical1.lines().collect();
 
     // Find element positions
+    let products_pos = lines
+        .iter()
+        .position(|l| l.contains("[dbo].[Products]"))
+        .expect("Should find Products table");
     let db_options_pos = lines
         .iter()
         .position(|l| l.contains("SqlDatabaseOptions"))
@@ -4427,18 +4465,14 @@ fn test_canonicalize_model_xml_basic() {
         .iter()
         .position(|l| l.contains("[dbo].[Customers]"))
         .expect("Should find Customers table");
-    let products_pos = lines
-        .iter()
-        .position(|l| l.contains("[dbo].[Products]"))
-        .expect("Should find Products table");
 
     assert!(
-        db_options_pos < customers_pos,
-        "SqlDatabaseOptions should come before Customers table"
+        products_pos < db_options_pos,
+        "Products table should come before SqlDatabaseOptions (original order)"
     );
     assert!(
-        customers_pos < products_pos,
-        "Customers table should come before Products table (alphabetically)"
+        db_options_pos < customers_pos,
+        "SqlDatabaseOptions should come before Customers table (original order)"
     );
 
     println!("Canonical XML output ({} lines):", lines.len());
@@ -4476,16 +4510,17 @@ WHERE [IsActive] = 1]]></Value>
         "Multi-line content should use CDATA"
     );
 
-    // Properties should be sorted alphabetically
-    let is_ansi_pos = canonical
-        .find("IsAnsiNullsOn")
-        .expect("Should find IsAnsiNullsOn");
+    // Properties should preserve original order from source XML
+    // QueryScript appears first in input, then IsAnsiNullsOn
     let query_script_pos = canonical
         .find("QueryScript")
         .expect("Should find QueryScript");
+    let is_ansi_pos = canonical
+        .find("IsAnsiNullsOn")
+        .expect("Should find IsAnsiNullsOn");
     assert!(
-        is_ansi_pos < query_script_pos,
-        "IsAnsiNullsOn should come before QueryScript (alphabetically)"
+        query_script_pos < is_ansi_pos,
+        "QueryScript should come before IsAnsiNullsOn (original order)"
     );
 
     println!("Canonical XML with CDATA:");
@@ -4524,28 +4559,30 @@ fn test_canonicalize_model_xml_with_relationships() {
 
     let canonical = canonicalize_model_xml(xml).expect("Canonicalization should succeed");
 
-    // Relationships should be sorted by name (Columns before Schema)
-    let columns_pos = canonical
-        .find("Relationship Name=\"Columns\"")
-        .expect("Should find Columns");
+    // Relationships should preserve original order from source XML
+    // Schema appears first in input, then Columns
     let schema_pos = canonical
         .find("Relationship Name=\"Schema\"")
         .expect("Should find Schema");
+    let columns_pos = canonical
+        .find("Relationship Name=\"Columns\"")
+        .expect("Should find Columns");
     assert!(
-        columns_pos < schema_pos,
-        "Columns relationship should come before Schema (alphabetically)"
+        schema_pos < columns_pos,
+        "Schema relationship should come before Columns (original order)"
     );
 
-    // Column entries should be sorted by element name
-    let id_pos = canonical
-        .find("[dbo].[Products].[Id]")
-        .expect("Should find Id column");
+    // Column entries should preserve original order from source XML
+    // Name appears first in input, then Id
     let name_pos = canonical
         .find("[dbo].[Products].[Name]")
         .expect("Should find Name column");
+    let id_pos = canonical
+        .find("[dbo].[Products].[Id]")
+        .expect("Should find Id column");
     assert!(
-        id_pos < name_pos,
-        "Id column should come before Name column (alphabetically)"
+        name_pos < id_pos,
+        "Name column should come before Id column (original order)"
     );
 
     println!("Canonical XML with relationships:");

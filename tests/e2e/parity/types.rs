@@ -714,6 +714,8 @@ pub struct ComparisonOptions {
     pub check_metadata_files: bool,
     /// Compare pre/post-deploy scripts (predeploy.sql, postdeploy.sql) (Phase 5.4)
     pub check_deploy_scripts: bool,
+    /// Compare canonical XML for byte-level matching (Layer 7)
+    pub check_canonical: bool,
 }
 
 /// Layer 3: SqlPackage DeployReport result
@@ -733,6 +735,7 @@ pub struct ComparisonResult {
     pub layer4_errors: Vec<Layer4Error>,
     pub metadata_errors: Vec<MetadataFileError>,
     pub layer3_result: Option<Layer3Result>,
+    pub layer7_errors: Vec<CanonicalXmlError>,
 }
 
 impl ComparisonResult {
@@ -742,6 +745,7 @@ impl ComparisonResult {
             && self.relationship_errors.is_empty()
             && self.layer4_errors.is_empty()
             && self.metadata_errors.is_empty()
+            && self.layer7_errors.is_empty()
             && self
                 .layer3_result
                 .as_ref()
@@ -818,6 +822,16 @@ impl ComparisonResult {
                 println!("  Deploy script:\n{}", l3.deploy_script);
             } else {
                 println!("  No schema differences (dacpacs are equivalent).");
+            }
+        }
+
+        // Layer 7: Canonical XML Comparison
+        if !self.layer7_errors.is_empty() {
+            println!();
+            println!("Layer 7: Canonical XML Comparison");
+            println!("{}", "-".repeat(40));
+            for err in &self.layer7_errors {
+                println!("  {}", err);
             }
         }
 
