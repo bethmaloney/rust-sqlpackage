@@ -223,11 +223,11 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 | 21.3.2 | Create `view_writer.rs` for view XML | ✅ | 574 lines including 8 unit tests. Extracted: `write_view`, `write_raw_view`, `extract_view_query`, `ViewColumn` struct, `expand_select_star`, `extract_view_columns_and_deps`, `write_view_columns`, `write_query_dependencies`. |
 | 21.3.3 | Create `programmability_writer.rs` for procs/functions | ✅ | 1838 lines including 35 unit tests. Extracted: `write_procedure`, `write_function`, `ProcedureParameter`, `FunctionParameter`, TVF column handling (`TvfColumn`, `TvfColumnTypeInfo`, `extract_inline_tvf_columns`, `extract_multistatement_tvf_columns`), procedure/function body extraction (`extract_procedure_body_only`, `extract_function_body`, `extract_function_header`). |
 
-### Phase 21.4: Extract Body Dependencies (0/2)
+### Phase 21.4: Extract Body Dependencies (1/2)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 21.4.1 | Create `body_deps.rs` for dependency extraction | ⬜ | `BodyDependencyTokenScanner`, `extract_body_dependencies`, `extract_table_aliases_for_body_deps`, `TableAliasTokenParser` (~1,500 lines) |
+| 21.4.1 | Create `body_deps.rs` for dependency extraction | ✅ | Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScanner, TableAliasTokenParser, QualifiedName, extract_body_dependencies, extract_table_refs_tokenized, parse_qualified_name_tokenized, and helper functions. ~2,200 lines including tests. |
 | 21.4.2 | Create `qualified_name.rs` for name parsing | ⬜ | `QualifiedName` struct and impl, `parse_qualified_name_tokenized` (~300 lines) |
 
 ### Phase 21.5: Extract Remaining Writers (0/1)
@@ -396,3 +396,9 @@ Replaced regex-based parameter parsing with token-based approach for procedures 
 | Cloning | `src/model/builder.rs` | 149 clone() calls | MEDIUM | ⬜ |
 
 </details>
+
+## Known Issues
+
+| Issue | Location | Description | Status |
+|-------|----------|-------------|--------|
+| TVF MAX column IsMax property | Integration tests `tvf_column_tests` | Tests `test_tvf_column_nvarchar_max_property`, `test_tvf_column_varchar_max_property`, `test_tvf_column_varbinary_max_property` fail - IsMax=True not being set despite commit c2e9b32 claiming to fix it | ⬜ Needs investigation |
