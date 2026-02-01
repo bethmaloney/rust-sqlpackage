@@ -10,6 +10,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.1 complete: Token-based parameter parsing (3/3 tasks)
 - ✅ Phase 20.2 complete: Body dependency token extraction (8/8 tasks)
 - 🔄 Phase 20.3-20.7: Type, table, keyword, and CTE parsing (24 tasks remaining)
+- 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (11 tasks)
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -124,6 +125,47 @@ These test Rust's ability to build projects that DotNet cannot handle.
 | 20.7.4 | Replace APPLY_FUNCTION_ALIAS_RE with tokenizer | ⬜ | Line 3221-3229: APPLY subquery alias extraction |
 
 **Implementation Approach:** Parse WITH clauses, subqueries, and APPLY expressions using sqlparser-rs AST. Extract CTE names and subquery aliases from the syntax tree.
+
+### Phase 20.8: Fix Alias Resolution Bugs in BodyDependencies (0/11)
+
+**Location:** `src/dacpac/model_xml.rs` - `extract_table_aliases_for_body_deps()` and related functions
+
+**Background:** Integration tests in `tests/integration/dacpac/alias_resolution_tests.rs` expose bugs where table aliases defined in nested contexts (subqueries, CTEs, APPLY clauses) are not properly tracked. When an alias is not found in the alias map, references like `[ALIAS].[Column]` are incorrectly emitted as `[dbo].[PreviousTable].[ALIAS]` instead of being resolved or excluded.
+
+**Test Fixture:** `tests/fixtures/body_dependencies_aliases/`
+
+| ID | Task | Status | Test | Notes |
+|----|------|--------|------|-------|
+| 20.8.1 | Fix STUFF() nested subquery alias extraction | ⬜ | `test_stuff_nested_subquery_alias_resolution` | Aliases inside STUFF() with FOR XML PATH not captured |
+| 20.8.2 | Fix multi-level nested subquery alias extraction | ⬜ | `test_nested_subquery_alias_resolution` | Aliases at depth > 1 not captured |
+| 20.8.3 | Fix CROSS/OUTER APPLY alias extraction in views | ⬜ | `test_apply_clause_alias_resolution` | APPLY subquery aliases not captured in view context |
+| 20.8.4 | Exclude CTE names from view dependencies | ⬜ | `test_cte_alias_recognition` | CTE names incorrectly appear as `[dbo].[CteName]` |
+| 20.8.5 | Fix EXISTS/NOT EXISTS subquery alias extraction | ⬜ | `test_exists_subquery_alias_resolution` | Aliases inside EXISTS clauses not captured |
+| 20.8.6 | Fix IN clause subquery alias extraction | ⬜ | `test_in_subquery_alias_resolution` | Aliases inside IN (SELECT...) not captured |
+| 20.8.7 | Fix correlated subquery alias extraction in SELECT | ⬜ | `test_correlated_subquery_alias_resolution` | Aliases in scalar subqueries not captured |
+| 20.8.8 | Fix CASE expression subquery alias extraction | ⬜ | `test_case_subquery_alias_resolution` | Aliases inside CASE WHEN subqueries not captured |
+| 20.8.9 | Fix derived table chain alias extraction | ⬜ | `test_derived_table_chain_alias_resolution` | Nested derived table aliases not captured |
+| 20.8.10 | Exclude recursive CTE self-references from dependencies | ⬜ | `test_recursive_cte_alias_resolution` | Recursive CTE name appears as dependency |
+| 20.8.11 | Fix MERGE TARGET/SOURCE alias handling | ⬜ | `test_merge_alias_resolution` | MERGE aliases and keywords parsed incorrectly |
+
+**Implementation Approach:**
+
+The root cause is that `extract_table_aliases_for_body_deps()` uses regex patterns that only capture aliases from top-level FROM/JOIN clauses. Aliases defined in:
+- Nested subqueries (any depth)
+- APPLY clause subqueries
+- CTE definitions
+- EXISTS/IN clause subqueries
+- CASE expression subqueries
+
+...are not added to the alias map. When `[ALIAS].[Column]` is encountered, the alias lookup fails and the reference is incorrectly constructed.
+
+**Fix Strategy:**
+1. Use sqlparser-rs AST to recursively walk all subqueries and extract table aliases
+2. Track CTE names separately and exclude them from dependency output
+3. Handle MERGE statement TARGET/SOURCE as special alias cases
+4. For each context (STUFF, APPLY, EXISTS, IN, CASE), ensure the subquery walker visits all nested SELECT statements
+
+**Validation:** Remove `#[ignore]` from each test after fixing. All 11 tests should pass.
 
 ### Implementation Notes
 

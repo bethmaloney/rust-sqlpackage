@@ -2,6 +2,7 @@
 //!
 //! These tests verify the structure and content of generated dacpac files.
 
+mod alias_resolution_tests;
 mod column_tests;
 mod constraint_tests;
 mod element_tests;
