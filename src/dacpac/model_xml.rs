@@ -115,14 +115,7 @@ static AS_KEYWORD_RE: LazyLock<Regex> =
 
 // INSERT_SELECT_RE removed - replaced by InsertSelectTokenParser (Phase 20.4.6)
 // INSERT_SELECT_JOIN_RE removed - replaced by InsertSelectTokenParser (Phase 20.4.6)
-
-/// UPDATE with alias pattern
-static UPDATE_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?is)UPDATE\s+(\w+)\s+SET\s+(.+?)\s+FROM\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+(\w+)\s+(?:INNER\s+)?JOIN\s+(inserted|deleted)\s+(\w+)\s+ON\s+(.+?)(?:;|$)",
-    )
-    .unwrap()
-});
+// UPDATE_ALIAS_RE removed - replaced by UpdateTokenParser (Phase 20.4.7)
 
 /// Check if a schema name is a built-in SQL Server schema
 fn is_builtin_schema(schema: &str) -> bool {
@@ -4710,6 +4703,395 @@ impl InsertSelectTokenParser {
 }
 
 // =============================================================================
+// UPDATE Token Parser (Phase 20.4.7)
+// =============================================================================
+// Replaces UPDATE_ALIAS_RE regex pattern with tokenizer-based parsing.
+// Handles UPDATE alias SET ... FROM [schema].[table] alias (INNER) JOIN inserted/deleted alias ON ...
+// statements in trigger bodies.
+
+/// Represents a parsed UPDATE...FROM...JOIN statement from a trigger body
+#[derive(Debug, Clone)]
+pub(crate) struct UpdateStatement {
+    /// Alias used in UPDATE clause (e.g., "p" in UPDATE p SET ...)
+    pub update_alias: String,
+    /// SET clause content (raw text between SET and FROM)
+    pub set_clause: String,
+    /// Schema of the target table
+    pub schema: String,
+    /// Name of the target table
+    pub table: String,
+    /// Alias for the target table in FROM clause
+    pub table_alias: String,
+    /// Magic table reference (inserted or deleted) - used in tests for validation
+    #[allow(dead_code)]
+    pub magic_table: String,
+    /// Alias for the magic table
+    pub magic_alias: String,
+    /// ON clause content
+    pub on_clause: String,
+}
+
+/// Token-based parser for UPDATE...FROM...JOIN statements in trigger bodies.
+/// Replaces UPDATE_ALIAS_RE regex pattern.
+pub(crate) struct UpdateTokenParser {
+    tokens: Vec<sqlparser::tokenizer::TokenWithSpan>,
+    pos: usize,
+    source: String,           // Keep source for extracting raw text segments
+    line_offsets: Vec<usize>, // For converting token locations to byte offsets
+}
+
+impl UpdateTokenParser {
+    /// Create a new parser for SQL body text
+    pub fn new(sql: &str) -> Option<Self> {
+        let dialect = MsSqlDialect {};
+        let tokens = Tokenizer::new(&dialect, sql)
+            .tokenize_with_location()
+            .ok()?;
+        let line_offsets = compute_line_offsets(sql);
+        Some(Self {
+            tokens,
+            pos: 0,
+            source: sql.to_string(),
+            line_offsets,
+        })
+    }
+
+    /// Extract all UPDATE...FROM...JOIN statements from the SQL body
+    pub fn extract_statements(&mut self) -> Vec<UpdateStatement> {
+        let mut statements = Vec::new();
+
+        while !self.is_at_end() {
+            self.skip_whitespace();
+
+            // Look for UPDATE keyword
+            if self.check_keyword(Keyword::UPDATE) {
+                if let Some(stmt) = self.try_parse_update() {
+                    statements.push(stmt);
+                } else {
+                    self.advance();
+                }
+            } else {
+                self.advance();
+            }
+        }
+
+        statements
+    }
+
+    /// Try to parse an UPDATE...FROM...JOIN inserted/deleted statement
+    fn try_parse_update(&mut self) -> Option<UpdateStatement> {
+        let start_pos = self.pos;
+
+        // Expect UPDATE
+        if !self.check_keyword(Keyword::UPDATE) {
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Parse update alias (word before SET)
+        let update_alias = self.try_parse_any_identifier()?;
+        self.skip_whitespace();
+
+        // Expect SET
+        if !self.check_keyword(Keyword::SET) {
+            self.pos = start_pos;
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Extract SET clause (everything until FROM)
+        let set_start = self.current_byte_offset();
+        if !self.scan_until_keyword(Keyword::FROM) {
+            self.pos = start_pos;
+            return None;
+        }
+        let set_end = self.current_byte_offset();
+        let set_clause = self.source[set_start..set_end].trim().to_string();
+
+        // Now at FROM keyword - advance past it
+        self.advance();
+        self.skip_whitespace();
+
+        // Parse table: [schema].[table] or schema.table
+        let (schema, table) = self.parse_table_name()?;
+        self.skip_whitespace();
+
+        // Parse table alias (must be present for this pattern)
+        let table_alias = match self.try_parse_any_identifier() {
+            Some(alias) => alias,
+            None => {
+                self.pos = start_pos;
+                return None;
+            }
+        };
+        self.skip_whitespace();
+
+        // Optional INNER keyword before JOIN
+        if self.check_keyword(Keyword::INNER) {
+            self.advance();
+            self.skip_whitespace();
+        }
+
+        // Expect JOIN
+        if !self.check_keyword(Keyword::JOIN) {
+            self.pos = start_pos;
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Check for inserted/deleted magic table
+        if !self.check_inserted_or_deleted() {
+            self.pos = start_pos;
+            return None;
+        }
+        let magic_table = self.current_word_value().unwrap_or_default();
+        self.advance();
+        self.skip_whitespace();
+
+        // Parse magic alias
+        let magic_alias = match self.try_parse_any_identifier() {
+            Some(alias) => alias,
+            None => {
+                self.pos = start_pos;
+                return None;
+            }
+        };
+        self.skip_whitespace();
+
+        // Expect ON keyword
+        if !self.check_keyword(Keyword::ON) {
+            self.pos = start_pos;
+            return None;
+        }
+        self.advance();
+        self.skip_whitespace();
+
+        // Extract ON clause (everything until semicolon or end)
+        let on_start = self.current_byte_offset();
+        while !self.is_at_end() && !self.check_token(&Token::SemiColon) {
+            self.advance();
+        }
+        let on_end = self.current_byte_offset();
+        let on_clause = self.source[on_start..on_end].trim().to_string();
+
+        Some(UpdateStatement {
+            update_alias,
+            set_clause,
+            schema,
+            table,
+            table_alias,
+            magic_table,
+            magic_alias,
+            on_clause,
+        })
+    }
+
+    /// Parse a table name: [schema].[table] or schema.table
+    fn parse_table_name(&mut self) -> Option<(String, String)> {
+        // Try bracketed form first
+        if let Some(first) = self.try_parse_bracketed_identifier() {
+            self.skip_whitespace();
+            if self.check_token(&Token::Period) {
+                self.advance();
+                self.skip_whitespace();
+                if let Some(second) = self.try_parse_bracketed_identifier() {
+                    return Some((first, second));
+                } else if let Some(second) = self.try_parse_any_identifier() {
+                    return Some((first, second));
+                }
+            }
+            // Single bracketed identifier - might be just table name, use dbo as default
+            return Some(("dbo".to_string(), first));
+        }
+
+        // Try unbracketed form
+        if let Some(first) = self.try_parse_any_identifier() {
+            self.skip_whitespace();
+            if self.check_token(&Token::Period) {
+                self.advance();
+                self.skip_whitespace();
+                if let Some(second) = self.try_parse_bracketed_identifier() {
+                    return Some((first, second));
+                } else if let Some(second) = self.try_parse_any_identifier() {
+                    return Some((first, second));
+                }
+            }
+            // Single identifier - use as table with dbo schema
+            return Some(("dbo".to_string(), first));
+        }
+
+        None
+    }
+
+    /// Try to parse a bracketed identifier like [Name]
+    fn try_parse_bracketed_identifier(&mut self) -> Option<String> {
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                if w.quote_style == Some('[') {
+                    let name = w.value.clone();
+                    self.advance();
+                    return Some(name);
+                }
+            }
+        }
+        None
+    }
+
+    /// Try to parse any identifier (not a keyword)
+    fn try_parse_any_identifier(&mut self) -> Option<String> {
+        // Try bracketed first
+        if let Some(name) = self.try_parse_bracketed_identifier() {
+            return Some(name);
+        }
+
+        // Then try unbracketed word
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                // Skip SQL keywords that would terminate the expression
+                let upper = w.value.to_uppercase();
+                if matches!(
+                    upper.as_str(),
+                    "SET"
+                        | "FROM"
+                        | "INNER"
+                        | "JOIN"
+                        | "ON"
+                        | "WHERE"
+                        | "AND"
+                        | "OR"
+                        | "ORDER"
+                        | "GROUP"
+                        | "HAVING"
+                ) {
+                    return None;
+                }
+                // Also check sqlparser keyword enum
+                if matches!(
+                    w.keyword,
+                    Keyword::SET
+                        | Keyword::FROM
+                        | Keyword::INNER
+                        | Keyword::JOIN
+                        | Keyword::ON
+                        | Keyword::WHERE
+                        | Keyword::AND
+                        | Keyword::OR
+                        | Keyword::ORDER
+                        | Keyword::GROUP
+                        | Keyword::HAVING
+                ) {
+                    return None;
+                }
+
+                let ident = w.value.clone();
+                self.advance();
+                return Some(ident);
+            }
+        }
+        None
+    }
+
+    /// Get the value of the current word token (if any)
+    fn current_word_value(&self) -> Option<String> {
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                return Some(w.value.clone());
+            }
+        }
+        None
+    }
+
+    /// Scan tokens until we find a specific keyword, returning true if found
+    fn scan_until_keyword(&mut self, keyword: Keyword) -> bool {
+        while !self.is_at_end() {
+            if self.check_keyword(keyword) {
+                return true;
+            }
+            self.advance();
+        }
+        false
+    }
+
+    /// Check if current token is "inserted" or "deleted" (case-insensitive)
+    fn check_inserted_or_deleted(&self) -> bool {
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                return w.value.eq_ignore_ascii_case("inserted")
+                    || w.value.eq_ignore_ascii_case("deleted");
+            }
+        }
+        false
+    }
+
+    /// Get current byte offset in source text
+    fn current_byte_offset(&self) -> usize {
+        if let Some(token) = self.current_token() {
+            // Convert line/column to byte offset
+            location_to_byte_offset(
+                &self.line_offsets,
+                token.span.start.line,
+                token.span.start.column,
+            )
+        } else {
+            self.source.len()
+        }
+    }
+
+    /// Skip whitespace tokens
+    fn skip_whitespace(&mut self) {
+        while !self.is_at_end() {
+            if let Some(token) = self.current_token() {
+                if matches!(&token.token, Token::Whitespace(_)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Check if at end of tokens
+    fn is_at_end(&self) -> bool {
+        self.pos >= self.tokens.len()
+    }
+
+    /// Get current token without consuming
+    fn current_token(&self) -> Option<&sqlparser::tokenizer::TokenWithSpan> {
+        self.tokens.get(self.pos)
+    }
+
+    /// Advance to next token
+    fn advance(&mut self) {
+        if !self.is_at_end() {
+            self.pos += 1;
+        }
+    }
+
+    /// Check if current token is a specific keyword
+    fn check_keyword(&self, keyword: Keyword) -> bool {
+        if let Some(token) = self.current_token() {
+            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
+        } else {
+            false
+        }
+    }
+
+    /// Check if current token matches a specific token type
+    fn check_token(&self, expected: &Token) -> bool {
+        if let Some(token) = self.current_token() {
+            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
+        } else {
+            false
+        }
+    }
+}
+
+// =============================================================================
 // Body Dependency Token Scanner (Phase 20.2.1)
 // =============================================================================
 // Replaces TOKEN_RE regex with tokenizer-based scanning for body dependency extraction.
@@ -7757,49 +8139,44 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
     }
 
     // Process UPDATE with alias pattern: UPDATE alias SET ... FROM [schema].[table] alias JOIN inserted/deleted ON ...
-    for cap in UPDATE_ALIAS_RE.captures_iter(body) {
-        let update_alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let set_clause = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let schema = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-        let table = cap.get(4).map(|m| m.as_str()).unwrap_or("");
-        let table_alias = cap.get(5).map(|m| m.as_str()).unwrap_or("");
-        let magic_alias = cap.get(7).map(|m| m.as_str()).unwrap_or("");
-        let on_clause = cap.get(8).map(|m| m.as_str()).unwrap_or("");
+    // Uses tokenized parsing (Phase 20.4.7) instead of UPDATE_ALIAS_RE regex
+    if let Some(mut parser) = UpdateTokenParser::new(body) {
+        for stmt in parser.extract_statements() {
+            let table_ref = format!("[{}].[{}]", stmt.schema, stmt.table);
 
-        let table_ref = format!("[{}].[{}]", schema, table);
+            // Add aliases
+            table_aliases.insert(stmt.update_alias.to_lowercase(), table_ref.clone());
+            table_aliases.insert(stmt.table_alias.to_lowercase(), table_ref.clone());
+            table_aliases.insert(stmt.magic_alias.to_lowercase(), parent_ref.to_string());
 
-        // Add aliases
-        table_aliases.insert(update_alias.to_lowercase(), table_ref.clone());
-        table_aliases.insert(table_alias.to_lowercase(), table_ref.clone());
-        table_aliases.insert(magic_alias.to_lowercase(), parent_ref.to_string());
-
-        // Emit table reference first
-        if !seen.contains(&table_ref) {
-            seen.insert(table_ref.clone());
-            deps.push(BodyDependency::ObjectRef(table_ref.clone()));
-        }
-
-        // Process ON clause FIRST - extract alias.[col] patterns (these can be duplicated)
-        // Use tokenized extraction instead of ALIAS_COL_RE regex
-        for (alias, col) in extract_alias_column_refs_tokenized(on_clause) {
-            let alias_lower = alias.to_lowercase();
-
-            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
-                let col_ref = format!("{}.[{}]", resolved_table, col);
-                // DotNet allows duplicates for columns in ON clause
-                deps.push(BodyDependency::ObjectRef(col_ref));
+            // Emit table reference first
+            if !seen.contains(&table_ref) {
+                seen.insert(table_ref.clone());
+                deps.push(BodyDependency::ObjectRef(table_ref.clone()));
             }
-        }
 
-        // Process SET clause - extract alias.[col] = patterns
-        // Use tokenized extraction instead of ALIAS_COL_RE regex
-        for (alias, col) in extract_alias_column_refs_tokenized(set_clause) {
-            let alias_lower = alias.to_lowercase();
+            // Process ON clause FIRST - extract alias.[col] patterns (these can be duplicated)
+            // Use tokenized extraction instead of ALIAS_COL_RE regex
+            for (alias, col) in extract_alias_column_refs_tokenized(&stmt.on_clause) {
+                let alias_lower = alias.to_lowercase();
 
-            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
-                let col_ref = format!("{}.[{}]", resolved_table, col);
-                // DotNet allows duplicates for SET clause columns too
-                deps.push(BodyDependency::ObjectRef(col_ref));
+                if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                    let col_ref = format!("{}.[{}]", resolved_table, col);
+                    // DotNet allows duplicates for columns in ON clause
+                    deps.push(BodyDependency::ObjectRef(col_ref));
+                }
+            }
+
+            // Process SET clause - extract alias.[col] = patterns
+            // Use tokenized extraction instead of ALIAS_COL_RE regex
+            for (alias, col) in extract_alias_column_refs_tokenized(&stmt.set_clause) {
+                let alias_lower = alias.to_lowercase();
+
+                if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                    let col_ref = format!("{}.[{}]", resolved_table, col);
+                    // DotNet allows duplicates for SET clause columns too
+                    deps.push(BodyDependency::ObjectRef(col_ref));
+                }
             }
         }
     }
@@ -11136,5 +11513,246 @@ FROM [dbo].[Account] A
         let stmt = &stmts[0];
         assert_eq!(stmt.alias1.as_deref(), Some("ins"));
         assert_eq!(stmt.alias2.as_deref(), Some("del"));
+    }
+
+    // =========================================================================
+    // UpdateTokenParser Tests (Phase 20.4.7)
+    // =========================================================================
+    // Tests for token-based UPDATE...FROM...JOIN parsing (replaces UPDATE_ALIAS_RE regex pattern).
+
+    #[test]
+    fn test_update_parser_basic() {
+        // Basic UPDATE alias SET ... FROM [schema].[table] alias INNER JOIN inserted alias ON ...
+        let sql = r#"
+            UPDATE p
+            SET p.[Name] = i.[Name], p.[Price] = i.[Price]
+            FROM [dbo].[Products] p
+            INNER JOIN inserted i ON p.[Id] = i.[Id];
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.update_alias, "p");
+        assert_eq!(stmt.schema, "dbo");
+        assert_eq!(stmt.table, "Products");
+        assert_eq!(stmt.table_alias, "p");
+        assert_eq!(stmt.magic_table.to_lowercase(), "inserted");
+        assert_eq!(stmt.magic_alias, "i");
+        assert!(stmt.set_clause.contains("p.[Name]"));
+        assert!(stmt.on_clause.contains("p.[Id]"));
+    }
+
+    #[test]
+    fn test_update_parser_with_deleted() {
+        // UPDATE with JOIN to deleted instead of inserted
+        let sql = r#"
+            UPDATE t
+            SET t.[Status] = 'DELETED'
+            FROM [dbo].[Audit] t
+            INNER JOIN deleted d ON t.[Id] = d.[Id];
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.update_alias, "t");
+        assert_eq!(stmt.magic_table.to_lowercase(), "deleted");
+        assert_eq!(stmt.magic_alias, "d");
+    }
+
+    #[test]
+    fn test_update_parser_without_inner_keyword() {
+        // UPDATE with JOIN (without INNER keyword)
+        let sql = r#"
+            UPDATE p
+            SET p.[Name] = i.[Name]
+            FROM [dbo].[Products] p
+            JOIN inserted i ON p.[Id] = i.[Id];
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.update_alias, "p");
+        assert_eq!(stmt.table_alias, "p");
+    }
+
+    #[test]
+    fn test_update_parser_with_whitespace() {
+        // UPDATE with tabs and newlines
+        let sql = "UPDATE\tp\n\tSET\tp.[Name] = i.[Name]\n\tFROM\t[dbo].[Products]\tp\n\tINNER JOIN inserted i ON p.[Id] = i.[Id];";
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.update_alias, "p");
+        assert_eq!(stmt.schema, "dbo");
+        assert_eq!(stmt.table, "Products");
+    }
+
+    #[test]
+    fn test_update_parser_case_insensitive() {
+        // Keywords in different cases
+        let sql = r#"
+            update p
+            SET p.[Name] = i.[Name]
+            from [dbo].[Products] p
+            INNER join INSERTED i on p.[Id] = i.[Id];
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.update_alias, "p");
+        assert!(stmt.magic_table.eq_ignore_ascii_case("inserted"));
+    }
+
+    #[test]
+    fn test_update_parser_empty() {
+        let sql = "";
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert!(stmts.is_empty());
+    }
+
+    #[test]
+    fn test_update_parser_no_matching_pattern() {
+        // Regular UPDATE without JOIN to inserted/deleted
+        let sql = r#"
+            UPDATE [dbo].[Products]
+            SET [Name] = 'New Name'
+            WHERE [Id] = 1;
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert!(stmts.is_empty());
+    }
+
+    #[test]
+    fn test_update_parser_update_without_from() {
+        // UPDATE alias SET without FROM clause
+        let sql = r#"
+            UPDATE p
+            SET p.[Name] = 'New Name';
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert!(stmts.is_empty());
+    }
+
+    #[test]
+    fn test_update_parser_join_to_regular_table() {
+        // UPDATE with JOIN to a regular table (not inserted/deleted)
+        let sql = r#"
+            UPDATE p
+            SET p.[Name] = t.[Name]
+            FROM [dbo].[Products] p
+            INNER JOIN [dbo].[Temp] t ON p.[Id] = t.[Id];
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert!(stmts.is_empty());
+    }
+
+    #[test]
+    fn test_update_parser_complex_set_clause() {
+        // UPDATE with complex SET clause (multiple columns, GETDATE())
+        let sql = r#"
+            UPDATE p
+            SET
+                p.[Name] = i.[Name],
+                p.[Price] = i.[Price],
+                p.[ModifiedAt] = GETDATE()
+            FROM [dbo].[Products] p
+            INNER JOIN inserted i ON p.[Id] = i.[Id];
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert!(stmt.set_clause.contains("p.[Name]"));
+        assert!(stmt.set_clause.contains("p.[Price]"));
+        assert!(stmt.set_clause.contains("GETDATE()"));
+    }
+
+    #[test]
+    fn test_update_parser_complex_on_clause() {
+        // UPDATE with complex ON clause (multiple conditions)
+        let sql = r#"
+            UPDATE p
+            SET p.[Name] = i.[Name]
+            FROM [dbo].[Products] p
+            INNER JOIN inserted i ON p.[Id] = i.[Id] AND p.[Version] = i.[Version];
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert!(stmt.on_clause.contains("p.[Id]"));
+        assert!(stmt.on_clause.contains("i.[Id]"));
+    }
+
+    #[test]
+    fn test_update_parser_alias_differences() {
+        // UPDATE where update_alias differs from table_alias (rare but possible)
+        let sql = r#"
+            UPDATE upd
+            SET upd.[Name] = i.[Name]
+            FROM [dbo].[Products] tbl
+            INNER JOIN inserted i ON tbl.[Id] = i.[Id];
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.update_alias, "upd");
+        assert_eq!(stmt.table_alias, "tbl");
+    }
+
+    #[test]
+    fn test_update_parser_multiple_spaces() {
+        // UPDATE with multiple spaces between tokens
+        let sql = "UPDATE   p   SET   p.[Name] = i.[Name]   FROM   [dbo].[Products]   p   INNER   JOIN   inserted   i   ON   p.[Id] = i.[Id];";
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.update_alias, "p");
+        assert_eq!(stmt.schema, "dbo");
+    }
+
+    #[test]
+    fn test_update_parser_unbracketed_schema_table() {
+        // UPDATE with unbracketed schema.table
+        let sql = r#"
+            UPDATE p
+            SET p.[Name] = i.[Name]
+            FROM dbo.Products p
+            INNER JOIN inserted i ON p.[Id] = i.[Id];
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.schema, "dbo");
+        assert_eq!(stmt.table, "Products");
+    }
+
+    #[test]
+    fn test_update_parser_custom_schema() {
+        // UPDATE with custom schema (not dbo)
+        let sql = r#"
+            UPDATE p
+            SET p.[Name] = i.[Name]
+            FROM [Sales].[Products] p
+            INNER JOIN inserted i ON p.[Id] = i.[Id];
+        "#;
+        let mut parser = UpdateTokenParser::new(sql).unwrap();
+        let stmts = parser.extract_statements();
+        assert_eq!(stmts.len(), 1);
+        let stmt = &stmts[0];
+        assert_eq!(stmt.schema, "Sales");
+        assert_eq!(stmt.table, "Products");
     }
 }
