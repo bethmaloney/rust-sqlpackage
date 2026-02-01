@@ -56,9 +56,8 @@ pub(crate) fn write_header<W: Write>(
     }
 
     // SQLCMD variables (all in one CustomData element)
-    if !project.sqlcmd_variables.is_empty() {
-        write_sqlcmd_variables(writer, &project.sqlcmd_variables)?;
-    }
+    // Note: DotNet always emits this element, even when empty
+    write_sqlcmd_variables(writer, &project.sqlcmd_variables)?;
 
     writer.write_event(Event::End(BytesEnd::new("Header")))?;
     Ok(())
@@ -116,6 +115,10 @@ fn write_package_reference<W: Write>(
 ///   <Metadata Name="MaxConnections" Value="" />
 /// </CustomData>
 /// ```
+/// When no variables are defined, writes a self-closing empty element:
+/// ```xml
+/// <CustomData Category="SqlCmdVariables" Type="SqlCmdVariable" />
+/// ```
 fn write_sqlcmd_variables<W: Write>(
     writer: &mut Writer<W>,
     sqlcmd_vars: &[crate::project::SqlCmdVariable],
@@ -123,16 +126,22 @@ fn write_sqlcmd_variables<W: Write>(
     // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
     let custom_data = BytesStart::new("CustomData")
         .with_attributes([("Category", "SqlCmdVariables"), ("Type", "SqlCmdVariable")]);
-    writer.write_event(Event::Start(custom_data))?;
 
-    // Write each variable as a Metadata element with the variable name as Name attribute
-    for sqlcmd_var in sqlcmd_vars {
-        let metadata = BytesStart::new("Metadata")
-            .with_attributes([("Name", sqlcmd_var.name.as_str()), ("Value", "")]);
-        writer.write_event(Event::Empty(metadata))?;
+    if sqlcmd_vars.is_empty() {
+        // Write self-closing element when no variables are defined
+        writer.write_event(Event::Empty(custom_data))?;
+    } else {
+        writer.write_event(Event::Start(custom_data))?;
+
+        // Write each variable as a Metadata element with the variable name as Name attribute
+        for sqlcmd_var in sqlcmd_vars {
+            let metadata = BytesStart::new("Metadata")
+                .with_attributes([("Name", sqlcmd_var.name.as_str()), ("Value", "")]);
+            writer.write_event(Event::Empty(metadata))?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("CustomData")))?;
     }
-
-    writer.write_event(Event::End(BytesEnd::new("CustomData")))?;
     Ok(())
 }
 

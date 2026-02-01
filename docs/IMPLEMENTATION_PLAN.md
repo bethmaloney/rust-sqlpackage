@@ -22,7 +22,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 21.3 complete: Extract Element Writers (3/3 tasks)
 - Target: Break 13,413-line file into ~9 logical submodules (currently ~10,235 lines)
 
-**Discovered: Phase 22 - Layer 7 Canonical XML Parity** (0/4 tasks)
+**Discovered: Phase 22 - Layer 7 Canonical XML Parity** (2/4 tasks)
 - Layer 7 now performs true 1-1 XML comparison (no sorting/normalization)
 - All 48 fixtures fail with systematic differences (CollationCaseSensitive, missing CustomData elements)
 - See Phase 22 section below for detailed task breakdown
@@ -35,7 +35,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Relationships | 46/48 | 95.8% |
 | Layer 4 (Ordering) | 48/48 | 100% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 0/48 | 0% |
+| Layer 7 (Canonical XML) | 2/48 | 4.2% |
 
 ### Excluded Fixtures
 
@@ -228,7 +228,7 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 21.4.1 | Create `body_deps.rs` for dependency extraction | ✅ | Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScanner, TableAliasTokenParser, QualifiedName, extract_body_dependencies, extract_table_refs_tokenized, parse_qualified_name_tokenized, and helper functions. ~2,200 lines including tests. |
-| 21.4.2 | Create `qualified_name.rs` for name parsing | ⬜ | `QualifiedName` struct and impl, `parse_qualified_name_tokenized` (~300 lines) |
+| 21.4.2 | Create `qualified_name.rs` for name parsing | ⬜ | `QualifiedName` struct and impl, `parse_qualified_name_tokenized` (~300 lines). **Note:** QualifiedName is already well-integrated in body_deps.rs (~130 lines) and extraction to a separate module would add unnecessary complexity. Consider marking as not needed or re-evaluating scope. |
 
 ### Phase 21.5: Extract Remaining Writers (0/1)
 
@@ -249,7 +249,7 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 
 ---
 
-## Phase 22: Layer 7 Canonical XML Parity (0/4)
+## Phase 22: Layer 7 Canonical XML Parity (2/4)
 
 **Location:** `src/dacpac/model_xml/` - header.rs, mod.rs
 
@@ -266,17 +266,17 @@ Line 2: Rust='CollationCaseSensitive="False"', DotNet='CollationCaseSensitive="T
 Line 13: Rust='</Header>', DotNet='<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable" />'
 ```
 
-### Phase 22.1: Fix CollationCaseSensitive Attribute (0/1)
+### Phase 22.1: Fix CollationCaseSensitive Attribute (1/1) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 22.1.1 | Set CollationCaseSensitive="True" to match DotNet | ⬜ | DataSchemaModel root element attribute. DotNet defaults to True, Rust outputs False. Location: `generate_model_xml()` in mod.rs |
+| 22.1.1 | Set CollationCaseSensitive="True" to match DotNet | ✅ | DataSchemaModel root element attribute. DotNet defaults to True, Rust outputs False. Location: `generate_model_xml()` in mod.rs |
 
-### Phase 22.2: Fix Missing CustomData Elements (0/2)
+### Phase 22.2: Fix Missing CustomData Elements (1/2)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 22.2.1 | Add empty SqlCmdVariables CustomData element | ⬜ | `<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable" />` should be emitted even when no SQLCMD variables are defined. Location: `write_header()` in header.rs |
+| 22.2.1 | Add empty SqlCmdVariables CustomData element | ✅ | `<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable" />` should be emitted even when no SQLCMD variables are defined. Location: `write_header()` in header.rs |
 | 22.2.2 | Verify other CustomData elements match DotNet | ⬜ | Check for other missing CustomData categories in Header section |
 
 ### Phase 22.3: Fix Element/Property Ordering (0/1)

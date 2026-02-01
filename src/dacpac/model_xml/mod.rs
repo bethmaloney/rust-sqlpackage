@@ -149,7 +149,7 @@ pub fn generate_model_xml<W: Write>(
         ("SchemaVersion", model.schema_version.as_str()),
         ("DspName", project.target_platform.dsp_name()),
         ("CollationLcid", collation_lcid.as_str()),
-        ("CollationCaseSensitive", "False"),
+        ("CollationCaseSensitive", "True"),
         ("xmlns", NAMESPACE),
     ]);
     xml_writer.write_event(Event::Start(root))?;
