@@ -110,9 +110,8 @@ static UNBRACKETED_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
 // Note: BRACKETED_IDENT_RE has been replaced with extract_bracketed_identifiers_tokenized() in Phase 20.2.4
 // The token-based function handles whitespace, comments, and multi-part references correctly.
 
-/// CAST expression pattern
-static CAST_EXPR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)(CAST)\s*\([^)]+\s+AS\s+(\w+)").unwrap());
+// Note: CAST_EXPR_RE has been replaced with extract_cast_expressions_tokenized() in Phase 20.3.3
+// The token-based function handles whitespace, nested parentheses, and comments correctly.
 
 /// AS keyword pattern for function body extraction
 static AS_KEYWORD_RE: LazyLock<Regex> =
@@ -2122,6 +2121,142 @@ fn parse_tvf_column_type_tokenized(type_str: &str) -> Option<TvfColumnTypeInfo> 
         first_num,
         second_num,
     })
+}
+
+/// Result from tokenized CAST expression parsing.
+///
+/// Contains the extracted type name and byte positions for ordering column references.
+#[derive(Debug, PartialEq)]
+struct CastExprInfo {
+    /// The data type being cast to, in lowercase (e.g., "nvarchar", "int")
+    type_name: String,
+    /// Byte position where the CAST keyword starts
+    cast_start: usize,
+    /// Byte position where the CAST expression ends (after closing paren or type)
+    cast_end: usize,
+    /// Byte position of the CAST keyword itself (for type reference ordering)
+    cast_keyword_pos: usize,
+}
+
+/// Extract CAST expressions from SQL text using tokenization.
+///
+/// This function replaces CAST_EXPR_RE regex pattern. It scans for CAST expressions
+/// and extracts the target type name along with positions for proper ordering.
+///
+/// Pattern matched: `CAST(expression AS type)`
+///
+/// # Arguments
+/// * `sql` - SQL text containing expressions (e.g., CHECK constraint or computed column)
+///
+/// # Returns
+/// A vector of `CastExprInfo` containing type names and positions.
+fn extract_cast_expressions_tokenized(sql: &str) -> Vec<CastExprInfo> {
+    let mut results = Vec::new();
+    let sql_trimmed = sql.trim();
+    if sql_trimmed.is_empty() {
+        return results;
+    }
+
+    let dialect = MsSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, sql).tokenize_with_location() else {
+        return results;
+    };
+
+    // Build line offset map for byte position calculation
+    let line_offsets = compute_line_offsets(sql);
+
+    let len = tokens.len();
+    let mut i = 0;
+
+    // Helper to skip whitespace tokens
+    let skip_whitespace =
+        |tokens: &[sqlparser::tokenizer::TokenWithSpan], mut idx: usize| -> usize {
+            while idx < tokens.len() && matches!(&tokens[idx].token, Token::Whitespace(_)) {
+                idx += 1;
+            }
+            idx
+        };
+
+    while i < len {
+        // Look for CAST keyword (unquoted word)
+        if let Token::Word(w) = &tokens[i].token {
+            if w.quote_style.is_none() && w.value.eq_ignore_ascii_case("CAST") {
+                let cast_keyword_pos = location_to_byte_offset(
+                    &line_offsets,
+                    tokens[i].span.start.line,
+                    tokens[i].span.start.column,
+                );
+                let cast_start = cast_keyword_pos;
+
+                // Move past CAST keyword
+                let mut j = i + 1;
+                j = skip_whitespace(&tokens, j);
+
+                // Expect opening parenthesis
+                if j < len && matches!(&tokens[j].token, Token::LParen) {
+                    j += 1;
+
+                    // Track parenthesis nesting to find the AS keyword at the right level
+                    let mut paren_depth = 1;
+                    let mut as_pos = None;
+
+                    while j < len && paren_depth > 0 {
+                        match &tokens[j].token {
+                            Token::LParen => paren_depth += 1,
+                            Token::RParen => {
+                                paren_depth -= 1;
+                                if paren_depth == 0 {
+                                    break;
+                                }
+                            }
+                            Token::Word(w)
+                                if w.quote_style.is_none()
+                                    && w.value.eq_ignore_ascii_case("AS")
+                                    && paren_depth == 1 =>
+                            {
+                                // Found AS at the outermost level of CAST
+                                as_pos = Some(j);
+                            }
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+
+                    // If we found AS, extract the type name after it
+                    if let Some(as_idx) = as_pos {
+                        let mut type_idx = as_idx + 1;
+                        type_idx = skip_whitespace(&tokens, type_idx);
+
+                        if type_idx < len {
+                            // Extract type name (could be a Word token)
+                            if let Token::Word(type_word) = &tokens[type_idx].token {
+                                let type_name = type_word.value.to_lowercase();
+
+                                // Calculate cast_end position
+                                // Find the closing paren position
+                                let cast_end = if j < len {
+                                    let loc = &tokens[j].span.start;
+                                    location_to_byte_offset(&line_offsets, loc.line, loc.column) + 1
+                                } else {
+                                    sql.len()
+                                };
+
+                                results.push(CastExprInfo {
+                                    type_name,
+                                    cast_start,
+                                    cast_end,
+                                    cast_keyword_pos,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    results
 }
 
 /// Extract column aliases from SQL text using tokenization.
@@ -5205,18 +5340,17 @@ fn extract_expression_column_references(
 
     // Track CAST ranges so we can skip column references inside CAST expressions
     // (they'll be processed separately after the CAST type ref)
+    // Uses token-based extraction (Phase 20.3.3) for better whitespace handling
     let mut cast_ranges: Vec<(usize, usize, usize)> = Vec::new(); // (cast_start, cast_end, type_pos)
-    for cap in CAST_EXPR_RE.captures_iter(expression) {
-        if let (Some(cast_match), Some(type_match)) = (cap.get(1), cap.get(2)) {
-            let cast_start = cap.get(0).map(|m| m.start()).unwrap_or(0);
-            let cast_end = cap.get(0).map(|m| m.end()).unwrap_or(0);
-            let type_name = type_match.as_str().to_lowercase();
-            // Emit type reference at the CAST keyword position (before inner column refs)
-            let type_ref = format!("[{}]", type_name);
-            let cast_pos = cast_match.start();
-            position_refs.push((cast_pos, type_ref));
-            cast_ranges.push((cast_start, cast_end, cast_pos));
-        }
+    for cast_info in extract_cast_expressions_tokenized(expression) {
+        // Emit type reference at the CAST keyword position (before inner column refs)
+        let type_ref = format!("[{}]", cast_info.type_name);
+        position_refs.push((cast_info.cast_keyword_pos, type_ref));
+        cast_ranges.push((
+            cast_info.cast_start,
+            cast_info.cast_end,
+            cast_info.cast_keyword_pos,
+        ));
     }
 
     // Collect column references with their positions using token-based extraction
@@ -9786,5 +9920,139 @@ FROM [dbo].[Account] A
                 second_num: None,
             })
         );
+    }
+
+    // ==========================================
+    // Phase 20.3.3: CAST Expression Tokenized Tests
+    // ==========================================
+
+    #[test]
+    fn test_cast_expr_simple_int() {
+        let result = extract_cast_expressions_tokenized("CAST([Value] AS INT)");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "int");
+        assert_eq!(result[0].cast_start, 0);
+    }
+
+    #[test]
+    fn test_cast_expr_simple_nvarchar() {
+        let result = extract_cast_expressions_tokenized("CAST([Name] AS NVARCHAR)");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "nvarchar");
+    }
+
+    #[test]
+    fn test_cast_expr_with_length() {
+        // The type name is captured as just the base type (nvarchar), not including (100)
+        let result = extract_cast_expressions_tokenized("CAST([Name] AS NVARCHAR(100))");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "nvarchar");
+    }
+
+    #[test]
+    fn test_cast_expr_lowercase() {
+        let result = extract_cast_expressions_tokenized("cast([value] as varchar)");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "varchar");
+    }
+
+    #[test]
+    fn test_cast_expr_mixed_case() {
+        let result = extract_cast_expressions_tokenized("Cast([Value] As NVarChar)");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "nvarchar");
+    }
+
+    #[test]
+    fn test_cast_expr_with_whitespace() {
+        let result = extract_cast_expressions_tokenized("CAST  (  [Value]   AS   INT  )");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "int");
+    }
+
+    #[test]
+    fn test_cast_expr_with_tabs() {
+        let result = extract_cast_expressions_tokenized("CAST\t(\t[Value]\tAS\tINT\t)");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "int");
+    }
+
+    #[test]
+    fn test_cast_expr_with_newlines() {
+        let result = extract_cast_expressions_tokenized("CAST(\n    [Value]\n    AS\n    INT\n)");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "int");
+    }
+
+    #[test]
+    fn test_cast_expr_multiple() {
+        let result = extract_cast_expressions_tokenized(
+            "CAST([A] AS INT) + CAST([B] AS VARCHAR) + CAST([C] AS DECIMAL)",
+        );
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].type_name, "int");
+        assert_eq!(result[1].type_name, "varchar");
+        assert_eq!(result[2].type_name, "decimal");
+    }
+
+    #[test]
+    fn test_cast_expr_nested_function() {
+        // CAST with a function call inside - should still find the AS type
+        let result = extract_cast_expressions_tokenized("CAST(LEN([Name]) AS INT)");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "int");
+    }
+
+    #[test]
+    fn test_cast_expr_nested_parens() {
+        // Expression with nested parentheses inside CAST
+        let result =
+            extract_cast_expressions_tokenized("CAST(([A] + [B]) * ([C] - [D]) AS DECIMAL)");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "decimal");
+    }
+
+    #[test]
+    fn test_cast_expr_no_cast() {
+        // No CAST expression
+        let result = extract_cast_expressions_tokenized("[A] + [B]");
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_cast_expr_in_expression() {
+        // CAST in a larger expression
+        let result = extract_cast_expressions_tokenized("[Quantity] * CAST([Price] AS MONEY)");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "money");
+    }
+
+    #[test]
+    fn test_cast_expr_position_ordering() {
+        // Verify positions are correct for ordering
+        let result = extract_cast_expressions_tokenized("ABC CAST([X] AS INT) DEF");
+        assert_eq!(result.len(), 1);
+        // CAST starts at position 4 (after "ABC ")
+        assert_eq!(result[0].cast_start, 4);
+        assert_eq!(result[0].cast_keyword_pos, 4);
+    }
+
+    #[test]
+    fn test_cast_expr_decimal_with_precision() {
+        let result = extract_cast_expressions_tokenized("CAST([Value] AS DECIMAL(18,2))");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].type_name, "decimal");
+    }
+
+    #[test]
+    fn test_cast_expr_empty_string() {
+        let result = extract_cast_expressions_tokenized("");
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_cast_expr_whitespace_only() {
+        let result = extract_cast_expressions_tokenized("   \t\n   ");
+        assert_eq!(result.len(), 0);
     }
 }
