@@ -328,12 +328,12 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 27.2.1 | Refactor all `*TokenParser` structs to use composition with base `TokenParser` | 🔄 | 9/12 parsers migrated: trigger_parser, sequence_parser, extended_property_parser, fulltext_parser, column_parser, constraint_parser, preprocess_parser, function_parser, index_parser. Remaining: procedure_parser, statement_parser, table_type_parser |
+| 27.2.1 | Refactor all `*TokenParser` structs to use composition with base `TokenParser` | 🔄 | 10/12 parsers migrated: trigger_parser, sequence_parser, extended_property_parser, fulltext_parser, column_parser, constraint_parser, preprocess_parser, function_parser, index_parser, procedure_parser. Remaining: statement_parser, table_type_parser |
 | 27.2.2 | Remove duplicate `token_to_string()` implementations, use `identifier_utils::format_token()` | ⬜ | 6+ files have redundant implementations |
 
 **Progress Notes:**
 - Created `src/parser/token_parser_base.rs` with shared `TokenParser` struct containing common helper methods
-- Refactored 9 parsers to use composition with base `TokenParser`:
+- Refactored 10 parsers to use composition with base `TokenParser`:
   - `trigger_parser.rs`
   - `sequence_parser.rs`
   - `extended_property_parser.rs`
@@ -343,8 +343,8 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
   - `preprocess_parser.rs`
   - `function_parser.rs`
   - `index_parser.rs` (2026-02-01)
-- Remaining 3 parsers still need refactoring:
-  - `procedure_parser.rs`
+  - `procedure_parser.rs` (2026-02-01) - removed ~120 lines of duplicate helper methods
+- Remaining 2 parsers still need refactoring:
   - `statement_parser.rs`
   - `table_type_parser.rs`
 

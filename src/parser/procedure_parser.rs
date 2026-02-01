@@ -3,6 +3,7 @@
 //! This module provides token-based parsing for procedure definitions, replacing
 //! the previous regex-based approach. Part of Phase 15.3 of the implementation plan.
 //! Extended in Phase 20.1.1 to add full parameter parsing.
+//! Refactored in Phase 27 to use base TokenParser.
 //!
 //! ## Supported Syntax
 //!
@@ -22,9 +23,10 @@
 //! ALTER PROC [schema].[name] AS ...
 //! ```
 
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use sqlparser::tokenizer::Token;
+
+use super::token_parser_base::TokenParser;
 
 /// Result of parsing a procedure definition using tokens
 #[derive(Debug, Clone, Default)]
@@ -54,50 +56,46 @@ pub struct TokenParsedProcedureParameter {
 
 /// Token-based procedure definition parser
 pub struct ProcedureTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl ProcedureTokenParser {
     /// Create a new parser for a procedure definition string
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(sql)?,
+        })
     }
 
     /// Parse CREATE PROCEDURE and return schema/name (without parameters)
     pub fn parse_create_procedure(&mut self) -> Option<TokenParsedProcedure> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect CREATE keyword
-        if !self.check_keyword(Keyword::CREATE) {
+        if !self.base.check_keyword(Keyword::CREATE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Check for optional OR ALTER
-        if self.check_keyword(Keyword::OR) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_keyword(Keyword::OR) {
+            self.base.advance();
+            self.base.skip_whitespace();
 
-            if !self.check_keyword(Keyword::ALTER) {
+            if !self.base.check_keyword(Keyword::ALTER) {
                 return None;
             }
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Expect PROCEDURE or PROC keyword
-        if !self.check_keyword(Keyword::PROCEDURE) && !self.check_word_ci("PROC") {
+        if !self.base.check_keyword(Keyword::PROCEDURE) && !self.base.check_word_ci("PROC") {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse the schema-qualified name
         self.parse_schema_qualified_name()
@@ -105,37 +103,37 @@ impl ProcedureTokenParser {
 
     /// Parse CREATE PROCEDURE with full parameter extraction
     pub fn parse_create_procedure_full(&mut self) -> Option<TokenParsedProcedure> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect CREATE keyword
-        if !self.check_keyword(Keyword::CREATE) {
+        if !self.base.check_keyword(Keyword::CREATE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Check for optional OR ALTER
-        if self.check_keyword(Keyword::OR) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_keyword(Keyword::OR) {
+            self.base.advance();
+            self.base.skip_whitespace();
 
-            if !self.check_keyword(Keyword::ALTER) {
+            if !self.base.check_keyword(Keyword::ALTER) {
                 return None;
             }
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Expect PROCEDURE or PROC keyword
-        if !self.check_keyword(Keyword::PROCEDURE) && !self.check_word_ci("PROC") {
+        if !self.base.check_keyword(Keyword::PROCEDURE) && !self.base.check_word_ci("PROC") {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse the schema-qualified name
-        let (schema, name) = self.parse_schema_qualified_name_parts()?;
-        self.skip_whitespace();
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Parse parameters (between procedure name and AS keyword)
         let parameters = self.parse_parameters();
@@ -149,21 +147,21 @@ impl ProcedureTokenParser {
 
     /// Parse ALTER PROCEDURE and return schema/name (without parameters)
     pub fn parse_alter_procedure(&mut self) -> Option<TokenParsedProcedure> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect ALTER keyword
-        if !self.check_keyword(Keyword::ALTER) {
+        if !self.base.check_keyword(Keyword::ALTER) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect PROCEDURE or PROC keyword
-        if !self.check_keyword(Keyword::PROCEDURE) && !self.check_word_ci("PROC") {
+        if !self.base.check_keyword(Keyword::PROCEDURE) && !self.base.check_word_ci("PROC") {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse the schema-qualified name
         self.parse_schema_qualified_name()
@@ -171,25 +169,25 @@ impl ProcedureTokenParser {
 
     /// Parse ALTER PROCEDURE with full parameter extraction
     pub fn parse_alter_procedure_full(&mut self) -> Option<TokenParsedProcedure> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Expect ALTER keyword
-        if !self.check_keyword(Keyword::ALTER) {
+        if !self.base.check_keyword(Keyword::ALTER) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Expect PROCEDURE or PROC keyword
-        if !self.check_keyword(Keyword::PROCEDURE) && !self.check_word_ci("PROC") {
+        if !self.base.check_keyword(Keyword::PROCEDURE) && !self.base.check_word_ci("PROC") {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse the schema-qualified name
-        let (schema, name) = self.parse_schema_qualified_name_parts()?;
-        self.skip_whitespace();
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
 
         // Parse parameters
         let parameters = self.parse_parameters();
@@ -203,30 +201,12 @@ impl ProcedureTokenParser {
 
     /// Parse a schema-qualified name: [schema].[name] or schema.name or [name] or name
     fn parse_schema_qualified_name(&mut self) -> Option<TokenParsedProcedure> {
-        let (schema, name) = self.parse_schema_qualified_name_parts()?;
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
         Some(TokenParsedProcedure {
             schema,
             name,
             parameters: Vec::new(),
         })
-    }
-
-    /// Parse a schema-qualified name and return (schema, name) parts
-    fn parse_schema_qualified_name_parts(&mut self) -> Option<(String, String)> {
-        let first_ident = self.parse_identifier()?;
-        self.skip_whitespace();
-
-        // Check if there's a dot (schema.name pattern)
-        if self.check_token(&Token::Period) {
-            self.advance();
-            self.skip_whitespace();
-
-            let second_ident = self.parse_identifier()?;
-            Some((first_ident, second_ident))
-        } else {
-            // No dot - just a name, default schema to "dbo"
-            Some(("dbo".to_string(), first_ident))
-        }
     }
 
     /// Parse procedure parameters: @param1 TYPE, @param2 TYPE OUTPUT, @items TYPE READONLY
@@ -236,24 +216,24 @@ impl ProcedureTokenParser {
 
         // Parameters are between procedure name and AS keyword
         // They may or may not be wrapped in parentheses
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Check for optional opening parenthesis
-        let has_parens = self.check_token(&Token::LParen);
+        let has_parens = self.base.check_token(&Token::LParen);
         if has_parens {
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         loop {
             // Check if we've hit the AS keyword or end of tokens
-            if self.is_at_end() || self.check_keyword(Keyword::AS) {
+            if self.base.is_at_end() || self.base.check_keyword(Keyword::AS) {
                 break;
             }
 
             // Check for closing paren (if we had opening paren)
-            if has_parens && self.check_token(&Token::RParen) {
-                self.advance();
+            if has_parens && self.base.check_token(&Token::RParen) {
+                self.base.advance();
                 break;
             }
 
@@ -262,22 +242,22 @@ impl ProcedureTokenParser {
                 params.push(param);
             } else {
                 // Not a parameter - check if it's a comma or advance
-                if self.check_token(&Token::Comma) {
-                    self.advance();
-                    self.skip_whitespace();
-                } else if self.check_keyword(Keyword::AS) {
+                if self.base.check_token(&Token::Comma) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                } else if self.base.check_keyword(Keyword::AS) {
                     break;
                 } else {
-                    self.advance();
+                    self.base.advance();
                 }
             }
 
-            self.skip_whitespace();
+            self.base.skip_whitespace();
 
             // Check for comma (more parameters)
-            if self.check_token(&Token::Comma) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_token(&Token::Comma) {
+                self.base.advance();
+                self.base.skip_whitespace();
             }
         }
 
@@ -288,11 +268,11 @@ impl ProcedureTokenParser {
     fn parse_single_parameter(&mut self) -> Option<TokenParsedProcedureParameter> {
         // Parameter name should be a Word starting with @
         let name = self.parse_parameter_name()?;
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Parse data type
         let data_type = self.parse_data_type()?;
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Now parse optional modifiers: = default, READONLY, OUTPUT/OUT
         // These can appear in various orders, so we loop until we hit a delimiter
@@ -302,27 +282,27 @@ impl ProcedureTokenParser {
 
         loop {
             // Check for default value: = ...
-            if self.check_token(&Token::Eq) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_token(&Token::Eq) {
+                self.base.advance();
+                self.base.skip_whitespace();
                 default_value = Some(self.parse_default_value());
-                self.skip_whitespace();
+                self.base.skip_whitespace();
                 continue;
             }
 
             // Check for READONLY keyword
-            if self.check_word_ci("READONLY") {
+            if self.base.check_word_ci("READONLY") {
                 is_readonly = true;
-                self.advance();
-                self.skip_whitespace();
+                self.base.advance();
+                self.base.skip_whitespace();
                 continue;
             }
 
             // Check for OUTPUT or OUT keyword (OUTPUT is not a Keyword variant, use word check)
-            if self.check_word_ci("OUTPUT") || self.check_word_ci("OUT") {
+            if self.base.check_word_ci("OUTPUT") || self.base.check_word_ci("OUT") {
                 is_output = true;
-                self.advance();
-                self.skip_whitespace();
+                self.base.advance();
+                self.base.skip_whitespace();
                 continue;
             }
 
@@ -341,16 +321,16 @@ impl ProcedureTokenParser {
 
     /// Parse parameter name (@name) and return name without @ prefix
     fn parse_parameter_name(&mut self) -> Option<String> {
-        if self.is_at_end() {
+        if self.base.is_at_end() {
             return None;
         }
 
-        let token = self.current_token()?;
+        let token = self.base.current_token()?;
         match &token.token {
             // MsSqlDialect tokenizes @name as a Word
             Token::Word(w) if w.value.starts_with('@') => {
                 let name = w.value[1..].to_string(); // Remove @ prefix
-                self.advance();
+                self.base.advance();
                 Some(name)
             }
             _ => None,
@@ -361,12 +341,12 @@ impl ProcedureTokenParser {
     fn parse_data_type(&mut self) -> Option<String> {
         // Check for schema-qualified type: [schema].[type] or schema.type
         let first_part = self.try_parse_identifier()?;
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
-        let mut result = if self.check_token(&Token::Period) {
+        let mut result = if self.base.check_token(&Token::Period) {
             // Schema-qualified type
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
 
             if let Some(second_part) = self.try_parse_identifier() {
                 // Build [schema].[type] format
@@ -381,16 +361,16 @@ impl ProcedureTokenParser {
             first_part.to_uppercase()
         };
 
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Check for type parameters in parentheses
-        if self.check_token(&Token::LParen) {
+        if self.base.check_token(&Token::LParen) {
             result.push('(');
-            self.advance();
+            self.base.advance();
 
             let mut depth = 1;
-            while !self.is_at_end() && depth > 0 {
-                if let Some(token) = self.current_token() {
+            while !self.base.is_at_end() && depth > 0 {
+                if let Some(token) = self.base.current_token() {
                     match &token.token {
                         Token::LParen => {
                             depth += 1;
@@ -406,10 +386,10 @@ impl ProcedureTokenParser {
                             // Skip whitespace inside type params
                         }
                         _ => {
-                            result.push_str(&self.token_to_string(&token.token));
+                            result.push_str(&TokenParser::token_to_string(&token.token));
                         }
                     }
-                    self.advance();
+                    self.base.advance();
                 }
             }
             result.push(')');
@@ -420,11 +400,11 @@ impl ProcedureTokenParser {
 
     /// Try to parse an identifier without consuming if not found
     fn try_parse_identifier(&mut self) -> Option<String> {
-        if self.is_at_end() {
+        if self.base.is_at_end() {
             return None;
         }
 
-        let token = self.current_token()?;
+        let token = self.base.current_token()?;
         match &token.token {
             Token::Word(w) => {
                 // Don't consume keywords that aren't type names
@@ -439,7 +419,7 @@ impl ProcedureTokenParser {
                     return None;
                 }
                 let name = w.value.clone();
-                self.advance();
+                self.base.advance();
                 Some(name)
             }
             _ => None,
@@ -460,13 +440,13 @@ impl ProcedureTokenParser {
         let mut result = String::new();
         let mut depth = 0;
 
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
+        while !self.base.is_at_end() {
+            if let Some(token) = self.base.current_token() {
                 match &token.token {
                     Token::LParen => {
                         depth += 1;
                         result.push('(');
-                        self.advance();
+                        self.base.advance();
                     }
                     Token::RParen => {
                         if depth == 0 {
@@ -474,7 +454,7 @@ impl ProcedureTokenParser {
                         }
                         depth -= 1;
                         result.push(')');
-                        self.advance();
+                        self.base.advance();
                     }
                     Token::Comma if depth == 0 => {
                         break; // Next parameter
@@ -493,11 +473,11 @@ impl ProcedureTokenParser {
                         if !result.is_empty() && !result.ends_with(' ') {
                             result.push(' ');
                         }
-                        self.advance();
+                        self.base.advance();
                     }
                     _ => {
-                        result.push_str(&self.token_to_string(&token.token));
-                        self.advance();
+                        result.push_str(&TokenParser::token_to_string(&token.token));
+                        self.base.advance();
                     }
                 }
             } else {
@@ -506,107 +486,6 @@ impl ProcedureTokenParser {
         }
 
         result.trim().to_string()
-    }
-
-    /// Convert a token to its string representation
-    fn token_to_string(&self, token: &Token) -> String {
-        match token {
-            Token::Word(w) => w.value.clone(),
-            Token::Number(n, _) => n.clone(),
-            Token::SingleQuotedString(s) => format!("'{}'", s),
-            Token::NationalStringLiteral(s) => format!("N'{}'", s),
-            Token::Comma => ",".to_string(),
-            Token::Period => ".".to_string(),
-            Token::LParen => "(".to_string(),
-            Token::RParen => ")".to_string(),
-            Token::Eq => "=".to_string(),
-            Token::Minus => "-".to_string(),
-            Token::Plus => "+".to_string(),
-            Token::Mul => "*".to_string(),
-            Token::Div => "/".to_string(),
-            _ => String::new(),
-        }
-    }
-
-    // ========================================================================
-    // Helper methods (similar to ColumnTokenParser)
-    // ========================================================================
-
-    /// Parse an identifier (bracketed or unbracketed)
-    fn parse_identifier(&mut self) -> Option<String> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Word(w) => {
-                let name = w.value.clone();
-                self.advance();
-                Some(name)
-            }
-            _ => None,
-        }
-    }
-
-    /// Skip whitespace tokens
-    fn skip_whitespace(&mut self) {
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
-                match &token.token {
-                    Token::Whitespace(_) => {
-                        self.advance();
-                    }
-                    _ => break,
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Check if at end of tokens
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-    }
-
-    /// Get current token without consuming
-    fn current_token(&self) -> Option<&TokenWithSpan> {
-        self.tokens.get(self.pos)
-    }
-
-    /// Advance to next token
-    fn advance(&mut self) {
-        if !self.is_at_end() {
-            self.pos += 1;
-        }
-    }
-
-    /// Check if current token is a specific keyword
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token is a word matching (case-insensitive)
-    fn check_word_ci(&self, word: &str) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word))
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token matches a specific token type
-    fn check_token(&self, expected: &Token) -> bool {
-        if let Some(token) = self.current_token() {
-            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
-        } else {
-            false
-        }
     }
 }
 
