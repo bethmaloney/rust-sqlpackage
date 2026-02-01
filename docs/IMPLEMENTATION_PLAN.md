@@ -380,7 +380,7 @@ The `clean_data_type()` function in `src/dacpac/model_xml.rs` was refactored to 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 20.1.1 | Replace PROC_PARAM_RE with token-based parser | ✅ | Implemented in `src/parser/procedure_parser.rs` |
-| 20.1.2 | Replace FUNC_PARAM_RE with token-based parser | ⬜ | Line 100-102: Function parameter extraction |
+| 20.1.2 | Replace FUNC_PARAM_RE with token-based parser | ✅ | Implemented in `src/parser/function_parser.rs` |
 | 20.1.3 | Replace parameter name trim_start_matches('@') | ⬜ | Lines 2551, 2575, 2938: Use tokenizer to identify parameters |
 
 **Implementation Approach:** Create a `ParameterParser` using sqlparser-rs tokenization to extract parameter declarations from procedure/function signatures. Parse parameter attributes (OUTPUT, READONLY) as tokens rather than regex captures.
@@ -413,6 +413,22 @@ The following changes were made in `src/parser/procedure_parser.rs`:
 10. **Whitespace-agnostic** - Handles tabs, multiple spaces, newlines between parameter components.
 
 11. **42 unit tests** - Comprehensive test coverage for all parameter parsing cases.
+
+**Implementation Notes (20.1.2 - Token-based Function Parameter Parsing):**
+
+The following changes were made in `src/parser/function_parser.rs` and `src/dacpac/model_xml.rs`:
+
+1. **Added `extract_function_parameters_tokens()` function** - New public API function that extracts parameters from CREATE/ALTER FUNCTION statements using token-based parsing.
+
+2. **Exported from `src/parser/mod.rs`** - Added `extract_function_parameters_tokens` to the public exports.
+
+3. **Updated `extract_function_parameters()` in model_xml.rs** - Replaced regex-based FUNC_PARAM_RE extraction with call to `extract_function_parameters_tokens()`.
+
+4. **Removed FUNC_PARAM_RE regex pattern** - The regex is no longer needed and has been removed from model_xml.rs.
+
+5. **Added 9 unit tests** - Comprehensive tests covering simple parameters, multiple parameters, default values, decimal precision, multiline with tabs, empty parameters, and ALTER FUNCTION.
+
+6. **Whitespace-agnostic** - Handles tabs, multiple spaces, and newlines between parameter components.
 
 ### Phase 20.2: Body Dependency Token Extraction (0/8)
 

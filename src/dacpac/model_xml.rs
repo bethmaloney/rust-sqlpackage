@@ -16,6 +16,7 @@ use crate::model::{
     SchemaElement, SequenceElement, SortDirection, TableElement, TableTypeColumnElement,
     TableTypeConstraint, TriggerElement, UserDefinedTypeElement, ViewElement,
 };
+use crate::parser::extract_function_parameters_tokens;
 use crate::parser::identifier_utils::format_word;
 use crate::project::SqlProject;
 
@@ -97,10 +98,8 @@ static PROC_PARAM_RE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
-/// Function parameter pattern
-static FUNC_PARAM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"@(\w+)\s+([A-Za-z0-9_\(\),\s]+?)(?:\s*=\s*([^,@]+?))?(?:,|$|\s*\n)").unwrap()
-});
+// Note: FUNC_PARAM_RE has been removed and replaced with token-based parsing in Phase 20.1.2.
+// Function parameter extraction now uses extract_function_parameters_tokens() from function_parser.rs.
 
 /// DECLARE statement pattern for type extraction
 static DECLARE_TYPE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -2675,71 +2674,27 @@ struct FunctionParameter {
     default_value: Option<String>,
 }
 
-/// Extract parameters from a CREATE FUNCTION definition
+/// Extract parameters from a CREATE FUNCTION definition using token-based parsing.
+///
+/// Phase 20.1.2: Replaced FUNC_PARAM_RE regex with token-based parser.
+/// Uses the same token-based infrastructure as procedure parameter parsing.
 fn extract_function_parameters(definition: &str) -> Vec<FunctionParameter> {
-    let mut params = Vec::new();
+    // Use token-based parameter extraction
+    let token_params = extract_function_parameters_tokens(definition);
 
-    // Find the function name and the parameters that follow
-    let def_upper = definition.to_uppercase();
-    let func_start = def_upper.find("CREATE FUNCTION");
-
-    if func_start.is_none() {
-        return params;
-    }
-
-    let after_create = &definition[func_start.unwrap()..];
-
-    // Function parameters are in parentheses after the function name
-    // Find opening paren after the function name
-    if let Some(open_paren) = after_create.find('(') {
-        // Find matching close paren - need to handle nested parens for types like DECIMAL(18,2)
-        let rest = &after_create[open_paren + 1..];
-        let mut paren_depth = 1;
-        let mut close_pos = None;
-        for (i, ch) in rest.char_indices() {
-            match ch {
-                '(' => paren_depth += 1,
-                ')' => {
-                    paren_depth -= 1;
-                    if paren_depth == 0 {
-                        close_pos = Some(i);
-                        break;
-                    }
-                }
-                _ => {}
+    // Convert TokenParsedParameter to FunctionParameter
+    token_params
+        .into_iter()
+        .map(|p| {
+            // Strip @ prefix from parameter name (TokenParsedParameter includes it)
+            let name = p.name.strip_prefix('@').unwrap_or(&p.name).to_string();
+            FunctionParameter {
+                name,
+                data_type: p.data_type,
+                default_value: p.default_value,
             }
-        }
-
-        if let Some(close_paren) = close_pos {
-            let param_section = &rest[..close_paren];
-
-            // Extract parameters with full details - same regex as procedure parameters
-            // but without OUTPUT since function parameters are always input
-            for cap in FUNC_PARAM_RE.captures_iter(param_section) {
-                let name = cap
-                    .get(1)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default();
-                let data_type = cap
-                    .get(2)
-                    .map(|m| m.as_str().trim().to_string())
-                    .unwrap_or_default();
-                let default_value = cap.get(3).map(|m| m.as_str().trim().to_string());
-
-                if !name.is_empty() && !data_type.is_empty() {
-                    // Clean up data type
-                    let clean_type = clean_data_type(&data_type);
-                    params.push(FunctionParameter {
-                        name,
-                        data_type: clean_type,
-                        default_value,
-                    });
-                }
-            }
-        }
-    }
-
-    params
+        })
+        .collect()
 }
 
 /// Write Parameters relationship for function parameters

@@ -599,6 +599,19 @@ pub fn detect_function_type_tokens(sql: &str) -> TokenParsedFunctionType {
     }
 }
 
+/// Extract function parameters from SQL using token-based parsing
+///
+/// This function replaces the regex-based FUNC_PARAM_RE extraction.
+/// Tries both CREATE FUNCTION and ALTER FUNCTION patterns.
+///
+/// Phase 20.1.2: Token-based function parameter parsing
+pub fn extract_function_parameters_tokens(sql: &str) -> Vec<TokenParsedParameter> {
+    parse_create_function_full(sql)
+        .or_else(|| parse_alter_function_full(sql))
+        .map(|f| f.parameters)
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,5 +992,102 @@ RETURN
             result.function_type,
             TokenParsedFunctionType::InlineTableValued
         );
+    }
+
+    // ========================================================================
+    // extract_function_parameters_tokens tests (Phase 20.1.2)
+    // ========================================================================
+
+    #[test]
+    fn test_extract_function_parameters_tokens_simple() {
+        let params = extract_function_parameters_tokens(
+            "CREATE FUNCTION [dbo].[Test](@Id INT) RETURNS INT AS BEGIN RETURN @Id END",
+        );
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "@Id");
+        assert_eq!(params[0].data_type, "INT");
+        assert!(params[0].default_value.is_none());
+    }
+
+    #[test]
+    fn test_extract_function_parameters_tokens_multiple() {
+        let params = extract_function_parameters_tokens(
+            "CREATE FUNCTION [dbo].[Test](@Id INT, @Name NVARCHAR(100)) RETURNS INT AS BEGIN RETURN 1 END",
+        );
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "@Id");
+        assert_eq!(params[0].data_type, "INT");
+        assert_eq!(params[1].name, "@Name");
+        assert_eq!(params[1].data_type, "NVARCHAR(100)");
+    }
+
+    #[test]
+    fn test_extract_function_parameters_tokens_with_default() {
+        let params = extract_function_parameters_tokens(
+            "CREATE FUNCTION [dbo].[Test](@Id INT = 0, @Name VARCHAR(50) = 'default') RETURNS INT AS BEGIN RETURN 1 END",
+        );
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "@Id");
+        assert_eq!(params[0].data_type, "INT");
+        assert_eq!(params[0].default_value, Some("0".to_string()));
+        assert_eq!(params[1].name, "@Name");
+        assert_eq!(params[1].data_type, "VARCHAR(50)");
+        assert_eq!(params[1].default_value, Some("'default'".to_string()));
+    }
+
+    #[test]
+    fn test_extract_function_parameters_tokens_decimal_precision() {
+        let params = extract_function_parameters_tokens(
+            "CREATE FUNCTION [dbo].[Test](@Amount DECIMAL(18, 2)) RETURNS DECIMAL(18, 2) AS BEGIN RETURN @Amount END",
+        );
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "@Amount");
+        assert_eq!(params[0].data_type, "DECIMAL(18,2)");
+    }
+
+    #[test]
+    fn test_extract_function_parameters_tokens_alter() {
+        let params = extract_function_parameters_tokens(
+            "ALTER FUNCTION [dbo].[Test](@Id INT, @Value FLOAT) RETURNS FLOAT AS BEGIN RETURN @Value END",
+        );
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "@Id");
+        assert_eq!(params[1].name, "@Value");
+    }
+
+    #[test]
+    fn test_extract_function_parameters_tokens_multiline_with_tabs() {
+        let sql = "CREATE FUNCTION [dbo].[Test]\n(\n\t@Id\t\tINT,\n\t@Name\t\tVARCHAR(100)\n)\nRETURNS INT AS BEGIN RETURN 1 END";
+        let params = extract_function_parameters_tokens(sql);
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].name, "@Id");
+        assert_eq!(params[0].data_type, "INT");
+        assert_eq!(params[1].name, "@Name");
+        assert_eq!(params[1].data_type, "VARCHAR(100)");
+    }
+
+    #[test]
+    fn test_extract_function_parameters_tokens_empty() {
+        let params = extract_function_parameters_tokens(
+            "CREATE FUNCTION [dbo].[Test]() RETURNS INT AS BEGIN RETURN 1 END",
+        );
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn test_extract_function_parameters_tokens_not_a_function() {
+        let params = extract_function_parameters_tokens("CREATE TABLE [dbo].[Test] (Id INT)");
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn test_extract_function_parameters_tokens_default_null() {
+        let params = extract_function_parameters_tokens(
+            "CREATE FUNCTION [dbo].[Test](@Id INT = NULL) RETURNS INT AS BEGIN RETURN COALESCE(@Id, 0) END",
+        );
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].name, "@Id");
+        assert_eq!(params[0].data_type, "INT");
+        assert_eq!(params[0].default_value, Some("NULL".to_string()));
     }
 }
