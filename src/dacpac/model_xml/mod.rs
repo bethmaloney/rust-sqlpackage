@@ -35,9 +35,12 @@ use header::{write_database_options, write_header};
 
 // Re-export table writer functions for use within this module
 use table_writer::{
-    parse_qualified_table_name, write_column_type_specifier, write_table,
-    write_table_type_column_with_annotation, write_table_type_relationship,
+    write_column_type_specifier, write_table, write_table_type_column_with_annotation,
+    write_table_type_relationship,
 };
+
+#[cfg(test)]
+use table_writer::parse_qualified_table_name;
 
 const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
 
