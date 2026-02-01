@@ -17,6 +17,10 @@ mod trigger_parser;
 mod tsql_dialect;
 mod tsql_parser;
 
+pub use procedure_parser::{
+    extract_procedure_parameters_tokens, parse_alter_procedure_full, parse_create_procedure_full,
+    TokenParsedProcedure, TokenParsedProcedureParameter,
+};
 pub use sqlcmd::expand_includes;
 pub use tsql_dialect::ExtendedTsqlDialect;
 pub use tsql_parser::{

@@ -373,17 +373,46 @@ The `clean_data_type()` function in `src/dacpac/model_xml.rs` was refactored to 
 
 **Background:** Phase 15 converted many regex patterns to token-based parsing, but several complex patterns remain in `src/dacpac/model_xml.rs` and other modules. These patterns are fragile and can fail on edge cases involving tabs, multiple spaces, or nested expressions.
 
-### Phase 20.1: Parameter Parsing (0/3)
+### Phase 20.1: Parameter Parsing (1/3)
 
 **Location:** `src/dacpac/model_xml.rs`
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 20.1.1 | Replace PROC_PARAM_RE with token-based parser | ⬜ | Line 92-96: Complex regex for `@param type READONLY/OUTPUT` |
+| 20.1.1 | Replace PROC_PARAM_RE with token-based parser | ✅ | Implemented in `src/parser/procedure_parser.rs` |
 | 20.1.2 | Replace FUNC_PARAM_RE with token-based parser | ⬜ | Line 100-102: Function parameter extraction |
 | 20.1.3 | Replace parameter name trim_start_matches('@') | ⬜ | Lines 2551, 2575, 2938: Use tokenizer to identify parameters |
 
 **Implementation Approach:** Create a `ParameterParser` using sqlparser-rs tokenization to extract parameter declarations from procedure/function signatures. Parse parameter attributes (OUTPUT, READONLY) as tokens rather than regex captures.
+
+**Implementation Notes (20.1.1 - Token-based Procedure Parameter Parsing):**
+
+The following changes were made in `src/parser/procedure_parser.rs`:
+
+1. **Extended ProcedureTokenParser with full parameter parsing** - Added comprehensive parameter extraction capabilities to the existing token parser infrastructure.
+
+2. **Added `TokenParsedProcedureParameter` struct** - New struct with fields: `name`, `data_type`, `is_output`, `is_readonly`, `default_value`.
+
+3. **Added public API functions:**
+   - `parse_create_procedure_full()` - Parse CREATE PROCEDURE with full parameter details
+   - `parse_alter_procedure_full()` - Parse ALTER PROCEDURE with full parameter details
+   - `extract_procedure_parameters_tokens()` - Extract parameters from procedure SQL
+
+4. **Handles simple types** - INT, VARCHAR, NVARCHAR, etc.
+
+5. **Handles complex types** - DECIMAL(18,2), VARCHAR(MAX), NVARCHAR(255), etc.
+
+6. **Handles schema-qualified types** - `[dbo].[TableType]` for table-valued parameters.
+
+7. **Handles OUTPUT/OUT modifiers** - Detects output parameters correctly.
+
+8. **Handles READONLY keyword** - Detects readonly table-valued parameters.
+
+9. **Handles default values** - Extracts default values like `= NULL`, `= 0`, `= 'default'`.
+
+10. **Whitespace-agnostic** - Handles tabs, multiple spaces, newlines between parameter components.
+
+11. **42 unit tests** - Comprehensive test coverage for all parameter parsing cases.
 
 ### Phase 20.2: Body Dependency Token Extraction (0/8)
 
