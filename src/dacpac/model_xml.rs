@@ -3227,304 +3227,571 @@ fn extract_body_dependencies(
 /// - JOIN [schema].[table] alias ON ...
 /// - LEFT JOIN (...) AS SubqueryAlias ON ...
 /// - CROSS APPLY (...) AS ApplyAlias
+///
+/// This implementation uses sqlparser-rs tokenizer instead of regex for more robust parsing.
 fn extract_table_aliases_for_body_deps(
     body: &str,
     table_aliases: &mut std::collections::HashMap<String, String>,
     subquery_aliases: &mut std::collections::HashSet<String>,
 ) {
-    // Regex for bracketed table with bracketed alias: FROM/JOIN [schema].[table] [alias]
-    // Must come BEFORE the unbracketed alias regex to match more specific pattern first
-    static BODY_TABLE_BRACKET_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+(?:AS\s+)?\[([^\]]+)\]"
-        ).unwrap()
-    });
+    let mut parser = match TableAliasTokenParser::new(body) {
+        Some(p) => p,
+        None => return,
+    };
+    parser.extract_all_aliases(table_aliases, subquery_aliases);
+}
 
-    // Regex for bracketed table with unbracketed alias: FROM/JOIN [schema].[table] alias
-    static BODY_TABLE_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+(?:AS\s+)?([A-Za-z_]\w*)"
-        ).unwrap()
-    });
+/// Token-based parser for extracting table aliases from SQL body text.
+/// Replaces 6 regex patterns with a single tokenizer-based implementation.
+struct TableAliasTokenParser {
+    tokens: Vec<sqlparser::tokenizer::TokenWithSpan>,
+    pos: usize,
+}
 
-    // Regex for unbracketed table with alias: FROM schema.table alias
-    static BODY_TABLE_ALIAS_UNBR_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+([A-Za-z_]\w*)\s*\.\s*([A-Za-z_]\w*)\s+(?:AS\s+)?([A-Za-z_]\w*)"
-        ).unwrap()
-    });
+impl TableAliasTokenParser {
+    /// Create a new parser for SQL body text
+    fn new(sql: &str) -> Option<Self> {
+        let dialect = MsSqlDialect {};
+        let tokens = Tokenizer::new(&dialect, sql)
+            .tokenize_with_location()
+            .ok()?;
+        Some(Self { tokens, pos: 0 })
+    }
 
-    // Regex for unqualified bracketed table with alias: FROM [Table] alias or FROM [Table] [alias]
-    // No schema prefix - assumes [dbo] schema
-    static BODY_TABLE_ALIAS_UNQUAL_BRACKET_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+\[([^\]\.]+)\]\s+(?:AS\s+)?(\[?[A-Za-z_]\w*\]?)"
-        ).unwrap()
-    });
+    /// Extract all aliases from the SQL body
+    fn extract_all_aliases(
+        &mut self,
+        table_aliases: &mut std::collections::HashMap<String, String>,
+        subquery_aliases: &mut std::collections::HashSet<String>,
+    ) {
+        // First pass: extract CTE aliases from WITH clauses
+        self.extract_cte_aliases(subquery_aliases);
 
-    // Regex for unqualified unbracketed table with alias: FROM Table alias
-    // No schema prefix - assumes [dbo] schema
-    // Matches table followed by whitespace and alias (not a dot for schema.table pattern)
-    static BODY_TABLE_ALIAS_UNQUAL_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?i)(?:FROM|(?:INNER|LEFT|RIGHT|OUTER|CROSS)?\s*JOIN)\s+([A-Za-z_]\w*)\s+(?:AS\s+)?([A-Za-z_]\w*)"
-        ).unwrap()
-    });
+        // Reset position for second pass
+        self.pos = 0;
 
-    // Regex for subquery with alias using AS: (...) AS alias
-    // This matches parentheses followed by AS and an alias
-    static SUBQUERY_ALIAS_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)\)\s+AS\s+(\[?[A-Za-z_]\w*\]?)").unwrap());
+        // Second pass: extract table aliases and subquery aliases from FROM/JOIN/APPLY
+        // We scan the entire token stream without skipping nested parens for table aliases,
+        // because table aliases inside subqueries are still valid and need to be captured.
+        while !self.is_at_end() {
+            self.skip_whitespace();
 
-    // Regex to find APPLY keyword positions: CROSS APPLY or OUTER APPLY
-    static APPLY_KEYWORD_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)(?:CROSS|OUTER)\s+APPLY\s*").unwrap());
+            // Look for FROM, JOIN variants, or APPLY keywords
+            if self.check_keyword(Keyword::FROM) {
+                self.advance();
+                self.extract_table_reference_after_from_join(table_aliases, subquery_aliases);
+            } else if self.is_join_keyword() {
+                self.skip_join_keywords();
+                self.extract_table_reference_after_from_join(table_aliases, subquery_aliases);
+            } else if self.check_word_ci("CROSS") || self.check_word_ci("OUTER") {
+                // Check for APPLY - just skip past the APPLY keyword and let the loop
+                // continue to find FROM/JOIN inside the APPLY subquery
+                // The subquery alias will be captured via the ) AS/alias pattern
+                let saved_pos = self.pos;
+                self.advance();
+                self.skip_whitespace();
+                if self.check_keyword(Keyword::APPLY) || self.check_word_ci("APPLY") {
+                    self.advance();
+                    // Don't extract alias here - let the loop continue to scan content
+                    // The ) alias pattern will capture the APPLY alias
+                } else {
+                    // Not an APPLY, restore position and continue
+                    self.pos = saved_pos;
+                    self.advance();
+                }
+            } else if self.check_token(&Token::RParen) {
+                // After closing paren, check for subquery alias pattern: ) AS alias or ) alias
+                self.advance();
+                self.skip_whitespace();
 
-    // Regex for CROSS APPLY / OUTER APPLY with table-valued function: APPLY func(...) alias
-    // Matches: CROSS APPLY STRING_SPLIT(e.[Skills], ',') s
-    // or: OUTER APPLY OPENJSON(d.[Data]) j
-    static APPLY_FUNCTION_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"(?i)(?:CROSS|OUTER)\s+APPLY\s+([A-Za-z_]\w*)\s*\([^)]*\)\s*(\[?[A-Za-z_]\w*\]?)",
+                // Check for AS keyword (optional)
+                if self.check_keyword(Keyword::AS) {
+                    self.advance();
+                    self.skip_whitespace();
+                }
+
+                // Try to get an alias - but only if it's a valid identifier
+                if let Some(alias) = self.try_parse_subquery_alias() {
+                    let alias_lower = alias.to_lowercase();
+                    if !Self::is_alias_keyword(&alias_lower) {
+                        subquery_aliases.insert(alias_lower);
+                    }
+                }
+            } else {
+                self.advance();
+            }
+        }
+    }
+
+    /// Extract CTE aliases from WITH clause
+    fn extract_cte_aliases(&mut self, subquery_aliases: &mut std::collections::HashSet<String>) {
+        while !self.is_at_end() {
+            self.skip_whitespace();
+
+            // Look for WITH keyword (start of CTE)
+            if self.check_keyword(Keyword::WITH) {
+                self.advance();
+                self.skip_whitespace();
+
+                // Skip RECURSIVE if present
+                if self.check_word_ci("RECURSIVE") {
+                    self.advance();
+                    self.skip_whitespace();
+                }
+
+                // Parse CTE definitions: name AS (...), name AS (...), ...
+                loop {
+                    // Get CTE name
+                    if let Some(cte_name) = self.parse_identifier() {
+                        let cte_name_lower = cte_name.to_lowercase();
+
+                        self.skip_whitespace();
+
+                        // Expect AS keyword
+                        if self.check_keyword(Keyword::AS) {
+                            self.advance();
+                            self.skip_whitespace();
+
+                            // Expect opening paren
+                            if self.check_token(&Token::LParen) {
+                                // This is a valid CTE - add to subquery aliases
+                                if !Self::is_alias_keyword(&cte_name_lower) {
+                                    subquery_aliases.insert(cte_name_lower);
+                                }
+
+                                // Skip past the balanced parens
+                                self.skip_balanced_parens();
+
+                                self.skip_whitespace();
+
+                                // Check for comma (more CTEs) or end of WITH clause
+                                if self.check_token(&Token::Comma) {
+                                    self.advance();
+                                    self.skip_whitespace();
+                                    continue; // Parse next CTE
+                                }
+                            }
+                        }
+                    }
+                    break; // End of CTEs
+                }
+            } else {
+                self.advance();
+            }
+        }
+    }
+
+    /// Extract table reference after FROM or JOIN keyword
+    fn extract_table_reference_after_from_join(
+        &mut self,
+        table_aliases: &mut std::collections::HashMap<String, String>,
+        _subquery_aliases: &mut std::collections::HashSet<String>,
+    ) {
+        self.skip_whitespace();
+
+        // Check if it's a subquery (starts with paren)
+        if self.check_token(&Token::LParen) {
+            // This is a subquery - don't skip it, let the main loop continue scanning
+            // The subquery alias will be captured when we hit the closing paren + AS pattern
+            return;
+        }
+
+        // Parse table name (could be qualified or unqualified)
+        let (schema, table_name) = match self.parse_table_name() {
+            Some(t) => t,
+            None => return,
+        };
+
+        self.skip_whitespace();
+
+        // Check for AS keyword (optional)
+        if self.check_keyword(Keyword::AS) {
+            self.advance();
+            self.skip_whitespace();
+        }
+
+        // Check for alias - must be an identifier that's not a keyword like ON, WHERE, etc.
+        if let Some(alias) = self.try_parse_table_alias() {
+            let alias_lower = alias.to_lowercase();
+
+            // Skip if alias is a SQL keyword
+            if Self::is_alias_keyword(&alias_lower) {
+                return;
+            }
+
+            // Don't overwrite if already captured by a more specific pattern
+            if table_aliases.contains_key(&alias_lower) {
+                return;
+            }
+
+            let table_ref = format!("[{}].[{}]", schema, table_name);
+            table_aliases.insert(alias_lower, table_ref);
+        }
+    }
+
+    /// Parse a table name (qualified or unqualified)
+    /// Returns (schema, table_name)
+    fn parse_table_name(&mut self) -> Option<(String, String)> {
+        let first_ident = self.parse_identifier()?;
+        self.skip_whitespace();
+
+        // Check for dot (schema.table pattern)
+        if self.check_token(&Token::Period) {
+            self.advance();
+            self.skip_whitespace();
+
+            let second_ident = self.parse_identifier()?;
+
+            // Skip if schema is a SQL keyword (would make this not a valid schema.table)
+            if is_sql_keyword(&first_ident.to_uppercase()) {
+                return None;
+            }
+
+            Some((first_ident, second_ident))
+        } else {
+            // Unqualified table - use dbo as default schema
+            // Skip if table name is a SQL keyword
+            if is_sql_keyword(&first_ident.to_uppercase()) {
+                return None;
+            }
+            Some(("dbo".to_string(), first_ident))
+        }
+    }
+
+    /// Try to parse a table alias (identifier that's not a reserved keyword for clause structure)
+    fn try_parse_table_alias(&mut self) -> Option<String> {
+        if self.is_at_end() {
+            return None;
+        }
+
+        // Check if current token is a word that could be an alias
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                let value_upper = w.value.to_uppercase();
+
+                // These keywords indicate end of table reference, not an alias
+                if matches!(
+                    value_upper.as_str(),
+                    "ON" | "WHERE"
+                        | "INNER"
+                        | "LEFT"
+                        | "RIGHT"
+                        | "OUTER"
+                        | "CROSS"
+                        | "FULL"
+                        | "JOIN"
+                        | "GROUP"
+                        | "ORDER"
+                        | "HAVING"
+                        | "UNION"
+                        | "WITH"
+                        | "AND"
+                        | "OR"
+                        | "NOT"
+                        | "SET"
+                        | "FROM"
+                        | "SELECT"
+                        | "INTO"
+                        | "WHEN"
+                        | "THEN"
+                        | "ELSE"
+                        | "END"
+                        | "CASE"
+                        | "FOR"
+                ) {
+                    return None;
+                }
+
+                // Also check if it's a sqlparser keyword that indicates clause structure
+                if matches!(
+                    w.keyword,
+                    Keyword::ON
+                        | Keyword::WHERE
+                        | Keyword::INNER
+                        | Keyword::LEFT
+                        | Keyword::RIGHT
+                        | Keyword::OUTER
+                        | Keyword::CROSS
+                        | Keyword::FULL
+                        | Keyword::JOIN
+                        | Keyword::GROUP
+                        | Keyword::ORDER
+                        | Keyword::HAVING
+                        | Keyword::UNION
+                        | Keyword::WITH
+                        | Keyword::AND
+                        | Keyword::OR
+                        | Keyword::NOT
+                        | Keyword::SET
+                        | Keyword::FROM
+                        | Keyword::SELECT
+                        | Keyword::INTO
+                        | Keyword::WHEN
+                        | Keyword::THEN
+                        | Keyword::ELSE
+                        | Keyword::END
+                        | Keyword::CASE
+                        | Keyword::FOR
+                ) {
+                    return None;
+                }
+
+                // This is a valid alias
+                let alias = w.value.clone();
+                self.advance();
+                return Some(alias);
+            }
+        }
+
+        None
+    }
+
+    /// Try to parse a subquery alias after closing paren
+    /// This is similar to try_parse_table_alias but handles the ) AS alias or ) alias pattern
+    fn try_parse_subquery_alias(&mut self) -> Option<String> {
+        if self.is_at_end() {
+            return None;
+        }
+
+        // Check if current token is a word that could be a subquery alias
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                let value_upper = w.value.to_uppercase();
+
+                // These keywords indicate something other than a subquery alias
+                if matches!(
+                    value_upper.as_str(),
+                    "ON" | "WHERE"
+                        | "INNER"
+                        | "LEFT"
+                        | "RIGHT"
+                        | "OUTER"
+                        | "CROSS"
+                        | "FULL"
+                        | "JOIN"
+                        | "GROUP"
+                        | "ORDER"
+                        | "HAVING"
+                        | "UNION"
+                        | "WITH"
+                        | "AND"
+                        | "OR"
+                        | "NOT"
+                        | "SET"
+                        | "FROM"
+                        | "SELECT"
+                        | "INTO"
+                        | "WHEN"
+                        | "THEN"
+                        | "ELSE"
+                        | "END"
+                        | "CASE"
+                        | "FOR"
+                        | "AS" // Don't consume AS here - it's handled by caller
+                ) {
+                    return None;
+                }
+
+                // Also check if it's a sqlparser keyword that indicates clause structure
+                if matches!(
+                    w.keyword,
+                    Keyword::ON
+                        | Keyword::WHERE
+                        | Keyword::INNER
+                        | Keyword::LEFT
+                        | Keyword::RIGHT
+                        | Keyword::OUTER
+                        | Keyword::CROSS
+                        | Keyword::FULL
+                        | Keyword::JOIN
+                        | Keyword::GROUP
+                        | Keyword::ORDER
+                        | Keyword::HAVING
+                        | Keyword::UNION
+                        | Keyword::WITH
+                        | Keyword::AND
+                        | Keyword::OR
+                        | Keyword::NOT
+                        | Keyword::SET
+                        | Keyword::FROM
+                        | Keyword::SELECT
+                        | Keyword::INTO
+                        | Keyword::WHEN
+                        | Keyword::THEN
+                        | Keyword::ELSE
+                        | Keyword::END
+                        | Keyword::CASE
+                        | Keyword::FOR
+                        | Keyword::AS
+                ) {
+                    return None;
+                }
+
+                // This is a valid subquery alias
+                let alias = w.value.clone();
+                self.advance();
+                return Some(alias);
+            }
+        }
+
+        None
+    }
+
+    /// Check if a word is a SQL keyword that should not be treated as an alias
+    fn is_alias_keyword(word: &str) -> bool {
+        matches!(
+            word.to_uppercase().as_str(),
+            "ON" | "WHERE"
+                | "INNER"
+                | "LEFT"
+                | "RIGHT"
+                | "OUTER"
+                | "CROSS"
+                | "JOIN"
+                | "GROUP"
+                | "ORDER"
+                | "HAVING"
+                | "UNION"
+                | "WITH"
+                | "AS"
+                | "AND"
+                | "OR"
+                | "NOT"
+                | "SET"
+                | "FROM"
+                | "SELECT"
+                | "INTO"
         )
-        .unwrap()
-    });
+    }
 
-    // Regex to extract alias after balanced parens: identifier at start of string
-    static ALIAS_AFTER_PAREN_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^\s*(\[?[A-Za-z_]\w*\]?)").unwrap());
+    /// Check if current position is at a JOIN keyword (INNER, LEFT, RIGHT, FULL, CROSS, JOIN)
+    fn is_join_keyword(&self) -> bool {
+        self.check_keyword(Keyword::INNER)
+            || self.check_keyword(Keyword::LEFT)
+            || self.check_keyword(Keyword::RIGHT)
+            || self.check_keyword(Keyword::FULL)
+            || self.check_keyword(Keyword::JOIN)
+    }
 
-    // Regex to extract CTE (Common Table Expression) aliases from WITH clause
-    // Matches: WITH CteName AS ( or , CteName AS (
-    // CTE names should be treated as subquery aliases (derived tables)
-    static CTE_ALIAS_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)(?:WITH|,)\s+(\[?[A-Za-z_]\w*\]?)\s+AS\s*\(").unwrap());
-
-    // SQL keywords that should not be treated as aliases
-    let alias_keywords = [
-        "ON", "WHERE", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "JOIN", "GROUP", "ORDER",
-        "HAVING", "UNION", "WITH", "AS", "AND", "OR", "NOT", "SET", "FROM", "SELECT", "INTO",
-    ];
-
-    // Extract bracketed table with bracketed aliases: [schema].[table] [alias]
-    for cap in BODY_TABLE_BRACKET_ALIAS_RE.captures_iter(body) {
-        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let alias = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-        let alias_upper = alias.to_uppercase();
-
-        // Skip if alias is a keyword
-        if alias_keywords.iter().any(|&k| k == alias_upper) {
-            continue;
+    /// Skip past JOIN keyword variants (INNER JOIN, LEFT OUTER JOIN, etc.)
+    fn skip_join_keywords(&mut self) {
+        // Skip INNER/LEFT/RIGHT/FULL/CROSS
+        if self.check_keyword(Keyword::INNER)
+            || self.check_keyword(Keyword::LEFT)
+            || self.check_keyword(Keyword::RIGHT)
+            || self.check_keyword(Keyword::FULL)
+            || self.check_keyword(Keyword::CROSS)
+        {
+            self.advance();
+            self.skip_whitespace();
         }
 
-        if !alias.is_empty() {
-            let table_ref = format!("[{}].[{}]", schema, table);
-            table_aliases.insert(alias.to_lowercase(), table_ref);
+        // Skip OUTER (for LEFT OUTER JOIN, etc.)
+        if self.check_keyword(Keyword::OUTER) {
+            self.advance();
+            self.skip_whitespace();
+        }
+
+        // Skip JOIN
+        if self.check_keyword(Keyword::JOIN) {
+            self.advance();
+            self.skip_whitespace();
         }
     }
 
-    // Extract bracketed table aliases: [schema].[table] alias
-    for cap in BODY_TABLE_ALIAS_RE.captures_iter(body) {
-        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let alias = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-        let alias_upper = alias.to_uppercase();
-
-        // Skip if alias is a keyword
-        if alias_keywords.iter().any(|&k| k == alias_upper) {
-            continue;
+    /// Skip balanced parentheses
+    fn skip_balanced_parens(&mut self) {
+        if !self.check_token(&Token::LParen) {
+            return;
         }
 
-        if !alias.is_empty() {
-            let table_ref = format!("[{}].[{}]", schema, table);
-            table_aliases.insert(alias.to_lowercase(), table_ref);
-        }
-    }
-
-    // Extract unbracketed table aliases: schema.table alias
-    for cap in BODY_TABLE_ALIAS_UNBR_RE.captures_iter(body) {
-        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let alias = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-        let alias_upper = alias.to_uppercase();
-
-        // Skip if schema is dbo or another common schema that would make this a table ref
-        if is_sql_keyword(&schema.to_uppercase()) {
-            continue;
-        }
-
-        // Skip if alias is a keyword
-        if alias_keywords.iter().any(|&k| k == alias_upper) {
-            continue;
-        }
-
-        if !alias.is_empty() {
-            let table_ref = format!("[{}].[{}]", schema, table);
-            table_aliases.insert(alias.to_lowercase(), table_ref);
+        let mut depth = 0;
+        while !self.is_at_end() {
+            if self.check_token(&Token::LParen) {
+                depth += 1;
+            } else if self.check_token(&Token::RParen) {
+                depth -= 1;
+                if depth == 0 {
+                    self.advance();
+                    return;
+                }
+            }
+            self.advance();
         }
     }
 
-    // Extract unqualified bracketed table aliases: [Table] alias (no schema)
-    // Default to [dbo] schema for unqualified table references
-    for cap in BODY_TABLE_ALIAS_UNQUAL_BRACKET_RE.captures_iter(body) {
-        let table = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let alias = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
-        let alias_upper = alias_clean.to_uppercase();
-
-        // Skip if table name is a keyword (like SELECT, FROM, WHERE, etc.)
-        if is_sql_keyword(&table.to_uppercase()) {
-            continue;
+    /// Parse an identifier (bracketed or unbracketed)
+    fn parse_identifier(&mut self) -> Option<String> {
+        if self.is_at_end() {
+            return None;
         }
 
-        // Skip if alias is a keyword
-        if alias_keywords.iter().any(|&k| k == alias_upper) {
-            continue;
-        }
-
-        // Skip if alias is same as table (no alias was specified)
-        if alias_clean.eq_ignore_ascii_case(table) {
-            continue;
-        }
-
-        // Skip if this alias was already captured by a more specific pattern (schema.table)
-        if table_aliases.contains_key(&alias_clean.to_lowercase()) {
-            continue;
-        }
-
-        if !alias_clean.is_empty() {
-            let table_ref = format!("[dbo].[{}]", table);
-            table_aliases.insert(alias_clean.to_lowercase(), table_ref);
+        let token = self.current_token()?;
+        if let Token::Word(w) = &token.token {
+            let name = w.value.clone();
+            self.advance();
+            Some(name)
+        } else {
+            None
         }
     }
 
-    // Extract unqualified unbracketed table aliases: Table alias (no schema, no brackets)
-    // Default to [dbo] schema for unqualified table references
-    for cap in BODY_TABLE_ALIAS_UNQUAL_RE.captures_iter(body) {
-        let table = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let alias = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let alias_upper = alias.to_uppercase();
-
-        // Skip if table name is a keyword (like SELECT, FROM, WHERE, etc.)
-        if is_sql_keyword(&table.to_uppercase()) {
-            continue;
-        }
-
-        // Skip if alias is a keyword
-        if alias_keywords.iter().any(|&k| k == alias_upper) {
-            continue;
-        }
-
-        // Skip if alias is same as table (no alias was specified)
-        if alias.eq_ignore_ascii_case(table) {
-            continue;
-        }
-
-        // Skip if this alias was already captured by a more specific pattern (schema.table)
-        if table_aliases.contains_key(&alias.to_lowercase()) {
-            continue;
-        }
-
-        if !alias.is_empty() {
-            let table_ref = format!("[dbo].[{}]", table);
-            table_aliases.insert(alias.to_lowercase(), table_ref);
-        }
-    }
-
-    // Extract subquery aliases: (...) AS alias or (...) alias (for APPLY)
-    // These are derived tables/subqueries that should be skipped, not resolved
-    for cap in SUBQUERY_ALIAS_RE.captures_iter(body) {
-        let alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
-        let alias_upper = alias_clean.to_uppercase();
-
-        // Skip if alias is a keyword
-        if alias_keywords.iter().any(|&k| k == alias_upper) {
-            continue;
-        }
-
-        if !alias_clean.is_empty() {
-            subquery_aliases.insert(alias_clean.to_lowercase());
-        }
-    }
-
-    // Extract APPLY function aliases: CROSS APPLY func(...) alias or OUTER APPLY func(...) alias
-    // These are table-valued function results that should be skipped as subquery aliases
-    for cap in APPLY_FUNCTION_ALIAS_RE.captures_iter(body) {
-        let alias = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
-        let alias_upper = alias_clean.to_uppercase();
-
-        // Skip if alias is a keyword
-        if alias_keywords.iter().any(|&k| k == alias_upper) {
-            continue;
-        }
-
-        if !alias_clean.is_empty() {
-            subquery_aliases.insert(alias_clean.to_lowercase());
-        }
-    }
-
-    // Extract APPLY subquery aliases by finding APPLY keyword and counting balanced parens
-    // This handles: CROSS APPLY (...) alias or OUTER APPLY (...) alias (without AS)
-    for mat in APPLY_KEYWORD_RE.find_iter(body) {
-        let after_apply = &body[mat.end()..];
-
-        // Check if this is a subquery (starts with '(') or a function call
-        if !after_apply.trim_start().starts_with('(') {
-            continue; // This is a function call, handled by APPLY_FUNCTION_ALIAS_RE
-        }
-
-        // Find the matching closing paren by counting
-        let mut paren_depth = 0;
-        let mut found_open = false;
-        let mut close_pos = None;
-
-        for (i, c) in after_apply.char_indices() {
-            if c == '(' {
-                paren_depth += 1;
-                found_open = true;
-            } else if c == ')' {
-                paren_depth -= 1;
-                if found_open && paren_depth == 0 {
-                    close_pos = Some(i + 1); // Position after the closing paren
+    /// Skip whitespace tokens
+    fn skip_whitespace(&mut self) {
+        while !self.is_at_end() {
+            if let Some(token) = self.current_token() {
+                if matches!(&token.token, Token::Whitespace(_)) {
+                    self.advance();
+                } else {
                     break;
                 }
-            }
-        }
-
-        // Extract alias after the closing paren
-        if let Some(pos) = close_pos {
-            let after_close = &after_apply[pos..];
-            if let Some(cap) = ALIAS_AFTER_PAREN_RE.captures(after_close) {
-                let alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-                let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
-                let alias_upper = alias_clean.to_uppercase();
-
-                // Skip if alias is a keyword or empty
-                if !alias_clean.is_empty() && !alias_keywords.iter().any(|&k| k == alias_upper) {
-                    subquery_aliases.insert(alias_clean.to_lowercase());
-                }
+            } else {
+                break;
             }
         }
     }
 
-    // Extract CTE (Common Table Expression) aliases from WITH clauses
-    // CTEs are derived tables - references to them should be skipped, not resolved as schema.table
-    // Matches: WITH CteName AS ( and , NextCte AS (
-    for cap in CTE_ALIAS_RE.captures_iter(body) {
-        let alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
-        let alias_upper = alias_clean.to_uppercase();
+    /// Check if at end of tokens
+    fn is_at_end(&self) -> bool {
+        self.pos >= self.tokens.len()
+    }
 
-        // Skip if alias is a keyword
-        if alias_keywords.iter().any(|&k| k == alias_upper) {
-            continue;
+    /// Get current token without consuming
+    fn current_token(&self) -> Option<&sqlparser::tokenizer::TokenWithSpan> {
+        self.tokens.get(self.pos)
+    }
+
+    /// Advance to next token
+    fn advance(&mut self) {
+        if !self.is_at_end() {
+            self.pos += 1;
         }
+    }
 
-        if !alias_clean.is_empty() {
-            subquery_aliases.insert(alias_clean.to_lowercase());
+    /// Check if current token is a specific keyword
+    fn check_keyword(&self, keyword: Keyword) -> bool {
+        if let Some(token) = self.current_token() {
+            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
+        } else {
+            false
+        }
+    }
+
+    /// Check if current token is a word matching (case-insensitive)
+    fn check_word_ci(&self, word: &str) -> bool {
+        if let Some(token) = self.current_token() {
+            matches!(&token.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word))
+        } else {
+            false
+        }
+    }
+
+    /// Check if current token matches a specific token type
+    fn check_token(&self, expected: &Token) -> bool {
+        if let Some(token) = self.current_token() {
+            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
+        } else {
+            false
         }
     }
 }
@@ -6404,6 +6671,9 @@ OUTER APPLY (
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
         extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        println!("Table aliases: {:?}", table_aliases);
+        println!("Subquery aliases: {:?}", subquery_aliases);
 
         // 'a' should be a table alias for [dbo].[Account]
         assert_eq!(table_aliases.get("a"), Some(&"[dbo].[Account]".to_string()));

@@ -9,7 +9,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phase 19 pending: Whitespace-agnostic trim patterns (0/3 tasks, lower priority).**
 
 **✅ Phase 18.5 complete:** Unqualified table names now work (regex-based fix).
-**🔧 Phase 18.6 planned:** Refactor to centralized identifier utilities (technical debt reduction).
+**✅ Phase 18.6 complete:** Centralized identifier utilities and tokenizer-based alias resolution.
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -189,7 +189,7 @@ The following changes were made to handle unqualified table names:
 
 5. **Unit tests** - Added `test_extract_table_aliases_unqualified_single`, `test_extract_table_aliases_unqualified_multiple_joins`, `test_extract_table_aliases_unqualified_bracketed`, `test_body_dependencies_unqualified_alias_resolution`, and `test_extract_table_aliases_qualified_takes_precedence` tests.
 
-### Phase 18.6: Identifier Utilities Refactoring (4/5)
+### Phase 18.6: Identifier Utilities Refactoring (5/5) ✅
 
 **Goal:** Replace piecemeal bracket handling with centralized identifier utilities and migrate from regex to tokenizer-based parsing.
 
@@ -207,7 +207,7 @@ The following changes were made to handle unqualified table names:
 | 18.6.2 | Add `format_identifier(word)` function | ✅ | Implemented as `format_word()` |
 | 18.6.3 | Add `normalize_identifier(str)` function | ✅ | Strip brackets/quotes from identifier |
 | 18.6.4 | Add `normalize_object_name(name, schema)` function | ✅ | Reuse normalize_table_reference logic |
-| 18.6.5 | Migrate alias resolution from regex to tokenizer | ⬜ | Replace 6 regex patterns with token-based parsing |
+| 18.6.5 | Migrate alias resolution from regex to tokenizer | ✅ | Replace 6 regex patterns with token-based parsing |
 
 **Implementation Approach:**
 
@@ -292,6 +292,34 @@ The module includes 24 unit tests covering all functions.
 - `preprocess_parser.rs` - Now uses `format_token_sql_cow()` (preserves Cow performance optimization)
 - `index_parser.rs` - Now uses `format_word_bracketed()` for Word tokens
 - `model_xml.rs` - Now uses `format_word()` for Word tokens
+
+**Implementation Notes (18.6.5 - Tokenizer-Based Alias Resolution):**
+
+The following changes were made to migrate alias resolution from regex to tokenizer-based parsing:
+
+1. **`TableAliasTokenParser` struct** - Created new struct in `model_xml.rs` using sqlparser-rs tokenizer to parse table aliases from FROM/JOIN clauses.
+
+2. **Replaced 6 regex patterns** - The following regex patterns were replaced with unified tokenizer-based parsing:
+   - `BODY_TABLE_BRACKET_ALIAS_RE` (bracketed table with bracketed alias)
+   - `BODY_TABLE_ALIAS_RE` (bracketed table with unbracketed alias)
+   - `BODY_TABLE_ALIAS_UNBR_RE` (unbracketed schema.table)
+   - `BODY_TABLE_ALIAS_UNQUAL_BRACKET_RE` (unqualified bracketed table)
+   - `BODY_TABLE_ALIAS_UNQUAL_RE` (unqualified unbracketed table)
+   - CTE/subquery alias patterns
+
+3. **Token stream scanning** - The tokenizer approach scans the entire token stream for FROM/JOIN keywords and extracts table references and aliases by matching token sequences.
+
+4. **CTE handling** - First pass extracts CTE aliases (from `WITH name AS (` patterns) into the `subquery_aliases` set to prevent them from being treated as table references.
+
+5. **Subquery handling** - Detects subquery aliases via closing paren + AS/alias pattern matching (e.g., `(...) AS SubqueryAlias` or `(...) SubqueryAlias`).
+
+6. **Key fix** - Removed incorrect "alias same as table name" check that was blocking valid aliases like `[dbo].[Tag] tag` where the alias matches the unqualified table name.
+
+7. **Benefits:**
+   - More robust whitespace handling (tabs, multiple spaces, newlines)
+   - Fewer regex patterns to maintain
+   - Consistent with Phase 15 tokenizer-based parsing approach
+   - Completes Phase 20.4.1 (TABLE_ALIAS_RE migration) as a side effect
 
 ### Implementation Notes
 
