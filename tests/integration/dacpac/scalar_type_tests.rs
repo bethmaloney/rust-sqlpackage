@@ -4,9 +4,9 @@
 //! Verifies that NVARCHAR(MAX), VARCHAR(MAX), VARBINARY(MAX) scalar types use IsMax=True
 //! instead of Length=-1 in the generated model.xml.
 
-use crate::common::{DacpacInfo, TestContext};
+use crate::common::TestContext;
 
-use super::{find_elements_by_type, get_property_value, parse_model_xml};
+use super::{find_elements_by_type, get_property_value, parse_dacpac_model, parse_model_xml};
 
 /// Helper to find a scalar type element by name
 fn find_scalar_type<'a>(
@@ -35,9 +35,7 @@ fn test_scalar_type_nvarchar_max_property() {
     let ctx = TestContext::with_fixture("scalar_types");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Verify we have scalar types
@@ -77,9 +75,7 @@ fn test_scalar_type_regular_length_property() {
     let ctx = TestContext::with_fixture("scalar_types");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check VARCHAR(20) scalar type - PhoneNumber

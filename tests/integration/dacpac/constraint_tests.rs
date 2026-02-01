@@ -2,9 +2,9 @@
 //!
 //! Tests for primary key, foreign key, check, and default constraints.
 
-use crate::common::{DacpacInfo, TestContext};
+use crate::common::TestContext;
 
-use super::{find_elements_by_type, has_relationship, parse_model_xml};
+use super::{find_elements_by_type, has_relationship, parse_dacpac_model, parse_model_xml};
 
 // ============================================================================
 // Constraint Tests (Medium Priority)
@@ -15,9 +15,7 @@ fn test_primary_key_constraint() {
     let ctx = TestContext::with_fixture("constraints");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let pk_constraints = find_elements_by_type(&doc, "SqlPrimaryKeyConstraint");
 
@@ -55,9 +53,7 @@ fn test_foreign_key_constraint_with_referenced_table() {
     let ctx = TestContext::with_fixture("constraints");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let fk_constraints = find_elements_by_type(&doc, "SqlForeignKeyConstraint");
 
@@ -104,9 +100,7 @@ fn test_check_constraint_with_definition() {
     let ctx = TestContext::with_fixture("constraints");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let ck_constraints = find_elements_by_type(&doc, "SqlCheckConstraint");
 
@@ -166,9 +160,7 @@ fn test_default_constraint() {
     let ctx = TestContext::with_fixture("constraints");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let default_constraints = find_elements_by_type(&doc, "SqlDefaultConstraint");
 
@@ -194,9 +186,7 @@ fn test_all_constraint_types_combined() {
     let ctx = TestContext::with_fixture("all_constraints");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Verify all constraint types are present

@@ -4,7 +4,7 @@
 
 use crate::common::{DacpacInfo, TestContext};
 
-use super::{find_elements_by_type, has_relationship, parse_model_xml};
+use super::{find_elements_by_type, has_relationship, parse_dacpac_model, parse_model_xml};
 
 // ============================================================================
 // Model.xml Validation Tests
@@ -51,9 +51,7 @@ fn test_model_xml_has_file_format_version() {
     let ctx = TestContext::with_fixture("simple_table");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let root = doc.root_element();
 
@@ -79,9 +77,7 @@ fn test_model_xml_has_schema_version() {
     let ctx = TestContext::with_fixture("simple_table");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let root = doc.root_element();
 
@@ -101,9 +97,7 @@ fn test_model_xml_has_collation_lcid() {
     let ctx = TestContext::with_fixture("simple_table");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let root = doc.root_element();
 
@@ -126,9 +120,7 @@ fn test_model_xml_has_collation_case_sensitive() {
     let ctx = TestContext::with_fixture("simple_table");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let root = doc.root_element();
 
@@ -153,9 +145,7 @@ fn test_table_has_schema_relationship() {
     let ctx = TestContext::with_fixture("simple_table");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let tables = find_elements_by_type(&doc, "SqlTable");
 
@@ -178,9 +168,7 @@ fn test_table_has_columns_relationship() {
     let ctx = TestContext::with_fixture("simple_table");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let tables = find_elements_by_type(&doc, "SqlTable");
 
@@ -234,9 +222,7 @@ fn test_view_has_schema_relationship() {
     let ctx = TestContext::with_fixture("views");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let views = find_elements_by_type(&doc, "SqlView");
 
@@ -259,9 +245,7 @@ fn test_type_references_have_external_source() {
     let ctx = TestContext::with_fixture("simple_table");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Find all References elements with ExternalSource="BuiltIns"
@@ -340,9 +324,7 @@ fn test_model_xml_has_dataschemamodel_root() {
     let ctx = TestContext::with_fixture("simple_table");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let root = doc.root_element();
 
@@ -358,9 +340,7 @@ fn test_model_xml_has_model_element() {
     let ctx = TestContext::with_fixture("simple_table");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let root = doc.root_element();
 

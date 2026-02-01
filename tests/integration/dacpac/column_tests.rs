@@ -2,10 +2,11 @@
 //!
 //! Tests for nullable, identity, type specifier, length, precision/scale, and max properties.
 
-use crate::common::{DacpacInfo, TestContext};
+use crate::common::TestContext;
 
 use super::{
-    find_column_by_name, get_property_value, get_type_specifier_property, parse_model_xml,
+    find_column_by_name, get_property_value, get_type_specifier_property, parse_dacpac_model,
+    parse_model_xml,
 };
 
 // ============================================================================
@@ -17,9 +18,7 @@ fn test_column_nullable_property() {
     let ctx = TestContext::with_fixture("column_properties");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check required (NOT NULL) column
@@ -50,9 +49,7 @@ fn test_column_identity_property() {
     let ctx = TestContext::with_fixture("identity_column");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check identity column - should find it as SqlSimpleColumn with IsIdentity=True
@@ -76,9 +73,7 @@ fn test_column_type_specifier() {
     let ctx = TestContext::with_fixture("column_properties");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Find a column and verify it has TypeSpecifier relationship
@@ -118,9 +113,7 @@ fn test_column_length_property() {
     let ctx = TestContext::with_fixture("column_properties");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check varchar(10) column
@@ -158,9 +151,7 @@ fn test_column_precision_scale_properties() {
     let ctx = TestContext::with_fixture("column_properties");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check decimal(18, 2) column - Price
@@ -199,9 +190,7 @@ fn test_column_max_property() {
     let ctx = TestContext::with_fixture("column_properties");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check varchar(max) column - LongDescription
@@ -232,9 +221,7 @@ fn test_column_varbinary_max_property() {
     let ctx = TestContext::with_fixture("varbinary_max");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check varbinary(max) column - LargeData

@@ -34,7 +34,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Code Simplification (Phases 27-31):**
 - Phase 27: Parser token helper consolidation (4/4) ✅ - ~400-500 lines reduction (complete)
 - Phase 28: Test infrastructure simplification (3/3) ✅ - ~560 lines reduction (complete)
-- Phase 29: Test dacpac parsing helper (0/2) - ~150-200 lines reduction
+- Phase 29: Test dacpac parsing helper (2/2) ✅ - ~120 lines reduction (complete)
 - Phase 30: Model builder constraint helper (0/2) - ~200 lines reduction
 - Phase 31: Project parser helpers (0/2) - ~50 lines reduction
 
@@ -372,25 +372,30 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 29: Test Dacpac Parsing Helper (0/2) - MEDIUM PRIORITY
+## Phase 29: Test Dacpac Parsing Helper (2/2) ✅ COMPLETE
 
 **Goal:** Reduce ~150-200 lines of duplicated XML parsing chains.
 
-**Problem:** This 3-line pattern appears repeatedly:
+**Problem:** This 3-line pattern appeared repeatedly:
 ```rust
 let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
 let model_xml = info.model_xml_content.expect("Should have model XML");
 let doc = parse_model_xml(&model_xml);
 ```
 
-### Phase 29.1: Add Parsing Helper (0/2)
+### Phase 29.1: Add Parsing Helper (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 29.1.1 | Add `parse_dacpac_model(dacpac_path: &Path) -> roxmltree::Document` in `tests/integration/dacpac/mod.rs` | ⬜ | Consolidates 3-line chain |
-| 29.1.2 | Update dacpac test modules to use helper | ⬜ | column_tests, constraint_tests, element_tests, index_tests |
+| 29.1.1 | Add `parse_dacpac_model(dacpac_path: &Path) -> (DacpacInfo, String)` in `tests/integration/dacpac/mod.rs` | ✅ | Returns tuple since roxmltree borrows from String |
+| 29.1.2 | Update dacpac test modules to use helper | ✅ | Updated 7 files with 41 occurrences: column_tests, constraint_tests, element_tests, index_tests, model_xml_tests, scalar_type_tests, tvf_column_tests |
 
-**Estimated Impact:** ~150-200 lines removed.
+**Actual Impact:** ~120 lines removed (3 lines → 2 lines per occurrence × 41 occurrences, minus new helper function).
+
+**Notes:**
+- The helper returns `(DacpacInfo, String)` instead of `roxmltree::Document` because roxmltree borrows from the String
+- Tests still need to call `parse_model_xml(&model_xml)` to get the Document, but the parsing and extraction is consolidated
+- Some tests that need the `DacpacInfo` for additional validation (like counting tables/views) can now use the `_info` from the tuple
 
 ---
 
@@ -459,9 +464,9 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 
 | Issue | Location | Phase | Impact |
 |-------|----------|-------|--------|
-| Duplicated token parser helper methods | src/parser/*.rs (12 files) | Phase 27 | ~400-500 lines |
-| Test setup boilerplate (4 lines × 140 occurrences) | tests/integration/ | Phase 28 | ~560 lines |
-| Dacpac XML parsing chain duplication | tests/integration/dacpac/ | Phase 29 | ~150-200 lines |
+| Duplicated token parser helper methods | src/parser/*.rs (12 files) | Phase 27 ✅ | ~400-500 lines |
+| Test setup boilerplate (4 lines × 140 occurrences) | tests/integration/ | Phase 28 ✅ | ~560 lines |
+| Dacpac XML parsing chain duplication | tests/integration/dacpac/ | Phase 29 ✅ | ~120 lines |
 | ConstraintElement creation boilerplate | src/model/builder.rs | Phase 30 | ~200 lines |
 | Boolean property parsing duplication | src/project/sqlproj_parser.rs | Phase 31 | ~50 lines |
 

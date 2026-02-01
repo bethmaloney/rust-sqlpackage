@@ -4,9 +4,9 @@
 //! Verifies that NVARCHAR(MAX), VARCHAR(MAX), VARBINARY(MAX) columns use IsMax=True
 //! instead of Length=4294967295 in the generated model.xml.
 
-use crate::common::{DacpacInfo, TestContext};
+use crate::common::TestContext;
 
-use super::{find_elements_by_type, get_property_value, parse_model_xml};
+use super::{find_elements_by_type, get_property_value, parse_dacpac_model, parse_model_xml};
 
 /// Helper to find a TVF column by name within a multi-statement TVF
 fn find_tvf_column<'a>(
@@ -53,9 +53,7 @@ fn test_tvf_column_nvarchar_max_property() {
     let ctx = TestContext::with_fixture("tvf_max_columns");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Verify we have the TVF
@@ -91,9 +89,7 @@ fn test_tvf_column_varchar_max_property() {
     let ctx = TestContext::with_fixture("tvf_max_columns");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check VARCHAR(MAX) column - Description
@@ -122,9 +118,7 @@ fn test_tvf_column_varbinary_max_property() {
     let ctx = TestContext::with_fixture("tvf_max_columns");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check VARBINARY(MAX) column - BinaryData
@@ -158,9 +152,7 @@ fn test_tvf_column_regular_length_property() {
     let ctx = TestContext::with_fixture("tvf_max_columns");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check NVARCHAR(200) column - Title

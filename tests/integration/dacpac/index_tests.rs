@@ -2,9 +2,11 @@
 //!
 //! Tests for unique, clustered, column specs, and include columns.
 
-use crate::common::{DacpacInfo, TestContext};
+use crate::common::TestContext;
 
-use super::{find_index_by_name, get_property_value, has_relationship, parse_model_xml};
+use super::{
+    find_index_by_name, get_property_value, has_relationship, parse_dacpac_model, parse_model_xml,
+};
 
 // ============================================================================
 // Index Property Tests (XSD Compliance)
@@ -17,9 +19,7 @@ fn test_index_is_unique_property() {
     let ctx = TestContext::with_fixture("index_properties");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check unique index has IsUnique=True
@@ -61,9 +61,7 @@ fn test_index_is_clustered_property() {
     let ctx = TestContext::with_fixture("index_properties");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check clustered index has IsClustered=True
@@ -106,9 +104,7 @@ fn test_index_column_specifications() {
     let ctx = TestContext::with_fixture("index_properties");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Find the multi-column index
@@ -181,9 +177,7 @@ fn test_index_include_columns() {
     let ctx = TestContext::with_fixture("index_properties");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Find the index with INCLUDE columns

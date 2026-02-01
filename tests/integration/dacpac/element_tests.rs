@@ -4,7 +4,7 @@
 
 use crate::common::{DacpacInfo, TestContext};
 
-use super::{find_elements_by_type, parse_model_xml};
+use super::{find_elements_by_type, parse_dacpac_model, parse_model_xml};
 
 // ============================================================================
 // Basic Element Tests
@@ -107,9 +107,7 @@ fn test_model_contains_procedures() {
     let ctx = TestContext::with_fixture("element_types");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let procedures = find_elements_by_type(&doc, "SqlProcedure");
 
@@ -137,9 +135,7 @@ fn test_model_contains_scalar_functions() {
     let ctx = TestContext::with_fixture("element_types");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let scalar_funcs = find_elements_by_type(&doc, "SqlScalarFunction");
 
@@ -168,9 +164,7 @@ fn test_model_contains_table_valued_functions() {
     let ctx = TestContext::with_fixture("element_types");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
 
     // Check for multi-statement TVF (SqlMultiStatementTableValuedFunction)
@@ -189,9 +183,7 @@ fn test_model_contains_sequences() {
     let ctx = TestContext::with_fixture("element_types");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let sequences = find_elements_by_type(&doc, "SqlSequence");
 
@@ -220,9 +212,7 @@ fn test_model_contains_user_defined_types() {
     let ctx = TestContext::with_fixture("element_types");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let udts = find_elements_by_type(&doc, "SqlTableType");
 
@@ -250,9 +240,7 @@ fn test_model_contains_triggers() {
     let ctx = TestContext::with_fixture("element_types");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let triggers = find_elements_by_type(&doc, "SqlDmlTrigger");
 
@@ -281,9 +269,7 @@ fn test_model_contains_schemas() {
     let ctx = TestContext::with_fixture("element_types");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let schemas = find_elements_by_type(&doc, "SqlSchema");
 
@@ -316,9 +302,7 @@ fn test_self_referencing_foreign_key() {
     let ctx = TestContext::with_fixture("self_ref_fk");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let fk_constraints = find_elements_by_type(&doc, "SqlForeignKeyConstraint");
 
@@ -372,9 +356,7 @@ fn test_multiple_indexes_same_table() {
     let ctx = TestContext::with_fixture("multiple_indexes");
     let dacpac_path = ctx.build_successfully();
 
-    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
-    let model_xml = info.model_xml_content.expect("Should have model XML");
-
+    let (_info, model_xml) = parse_dacpac_model(&dacpac_path);
     let doc = parse_model_xml(&model_xml);
     let indexes = find_elements_by_type(&doc, "SqlIndex");
 
