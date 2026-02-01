@@ -11,7 +11,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.2 complete: Body dependency token extraction (8/8 tasks)
 - ✅ Phase 20.3 complete: Type and declaration parsing (4/4 tasks)
 - ✅ Phase 20.4 complete: Table and alias pattern matching (7/7 tasks)
-- 🔄 Phase 20.5-20.7: Keyword, semicolon, and CTE parsing (13 tasks remaining)
+- 🔄 Phase 20.5-20.7: Keyword, semicolon, and CTE parsing (12 tasks remaining)
 - 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (11 tasks)
 
 **Upcoming: Phase 21 - Split model_xml.rs into Submodules** (0/10 tasks)
@@ -91,18 +91,18 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Implementation Approach:** Use sqlparser-rs to parse FROM clauses, JOIN clauses, and table references. Extract table names and aliases from AST nodes rather than regex pattern matching.
 
-### Phase 20.5: SQL Keyword Detection (0/6)
+### Phase 20.5: SQL Keyword Detection (1/6)
 
 **Location:** `src/dacpac/model_xml.rs`
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 20.5.1 | Replace AS_KEYWORD_RE with tokenizer | ⬜ | Line 145-146: Find AS keyword in function body |
-| 20.5.2 | Replace find_body_separator_as() with tokenizer | ⬜ | Lines 4022-4076: Manual character scanning for AS |
-| 20.5.3 | Replace starts_with() SQL keyword checks with tokenizer | ⬜ | Lines 4054-4065: BEGIN, RETURN, SELECT, etc. |
-| 20.5.4 | Replace ON_KEYWORD_RE with tokenizer | ⬜ | Line 68: `ON` keyword in JOIN clauses |
-| 20.5.5 | Replace GROUP_BY_RE with tokenizer | ⬜ | Line 81: `GROUP BY` keyword |
-| 20.5.6 | Replace terminator patterns with tokenizer | ⬜ | Lines 71-73, 84-85: WHERE, HAVING, ORDER, etc. |
+| 20.5.1 | Replace AS_KEYWORD_RE with tokenizer | ✅ | Replaced with `find_function_body_as_tokenized()` using sqlparser-rs tokenizer. Scans for AS keyword after RETURNS, validates it's followed by body-starting keywords (BEGIN, RETURN, SELECT, etc.). Handles whitespace (tabs, spaces, newlines), case-insensitive matching. Updated `extract_function_body()` and `extract_function_header()` to use tokenized parsing. 20 unit tests. |
+| 20.5.2 | Replace find_body_separator_as() with tokenizer | ⬜ | Lines 6347-6402: Manual character scanning for AS (used by procedures) |
+| 20.5.3 | Replace starts_with() SQL keyword checks with tokenizer | ⬜ | Lines 6379-6390: BEGIN, RETURN, SELECT, etc. (inside find_body_separator_as) |
+| 20.5.4 | Replace ON_KEYWORD_RE with tokenizer | ⬜ | Line 62: `ON` keyword in JOIN clauses |
+| 20.5.5 | Replace GROUP_BY_RE with tokenizer | ⬜ | Line 77: `GROUP BY` keyword |
+| 20.5.6 | Replace terminator patterns with tokenizer | ⬜ | Lines 65-68, 80-81: WHERE, HAVING, ORDER, etc. |
 
 **Implementation Approach:** Scan SQL body text with tokenizer and identify keywords as `Token::Word` instances. Check token values instead of string prefix/suffix matching.
 

@@ -104,9 +104,9 @@ static GROUP_TERMINATOR_RE: LazyLock<Regex> =
 // Note: CAST_EXPR_RE has been replaced with extract_cast_expressions_tokenized() in Phase 20.3.3
 // The token-based function handles whitespace, nested parentheses, and comments correctly.
 
-/// AS keyword pattern for function body extraction
-static AS_KEYWORD_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)[\s\n]AS[\s\n]").unwrap());
+// Note: AS_KEYWORD_RE has been replaced with find_function_body_as_tokenized() in Phase 20.5.1
+// The token-based function properly identifies AS as a SQL keyword token, handling
+// whitespace (tabs, spaces, newlines) and avoiding false matches within identifiers.
 
 // TRIGGER_ALIAS_RE removed - replaced by TableAliasTokenParser::extract_aliases_with_table_names() (Phase 20.4.2)
 
@@ -6401,6 +6401,111 @@ fn find_body_separator_as(s: &str) -> Option<usize> {
     None
 }
 
+/// Find the AS keyword that separates function header from body using token-based parsing.
+///
+/// This function tokenizes the input string and looks for the AS keyword that appears
+/// after RETURNS and is followed by BEGIN, RETURN, or other body-starting statements.
+/// It returns the byte position where the AS token ends (after any trailing whitespace).
+///
+/// # Arguments
+/// * `definition` - The full CREATE FUNCTION definition
+/// * `after_returns_start` - The byte position where RETURNS was found
+///
+/// # Returns
+/// * `Some((as_start, as_end))` - The start and end byte positions of the AS keyword
+///   where `as_end` includes any trailing whitespace after AS
+/// * `None` - If no valid body separator AS was found
+fn find_function_body_as_tokenized(
+    definition: &str,
+    after_returns_start: usize,
+) -> Option<(usize, usize)> {
+    let after_returns = &definition[after_returns_start..];
+
+    let dialect = MsSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, after_returns).tokenize_with_location() else {
+        return None;
+    };
+
+    if tokens.is_empty() {
+        return None;
+    }
+
+    // Build line offset map for byte position calculation
+    let line_offsets = compute_line_offsets(after_returns);
+
+    let len = tokens.len();
+    let mut i = 0;
+
+    // Helper to skip whitespace tokens, returns the next non-whitespace index
+    let skip_whitespace =
+        |tokens: &[sqlparser::tokenizer::TokenWithSpan], mut idx: usize| -> usize {
+            while idx < tokens.len() && matches!(&tokens[idx].token, Token::Whitespace(_)) {
+                idx += 1;
+            }
+            idx
+        };
+
+    // Keywords that can start a function body after AS
+    let body_start_keywords = [
+        "BEGIN", "RETURN", "SET", "SELECT", "IF", "WHILE", "DECLARE", "WITH", "INSERT", "UPDATE",
+        "DELETE", "EXEC", "EXECUTE",
+    ];
+
+    while i < len {
+        // Look for AS keyword (unquoted word)
+        if let Token::Word(w) = &tokens[i].token {
+            if w.quote_style.is_none() && w.value.eq_ignore_ascii_case("AS") {
+                // Calculate byte position of AS keyword
+                let as_byte_start = location_to_byte_offset(
+                    &line_offsets,
+                    tokens[i].span.start.line,
+                    tokens[i].span.start.column,
+                );
+
+                // Look at what comes after AS
+                let j = skip_whitespace(&tokens, i + 1);
+
+                // Calculate end position (after AS and any whitespace)
+                let as_byte_end = if j < len {
+                    location_to_byte_offset(
+                        &line_offsets,
+                        tokens[j].span.start.line,
+                        tokens[j].span.start.column,
+                    )
+                } else {
+                    // AS is at the end, end is after "AS" (2 chars)
+                    as_byte_start + 2
+                };
+
+                // Check if followed by a body-starting keyword
+                if j < len {
+                    if let Token::Word(next_word) = &tokens[j].token {
+                        if next_word.quote_style.is_none() {
+                            let next_upper = next_word.value.to_uppercase();
+                            if body_start_keywords.contains(&next_upper.as_str()) {
+                                // This AS is the body separator
+                                return Some((
+                                    after_returns_start + as_byte_start,
+                                    after_returns_start + as_byte_end,
+                                ));
+                            }
+                        }
+                    }
+                } else {
+                    // AS is at the very end - still a valid body separator
+                    return Some((
+                        after_returns_start + as_byte_start,
+                        after_returns_start + as_byte_end,
+                    ));
+                }
+            }
+        }
+        i += 1;
+    }
+
+    None
+}
+
 /// Write the data type relationship for a parameter with inline type specifier
 fn write_data_type_relationship<W: Write>(
     writer: &mut Writer<W>,
@@ -6672,21 +6777,20 @@ fn extract_base_type_name(type_spec: &str) -> String {
 
 /// Extract the body part from a CREATE FUNCTION definition
 /// Returns just the body (BEGIN...END or RETURN(...)) without the header
+///
+/// Uses token-based parsing to find the AS keyword that separates header from body,
+/// handling whitespace (tabs, spaces, newlines) correctly.
 fn extract_function_body(definition: &str) -> String {
     let def_upper = definition.to_uppercase();
 
     // Find RETURNS and then AS after it
     // Pattern: CREATE FUNCTION [name](...) RETURNS type AS BEGIN ... END
-    // AS can be preceded by space or newline
     if let Some(returns_pos) = def_upper.find("RETURNS") {
-        let after_returns = &def_upper[returns_pos..];
-        // Find AS (could be "\nAS" or " AS" - with word boundary)
-        // We need to find " AS " or "\nAS" to avoid matching within a type like "ALIAS"
-        if let Some(m) = AS_KEYWORD_RE.find(after_returns) {
-            // Calculate absolute position in original string
-            let abs_as_pos = returns_pos + m.end();
-            // Return everything after AS
-            return definition[abs_as_pos..].trim().to_string();
+        // Use token-based parsing to find the AS keyword
+        if let Some((_as_start, as_end)) = find_function_body_as_tokenized(definition, returns_pos)
+        {
+            // Return everything after AS (as_end is after AS and any trailing whitespace)
+            return definition[as_end..].trim().to_string();
         }
     }
 
@@ -6697,19 +6801,20 @@ fn extract_function_body(definition: &str) -> String {
 /// Extract the header part from a CREATE FUNCTION definition
 /// Returns everything up to and including AS (CREATE FUNCTION [name](...) RETURNS type AS\n)
 /// Preserves trailing whitespace after AS to ensure proper separation from body
+///
+/// Uses token-based parsing to find the AS keyword that separates header from body,
+/// handling whitespace (tabs, spaces, newlines) correctly.
 fn extract_function_header(definition: &str) -> String {
     let def_upper = definition.to_uppercase();
 
     // Find RETURNS and then AS after it
     if let Some(returns_pos) = def_upper.find("RETURNS") {
-        let after_returns = &def_upper[returns_pos..];
-        // Find AS keyword
-        if let Some(m) = AS_KEYWORD_RE.find(after_returns) {
-            // Calculate absolute position in original string (include the AS and trailing whitespace)
-            let abs_as_end = returns_pos + m.end();
+        // Use token-based parsing to find the AS keyword
+        if let Some((_as_start, as_end)) = find_function_body_as_tokenized(definition, returns_pos)
+        {
             // Return everything up to and including AS with trailing whitespace
             // Use trim_start() to only remove leading whitespace, preserving trailing newline
-            return definition[..abs_as_end].trim_start().to_string();
+            return definition[..as_end].trim_start().to_string();
         }
     }
 
@@ -11754,5 +11859,201 @@ FROM [dbo].[Account] A
         let stmt = &stmts[0];
         assert_eq!(stmt.schema, "Sales");
         assert_eq!(stmt.table, "Products");
+    }
+
+    // ============================================================================
+    // find_function_body_as_tokenized tests (Phase 20.5.1)
+    // ============================================================================
+
+    #[test]
+    fn test_find_function_body_as_basic_begin() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT AS BEGIN RETURN 1 END";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_with_newline() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT\nAS\nBEGIN RETURN 1 END";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_with_tabs() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT\tAS\tBEGIN RETURN 1 END";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_with_return() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT AS RETURN 1";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("RETURN"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_with_select() {
+        let sql = "CREATE FUNCTION [dbo].[GetData]() RETURNS TABLE AS RETURN SELECT * FROM t";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        // For inline TVF, body starts with RETURN
+        assert!(sql[end..].trim().starts_with("RETURN"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_lowercase() {
+        let sql = "create function [dbo].[GetValue]() returns int as begin return 1 end";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().to_uppercase().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_mixed_case() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() Returns INT As Begin RETURN 1 End";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("Begin"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_with_declare() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT AS DECLARE @x INT; RETURN @x";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("DECLARE"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_with_set() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT AS SET NOCOUNT ON; RETURN 1";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("SET"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_with_if() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue](@x INT) RETURNS INT AS IF @x > 0 RETURN 1 ELSE RETURN 0";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("IF"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_with_with_cte() {
+        let sql = "CREATE FUNCTION [dbo].[GetData]() RETURNS TABLE AS WITH cte AS (SELECT 1 AS x) RETURN SELECT * FROM cte";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("WITH"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_with_multiple_whitespace() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT   AS   BEGIN RETURN 1 END";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_with_crlf() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT\r\nAS\r\nBEGIN RETURN 1 END";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_not_alias() {
+        // This should NOT match AS in "AS alias" pattern - it should match the body separator AS
+        let sql =
+            "CREATE FUNCTION [dbo].[GetValue]() RETURNS TABLE AS RETURN SELECT x AS alias FROM t";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        // Body starts with RETURN, not the alias pattern
+        assert!(sql[end..].trim().starts_with("RETURN"));
+    }
+
+    #[test]
+    fn test_find_function_body_as_no_match() {
+        // No AS keyword after RETURNS
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT";
+        let returns_pos = sql.to_uppercase().find("RETURNS").unwrap();
+        let result = find_function_body_as_tokenized(sql, returns_pos);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_function_body_as_empty_after_returns() {
+        let sql = "RETURNS";
+        let result = find_function_body_as_tokenized(sql, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_function_body_basic() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT AS BEGIN RETURN 1 END";
+        let body = extract_function_body(sql);
+        assert!(body.starts_with("BEGIN"));
+        assert!(body.contains("RETURN 1"));
+    }
+
+    #[test]
+    fn test_extract_function_body_with_tabs() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT\tAS\tBEGIN RETURN 1 END";
+        let body = extract_function_body(sql);
+        assert!(body.starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_extract_function_header_basic() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT AS BEGIN RETURN 1 END";
+        let header = extract_function_header(sql);
+        assert!(header.contains("CREATE FUNCTION"));
+        assert!(header.contains("RETURNS INT"));
+        assert!(header.ends_with("AS ") || header.ends_with("AS"));
+    }
+
+    #[test]
+    fn test_extract_function_header_with_tabs() {
+        let sql = "CREATE FUNCTION [dbo].[GetValue]() RETURNS INT\tAS\tBEGIN RETURN 1 END";
+        let header = extract_function_header(sql);
+        assert!(header.contains("CREATE FUNCTION"));
+        assert!(header.contains("RETURNS INT"));
     }
 }
