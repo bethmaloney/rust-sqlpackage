@@ -18,10 +18,10 @@
 //! [Name] AS (expression) [PERSISTED] [NOT NULL]
 //! ```
 
-use crate::parser::identifier_utils::format_token;
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use sqlparser::tokenizer::Token;
+
+use super::token_parser_base::TokenParser;
 
 /// Result of parsing a column definition using tokens
 #[derive(Debug, Clone, Default)]
@@ -63,38 +63,34 @@ pub struct TokenParsedColumn {
 
 /// Token-based column definition parser
 pub struct ColumnTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl ColumnTokenParser {
     /// Create a new parser for a column definition string
     pub fn new(col_def: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, col_def)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(col_def)?,
+        })
     }
 
     /// Parse the column definition and return the result
     pub fn parse(&mut self) -> Option<TokenParsedColumn> {
         // Skip leading whitespace tokens
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Check if empty
-        if self.is_at_end() {
+        if self.base.is_at_end() {
             return None;
         }
 
         // First token should be the column name (identifier)
-        let name = self.parse_identifier()?;
+        let name = self.base.parse_identifier()?;
 
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Check if this is a computed column: [Name] AS (expression)
-        if self.check_keyword(Keyword::AS) {
+        if self.base.check_keyword(Keyword::AS) {
             return self.parse_computed_column(name);
         }
 
@@ -116,8 +112,8 @@ impl ColumnTokenParser {
     /// Parse a computed column: [Name] AS (expression) [PERSISTED] [NOT NULL]
     fn parse_computed_column(&mut self, name: String) -> Option<TokenParsedColumn> {
         // Consume AS
-        self.expect_keyword(Keyword::AS)?;
-        self.skip_whitespace();
+        self.base.expect_keyword(Keyword::AS)?;
+        self.base.skip_whitespace();
 
         // Parse the expression (everything in parentheses)
         let expression = self.parse_parenthesized_expression()?;
@@ -130,23 +126,23 @@ impl ColumnTokenParser {
 
         // Parse optional PERSISTED and nullability
         loop {
-            self.skip_whitespace();
-            if self.is_at_end() {
+            self.base.skip_whitespace();
+            if self.base.is_at_end() {
                 break;
             }
 
-            if self.check_word_ci("PERSISTED") {
-                self.advance();
+            if self.base.check_word_ci("PERSISTED") {
+                self.base.advance();
                 result.is_persisted = true;
-            } else if self.check_keyword(Keyword::NOT) {
-                self.advance();
-                self.skip_whitespace();
-                if self.check_keyword(Keyword::NULL) {
-                    self.advance();
+            } else if self.base.check_keyword(Keyword::NOT) {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_keyword(Keyword::NULL) {
+                    self.base.advance();
                     result.nullability = Some(false);
                 }
-            } else if self.check_keyword(Keyword::NULL) {
-                self.advance();
+            } else if self.base.check_keyword(Keyword::NULL) {
+                self.base.advance();
                 result.nullability = Some(true);
             } else {
                 break;
@@ -166,19 +162,19 @@ impl ColumnTokenParser {
         let mut constraint_immediately_precedes = false;
 
         loop {
-            self.skip_whitespace();
-            if self.is_at_end() {
+            self.base.skip_whitespace();
+            if self.base.is_at_end() {
                 break;
             }
 
             // Check for IDENTITY
-            if self.check_keyword(Keyword::IDENTITY) {
-                self.advance();
+            if self.base.check_keyword(Keyword::IDENTITY) {
+                self.base.advance();
                 result.is_identity = true;
                 // Skip optional (seed, increment)
-                self.skip_whitespace();
-                if self.check_token(&Token::LParen) {
-                    self.skip_parenthesized();
+                self.base.skip_whitespace();
+                if self.base.check_token(&Token::LParen) {
+                    self.base.skip_parenthesized();
                 }
                 // IDENTITY separates CONSTRAINT from DEFAULT
                 constraint_immediately_precedes = false;
@@ -186,11 +182,11 @@ impl ColumnTokenParser {
             }
 
             // Check for NOT NULL
-            if self.check_keyword(Keyword::NOT) {
-                self.advance();
-                self.skip_whitespace();
-                if self.check_keyword(Keyword::NULL) {
-                    self.advance();
+            if self.base.check_keyword(Keyword::NOT) {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_keyword(Keyword::NULL) {
+                    self.base.advance();
                     result.nullability = Some(false);
                     // NOT NULL separates CONSTRAINT from DEFAULT
                     constraint_immediately_precedes = false;
@@ -199,9 +195,9 @@ impl ColumnTokenParser {
             }
 
             // Check for NULL (explicit nullable)
-            if self.check_keyword(Keyword::NULL) {
+            if self.base.check_keyword(Keyword::NULL) {
                 // Make sure this isn't part of NOT NULL
-                self.advance();
+                self.base.advance();
                 if result.nullability.is_none() {
                     result.nullability = Some(true);
                     // NULL separates CONSTRAINT from DEFAULT
@@ -211,10 +207,10 @@ impl ColumnTokenParser {
             }
 
             // Check for CONSTRAINT keyword (names the next constraint)
-            if self.check_keyword(Keyword::CONSTRAINT) {
-                self.advance();
-                self.skip_whitespace();
-                let constraint_name = self.parse_identifier();
+            if self.base.check_keyword(Keyword::CONSTRAINT) {
+                self.base.advance();
+                self.base.skip_whitespace();
+                let constraint_name = self.base.parse_identifier();
                 pending_constraint_name = constraint_name;
                 // Mark that CONSTRAINT immediately precedes what comes next
                 constraint_immediately_precedes = true;
@@ -222,9 +218,9 @@ impl ColumnTokenParser {
             }
 
             // Check for DEFAULT
-            if self.check_keyword(Keyword::DEFAULT) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_keyword(Keyword::DEFAULT) {
+                self.base.advance();
+                self.base.skip_whitespace();
 
                 // Parse default value
                 let default_value = self.parse_default_value();
@@ -243,12 +239,12 @@ impl ColumnTokenParser {
             }
 
             // Check for CHECK
-            if self.check_keyword(Keyword::CHECK) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_keyword(Keyword::CHECK) {
+                self.base.advance();
+                self.base.skip_whitespace();
 
                 // Parse check expression
-                if self.check_token(&Token::LParen) {
+                if self.base.check_token(&Token::LParen) {
                     let expr = self.parse_parenthesized_expression();
                     result.check_expression = expr;
                     result.check_constraint_name = pending_constraint_name.take();
@@ -261,79 +257,82 @@ impl ColumnTokenParser {
             }
 
             // Check for ROWGUIDCOL
-            if self.check_word_ci("ROWGUIDCOL") {
-                self.advance();
+            if self.base.check_word_ci("ROWGUIDCOL") {
+                self.base.advance();
                 result.is_rowguidcol = true;
                 continue;
             }
 
             // Check for SPARSE
-            if self.check_word_ci("SPARSE") {
-                self.advance();
+            if self.base.check_word_ci("SPARSE") {
+                self.base.advance();
                 result.is_sparse = true;
                 continue;
             }
 
             // Check for FILESTREAM
-            if self.check_word_ci("FILESTREAM") {
-                self.advance();
+            if self.base.check_word_ci("FILESTREAM") {
+                self.base.advance();
                 result.is_filestream = true;
                 continue;
             }
 
             // Check for PERSISTED (for computed columns, but can appear in regular column context)
-            if self.check_word_ci("PERSISTED") {
-                self.advance();
+            if self.base.check_word_ci("PERSISTED") {
+                self.base.advance();
                 result.is_persisted = true;
                 continue;
             }
 
             // Check for PRIMARY KEY (inline) - skip it
-            if self.check_keyword(Keyword::PRIMARY) {
-                self.advance();
-                self.skip_whitespace();
-                if self.check_keyword(Keyword::KEY) {
-                    self.advance();
+            if self.base.check_keyword(Keyword::PRIMARY) {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_keyword(Keyword::KEY) {
+                    self.base.advance();
                     // Skip optional CLUSTERED/NONCLUSTERED
-                    self.skip_whitespace();
-                    if self.check_keyword(Keyword::CLUSTERED) || self.check_word_ci("NONCLUSTERED")
+                    self.base.skip_whitespace();
+                    if self.base.check_keyword(Keyword::CLUSTERED)
+                        || self.base.check_word_ci("NONCLUSTERED")
                     {
-                        self.advance();
+                        self.base.advance();
                     }
                 }
                 continue;
             }
 
             // Check for UNIQUE (inline) - skip it
-            if self.check_keyword(Keyword::UNIQUE) {
-                self.advance();
+            if self.base.check_keyword(Keyword::UNIQUE) {
+                self.base.advance();
                 // Skip optional CLUSTERED/NONCLUSTERED
-                self.skip_whitespace();
-                if self.check_keyword(Keyword::CLUSTERED) || self.check_word_ci("NONCLUSTERED") {
-                    self.advance();
+                self.base.skip_whitespace();
+                if self.base.check_keyword(Keyword::CLUSTERED)
+                    || self.base.check_word_ci("NONCLUSTERED")
+                {
+                    self.base.advance();
                 }
                 continue;
             }
 
             // Check for FOREIGN KEY (inline) - skip it
-            if self.check_keyword(Keyword::FOREIGN) {
-                self.advance();
-                self.skip_whitespace();
-                if self.check_keyword(Keyword::KEY) {
-                    self.advance();
+            if self.base.check_keyword(Keyword::FOREIGN) {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_keyword(Keyword::KEY) {
+                    self.base.advance();
                 }
                 // Skip REFERENCES clause
-                self.skip_whitespace();
-                if self.check_keyword(Keyword::REFERENCES) {
+                self.base.skip_whitespace();
+                if self.base.check_keyword(Keyword::REFERENCES) {
                     // Skip until end or next keyword
-                    while !self.is_at_end() {
-                        if self.check_keyword(Keyword::CONSTRAINT)
-                            || self.check_keyword(Keyword::DEFAULT)
-                            || self.check_keyword(Keyword::CHECK)
+                    while !self.base.is_at_end() {
+                        if self.base.check_keyword(Keyword::CONSTRAINT)
+                            || self.base.check_keyword(Keyword::DEFAULT)
+                            || self.base.check_keyword(Keyword::CHECK)
                         {
                             break;
                         }
-                        self.advance();
+                        self.base.advance();
                     }
                 }
                 continue;
@@ -344,40 +343,25 @@ impl ColumnTokenParser {
         }
     }
 
-    /// Parse an identifier (column name, constraint name, etc.)
-    fn parse_identifier(&mut self) -> Option<String> {
-        self.skip_whitespace();
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Word(word) => {
-                let name = word.value.clone();
-                self.advance();
-                Some(name)
-            }
-            _ => None,
-        }
-    }
-
     /// Parse a data type (e.g., INT, NVARCHAR(50), DECIMAL(18, 2))
     fn parse_data_type(&mut self) -> Option<String> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         let mut data_type = String::new();
 
         // Get the base type name
-        let token = self.current_token()?;
+        let token = self.base.current_token()?;
         match &token.token {
             Token::Word(word) => {
                 data_type.push_str(&word.value.to_uppercase());
-                self.advance();
+                self.base.advance();
             }
             _ => return None,
         }
 
         // Check for type parameters in parentheses
-        self.skip_whitespace();
-        if self.check_token(&Token::LParen) {
+        self.base.skip_whitespace();
+        if self.base.check_token(&Token::LParen) {
             let params = self.consume_parenthesized_raw()?;
             data_type.push('(');
             data_type.push_str(&params);
@@ -389,44 +373,44 @@ impl ColumnTokenParser {
 
     /// Parse a DEFAULT value (handles various forms: function calls, literals, parenthesized expressions)
     fn parse_default_value(&mut self) -> Option<String> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Check what kind of default value we have
-        if self.check_token(&Token::LParen) {
+        if self.base.check_token(&Token::LParen) {
             // Parenthesized expression like ((0)) or (GETDATE())
             let expr = self.parse_parenthesized_expression()?;
             return Some(format!("({})", expr));
         }
 
         // Check for function call like GETDATE(), NEWID(), etc.
-        if let Some(token) = self.current_token() {
+        if let Some(token) = self.base.current_token() {
             if let Token::Word(word) = &token.token {
                 let func_name = word.value.clone();
-                self.advance();
-                self.skip_whitespace();
+                self.base.advance();
+                self.base.skip_whitespace();
 
                 // Check if followed by ()
-                if self.check_token(&Token::LParen) {
-                    self.advance(); // consume (
-                    self.skip_whitespace();
-                    if self.check_token(&Token::RParen) {
-                        self.advance(); // consume )
+                if self.base.check_token(&Token::LParen) {
+                    self.base.advance(); // consume (
+                    self.base.skip_whitespace();
+                    if self.base.check_token(&Token::RParen) {
+                        self.base.advance(); // consume )
                         return Some(format!("{}()", func_name));
                     }
                     // Function with args - reconstruct
                     let mut args = String::new();
                     let mut depth = 1;
-                    while !self.is_at_end() && depth > 0 {
-                        if let Some(t) = self.current_token() {
+                    while !self.base.is_at_end() && depth > 0 {
+                        if let Some(t) = self.base.current_token() {
                             match &t.token {
                                 Token::LParen => depth += 1,
                                 Token::RParen => depth -= 1,
                                 _ => {}
                             }
                             if depth > 0 {
-                                args.push_str(&self.token_to_string(&t.token));
+                                args.push_str(&TokenParser::token_to_string(&t.token));
                             }
-                            self.advance();
+                            self.base.advance();
                         }
                     }
                     return Some(format!("{}({})", func_name, args.trim()));
@@ -438,30 +422,30 @@ impl ColumnTokenParser {
         }
 
         // Check for string literal
-        if let Some(token) = self.current_token() {
+        if let Some(token) = self.base.current_token() {
             match &token.token {
                 Token::SingleQuotedString(s) => {
                     let value = format!("'{}'", s.replace('\'', "''"));
-                    self.advance();
+                    self.base.advance();
                     return Some(value);
                 }
                 Token::NationalStringLiteral(s) => {
                     let value = format!("N'{}'", s.replace('\'', "''"));
-                    self.advance();
+                    self.base.advance();
                     return Some(value);
                 }
                 Token::Number(n, _) => {
                     let value = n.clone();
-                    self.advance();
+                    self.base.advance();
                     return Some(value);
                 }
                 Token::Minus => {
                     // Negative number
-                    self.advance();
-                    if let Some(next) = self.current_token() {
+                    self.base.advance();
+                    if let Some(next) = self.base.current_token() {
                         if let Token::Number(n, _) = &next.token {
                             let value = format!("-{}", n);
-                            self.advance();
+                            self.base.advance();
                             return Some(value);
                         }
                     }
@@ -476,17 +460,17 @@ impl ColumnTokenParser {
     /// Parse a parenthesized expression and return its contents
     /// Reconstructs the content from tokens
     fn parse_parenthesized_expression(&mut self) -> Option<String> {
-        if !self.check_token(&Token::LParen) {
+        if !self.base.check_token(&Token::LParen) {
             return None;
         }
 
-        self.advance(); // consume (
+        self.base.advance(); // consume (
 
         let mut depth = 1;
         let mut content = String::new();
 
-        while !self.is_at_end() && depth > 0 {
-            if let Some(token) = self.current_token() {
+        while !self.base.is_at_end() && depth > 0 {
+            if let Some(token) = self.base.current_token() {
                 match &token.token {
                     Token::LParen => {
                         depth += 1;
@@ -500,10 +484,10 @@ impl ColumnTokenParser {
                         // depth == 0 means we hit the closing paren, don't add it
                     }
                     _ => {
-                        content.push_str(&self.token_to_string(&token.token));
+                        content.push_str(&TokenParser::token_to_string(&token.token));
                     }
                 }
-                self.advance();
+                self.base.advance();
             }
         }
 
@@ -512,17 +496,17 @@ impl ColumnTokenParser {
 
     /// Consume a parenthesized section and return the raw content
     fn consume_parenthesized_raw(&mut self) -> Option<String> {
-        if !self.check_token(&Token::LParen) {
+        if !self.base.check_token(&Token::LParen) {
             return None;
         }
 
-        self.advance(); // consume (
+        self.base.advance(); // consume (
 
         let mut depth = 1;
         let mut content = String::new();
 
-        while !self.is_at_end() && depth > 0 {
-            if let Some(token) = self.current_token() {
+        while !self.base.is_at_end() && depth > 0 {
+            if let Some(token) = self.base.current_token() {
                 match &token.token {
                     Token::LParen => {
                         depth += 1;
@@ -535,99 +519,14 @@ impl ColumnTokenParser {
                         }
                     }
                     _ => {
-                        content.push_str(&self.token_to_string(&token.token));
+                        content.push_str(&TokenParser::token_to_string(&token.token));
                     }
                 }
-                self.advance();
+                self.base.advance();
             }
         }
 
         Some(content.trim().to_string())
-    }
-
-    /// Skip a parenthesized section without returning content
-    fn skip_parenthesized(&mut self) {
-        if !self.check_token(&Token::LParen) {
-            return;
-        }
-
-        self.advance(); // consume (
-        let mut depth = 1;
-
-        while !self.is_at_end() && depth > 0 {
-            if let Some(token) = self.current_token() {
-                match &token.token {
-                    Token::LParen => depth += 1,
-                    Token::RParen => depth -= 1,
-                    _ => {}
-                }
-                self.advance();
-            }
-        }
-    }
-
-    // =========================================================================
-    // Helper methods for token navigation
-    // =========================================================================
-
-    fn current_token(&self) -> Option<&TokenWithSpan> {
-        self.tokens.get(self.pos)
-    }
-
-    fn advance(&mut self) {
-        if self.pos < self.tokens.len() {
-            self.pos += 1;
-        }
-    }
-
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-            || matches!(
-                self.tokens.get(self.pos),
-                Some(TokenWithSpan {
-                    token: Token::EOF,
-                    ..
-                })
-            )
-    }
-
-    fn skip_whitespace(&mut self) {
-        while let Some(token) = self.current_token() {
-            if matches!(token.token, Token::Whitespace(_)) {
-                self.advance();
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn check_token(&self, expected: &Token) -> bool {
-        self.current_token()
-            .is_some_and(|t| std::mem::discriminant(&t.token) == std::mem::discriminant(expected))
-    }
-
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        self.current_token()
-            .is_some_and(|t| matches!(&t.token, Token::Word(w) if w.keyword == keyword))
-    }
-
-    fn check_word_ci(&self, word: &str) -> bool {
-        self.current_token().is_some_and(
-            |t| matches!(&t.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word)),
-        )
-    }
-
-    fn expect_keyword(&mut self, keyword: Keyword) -> Option<()> {
-        if self.check_keyword(keyword) {
-            self.advance();
-            Some(())
-        } else {
-            None
-        }
-    }
-
-    fn token_to_string(&self, token: &Token) -> String {
-        format_token(token)
     }
 }
 
