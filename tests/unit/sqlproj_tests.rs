@@ -947,3 +947,103 @@ fn test_project_dir_is_set_correctly() {
     let project = result.unwrap();
     assert_eq!(project.project_dir, temp_dir.path());
 }
+
+// ============================================================================
+// DAC Version and Description Tests
+// ============================================================================
+
+#[test]
+fn test_parse_dac_version_default() {
+    // When DacVersion is not specified, should default to "1.0.0.0"
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.dac_version, "1.0.0.0");
+    assert!(project.dac_description.is_none());
+}
+
+#[test]
+fn test_parse_dac_version_custom() {
+    // When DacVersion is specified, should use that value
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DacVersion>2.5.3.0</DacVersion>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.dac_version, "2.5.3.0");
+}
+
+#[test]
+fn test_parse_dac_description() {
+    // When DacDescription is specified, should parse it
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DacDescription>My database project description</DacDescription>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(
+        project.dac_description,
+        Some("My database project description".to_string())
+    );
+}
+
+#[test]
+fn test_parse_dac_version_and_description() {
+    // When both DacVersion and DacDescription are specified
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DacVersion>3.0.0.0</DacVersion>
+    <DacDescription>Production database schema</DacDescription>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = create_test_project(content, &[]);
+    let sqlproj_path = temp_dir.path().join("project.sqlproj");
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.dac_version, "3.0.0.0");
+    assert_eq!(
+        project.dac_description,
+        Some("Production database schema".to_string())
+    );
+}

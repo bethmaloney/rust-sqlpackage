@@ -29,8 +29,10 @@ pub fn generate_metadata_xml<W: Write>(
     // Version
     write_element(&mut xml_writer, "Version", version)?;
 
-    // Description - omit if empty (matches dotnet behavior)
-    // Currently SqlProject doesn't have a description field, so we don't emit it
+    // Description - emit only if DacDescription is specified in sqlproj (matches DacFx behavior)
+    if let Some(ref description) = project.dac_description {
+        write_element(&mut xml_writer, "Description", description)?;
+    }
 
     // Close root
     xml_writer.write_event(Event::End(BytesEnd::new("DacType")))?;

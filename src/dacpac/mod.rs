@@ -39,6 +39,8 @@ pub fn generate_model_xml_string(
         ansi_nulls: true,
         quoted_identifier: true,
         database_options: crate::project::DatabaseOptions::default(),
+        dac_version: "1.0.0.0".to_string(),
+        dac_description: None,
     };
 
     let mut buffer = Vec::new();
@@ -66,6 +68,8 @@ pub fn generate_dac_metadata_xml(name: &str, version: &str) -> String {
         ansi_nulls: true,
         quoted_identifier: true,
         database_options: crate::project::DatabaseOptions::default(),
+        dac_version: version.to_string(),
+        dac_description: None,
     };
 
     let mut buffer = Vec::new();

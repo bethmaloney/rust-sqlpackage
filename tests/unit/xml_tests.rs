@@ -33,6 +33,8 @@ fn create_test_project() -> rust_sqlpackage::project::SqlProject {
         ansi_nulls: true,
         quoted_identifier: true,
         database_options: rust_sqlpackage::project::DatabaseOptions::default(),
+        dac_version: "1.0.0.0".to_string(),
+        dac_description: None,
     }
 }
 

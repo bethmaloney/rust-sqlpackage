@@ -48,7 +48,7 @@ pub fn create_dacpac(
 
     // Write DacMetadata.xml
     let mut metadata_buffer = Cursor::new(Vec::new());
-    metadata_xml::generate_metadata_xml(&mut metadata_buffer, project, "1.0.0.0")?;
+    metadata_xml::generate_metadata_xml(&mut metadata_buffer, project, &project.dac_version)?;
     zip.start_file("DacMetadata.xml", options)?;
     zip.write_all(metadata_buffer.get_ref())?;
 

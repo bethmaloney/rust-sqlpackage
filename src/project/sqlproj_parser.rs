@@ -175,6 +175,10 @@ pub struct SqlProject {
     pub quoted_identifier: bool,
     /// Database options from sqlproj
     pub database_options: DatabaseOptions,
+    /// DAC version for metadata (default: "1.0.0.0")
+    pub dac_version: String,
+    /// DAC description for metadata (optional)
+    pub dac_description: Option<String>,
 }
 
 /// Parse a .sqlproj file
@@ -220,6 +224,13 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
     // Parse database options
     let database_options = parse_database_options(&root);
 
+    // Parse DAC version (default: "1.0.0.0" per DacFx behavior)
+    let dac_version =
+        find_property_value(&root, "DacVersion").unwrap_or_else(|| "1.0.0.0".to_string());
+
+    // Parse DAC description (optional, omit if not specified)
+    let dac_description = find_property_value(&root, "DacDescription");
+
     // Find all SQL files
     let sql_files = find_sql_files(&root, &project_dir)?;
 
@@ -250,6 +261,8 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         ansi_nulls,
         quoted_identifier,
         database_options,
+        dac_version,
+        dac_description,
     })
 }
 

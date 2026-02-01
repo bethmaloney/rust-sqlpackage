@@ -383,6 +383,8 @@ mod tests {
             ansi_nulls: true,
             quoted_identifier: true,
             database_options: DatabaseOptions::default(),
+            dac_version: "1.0.0.0".to_string(),
+            dac_description: None,
         }
     }
 

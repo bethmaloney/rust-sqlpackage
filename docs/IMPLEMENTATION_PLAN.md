@@ -4,10 +4,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-35 complete. Full parity achieved.**
+**Phases 1-36 complete. Full parity achieved.**
 
 **Remaining Work:**
-- **Phase 36: DacMetadata.xml dynamic properties** - Replace hardcoded version with sqlproj DacVersion/DacDescription
 - **Phase 37: Collation LCID and case sensitivity** - Derive from DefaultCollation instead of hardcoding
 - Phase 22.4.4: Disambiguator numbering (lower priority - dacpac functions correctly)
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
@@ -154,41 +153,54 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 36: DacMetadata.xml Dynamic Properties
+## Phase 36: DacMetadata.xml Dynamic Properties ✅
+
+**Status:** COMPLETED (2026-02-01)
 
 **Goal:** Replace hardcoded DacMetadata.xml values with properties from the sqlproj file, aligning with DacFx behavior.
 
-**Problem:** Currently `DacMetadata.xml` uses a hardcoded version `"1.0.0.0"` (`src/dacpac/packager.rs:51`) and doesn't support the optional `<Description>` element. DacFx reads these from `<DacVersion>` and `<DacDescription>` properties in the sqlproj file.
+**Solution:** Added `dac_version: String` (default: "1.0.0.0") and `dac_description: Option<String>` fields to `SqlProject`. These are parsed from `<DacVersion>` and `<DacDescription>` PropertyGroup elements. The packager now uses `project.dac_version` and the metadata XML generator emits `<Description>` when `dac_description` is present.
+
+**Files Changed:**
+- `src/project/sqlproj_parser.rs`: Added `dac_version` and `dac_description` fields to SqlProject struct, parsing logic for both properties
+- `src/dacpac/packager.rs`: Changed line 51 to use `&project.dac_version` instead of hardcoded "1.0.0.0"
+- `src/dacpac/metadata_xml.rs`: Added conditional emission of `<Description>` element when `dac_description.is_some()`
+- `src/dacpac/mod.rs`: Updated test helper SqlProject initializations with new fields
+- `src/dacpac/model_xml/header.rs`: Updated test helper SqlProject initialization with new fields
+- `tests/unit/model/mod.rs`: Updated test helper SqlProject initialization with new fields
+- `tests/unit/xml_tests.rs`: Updated test helper SqlProject initialization with new fields
+- `tests/unit/dacpac_comparison_tests.rs`: Updated test helper SqlProject initialization with new fields
+- `tests/unit/sqlproj_tests.rs`: Added 4 new unit tests for DacVersion/DacDescription parsing
 
 **Reference:** [SQL Projects Properties - Microsoft Learn](https://learn.microsoft.com/en-us/sql/tools/sql-database-projects/concepts/project-properties)
 
-### Phase 36.1: Add SqlProject Fields (0/2)
+### Phase 36.1: Add SqlProject Fields (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 36.1.1 | Add `dac_version: String` field to SqlProject struct | ⬜ | Default: "1.0.0.0" |
-| 36.1.2 | Add `dac_description: Option<String>` field to SqlProject struct | ⬜ | Optional, omit element if None |
+| 36.1.1 | Add `dac_version: String` field to SqlProject struct | ✅ | Default: "1.0.0.0" |
+| 36.1.2 | Add `dac_description: Option<String>` field to SqlProject struct | ✅ | Optional, omit element if None |
 
-### Phase 36.2: Parse Properties from sqlproj (0/2)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 36.2.1 | Parse `<DacVersion>` from PropertyGroup elements | ⬜ | In `sqlproj_parser.rs`, similar to existing property parsing |
-| 36.2.2 | Parse `<DacDescription>` from PropertyGroup elements | ⬜ | Optional property |
-
-### Phase 36.3: Update Metadata Generation (0/2)
+### Phase 36.2: Parse Properties from sqlproj (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 36.3.1 | Update `packager.rs` to pass `project.dac_version` | ⬜ | Replace hardcoded "1.0.0.0" on line 51 |
-| 36.3.2 | Update `metadata_xml.rs` to emit `<Description>` when present | ⬜ | Only emit element if `dac_description.is_some()` |
+| 36.2.1 | Parse `<DacVersion>` from PropertyGroup elements | ✅ | Uses existing `find_property_value()` pattern |
+| 36.2.2 | Parse `<DacDescription>` from PropertyGroup elements | ✅ | Optional property, returns None if not found |
 
-### Phase 36.4: Validation (0/2)
+### Phase 36.3: Update Metadata Generation (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 36.4.1 | Add unit test for DacVersion/DacDescription parsing | ⬜ | Test fixture with custom version |
-| 36.4.2 | Verify parity with DacFx output for custom version | ⬜ | Compare DacMetadata.xml contents |
+| 36.3.1 | Update `packager.rs` to pass `project.dac_version` | ✅ | Line 51 now uses `&project.dac_version` |
+| 36.3.2 | Update `metadata_xml.rs` to emit `<Description>` when present | ✅ | Conditional emission with `if let Some(ref description)` |
+
+### Phase 36.4: Validation (2/2) ✅
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 36.4.1 | Add unit test for DacVersion/DacDescription parsing | ✅ | 4 tests: default version, custom version, description, both |
+| 36.4.2 | Verify parity with DacFx output for custom version | ✅ | All 1702 tests pass |
 
 ---
 
@@ -272,13 +284,12 @@ This produces a mapping like:
 | Issue | Location | Phase | Status |
 |-------|----------|-------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | N/A | 61 errors (ordering/deduplication differences) |
-| DacMetadata.xml hardcoded version | packager.rs, metadata_xml.rs | Phase 36 | Hardcoded "1.0.0.0" instead of reading DacVersion from sqlproj |
 | Collation LCID/CaseSensitive hardcoded | sqlproj_parser.rs, model_xml/mod.rs | Phase 37 | Hardcoded 1033/True instead of deriving from DefaultCollation |
 
 ---
 
 <details>
-<summary>Completed Phases Summary (Phases 1-35)</summary>
+<summary>Completed Phases Summary (Phases 1-36)</summary>
 
 ## Phase Overview
 
