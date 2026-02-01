@@ -13,6 +13,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - 🔄 Phase 20.4-20.7: Table, keyword, and CTE parsing (20 tasks remaining)
 - 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (11 tasks)
 
+**Upcoming: Phase 21 - Split model_xml.rs into Submodules** (0/10 tasks)
+- Target: Break 9,790-line file into ~9 logical submodules
+
 | Layer | Passing | Rate |
 |-------|---------|------|
 | Layer 1 (Inventory) | 44/44 | 100% |
@@ -167,6 +170,79 @@ The root cause is that `extract_table_aliases_for_body_deps()` uses regex patter
 4. For each context (STUFF, APPLY, EXISTS, IN, CASE), ensure the subquery walker visits all nested SELECT statements
 
 **Validation:** Remove `#[ignore]` from each test after fixing. All 11 tests should pass.
+
+---
+
+## Phase 21: Split model_xml.rs into Submodules (0/10)
+
+**Location:** `src/dacpac/model_xml.rs` (9,790 lines)
+
+**Goal:** Break up the largest file in the codebase into logical submodules for improved maintainability, faster compilation, and easier navigation.
+
+**Background:** The `model_xml.rs` file has grown to nearly 10,000 lines containing XML generation, SQL parsing helpers, body dependency extraction, type handling, and 2,400+ lines of tests. These are distinct concerns that should be separated.
+
+### Phase 21.1: Create Module Structure (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 21.1.1 | Create `src/dacpac/model_xml/` directory with `mod.rs` | ⬜ | Re-export public API from mod.rs |
+| 21.1.2 | Move `generate_model_xml()` entry point to mod.rs | ⬜ | Keep main entry point in mod.rs, delegate to submodules |
+
+### Phase 21.2: Extract XML Writing Helpers (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 21.2.1 | Create `xml_helpers.rs` with low-level XML utilities | ⬜ | `write_property`, `write_relationship`, `write_script_property`, `write_raw` (~200 lines) |
+| 21.2.2 | Create `header.rs` with header/metadata writing | ⬜ | `write_header`, `write_custom_data`, `write_database_options`, `write_package_reference`, `write_sqlcmd_variables` (~400 lines) |
+
+### Phase 21.3: Extract Element Writers (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 21.3.1 | Create `table_writer.rs` for table/column XML | ⬜ | `write_table`, `write_column`, `write_computed_column`, type specifier functions (~600 lines) |
+| 21.3.2 | Create `view_writer.rs` for view XML | ⬜ | `write_view`, `write_view_columns`, `extract_view_*` functions, `ViewColumn` struct (~700 lines) |
+| 21.3.3 | Create `programmability_writer.rs` for procs/functions | ⬜ | `write_procedure`, `write_function`, parameter extraction, `write_dynamic_objects` (~800 lines) |
+
+### Phase 21.4: Extract Body Dependencies (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 21.4.1 | Create `body_deps.rs` for dependency extraction | ⬜ | `BodyDependencyTokenScanner`, `extract_body_dependencies`, `extract_table_aliases_for_body_deps`, `TableAliasTokenParser` (~1,500 lines) |
+| 21.4.2 | Create `qualified_name.rs` for name parsing | ⬜ | `QualifiedName` struct and impl, `parse_qualified_name_tokenized` (~300 lines) |
+
+### Phase 21.5: Extract Remaining Writers (0/1)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 21.5.1 | Create `other_writers.rs` for remaining elements | ⬜ | `write_index`, `write_constraint`, `write_sequence`, `write_trigger`, `write_fulltext_*`, `write_table_type_*`, `write_extended_property` (~1,200 lines) |
+
+**Implementation Approach:**
+
+1. Create module directory structure first
+2. Move functions one module at a time, starting with lowest-dependency utilities
+3. Use `pub(crate)` for internal functions, `pub` only for external API
+4. Keep tests with their corresponding modules (split `mod tests` accordingly)
+5. Update imports incrementally, running tests after each move
+6. Final mod.rs should only contain `generate_model_xml()` and re-exports
+
+**Validation:** All existing tests must pass after each phase. No functional changes.
+
+**Expected Result:**
+
+| Module | Estimated Lines | Purpose |
+|--------|-----------------|---------|
+| `mod.rs` | ~200 | Entry point, re-exports |
+| `xml_helpers.rs` | ~200 | Low-level XML utilities |
+| `header.rs` | ~400 | Header/metadata generation |
+| `table_writer.rs` | ~600 | Table/column XML |
+| `view_writer.rs` | ~700 | View XML and column extraction |
+| `programmability_writer.rs` | ~800 | Procedures/functions |
+| `body_deps.rs` | ~1,500 | Body dependency extraction |
+| `qualified_name.rs` | ~300 | Qualified name parsing |
+| `other_writers.rs` | ~1,200 | Index/constraint/trigger/etc |
+| Tests (distributed) | ~2,400 | Unit tests per module |
+
+---
 
 ### Implementation Notes
 
