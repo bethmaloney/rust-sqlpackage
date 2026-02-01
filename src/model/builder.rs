@@ -34,6 +34,101 @@ use super::{
 /// Static schema name for "dbo" - avoids allocation for the most common schema
 const DBO_SCHEMA: &str = "dbo";
 
+/// Builder for creating `ConstraintElement` instances with common defaults.
+///
+/// Reduces boilerplate by providing sensible defaults for the many fields that
+/// are typically None, empty, or determined post-processing. Type-specific
+/// fields (referenced_table, is_clustered, etc.) are set via builder methods.
+struct ConstraintBuilder {
+    name: String,
+    table_schema: String,
+    table_name: String,
+    constraint_type: ConstraintType,
+    columns: Vec<ConstraintColumn>,
+    definition: Option<String>,
+    referenced_table: Option<String>,
+    referenced_columns: Option<Vec<String>>,
+    is_clustered: Option<bool>,
+    is_inline: bool,
+    emit_name: bool,
+}
+
+impl ConstraintBuilder {
+    /// Create a new constraint builder with the required fields.
+    fn new(
+        name: String,
+        table_schema: String,
+        table_name: String,
+        constraint_type: ConstraintType,
+        columns: Vec<ConstraintColumn>,
+    ) -> Self {
+        Self {
+            name,
+            table_schema,
+            table_name,
+            constraint_type,
+            columns,
+            definition: None,
+            referenced_table: None,
+            referenced_columns: None,
+            is_clustered: None,
+            is_inline: false,
+            emit_name: true, // Default for table-level constraints
+        }
+    }
+
+    /// Create an inline (column-level) constraint.
+    fn inline(mut self, emit_name: bool) -> Self {
+        self.is_inline = true;
+        self.emit_name = emit_name;
+        self
+    }
+
+    /// Set the constraint definition (for DEFAULT and CHECK constraints).
+    fn definition(mut self, def: String) -> Self {
+        self.definition = Some(def);
+        self
+    }
+
+    /// Set the referenced table and columns (for FOREIGN KEY constraints).
+    fn foreign_key_refs(mut self, table: String, columns: Vec<String>) -> Self {
+        self.referenced_table = Some(table);
+        self.referenced_columns = Some(columns);
+        self
+    }
+
+    /// Set whether the constraint is clustered (for PRIMARY KEY and UNIQUE).
+    fn clustered(mut self, is_clustered: bool) -> Self {
+        self.is_clustered = Some(is_clustered);
+        self
+    }
+
+    /// Set optional clustering (for PRIMARY KEY and UNIQUE).
+    fn clustered_opt(mut self, is_clustered: Option<bool>) -> Self {
+        self.is_clustered = is_clustered;
+        self
+    }
+
+    /// Build the final `ConstraintElement`.
+    fn build(self) -> ConstraintElement {
+        ConstraintElement {
+            name: self.name,
+            table_schema: self.table_schema,
+            table_name: self.table_name,
+            constraint_type: self.constraint_type,
+            columns: self.columns,
+            definition: self.definition,
+            referenced_table: self.referenced_table,
+            referenced_columns: self.referenced_columns,
+            is_clustered: self.is_clustered,
+            is_inline: self.is_inline,
+            inline_constraint_disambiguator: None, // Set by assign_inline_constraint_disambiguators
+            uses_annotation: false,                // Set by assign_inline_constraint_disambiguators
+            emit_name: self.emit_name,
+        }
+    }
+}
+
 /// Track a schema name, avoiding allocation if it already exists in the set.
 /// Returns a clone of the schema name for use in struct fields.
 #[inline]
@@ -288,21 +383,18 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 .default_constraint_name
                                 .clone()
                                 .unwrap_or_else(|| format!("DF_{}_{}", name, col.name));
-                            model.add_element(ModelElement::Constraint(ConstraintElement {
-                                name: constraint_name,
-                                table_schema: schema_owned.clone(),
-                                table_name: name.clone(),
-                                constraint_type: ConstraintType::Default,
-                                columns: vec![ConstraintColumn::new(col.name.clone())],
-                                definition: Some(default_value.clone()),
-                                referenced_table: None,
-                                referenced_columns: None,
-                                is_clustered: None,
-                                is_inline: true, // Column-level constraints are always inline
-                                inline_constraint_disambiguator: None,
-                                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-                                emit_name: col.emit_default_constraint_name, // Emit Name only if CONSTRAINT after NOT NULL
-                            }));
+                            model.add_element(ModelElement::Constraint(
+                                ConstraintBuilder::new(
+                                    constraint_name,
+                                    schema_owned.clone(),
+                                    name.clone(),
+                                    ConstraintType::Default,
+                                    vec![ConstraintColumn::new(col.name.clone())],
+                                )
+                                .inline(col.emit_default_constraint_name)
+                                .definition(default_value.clone())
+                                .build(),
+                            ));
                         }
                     }
 
@@ -314,21 +406,18 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 .check_constraint_name
                                 .clone()
                                 .unwrap_or_else(|| format!("CK_{}_{}", name, col.name));
-                            model.add_element(ModelElement::Constraint(ConstraintElement {
-                                name: constraint_name,
-                                table_schema: schema_owned.clone(),
-                                table_name: name.clone(),
-                                constraint_type: ConstraintType::Check,
-                                columns: vec![ConstraintColumn::new(col.name.clone())],
-                                definition: Some(check_expr.clone()),
-                                referenced_table: None,
-                                referenced_columns: None,
-                                is_clustered: None,
-                                is_inline: true, // Column-level constraints are always inline
-                                inline_constraint_disambiguator: None,
-                                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-                                emit_name: col.emit_check_constraint_name, // Emit Name only if CONSTRAINT after NOT NULL
-                            }));
+                            model.add_element(ModelElement::Constraint(
+                                ConstraintBuilder::new(
+                                    constraint_name,
+                                    schema_owned.clone(),
+                                    name.clone(),
+                                    ConstraintType::Check,
+                                    vec![ConstraintColumn::new(col.name.clone())],
+                                )
+                                .inline(col.emit_check_constraint_name)
+                                .definition(check_expr.clone())
+                                .build(),
+                            ));
                         }
                     }
                 }
@@ -444,7 +533,6 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }
 
                 // Extract inline column constraints (PRIMARY KEY, UNIQUE on columns)
-                // Extract inline column constraints (PRIMARY KEY, UNIQUE on columns)
                 // DotNet emits Name attribute only if constraint has explicit CONSTRAINT [name]
                 for col in &create_table.columns {
                     for option in &col.options {
@@ -465,21 +553,17 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 ConstraintType::Unique
                             };
 
-                            model.add_element(ModelElement::Constraint(ConstraintElement {
-                                name: constraint_name,
-                                table_schema: schema.clone(),
-                                table_name: name.clone(),
-                                constraint_type,
-                                columns: vec![ConstraintColumn::new(col.name.value.clone())],
-                                definition: None,
-                                referenced_table: None,
-                                referenced_columns: None,
-                                is_clustered: None,
-                                is_inline: true, // Column-level constraints are always inline
-                                inline_constraint_disambiguator: None,
-                                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-                                emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
-                            }));
+                            model.add_element(ModelElement::Constraint(
+                                ConstraintBuilder::new(
+                                    constraint_name,
+                                    schema.clone(),
+                                    name.clone(),
+                                    constraint_type,
+                                    vec![ConstraintColumn::new(col.name.value.clone())],
+                                )
+                                .inline(has_explicit_name)
+                                .build(),
+                            ));
                         }
                     }
                 }
@@ -541,21 +625,18 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                             let constraint_name = explicit_name
                                 .unwrap_or_else(|| format!("DF_{}_{}", name, col.name.value));
 
-                            model.add_element(ModelElement::Constraint(ConstraintElement {
-                                name: constraint_name,
-                                table_schema: schema.clone(),
-                                table_name: name.clone(),
-                                constraint_type: ConstraintType::Default,
-                                columns: vec![ConstraintColumn::new(col.name.value.clone())],
-                                definition: Some(expr.to_string()),
-                                referenced_table: None,
-                                referenced_columns: None,
-                                is_clustered: None,
-                                is_inline: true, // Column-level constraints are always inline
-                                inline_constraint_disambiguator: None,
-                                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-                                emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
-                            }));
+                            model.add_element(ModelElement::Constraint(
+                                ConstraintBuilder::new(
+                                    constraint_name,
+                                    schema.clone(),
+                                    name.clone(),
+                                    ConstraintType::Default,
+                                    vec![ConstraintColumn::new(col.name.value.clone())],
+                                )
+                                .inline(has_explicit_name)
+                                .definition(expr.to_string())
+                                .build(),
+                            ));
                         }
                     }
                 }
@@ -569,21 +650,18 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                             let has_explicit_name = explicit_name.is_some();
                             let constraint_name = explicit_name
                                 .unwrap_or_else(|| format!("CK_{}_{}", name, col.name.value));
-                            model.add_element(ModelElement::Constraint(ConstraintElement {
-                                name: constraint_name,
-                                table_schema: schema.clone(),
-                                table_name: name.clone(),
-                                constraint_type: ConstraintType::Check,
-                                columns: vec![ConstraintColumn::new(col.name.value.clone())],
-                                definition: Some(expr.to_string()),
-                                referenced_table: None,
-                                referenced_columns: None,
-                                is_clustered: None,
-                                is_inline: true, // Column-level constraints are always inline
-                                inline_constraint_disambiguator: None,
-                                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-                                emit_name: has_explicit_name, // Emit Name if explicit CONSTRAINT [name] in SQL
-                            }));
+                            model.add_element(ModelElement::Constraint(
+                                ConstraintBuilder::new(
+                                    constraint_name,
+                                    schema.clone(),
+                                    name.clone(),
+                                    ConstraintType::Check,
+                                    vec![ConstraintColumn::new(col.name.value.clone())],
+                                )
+                                .inline(has_explicit_name)
+                                .definition(expr.to_string())
+                                .build(),
+                            ));
                         }
                     }
                 }
@@ -591,21 +669,17 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 // Add extracted default constraints (from T-SQL DEFAULT FOR syntax)
                 // These are always named since they use explicit CONSTRAINT keyword
                 for default_constraint in &parsed.extracted_defaults {
-                    model.add_element(ModelElement::Constraint(ConstraintElement {
-                        name: default_constraint.name.clone(),
-                        table_schema: schema.clone(),
-                        table_name: name.clone(),
-                        constraint_type: ConstraintType::Default,
-                        columns: vec![ConstraintColumn::new(default_constraint.column.clone())],
-                        definition: Some(default_constraint.expression.clone()),
-                        referenced_table: None,
-                        referenced_columns: None,
-                        is_clustered: None,
-                        is_inline: false, // Named constraint (uses CONSTRAINT keyword)
-                        inline_constraint_disambiguator: None,
-                        uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-                        emit_name: true,        // Table-level constraints always emit Name
-                    }));
+                    model.add_element(ModelElement::Constraint(
+                        ConstraintBuilder::new(
+                            default_constraint.name.clone(),
+                            schema.clone(),
+                            name.clone(),
+                            ConstraintType::Default,
+                            vec![ConstraintColumn::new(default_constraint.column.clone())],
+                        )
+                        .definition(default_constraint.expression.clone())
+                        .build(),
+                    ));
                 }
             }
 
@@ -1365,84 +1439,68 @@ fn constraint_from_extracted(
             name,
             columns,
             is_clustered,
-        } => Some(ConstraintElement {
-            name: name.clone(),
-            table_schema: table_schema.to_string(),
-            table_name: table_name.to_string(),
-            constraint_type: ConstraintType::PrimaryKey,
-            columns: columns
-                .iter()
-                .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
-                .collect(),
-            definition: None,
-            referenced_table: None,
-            referenced_columns: None,
-            is_clustered: Some(*is_clustered),
-            is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
-            inline_constraint_disambiguator: None,
-            uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-            emit_name: true,        // Table-level constraints always emit Name
-        }),
+        } => Some(
+            ConstraintBuilder::new(
+                name.clone(),
+                table_schema.to_string(),
+                table_name.to_string(),
+                ConstraintType::PrimaryKey,
+                columns
+                    .iter()
+                    .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
+                    .collect(),
+            )
+            .clustered(*is_clustered)
+            .build(),
+        ),
         ExtractedTableConstraint::ForeignKey {
             name,
             columns,
             referenced_table,
             referenced_columns,
-        } => Some(ConstraintElement {
-            name: name.clone(),
-            table_schema: table_schema.to_string(),
-            table_name: table_name.to_string(),
-            constraint_type: ConstraintType::ForeignKey,
-            columns: columns
-                .iter()
-                .map(|c| ConstraintColumn::new(c.clone()))
-                .collect(),
-            definition: None,
-            referenced_table: Some(referenced_table.clone()),
-            referenced_columns: Some(referenced_columns.clone()),
-            is_clustered: None,
-            is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
-            inline_constraint_disambiguator: None,
-            uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-            emit_name: true,        // Table-level constraints always emit Name
-        }),
+        } => Some(
+            ConstraintBuilder::new(
+                name.clone(),
+                table_schema.to_string(),
+                table_name.to_string(),
+                ConstraintType::ForeignKey,
+                columns
+                    .iter()
+                    .map(|c| ConstraintColumn::new(c.clone()))
+                    .collect(),
+            )
+            .foreign_key_refs(referenced_table.clone(), referenced_columns.clone())
+            .build(),
+        ),
         ExtractedTableConstraint::Unique {
             name,
             columns,
             is_clustered,
-        } => Some(ConstraintElement {
-            name: name.clone(),
-            table_schema: table_schema.to_string(),
-            table_name: table_name.to_string(),
-            constraint_type: ConstraintType::Unique,
-            columns: columns
-                .iter()
-                .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
-                .collect(),
-            definition: None,
-            referenced_table: None,
-            referenced_columns: None,
-            is_clustered: Some(*is_clustered),
-            is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
-            inline_constraint_disambiguator: None,
-            uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-            emit_name: true,        // Table-level constraints always emit Name
-        }),
-        ExtractedTableConstraint::Check { name, expression } => Some(ConstraintElement {
-            name: name.clone(),
-            table_schema: table_schema.to_string(),
-            table_name: table_name.to_string(),
-            constraint_type: ConstraintType::Check,
-            columns: vec![],
-            definition: Some(expression.clone()),
-            referenced_table: None,
-            referenced_columns: None,
-            is_clustered: None,
-            is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
-            inline_constraint_disambiguator: None,
-            uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-            emit_name: true,        // Table-level constraints always emit Name
-        }),
+        } => Some(
+            ConstraintBuilder::new(
+                name.clone(),
+                table_schema.to_string(),
+                table_name.to_string(),
+                ConstraintType::Unique,
+                columns
+                    .iter()
+                    .map(|c| ConstraintColumn::with_direction(c.name.clone(), c.descending))
+                    .collect(),
+            )
+            .clustered(*is_clustered)
+            .build(),
+        ),
+        ExtractedTableConstraint::Check { name, expression } => Some(
+            ConstraintBuilder::new(
+                name.clone(),
+                table_schema.to_string(),
+                table_name.to_string(),
+                ConstraintType::Check,
+                vec![],
+            )
+            .definition(expression.clone())
+            .build(),
+        ),
     }
 }
 
@@ -1539,24 +1597,20 @@ fn constraint_from_table_constraint(
             // Default for PRIMARY KEY is CLUSTERED, so only set to false if NONCLUSTERED is found
             let is_clustered = extract_constraint_clustering(raw_sql, &constraint_name, true);
 
-            Some(ConstraintElement {
-                name: constraint_name,
-                table_schema,
-                table_name: table_name_str,
-                constraint_type: ConstraintType::PrimaryKey,
-                columns: columns
-                    .iter()
-                    .map(|c| ConstraintColumn::new(c.value.clone()))
-                    .collect(),
-                definition: None,
-                referenced_table: None,
-                referenced_columns: None,
-                is_clustered,
-                is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
-                inline_constraint_disambiguator: None,
-                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-                emit_name: true,        // Table-level constraints always emit Name
-            })
+            Some(
+                ConstraintBuilder::new(
+                    constraint_name,
+                    table_schema,
+                    table_name_str,
+                    ConstraintType::PrimaryKey,
+                    columns
+                        .iter()
+                        .map(|c| ConstraintColumn::new(c.value.clone()))
+                        .collect(),
+                )
+                .clustered_opt(is_clustered)
+                .build(),
+            )
         }
         TableConstraint::ForeignKey {
             name,
@@ -1575,26 +1629,23 @@ fn constraint_from_table_constraint(
                 extract_schema_and_name(foreign_table, default_schema);
             let formatted_foreign_table = format!("[{}].[{}]", foreign_schema, foreign_table_name);
 
-            Some(ConstraintElement {
-                name: constraint_name,
-                table_schema: table_schema.clone(),
-                table_name: table_name_str,
-                constraint_type: ConstraintType::ForeignKey,
-                columns: columns
-                    .iter()
-                    .map(|c| ConstraintColumn::new(c.value.clone()))
-                    .collect(),
-                definition: None,
-                referenced_table: Some(formatted_foreign_table),
-                referenced_columns: Some(
+            Some(
+                ConstraintBuilder::new(
+                    constraint_name,
+                    table_schema,
+                    table_name_str,
+                    ConstraintType::ForeignKey,
+                    columns
+                        .iter()
+                        .map(|c| ConstraintColumn::new(c.value.clone()))
+                        .collect(),
+                )
+                .foreign_key_refs(
+                    formatted_foreign_table,
                     referred_columns.iter().map(|c| c.value.clone()).collect(),
-                ),
-                is_clustered: None,
-                is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
-                inline_constraint_disambiguator: None,
-                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-                emit_name: true,        // Table-level constraints always emit Name
-            })
+                )
+                .build(),
+            )
         }
         TableConstraint::Unique { name, columns, .. } => {
             let constraint_name = name
@@ -1606,24 +1657,20 @@ fn constraint_from_table_constraint(
             // Default for UNIQUE is NONCLUSTERED, so only set to true if CLUSTERED is found
             let is_clustered = extract_constraint_clustering(raw_sql, &constraint_name, false);
 
-            Some(ConstraintElement {
-                name: constraint_name,
-                table_schema,
-                table_name: table_name_str,
-                constraint_type: ConstraintType::Unique,
-                columns: columns
-                    .iter()
-                    .map(|c| ConstraintColumn::new(c.value.clone()))
-                    .collect(),
-                definition: None,
-                referenced_table: None,
-                referenced_columns: None,
-                is_clustered,
-                is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
-                inline_constraint_disambiguator: None,
-                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-                emit_name: true,        // Table-level constraints always emit Name
-            })
+            Some(
+                ConstraintBuilder::new(
+                    constraint_name,
+                    table_schema,
+                    table_name_str,
+                    ConstraintType::Unique,
+                    columns
+                        .iter()
+                        .map(|c| ConstraintColumn::new(c.value.clone()))
+                        .collect(),
+                )
+                .clustered_opt(is_clustered)
+                .build(),
+            )
         }
         TableConstraint::Check { name, expr } => {
             let constraint_name = name
@@ -1631,21 +1678,17 @@ fn constraint_from_table_constraint(
                 .map(|n| n.value.clone())
                 .unwrap_or_else(|| format!("CK_{}", table_name_str));
 
-            Some(ConstraintElement {
-                name: constraint_name,
-                table_schema,
-                table_name: table_name_str,
-                constraint_type: ConstraintType::Check,
-                columns: vec![],
-                definition: Some(expr.to_string()),
-                referenced_table: None,
-                referenced_columns: None,
-                is_clustered: None,
-                is_inline: false, // Table-level constraint (uses CONSTRAINT keyword)
-                inline_constraint_disambiguator: None,
-                uses_annotation: false, // Set by assign_inline_constraint_disambiguators
-                emit_name: true,        // Table-level constraints always emit Name
-            })
+            Some(
+                ConstraintBuilder::new(
+                    constraint_name,
+                    table_schema,
+                    table_name_str,
+                    ConstraintType::Check,
+                    vec![],
+                )
+                .definition(expr.to_string())
+                .build(),
+            )
         }
         _ => None,
     }

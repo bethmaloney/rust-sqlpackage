@@ -35,7 +35,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Phase 27: Parser token helper consolidation (4/4) ✅ - ~400-500 lines reduction (complete)
 - Phase 28: Test infrastructure simplification (3/3) ✅ - ~560 lines reduction (complete)
 - Phase 29: Test dacpac parsing helper (2/2) ✅ - ~120 lines reduction (complete)
-- Phase 30: Model builder constraint helper (0/2) - ~200 lines reduction
+- Phase 30: Model builder constraint helper (2/2) ✅ - ConstraintBuilder pattern (complete)
 - Phase 31: Project parser helpers (0/2) - ~50 lines reduction
 
 | Layer | Passing | Rate |
@@ -399,7 +399,7 @@ let doc = parse_model_xml(&model_xml);
 
 ---
 
-## Phase 30: Model Builder Constraint Helper (0/2) - MEDIUM PRIORITY
+## Phase 30: Model Builder Constraint Helper (2/2) ✅ COMPLETE
 
 **Goal:** Reduce ~200 lines of duplicated `ConstraintElement` creation boilerplate.
 
@@ -407,18 +407,18 @@ let doc = parse_model_xml(&model_xml);
 
 **Location:** Lines 288-301, 313-326, 462-475, 537-550, 564-577, 585-598, and functions `constraint_from_extracted` (1307-1391), `constraint_from_table_constraint` (1468-1593).
 
-### Phase 30.1: Extract Builder Function (0/2)
+### Phase 30.1: Extract Builder Function (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 30.1.1 | Create `create_inline_constraint()` helper function | ⬜ | Takes name, schema, table, type, columns, definition, emit_name |
-| 30.1.2 | Refactor constraint creation sites to use helper | ⬜ | 14+ call sites in builder.rs |
+| 30.1.1 | Create `create_inline_constraint()` helper function | ✅ | Added ConstraintBuilder struct with builder pattern |
+| 30.1.2 | Refactor constraint creation sites to use helper | ✅ | Refactored 12 call sites across inline and table-level constraints |
 
 **Additional Cleanup:**
 - Remove duplicate comment on lines 440-441
 - Remove unused `_schema` and `_table_name` parameters in `column_from_def` and `column_from_fallback_table`
 
-**Estimated Impact:** ~200 lines removed, clearer intent.
+**Actual Impact:** ~200 lines removed, clearer intent.
 
 ---
 
@@ -467,7 +467,7 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 | Duplicated token parser helper methods | src/parser/*.rs (12 files) | Phase 27 ✅ | ~400-500 lines |
 | Test setup boilerplate (4 lines × 140 occurrences) | tests/integration/ | Phase 28 ✅ | ~560 lines |
 | Dacpac XML parsing chain duplication | tests/integration/dacpac/ | Phase 29 ✅ | ~120 lines |
-| ConstraintElement creation boilerplate | src/model/builder.rs | Phase 30 | ~200 lines |
+| ConstraintElement creation boilerplate | src/model/builder.rs | Phase 30 ✅ | ~200 lines |
 | Boolean property parsing duplication | src/project/sqlproj_parser.rs | Phase 31 | ~50 lines |
 
 ---
