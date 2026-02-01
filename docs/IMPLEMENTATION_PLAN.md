@@ -7,32 +7,18 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phases 1-20 complete (250 tasks). Full parity achieved.**
 
 **Current Focus: Phase 21 - Split model_xml.rs into Submodules** (7/10 tasks)
-- ✅ Phase 21.1-21.3 complete: Module structure and element writers extracted
-- ⬜ Phase 21.4-21.5 remaining: Body dependencies and other writers
-- Target: Break 13,413-line file into ~9 logical submodules
+- ✅ Phase 21.1-21.4.1 complete: Module structure, element writers, body_deps extracted
+- ⬜ Phase 21.4.2, 21.5.1 remaining: qualified_name.rs (optional), other_writers.rs
 
-**Discovered: Phase 22 - Layer 7 Canonical XML Parity** (2/4 tasks)
-- Layer 7 now performs true 1-1 XML comparison (no sorting/normalization)
-- All 48 fixtures fail with systematic differences (CollationCaseSensitive, missing CustomData elements)
-- See Phase 22 section below for detailed task breakdown
+**Phase 22 - Layer 7 Canonical XML Parity** (3/5 tasks)
+- ✅ CollationCaseSensitive, SqlCmdVariables, constraint ordering fixed
+- ⬜ CustomData verification, SqlInlineConstraintAnnotation order remaining
+- Layer 7: 10/48 (20.8%)
 
-**Discovered: Phase 23 - Fix IsMax Property for MAX Types** (0/4 tasks)
-- Deployment fails with "The value of the property type Int32 is formatted incorrectly"
-- TVF columns emit `Length="4294967295"` instead of `IsMax="True"`
-- ScalarType elements emit `Length="-1"` instead of `IsMax="True"`
-- See Phase 23 section below for detailed task breakdown
-
-**Discovered: Phase 24 - Track Dynamic Column Sources in Procedure Bodies** (0/8 tasks)
-- Real-world comparison reveals 177 missing SqlDynamicColumnSource elements
-- CTEs, temp tables (#tables), and table variables inside procedures not tracked
-- Related: 181 missing SqlSimpleColumn and 181 missing SqlTypeSpecifier for internal columns
-- See Phase 24 section below for detailed task breakdown
-
-**Discovered: Phase 25 - Fix Missing Constraints from ALTER TABLE Statements** (0/6 tasks)
-- 14 missing PKs and 19 missing FKs from real-world comparison
-- Root cause: ALTER TABLE...ADD CONSTRAINT not parsed, `GO;` separator not handled
-- Affects tables using ALTER TABLE constraint patterns or `GO;` batch separators
-- See Phase 25 section below for detailed task breakdown
+**Discovered Issues (Phases 23-25):**
+- Phase 23: IsMax property for MAX types (0/4) - deployment failure
+- Phase 24: Dynamic column sources in procedures (0/8) - 177 missing elements
+- Phase 25: ALTER TABLE constraints (0/6) - 14 PKs, 19 FKs missing
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -51,153 +37,6 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 1. **external_reference** - References an external database via synonym; DotNet fails with SQL71501
 2. **unresolved_reference** - View references non-existent table; DotNet fails with SQL71501
 
-These test Rust's ability to build projects that DotNet cannot handle.
-
-## Phase 20: Replace Remaining Regex with Tokenization/AST
-
-**Goal:** Eliminate remaining regex patterns in favor of tokenizer-based or AST-based parsing for better maintainability and correctness.
-
-**Background:** Phase 15 converted many regex patterns to token-based parsing, but several complex patterns remain in `src/dacpac/model_xml.rs` and other modules. These patterns are fragile and can fail on edge cases involving tabs, multiple spaces, or nested expressions.
-
-**Status:** Phase 20.1 complete (parameter parsing). Phases 20.2-20.7 remain.
-
-### Phase 20.2: Body Dependency Token Extraction (8/8) ✅
-
-**Location:** `src/dacpac/model_xml.rs`
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 20.2.1 | Replace TOKEN_RE with tokenizer-based scanning | ✅ | Lines 129-134: Massive regex with 17 capture groups |
-| 20.2.2 | Replace COL_REF_RE with tokenizer | ✅ | Replaced with `extract_column_refs_tokenized()` using `BodyDependencyTokenScanner` |
-| 20.2.3 | Replace BARE_COL_RE with tokenizer | ✅ | Handled by `BodyDepToken::SingleBracketed` in `extract_all_column_references()` |
-| 20.2.4 | Replace BRACKETED_IDENT_RE with tokenizer | ✅ | Replaced with `extract_bracketed_identifiers_tokenized()` function. Used in `extract_filter_predicate_columns` and `extract_expression_column_references`. |
-| 20.2.5 | Replace ALIAS_COL_RE with tokenizer | ✅ | Replaced with `extract_alias_column_refs_tokenized()` using `BodyDepToken::AliasDotBracketedColumn`. Used in `extract_trigger_body_dependencies()` for ON/SET/SELECT clauses. 17 unit tests. |
-| 20.2.6 | Replace SINGLE_BRACKET_RE with tokenizer | ✅ | Replaced with `extract_single_bracketed_identifiers()` using `BodyDepToken::SingleBracketed`. Used in `extract_trigger_body_dependencies()` for INSERT column lists. 17 unit tests. |
-| 20.2.7 | Replace COLUMN_ALIAS_RE with tokenizer | ✅ | Replaced with `extract_column_aliases_tokenized()` using sqlparser-rs tokenizer. Detects AS keyword and extracts following identifier, filters SQL keywords. 17 unit tests. |
-| 20.2.8 | Replace split('.') with qualified name parser | ✅ | Replaced with `parse_qualified_name_tokenized()` using `BodyDependencyTokenScanner`. New `QualifiedName` struct for 1-3 part names. Used in `extract_simple_table_name`, `normalize_table_reference`, `extract_column_name_from_expr_simple`, `resolve_column_reference`, `normalize_type_name`, `expand_select_star`. 28 unit tests. |
-
-**Implementation Approach:** Use sqlparser-rs `Tokenizer` to scan body text and identify SQL tokens. Build a token stream and pattern-match against token sequences instead of regex. This handles whitespace, comments, and nested expressions correctly.
-
-### Phase 20.3: Type and Declaration Parsing (4/4) ✅
-
-**Location:** `src/dacpac/model_xml.rs`
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 20.3.1 | Replace DECLARE_TYPE_RE with tokenizer | ✅ | Replaced with `extract_declare_types_tokenized()` using sqlparser-rs tokenizer. Scans for DECLARE keyword followed by @variable and type name. Handles whitespace correctly. Returns base type names in lowercase. 17 unit tests. |
-| 20.3.2 | Replace TVF_COL_TYPE_RE with tokenizer | ✅ | Replaced with `parse_tvf_column_type_tokenized()` using sqlparser-rs tokenizer. Parses type strings like INT, NVARCHAR(100), DECIMAL(18,2). Handles MAX keyword, whitespace (tabs/spaces), and case-insensitive matching. Returns TvfColumnTypeInfo struct with data_type, first_num (length/precision), second_num (scale). 17 unit tests. |
-| 20.3.3 | Replace CAST_EXPR_RE with tokenizer | ✅ | Replaced with `extract_cast_expressions_tokenized()` using sqlparser-rs tokenizer. Parses CAST(expr AS type) expressions, handling nested parentheses, variable whitespace (spaces/tabs/newlines), and case-insensitive matching. Returns CastExprInfo struct with type_name, cast_start, cast_end, cast_keyword_pos for proper ordering. 17 unit tests. |
-| 20.3.4 | Replace bracket trimming with tokenizer | ✅ | Replaced `trim_start_matches('[')` / `trim_end_matches(']')` patterns with tokenized parsing. Created `split_qualified_name_tokenized()` function using sqlparser-rs tokenizer. Updated `split_qualified_name()` and `normalize_object_name()` to use tokenized parsing. Updated `is_builtin_type_reference()` in model_xml.rs to use `normalize_identifier()`. Updated schema name normalization in builder.rs to use `normalize_identifier()`. Handles whitespace (spaces, tabs), double-quoted identifiers, and special characters. 9 unit tests. |
-
-**Implementation Approach:** Parse DECLARE, CAST, and type definitions using sqlparser-rs AST or tokenizer. Extract type names as tokens rather than string manipulation.
-
-### Phase 20.4: Table and Alias Pattern Matching (7/7) ✅
-
-**Location:** `src/dacpac/model_xml.rs`
-
-**Note:** Phase 18.6 completes task 20.4.1 as part of refactoring alias resolution. The `identifier_utils.rs` module created in Phase 18.6 should be reused here.
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 20.4.1 | Replace TABLE_ALIAS_RE with tokenizer | ✅ | Reused TableAliasTokenParser with new `extract_aliases_with_table_names()` method. Added `default_schema` field to parser. Removed TABLE_ALIAS_RE regex and related helper functions. |
-| 20.4.2 | Replace TRIGGER_ALIAS_RE with tokenizer | ✅ | Reused `TableAliasTokenParser::extract_aliases_with_table_names()` in `extract_trigger_body_dependencies()`. Removed TRIGGER_ALIAS_RE regex. Handles whitespace (tabs/spaces/newlines), bracketed and unbracketed table names, AS keyword, and multiple JOINs. 17 unit tests. |
-| 20.4.3 | Replace BRACKETED_TABLE_RE with tokenizer | ✅ | Created `extract_table_refs_tokenized()` using `BodyDependencyTokenScanner`. Extracts `[schema].[table]` patterns via `BodyDepToken::TwoPartBracketed`. Handles whitespace (tabs/spaces/newlines), filters @ parameters. Updated `extract_body_dependencies()` to use tokenized extraction. Removed BRACKETED_TABLE_RE regex. 15 unit tests. |
-| 20.4.4 | Replace UNBRACKETED_TABLE_RE with tokenizer | ✅ | Same `extract_table_refs_tokenized()` handles `schema.table` patterns via `BodyDepToken::TwoPartUnbracketed`. Filters SQL keywords and table aliases. Removed UNBRACKETED_TABLE_RE regex. |
-| 20.4.5 | Replace QUALIFIED_TABLE_NAME_RE with tokenizer | ✅ | Updated `parse_qualified_table_name()` to use `parse_qualified_name_tokenized()`. Handles whitespace between parts, tabs, newlines. Removed QUALIFIED_TABLE_NAME_RE regex. 9 unit tests. |
-| 20.4.6 | Replace INSERT_SELECT_RE with tokenizer | ✅ | Created `InsertSelectTokenParser` with token-based parsing. Handles INSERT INTO [schema].[table] ([cols]) SELECT ... FROM inserted/deleted with or without JOIN. Removed INSERT_SELECT_RE and INSERT_SELECT_JOIN_RE regex patterns. 15 unit tests. |
-| 20.4.7 | Replace UPDATE_ALIAS_RE with tokenizer | ✅ | Created `UpdateTokenParser` with token-based parsing. Handles UPDATE alias SET ... FROM [schema].[table] alias (INNER) JOIN inserted/deleted alias ON ... patterns. Removed UPDATE_ALIAS_RE regex. 15 unit tests. |
-
-**Implementation Approach:** Use sqlparser-rs to parse FROM clauses, JOIN clauses, and table references. Extract table names and aliases from AST nodes rather than regex pattern matching.
-
-### Phase 20.5: SQL Keyword Detection (6/6) ✅
-
-**Location:** `src/dacpac/model_xml.rs`
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 20.5.1 | Replace AS_KEYWORD_RE with tokenizer | ✅ | Replaced with `find_function_body_as_tokenized()` using sqlparser-rs tokenizer. Scans for AS keyword after RETURNS, validates it's followed by body-starting keywords (BEGIN, RETURN, SELECT, etc.). Handles whitespace (tabs, spaces, newlines), case-insensitive matching. Updated `extract_function_body()` and `extract_function_header()` to use tokenized parsing. 20 unit tests. |
-| 20.5.2 | Replace find_body_separator_as() with tokenizer | ✅ | Replaced with `find_procedure_body_separator_as_tokenized()` using sqlparser-rs tokenizer. Scans for AS keyword followed by body-starting keywords (BEGIN, SET, SELECT, etc.). Updated `extract_procedure_body_only()` to use tokenized parsing. Removed old `find_body_separator_as()` function. 26 unit tests. |
-| 20.5.3 | Replace starts_with() SQL keyword checks with tokenizer | ✅ | Completed as part of 20.5.2 - the `starts_with()` checks were inside `find_body_separator_as()` which was completely replaced with token-based parsing. |
-| 20.5.4 | Replace ON_KEYWORD_RE with tokenizer | ✅ | Replaced with `extract_on_clause_boundaries_tokenized()` using sqlparser-rs tokenizer. Scans for ON keyword, handles termination at WHERE, GROUP, ORDER, HAVING, UNION, JOIN keywords, and semicolons. Updated `extract_join_on_columns()` to use tokenized boundary detection. Removed ON_KEYWORD_RE and ON_TERMINATOR_RE regex patterns. 18 unit tests. |
-| 20.5.5 | Replace GROUP_BY_RE with tokenizer | ✅ | Replaced with `extract_group_by_clause_boundaries_tokenized()` using sqlparser-rs tokenizer. Scans for GROUP followed by BY keyword, handles whitespace (tabs/spaces/newlines), case-insensitive matching. Removed GROUP_BY_RE regex. 18 unit tests. |
-| 20.5.6 | Replace GROUP_TERMINATOR_RE with tokenizer | ✅ | Same `extract_group_by_clause_boundaries_tokenized()` handles termination at HAVING, ORDER, UNION keywords, and semicolons. Removed GROUP_TERMINATOR_RE regex. |
-
-**Implementation Approach:** Scan SQL body text with tokenizer and identify keywords as `Token::Word` instances. Check token values instead of string prefix/suffix matching.
-
-### Phase 20.6: Semicolon and Whitespace Handling (3/3) ✅
-
-**Location:** Multiple files
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 20.6.1 | Replace trim_end_matches(';') in tsql_parser.rs | ✅ | Replaced with `extract_index_filter_predicate_tokenized()` in index_parser.rs. Token-based parsing stops at SemiColon tokens, no string manipulation needed. 17 unit tests. |
-| 20.6.2 | Replace trim_end_matches(';') in builder.rs | ✅ | Uses same `extract_index_filter_predicate_tokenized()` function. Removed regex-based `extract_filter_predicate_from_sql()`. |
-| 20.6.3 | Replace trim_end_matches([';', ' ']) in model_xml.rs | ✅ | Already completed in a previous phase - no `trim_end_matches` call exists at the referenced location. |
-
-**Implementation Approach:** Created `extract_index_filter_predicate_tokenized()` in `index_parser.rs` using sqlparser-rs tokenizer. Scans for WHERE keyword after closing parenthesis, collects tokens until WITH/semicolon/end, reconstructs predicate string without semicolons. Handles tabs, multiple spaces, and newlines correctly.
-
-### Phase 20.7: CTE and Subquery Pattern Matching (4/4) ✅
-
-**Location:** `src/dacpac/model_xml.rs`
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 20.7.1 | Replace CTE_ALIAS_RE with tokenizer | ✅ | Implemented via `extract_cte_aliases()` method (lines 3794-3849) using `TableAliasTokenParser`. Detects WITH keyword, handles RECURSIVE, parses multiple comma-separated CTEs, uses `skip_balanced_parens()` for CTE bodies. 20 unit tests passing. |
-| 20.7.2 | Replace SUBQUERY_ALIAS_RE with tokenizer | ✅ | Implemented via `try_parse_subquery_alias()` method (lines 4018-4105). Token-based detection of `) AS alias` and `) alias` patterns. Filters SQL keywords to avoid false matches. 4 unit tests passing. |
-| 20.7.3 | Replace APPLY_KEYWORD_RE with tokenizer | ✅ | Implemented in `extract_all_aliases()` method (lines 3655-3670). Uses `check_word_ci("CROSS")`, `check_word_ci("OUTER")`, and `check_keyword(Keyword::APPLY)` for detection. 3 unit tests passing. |
-| 20.7.4 | Replace APPLY_FUNCTION_ALIAS_RE with tokenizer | ✅ | APPLY aliases captured via the `) AS/alias` pattern in `try_parse_subquery_alias()`. Same tokenized approach as subquery aliases. |
-
-**Implementation Approach:** All patterns replaced with token-based parsing using `TableAliasTokenParser` struct and sqlparser-rs tokenizer. CTE extraction runs as first pass, followed by table/subquery alias extraction in second pass.
-
-### Phase 20.8: Fix Alias Resolution Bugs in BodyDependencies (11/11) ✅
-
-**Location:** `src/dacpac/model_xml.rs` - `extract_table_aliases_for_body_deps()` and related functions
-
-**Background:** Integration tests in `tests/integration/dacpac/alias_resolution_tests.rs` expose bugs where table aliases defined in nested contexts (subqueries, CTEs, APPLY clauses) are not properly tracked. When an alias is not found in the alias map, references like `[ALIAS].[Column]` are incorrectly emitted as `[dbo].[PreviousTable].[ALIAS]` instead of being resolved or excluded.
-
-**Test Fixture:** `tests/fixtures/body_dependencies_aliases/`
-
-| ID | Task | Status | Test | Notes |
-|----|------|--------|------|-------|
-| 20.8.1 | Fix STUFF() nested subquery alias extraction | ✅ | `test_stuff_nested_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.2 | Fix multi-level nested subquery alias extraction | ✅ | `test_nested_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.3 | Fix CROSS/OUTER APPLY alias extraction in views | ✅ | `test_apply_clause_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.4 | Exclude CTE names from view dependencies | ✅ | `test_cte_alias_recognition` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.5 | Fix EXISTS/NOT EXISTS subquery alias extraction | ✅ | `test_exists_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.6 | Fix IN clause subquery alias extraction | ✅ | `test_in_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.7 | Fix correlated subquery alias extraction in SELECT | ✅ | `test_correlated_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.8 | Fix CASE expression subquery alias extraction | ✅ | `test_case_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.9 | Fix derived table chain alias extraction | ✅ | `test_derived_table_chain_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.10 | Exclude recursive CTE self-references from dependencies | ✅ | `test_recursive_cte_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
-| 20.8.11 | Fix MERGE TARGET/SOURCE alias handling | ✅ | `test_merge_alias_resolution` | Added MERGE keyword detection to `TableAliasTokenParser::extract_all_aliases()`. Extracts `MERGE INTO [table] AS [alias]` for TARGET alias. USING subquery alias captured by existing `) AS alias` pattern. Inner FROM/JOIN clauses properly scanned. |
-
-**Fix Applied (20.8.1-20.8.10):**
-
-The fix was implemented in the `extract_all_column_references()` function in `src/dacpac/model_xml.rs`. The root cause was that single bracketed identifiers like `[ITTAG]` that are actually table aliases were being incorrectly treated as column names.
-
-**Solution:** Before treating a `SingleBracketed` token as a column reference, the function now checks if the identifier (case-insensitively) matches any known table alias in the `alias_names` set. If it matches a table alias, it is skipped rather than being added as a column reference. This prevents table aliases from being misinterpreted as column dependencies.
-
-**Fix Applied (20.8.11 - MERGE alias handling):**
-
-The fix for MERGE statements was implemented in `TableAliasTokenParser::extract_all_aliases()` in `src/dacpac/model_xml.rs`:
-1. Added MERGE keyword detection to identify MERGE statements
-2. Extracts `MERGE INTO [table] AS [alias]` pattern to capture the TARGET alias as a table alias
-3. The `USING (subquery) AS [alias]` pattern is handled by the existing `) AS alias` pattern handler which captures the SOURCE alias
-4. Inner FROM/JOIN clauses inside the USING subquery are properly scanned and their aliases are captured by the main loop
-
-**Original Implementation Approach (for reference):**
-
-The original root cause was that `extract_table_aliases_for_body_deps()` uses regex patterns that only capture aliases from top-level FROM/JOIN clauses. Aliases defined in:
-- Nested subqueries (any depth)
-- APPLY clause subqueries
-- CTE definitions
-- EXISTS/IN clause subqueries
-- CASE expression subqueries
-
-...are not added to the alias map. When `[ALIAS].[Column]` is encountered, the alias lookup fails and the reference is incorrectly constructed.
-
-**Validation:** All 11 tests pass. Phase 20.8 is complete.
-
 ---
 
 ## Phase 21: Split model_xml.rs into Submodules (7/10)
@@ -206,145 +45,186 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 
 **Goal:** Break up the largest file in the codebase into logical submodules for improved maintainability, faster compilation, and easier navigation.
 
-**Background:** The `model_xml.rs` file has grown to 13,413 lines containing XML generation, SQL parsing helpers, body dependency extraction, type handling, and ~4,600 lines of tests. These are distinct concerns that should be separated.
+<details>
+<summary>Completed: Phase 21.1-21.4.1 (7 tasks)</summary>
 
 ### Phase 21.1: Create Module Structure (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 21.1.1 | Create `src/dacpac/model_xml/` directory with `mod.rs` | ✅ | Moved model_xml.rs to model_xml/mod.rs. Public API (generate_model_xml) is re-exported from dacpac/mod.rs. |
-| 21.1.2 | Move `generate_model_xml()` entry point to mod.rs | ✅ | Entry point remains in mod.rs. All 492 unit tests + 116 e2e tests pass. |
+| 21.1.1 | Create `src/dacpac/model_xml/` directory with `mod.rs` | ✅ | Moved model_xml.rs to model_xml/mod.rs |
+| 21.1.2 | Move `generate_model_xml()` entry point to mod.rs | ✅ | Entry point remains in mod.rs |
 
 ### Phase 21.2: Extract XML Writing Helpers (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 21.2.1 | Create `xml_helpers.rs` with low-level XML utilities | ✅ | Created with `write_property`, `write_script_property`, `write_relationship`, `write_builtin_type_relationship`, `write_schema_relationship`, `write_type_specifier_builtin`, `normalize_script_content`, `is_builtin_schema`, `BUILTIN_SCHEMAS`. 244 lines including 9 unit tests. |
-| 21.2.2 | Create `header.rs` with header/metadata writing | ✅ | Created with `write_header`, `write_custom_data`, `write_database_options`, `write_package_reference`, `write_sqlcmd_variables`, `extract_dacpac_name`. 324 lines including 9 unit tests. |
+| 21.2.1 | Create `xml_helpers.rs` with low-level XML utilities | ✅ | 244 lines including 9 unit tests |
+| 21.2.2 | Create `header.rs` with header/metadata writing | ✅ | 324 lines including 9 unit tests |
 
 ### Phase 21.3: Extract Element Writers (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 21.3.1 | Create `table_writer.rs` for table/column XML | ✅ | 650 lines including 10 unit tests. Extracted: `write_table`, `write_column`, `write_computed_column`, `write_column_with_type`, `write_type_specifier`, `sql_type_to_reference`, `write_column_type_specifier`, `write_table_type_column_with_annotation`, `write_table_type_relationship`, `parse_qualified_table_name`, `is_builtin_type_reference`, `write_expression_dependencies`. |
-| 21.3.2 | Create `view_writer.rs` for view XML | ✅ | 574 lines including 8 unit tests. Extracted: `write_view`, `write_raw_view`, `extract_view_query`, `ViewColumn` struct, `expand_select_star`, `extract_view_columns_and_deps`, `write_view_columns`, `write_query_dependencies`. |
-| 21.3.3 | Create `programmability_writer.rs` for procs/functions | ✅ | 1838 lines including 35 unit tests. Extracted: `write_procedure`, `write_function`, `ProcedureParameter`, `FunctionParameter`, TVF column handling (`TvfColumn`, `TvfColumnTypeInfo`, `extract_inline_tvf_columns`, `extract_multistatement_tvf_columns`), procedure/function body extraction (`extract_procedure_body_only`, `extract_function_body`, `extract_function_header`). |
+| 21.3.1 | Create `table_writer.rs` for table/column XML | ✅ | 650 lines including 10 unit tests |
+| 21.3.2 | Create `view_writer.rs` for view XML | ✅ | 574 lines including 8 unit tests |
+| 21.3.3 | Create `programmability_writer.rs` for procs/functions | ✅ | 1838 lines including 35 unit tests |
+
+### Phase 21.4.1: Create body_deps.rs ✅
+
+Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScanner, TableAliasTokenParser, QualifiedName, extract_body_dependencies, and helper functions. ~2,200 lines including tests.
+
+</details>
 
 ### Phase 21.4: Extract Body Dependencies (1/2)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 21.4.1 | Create `body_deps.rs` for dependency extraction | ✅ | Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScanner, TableAliasTokenParser, QualifiedName, extract_body_dependencies, extract_table_refs_tokenized, parse_qualified_name_tokenized, and helper functions. ~2,200 lines including tests. |
-| 21.4.2 | Create `qualified_name.rs` for name parsing | ⬜ | `QualifiedName` struct and impl, `parse_qualified_name_tokenized` (~300 lines). **Note:** QualifiedName is already well-integrated in body_deps.rs (~130 lines) and extraction to a separate module would add unnecessary complexity. Consider marking as not needed or re-evaluating scope. |
+| 21.4.1 | Create `body_deps.rs` for dependency extraction | ✅ | ~2,200 lines including tests |
+| 21.4.2 | Create `qualified_name.rs` for name parsing | ⬜ | **Optional:** QualifiedName already integrated in body_deps.rs (~130 lines) |
 
 ### Phase 21.5: Extract Remaining Writers (0/1)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 21.5.1 | Create `other_writers.rs` for remaining elements | ⬜ | `write_index`, `write_constraint`, `write_sequence`, `write_trigger`, `write_fulltext_*`, `write_table_type_*`, `write_extended_property` (~1,200 lines) |
-
-**Implementation Approach:**
-
-1. Create module directory structure first
-2. Move functions one module at a time, starting with lowest-dependency utilities
-3. Use `pub(crate)` for internal functions, `pub` only for external API
-4. Keep tests with their corresponding modules (split `mod tests` accordingly)
-5. Update imports incrementally, running tests after each move
-6. Final mod.rs should only contain `generate_model_xml()` and re-exports
-
-**Validation:** All existing tests must pass after each phase. No functional changes.
+| 21.5.1 | Create `other_writers.rs` for remaining elements | ⬜ | `write_index`, `write_constraint`, `write_sequence`, `write_trigger`, etc. (~1,200 lines) |
 
 ---
 
-## Phase 22: Layer 7 Canonical XML Parity (2/4)
+## Phase 22: Layer 7 Canonical XML Parity (3/5)
 
-**Location:** `src/dacpac/model_xml/` - header.rs, mod.rs
-
-**Goal:** Achieve byte-level XML matching between rust-sqlpackage and DotNet DacFx output. Layer 7 compares the actual generated XML without sorting/normalization, catching ordering differences, missing elements, and attribute value mismatches.
-
-**Background:** Layer 7 was previously masking differences by sorting elements/properties before comparison. After fixing to preserve original ordering, all 48 fixtures fail with systematic differences:
-- CollationCaseSensitive attribute value mismatch
-- Missing CustomData elements in Header section
-- Line count differences (Rust outputs fewer lines)
-
-**Discovered Issues (from test output):**
-```
-Line 2: Rust='CollationCaseSensitive="False"', DotNet='CollationCaseSensitive="True"'
-Line 13: Rust='</Header>', DotNet='<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable" />'
-```
+**Goal:** Achieve byte-level XML matching between rust-sqlpackage and DotNet DacFx output.
 
 ### Phase 22.1: Fix CollationCaseSensitive Attribute (1/1) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 22.1.1 | Set CollationCaseSensitive="True" to match DotNet | ✅ | DataSchemaModel root element attribute. DotNet defaults to True, Rust outputs False. Location: `generate_model_xml()` in mod.rs |
+| 22.1.1 | Set CollationCaseSensitive="True" to match DotNet | ✅ | DataSchemaModel root element attribute |
 
 ### Phase 22.2: Fix Missing CustomData Elements (1/2)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 22.2.1 | Add empty SqlCmdVariables CustomData element | ✅ | `<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable" />` should be emitted even when no SQLCMD variables are defined. Location: `write_header()` in header.rs |
-| 22.2.2 | Verify other CustomData elements match DotNet | ⬜ | Check for other missing CustomData categories in Header section |
+| 22.2.1 | Add empty SqlCmdVariables CustomData element | ✅ | Emitted even when no SQLCMD variables defined |
+| 22.2.2 | Verify other CustomData elements match DotNet | ⬜ | Check for other missing CustomData categories |
 
 ### Phase 22.3: Fix Element/Property Ordering (1/2)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 22.3.1 | Audit element ordering against DotNet output | ✅ | Fixed PK/Unique constraint relationship ordering (ColumnSpecifications before DefiningTable). Fixed table SqlInlineConstraintAnnotation - only added when table has BOTH inline AND named constraints. Layer 7 pass rate improved from 2/48 (4.2%) to 10/48 (20.8%). |
-| 22.3.2 | Fix SqlInlineConstraintAnnotation/AttachedAnnotation order-dependent assignment | ⬜ | DotNet assigns Annotation to whichever element comes first (constraint or table), and AttachedAnnotation to the other. This depends on element ordering in the XML output. |
-
-**Validation:** Run `cargo test --test e2e_tests test_parity_all_fixtures` and verify Layer 7 pass rate increases.
-
-**Expected Result:**
-
-| Layer | Before | After |
-|-------|--------|-------|
-| Layer 7 (Canonical XML) | 0/48 (0%) | 48/48 (100%) |
+| 22.3.1 | Audit element ordering against DotNet output | ✅ | Fixed PK/Unique constraint relationship ordering. Layer 7: 2/48 → 10/48 |
+| 22.3.2 | Fix SqlInlineConstraintAnnotation/AttachedAnnotation order | ⬜ | DotNet assigns based on element ordering |
 
 ---
 
-| Module | Estimated Lines | Purpose |
-|--------|-----------------|---------|
-| `mod.rs` | ~200 | Entry point, re-exports |
-| `xml_helpers.rs` | ~244 | Low-level XML utilities |
-| `header.rs` | ~324 | Header/metadata generation |
-| `table_writer.rs` | ~650 | Table/column XML (extracted in 21.3.1) |
-| `view_writer.rs` | ~574 | View XML and column extraction |
-| `programmability_writer.rs` | ~800 | Procedures/functions |
-| `body_deps.rs` | ~1,500 | Body dependency extraction |
-| `qualified_name.rs` | ~300 | Qualified name parsing |
-| `other_writers.rs` | ~1,200 | Index/constraint/trigger/etc |
-| Tests (distributed) | ~2,400 | Unit tests per module |
+## Phase 23: Fix IsMax Property for MAX Types (0/4)
+
+**Goal:** Fix deployment failure: `Length="4294967295"` → `IsMax="True"` for MAX types.
+
+**Error:** `The value of the property type Int32 is formatted incorrectly.`
+
+### Phase 23.1: Fix TVF Column IsMax (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 23.1.1 | Add IsMax check in `write_tvf_columns()` | ⬜ | Check `col.length == Some(u32::MAX)` |
+| 23.1.2 | Add unit tests for TVF MAX column output | ⬜ | nvarchar(max), varchar(max), varbinary(max) |
+
+### Phase 23.2: Fix ScalarType IsMax (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 23.2.1 | Add IsMax check in `write_scalar_type()` | ⬜ | Check `scalar.length == Some(-1)` |
+| 23.2.2 | Add unit tests for scalar type MAX output | ⬜ | `CREATE TYPE ... FROM NVARCHAR(MAX)` |
+
+**Reference:** See `table_writer.rs` lines 344-350 for correct pattern.
 
 ---
 
-### Implementation Notes
+## Phase 24: Track Dynamic Column Sources in Procedure Bodies (0/8)
 
-**Benefits of tokenization over regex:**
-- Handles variable whitespace (tabs, multiple spaces, newlines) correctly
-- Respects SQL comments and string literals
-- More maintainable and easier to extend
-- Better error messages when parsing fails
-- Faster performance on complex patterns
+**Goal:** Generate `SqlDynamicColumnSource` elements for CTEs, temp tables, and table variables.
 
-**Migration Strategy:**
-1. Create new token-based parsers alongside existing regex patterns
-2. Add unit tests for token-based implementations
-3. Switch production code to use token-based parsers
-4. Remove regex patterns after validation
-5. Update performance benchmarks to measure impact
+**Impact:** 177 missing SqlDynamicColumnSource, 181 missing SqlSimpleColumn/SqlTypeSpecifier elements.
+
+### Phase 24.1: CTE Column Source Extraction (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 24.1.1 | Create `DynamicColumnSource` struct | ⬜ | name, source_type, columns |
+| 24.1.2 | Extract CTE definitions from bodies | ⬜ | Parse `WITH cte AS (SELECT ...)` |
+| 24.1.3 | Write `SqlDynamicColumnSource` for CTEs | ⬜ | With `SqlComputedColumn` for each column |
+
+### Phase 24.2: Temp Table Column Source Extraction (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 24.2.1 | Extract temp table definitions | ⬜ | `CREATE TABLE #name`, INSERT...SELECT inference |
+| 24.2.2 | Write `SqlDynamicColumnSource` for temp tables | ⬜ | Include column elements |
+
+### Phase 24.3: Table Variable Column Source Extraction (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 24.3.1 | Extract table variable definitions | ⬜ | `DECLARE @name TABLE(...)` |
+| 24.3.2 | Write `SqlDynamicColumnSource` for table variables | ⬜ | With `SqlTypeSpecifier` |
+
+### Phase 24.4: Integration (0/1)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 24.4.1 | Integrate into procedure/function writers | ⬜ | Add to DynamicObjects relationship |
+
+---
+
+## Phase 25: Fix Missing Constraints from ALTER TABLE Statements (0/6)
+
+**Goal:** Parse constraints defined via `ALTER TABLE...ADD CONSTRAINT` statements.
+
+**Impact:** 14 missing PKs, 19 missing FKs.
+
+### Phase 25.1: Parse ALTER TABLE Constraints (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 25.1.1 | Handle `GO;` batch separator | ⬜ | Treat same as `GO` |
+| 25.1.2 | Parse `ALTER TABLE...ADD CONSTRAINT PRIMARY KEY` | ⬜ | Extract table, constraint, columns |
+| 25.1.3 | Parse `ALTER TABLE...ADD CONSTRAINT FOREIGN KEY` | ⬜ | Handle CHECK CONSTRAINT pattern |
+
+### Phase 25.2: Fix Inline Constraint Edge Cases (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 25.2.1 | Debug inline PK parsing edge cases | ⬜ | `CONSTRAINT [PK_X] PRIMARY KEY CLUSTERED` |
+| 25.2.2 | Add tests for inline constraint variations | ⬜ | Whitespace, casing, CLUSTERED/NONCLUSTERED |
+
+### Phase 25.3: Validation (0/1)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 25.3.1 | Validate constraint counts match DotNet | ⬜ | Target: 667 PKs, 2316 FKs |
+
+---
+
+## Known Issues
+
+| Issue | Location | Phase |
+|-------|----------|-------|
+| TVF MAX column IsMax property | `programmability_writer.rs` | Phase 23 |
+| Missing SqlDynamicColumnSource elements | procedure bodies | Phase 24 |
+| Missing constraints from ALTER TABLE | parser/builder | Phase 25 |
 
 ---
 
 <details>
-<summary>Completed Phases Summary (Phases 1-20.1)</summary>
+<summary>Completed Phases Summary (Phases 1-20)</summary>
 
 ## Phase Overview
 
 | Phase | Description | Tasks |
 |-------|-------------|-------|
 | Phase 1-9 | Core implementation (properties, relationships, XML structure, metadata) | 58/58 |
-| Phase 10 | Fix extended properties, function classification, constraint naming, SqlPackage config | 5/5 |
+| Phase 10 | Fix extended properties, function classification, constraint naming | 5/5 |
 | Phase 11 | Fix remaining parity failures, error fixtures, ignored tests | 70/70 |
 | Phase 12 | SELECT * expansion, TVF columns, duplicate refs | 6/6 |
 | Phase 13 | Fix remaining relationship parity issues (TVP support) | 4/4 |
@@ -354,309 +234,51 @@ Line 13: Rust='</Header>', DotNet='<CustomData Category="SqlCmdVariables" Type="
 | Phase 17 | Real-world SQL compatibility: comma-less constraints, SQLCMD format | 5/5 |
 | Phase 18 | BodyDependencies alias resolution: fix table alias handling | 15/15 |
 | Phase 19 | Whitespace-agnostic trim patterns: token-based TVP parsing | 3/3 |
-| Phase 20.1 | Token-based parameter parsing for procedures and functions | 3/3 |
+| Phase 20 | Replace remaining regex with tokenization/AST | 43/43 |
+
+## Phase 20: Replace Remaining Regex with Tokenization/AST (43/43) ✅
+
+Eliminated remaining regex patterns in favor of tokenizer-based parsing for better maintainability and correctness.
+
+### Phase 20.1: Parameter Parsing (3/3) ✅
+- Procedure parameter parsing via `ProcedureTokenParser`
+- Function parameter parsing via `extract_function_parameters_tokens()`
+- Consistent parameter storage without `@` prefix
+
+### Phase 20.2: Body Dependency Token Extraction (8/8) ✅
+Replaced TOKEN_RE, COL_REF_RE, BARE_COL_RE, BRACKETED_IDENT_RE, ALIAS_COL_RE, SINGLE_BRACKET_RE, COLUMN_ALIAS_RE with token-based scanning. Created `BodyDependencyTokenScanner` and `QualifiedName` struct.
+
+### Phase 20.3: Type and Declaration Parsing (4/4) ✅
+Replaced DECLARE_TYPE_RE, TVF_COL_TYPE_RE, CAST_EXPR_RE with tokenized parsing. Created `TvfColumnTypeInfo` and `CastExprInfo` structs.
+
+### Phase 20.4: Table and Alias Pattern Matching (7/7) ✅
+Replaced TABLE_ALIAS_RE, TRIGGER_ALIAS_RE, BRACKETED_TABLE_RE, UNBRACKETED_TABLE_RE, QUALIFIED_TABLE_NAME_RE, INSERT_SELECT_RE, UPDATE_ALIAS_RE with `TableAliasTokenParser`.
+
+### Phase 20.5: SQL Keyword Detection (6/6) ✅
+Replaced AS_KEYWORD_RE, ON_KEYWORD_RE, GROUP_BY_RE, GROUP_TERMINATOR_RE with tokenized scanning.
+
+### Phase 20.6: Semicolon and Whitespace Handling (3/3) ✅
+Created `extract_index_filter_predicate_tokenized()` in index_parser.rs.
+
+### Phase 20.7: CTE and Subquery Pattern Matching (4/4) ✅
+Replaced CTE_ALIAS_RE, SUBQUERY_ALIAS_RE, APPLY_KEYWORD_RE, APPLY_FUNCTION_ALIAS_RE with token-based parsing via `TableAliasTokenParser`.
+
+### Phase 20.8: Fix Alias Resolution Bugs (11/11) ✅
+Fixed 11 alias resolution bugs in `extract_all_column_references()`. Table aliases now filtered before treating as column references. Added MERGE keyword detection for TARGET/SOURCE aliases.
 
 ## Key Implementation Details
 
-### Phase 19: Whitespace-Agnostic Trim Patterns (3/3)
-
-Replaced space-only `trim_end_matches()` patterns with token-based parsing to handle tabs and multiple spaces.
-
-**19.1: TVP Parameter Whitespace Handling (3/3)**
-
-Refactored `clean_data_type()` function in `src/dacpac/model_xml.rs` to use sqlparser-rs tokenization:
-- Token-based scanning handles tabs, multiple spaces, mixed whitespace
-- Trailing keyword detection: READONLY, NULL, NOT NULL
-- Case-insensitive keyword matching
-- Preserves schema-qualified types like `[dbo].[TableType]`
-- 18 unit tests covering all whitespace variations
-
-**Location:** `src/dacpac/model_xml.rs` in TVP parameter parsing
-
-### Phase 20.1: Parameter Parsing (3/3)
-
-Replaced regex-based parameter parsing with token-based approach for procedures and functions.
-
-**Key Changes:**
-
-**20.1.1: Procedure Parameter Parsing**
-- Extended `ProcedureTokenParser` with full parameter parsing in `src/parser/procedure_parser.rs`
-- New `TokenParsedProcedureParameter` struct with fields: name, data_type, is_output, is_readonly, default_value
-- Handles simple types (INT, VARCHAR), complex types (DECIMAL(18,2)), schema-qualified types (`[dbo].[TableType]`)
-- Detects OUTPUT/OUT, READONLY, and default values
-- Whitespace-agnostic (handles tabs, multiple spaces, newlines)
-- 42 unit tests
-
-**20.1.2: Function Parameter Parsing**
-- Added `extract_function_parameters_tokens()` in `src/parser/function_parser.rs`
-- Replaced FUNC_PARAM_RE regex pattern
-- 9 unit tests covering all parameter variations
-
-**20.1.3: Consistent Parameter Storage**
-- Parameter names now stored WITHOUT `@` prefix for both procedures and functions
-- Simplified parameter matching in `extract_body_dependencies()`
-- Removed PROC_PARAM_RE and FUNC_PARAM_RE regex patterns from model_xml.rs
+### Tokenization Benefits
+- Handles variable whitespace (tabs, multiple spaces, newlines) correctly
+- Respects SQL comments and string literals
+- More maintainable and easier to extend
+- Better error messages when parsing fails
+- Faster performance on complex patterns
 
 ### Remaining Hotspots
 
-| Area | Location | Issue | Impact | Status |
-|------|----------|-------|--------|--------|
-| Cloning | `src/model/builder.rs` | 149 clone() calls | MEDIUM | ⬜ |
+| Area | Location | Issue | Impact |
+|------|----------|-------|--------|
+| Cloning | `src/model/builder.rs` | 149 clone() calls | MEDIUM |
 
 </details>
-
-## Phase 23: Fix IsMax Property for MAX Types (0/4)
-
-**Location:** `src/dacpac/model_xml/programmability_writer.rs`, `src/dacpac/model_xml/mod.rs`
-
-**Goal:** Fix deployment failure caused by `Length="4294967295"` being written instead of `IsMax="True"` for MAX type columns.
-
-**Background:** When deploying a rust-sqlpackage built dacpac, sqlpackage fails with:
-```
-The value of the property type Int32 is formatted incorrectly.
-```
-
-The root cause is that MAX types (nvarchar(max), varchar(max), varbinary(max)) are being output as `Length="4294967295"` (u32::MAX) or `Length="-1"` instead of `IsMax="True"`. The value 4294967295 exceeds Int32.MaxValue (2147483647), causing the sqlpackage Int32 parser to fail.
-
-**Affected Patterns:**
-- TVF return columns with `NVARCHAR(MAX)` type
-- TVF return columns with `VARCHAR(MAX)` type
-- TVF return columns with `VARBINARY(MAX)` type
-- Scalar types created with `FROM NVARCHAR(MAX)` etc.
-
-### Phase 23.1: Fix TVF Column IsMax (0/2)
-
-**Location:** `src/dacpac/model_xml/programmability_writer.rs`
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 23.1.1 | Add IsMax check in `write_tvf_columns()` | ⬜ | Lines 1284-1286: Check if `col.length == Some(u32::MAX)` and emit `IsMax="True"` instead of `Length="4294967295"` |
-| 23.1.2 | Add unit tests for TVF MAX column output | ⬜ | Test that nvarchar(max), varchar(max), varbinary(max) TVF columns emit `IsMax="True"` property |
-
-**Current Code (lines 1284-1286):**
-```rust
-if let Some(length) = col.length {
-    write_property(writer, "Length", &length.to_string())?;
-}
-```
-
-**Fix:**
-```rust
-if let Some(length) = col.length {
-    if length == u32::MAX {
-        write_property(writer, "IsMax", "True")?;
-    } else {
-        write_property(writer, "Length", &length.to_string())?;
-    }
-}
-```
-
-### Phase 23.2: Fix ScalarType IsMax (0/2)
-
-**Location:** `src/dacpac/model_xml/mod.rs`
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 23.2.1 | Add IsMax check in `write_scalar_type()` | ⬜ | Lines 5207-5209: Check if `scalar.length == Some(-1)` and emit `IsMax="True"` instead of `Length="-1"` |
-| 23.2.2 | Add unit tests for scalar type MAX output | ⬜ | Test that `CREATE TYPE [dbo].[MyType] FROM NVARCHAR(MAX)` emits `IsMax="True"` property |
-
-**Current Code (lines 5207-5209):**
-```rust
-if let Some(length) = scalar.length {
-    write_property(writer, "Length", &length.to_string())?;
-}
-```
-
-**Fix:**
-```rust
-if let Some(length) = scalar.length {
-    if length == -1 {
-        write_property(writer, "IsMax", "True")?;
-    } else {
-        write_property(writer, "Length", &length.to_string())?;
-    }
-}
-```
-
-**Validation:**
-1. Build a project containing TVFs with MAX type columns
-2. Deploy with sqlpackage - should no longer fail with Int32 error
-3. Verify model.xml contains `IsMax="True"` for MAX columns (not `Length="4294967295"`)
-
-**Reference Implementation:** See `table_writer.rs` lines 344-350 which correctly handles this pattern:
-```rust
-if let Some(len) = max_length {
-    if len == -1 {
-        write_property(writer, "IsMax", "True")?;
-    } else {
-        write_property(writer, "Length", &len.to_string())?;
-    }
-}
-```
-
----
-
-## Phase 24: Track Dynamic Column Sources in Procedure Bodies (0/8)
-
-**Location:** `src/dacpac/model_xml/body_deps.rs`, `src/dacpac/model_xml/programmability_writer.rs`
-
-**Goal:** Generate `SqlDynamicColumnSource` elements for CTEs, temp tables (#tables), and table variables inside stored procedures and functions to match DotNet DacFx output.
-
-**Background:** Comparison with DotNet DacFx reveals missing `SqlDynamicColumnSource`, `SqlSimpleColumn`, and `SqlTypeSpecifier` elements. These represent internal/transient objects defined within procedure bodies:
-
-- **CTEs**: `[dbo].[udf_SplitString].[CTE1].[Items]` with computed columns `[Start]`, `[End]`, `[Seq]`
-- **Temp tables**: `[dbo].[usp_GenerateReport].[#TempResults]` with columns from INSERT...SELECT
-- **Table variables**: `[dbo].[udf_ParseList].[@Items]` with columns defined in DECLARE
-
-**Impact:** Medium - affects deployment comparison and reference tracking. Does not prevent deployment but causes model.xml size difference.
-
-**DotNet Output Example:**
-```xml
-<Relationship Name="DynamicObjects">
-  <Entry>
-    <Element Type="SqlDynamicColumnSource" Name="[dbo].[udf_SplitString].[CTE1].[Items]">
-      <Relationship Name="Columns">
-        <Entry>
-          <Element Type="SqlComputedColumn" Name="[dbo].[udf_SplitString].[CTE1].[Items].[Start]" />
-        </Entry>
-        <Entry>
-          <Element Type="SqlComputedColumn" Name="[dbo].[udf_SplitString].[CTE1].[Items].[End]" />
-        </Entry>
-      </Relationship>
-    </Element>
-  </Entry>
-</Relationship>
-```
-
-### Phase 24.1: CTE Column Source Extraction (0/3)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 24.1.1 | Create `DynamicColumnSource` struct for tracking transient objects | ⬜ | Fields: name, source_type (CTE/TempTable/TableVar), columns (Vec of column name + type) |
-| 24.1.2 | Extract CTE definitions from procedure/function bodies | ⬜ | Parse `WITH cte_name AS (SELECT ...)` to extract CTE name and column aliases from SELECT list |
-| 24.1.3 | Write `SqlDynamicColumnSource` elements for CTEs | ⬜ | Add to `DynamicObjects` relationship, with `SqlComputedColumn` for each derived column |
-
-### Phase 24.2: Temp Table Column Source Extraction (0/2)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 24.2.1 | Extract temp table definitions from CREATE TABLE #name statements | ⬜ | Parse column definitions, handle INSERT...SELECT column inference |
-| 24.2.2 | Write `SqlDynamicColumnSource` elements for temp tables | ⬜ | Include `SqlSimpleColumn` or `SqlComputedColumn` based on derivation |
-
-### Phase 24.3: Table Variable Column Source Extraction (0/2)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 24.3.1 | Extract table variable definitions from DECLARE @name TABLE(...) | ⬜ | Parse column definitions including type specifiers |
-| 24.3.2 | Write `SqlDynamicColumnSource` elements for table variables | ⬜ | Include `SqlSimpleColumn` with `SqlTypeSpecifier` for each column |
-
-### Phase 24.4: Integration and Validation (0/1)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 24.4.1 | Add dynamic column source extraction to procedure/function writers | ⬜ | Integrate into `write_procedure()` and `write_function()`, add to DynamicObjects relationship |
-
-**Implementation Approach:**
-
-1. Extend `BodyDependencyTokenScanner` to detect CTE/temp table/table variable definitions
-2. Create `extract_dynamic_column_sources()` function that returns `Vec<DynamicColumnSource>`
-3. For CTEs: Parse the SELECT list to determine column names (explicit aliases or inferred from expressions)
-4. For temp tables: Parse CREATE TABLE or infer from INSERT...SELECT patterns
-5. For table variables: Parse DECLARE @var TABLE (...) column definitions
-6. Add `write_dynamic_column_sources()` function to emit the `DynamicObjects` relationship
-
-**Validation:**
-1. Compare model.xml element counts before/after
-2. Target: SqlDynamicColumnSource count within 10% of DotNet (currently 0 vs 177)
-3. Run parity tests to verify no regressions
-
-**Expected Result:**
-- SqlDynamicColumnSource elements generated for CTEs, temp tables, and table variables
-- Corresponding SqlSimpleColumn/SqlComputedColumn elements for internal columns
-- SqlTypeSpecifier elements for column types
-- model.xml size closer to DotNet output
-
----
-
-## Phase 25: Fix Missing Constraints from ALTER TABLE Statements (0/6)
-
-**Location:** `src/model/builder.rs`, `src/parser/`
-
-**Goal:** Parse primary keys and foreign keys defined via `ALTER TABLE...ADD CONSTRAINT` statements, and fix edge cases in inline constraint parsing.
-
-**Background:** Real-world testing reveals missing constraints in certain patterns:
-- Missing SqlPrimaryKeyConstraint elements
-- Missing SqlForeignKeyConstraint elements
-- Missing SqlDefaultConstraint elements
-
-**Affected Patterns:**
-- Tables with PK/FKs defined via ALTER TABLE after CREATE TABLE with `GO;` separator
-- Tables with inline PK using `CONSTRAINT [PK_X] PRIMARY KEY CLUSTERED ([Col] ASC)` syntax
-- Tables with FKs using separate CHECK CONSTRAINT statements
-
-**Root Causes Identified:**
-
-1. **ALTER TABLE...ADD CONSTRAINT PRIMARY KEY not parsed** - Files using:
-   ```sql
-   CREATE TABLE [dbo].[X] (...);
-   GO;
-   ALTER TABLE [dbo].[X] ADD CONSTRAINT [PK_X] PRIMARY KEY ([Id]);
-   ```
-
-2. **`GO;` (semicolon after GO) batch separator** - Non-standard but used in some files
-
-3. **ALTER TABLE...ADD CONSTRAINT FOREIGN KEY with CHECK CONSTRAINT** - Pattern:
-   ```sql
-   ALTER TABLE [dbo].[X] ADD CONSTRAINT [FK_X_Y] FOREIGN KEY([Col]) REFERENCES [dbo].[Y] ([Id])
-   GO
-   ALTER TABLE [dbo].[X] CHECK CONSTRAINT [FK_X_Y]
-   ```
-
-### Phase 25.1: Parse ALTER TABLE Constraints (0/3)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 25.1.1 | Handle `GO;` batch separator in tsql_parser | ⬜ | Treat `GO;` same as `GO` - semicolon after GO is non-standard but valid |
-| 25.1.2 | Parse `ALTER TABLE...ADD CONSTRAINT PRIMARY KEY` statements | ⬜ | Extract table name, constraint name, column(s) from ALTER TABLE pattern |
-| 25.1.3 | Parse `ALTER TABLE...ADD CONSTRAINT FOREIGN KEY` statements | ⬜ | Handle FK definition with separate CHECK CONSTRAINT statement |
-
-### Phase 25.2: Fix Inline Constraint Edge Cases (0/2)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 25.2.1 | Debug inline PK parsing edge cases | ⬜ | `CONSTRAINT [PK_X] PRIMARY KEY CLUSTERED ([Col] ASC)` not captured despite similar pattern working elsewhere |
-| 25.2.2 | Add tests for inline constraint variations | ⬜ | Test different whitespace, casing, CLUSTERED/NONCLUSTERED options |
-
-### Phase 25.3: Validation (0/1)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 25.3.1 | Validate constraint counts match DotNet | ⬜ | Target: SqlPrimaryKeyConstraint 667/667, SqlForeignKeyConstraint 2316/2316 |
-
-**Implementation Approach:**
-
-1. Update `split_batches()` in tsql_parser.rs to handle `GO;` pattern
-2. Add `parse_alter_table_constraint()` function to extract constraints from ALTER statements
-3. Integrate ALTER TABLE constraint parsing into model builder
-4. Debug why specific inline PKs are not captured (compare with working examples)
-
-**Validation:**
-1. Build a project containing ALTER TABLE constraint patterns
-2. Compare constraint counts between rust-sqlpackage and DotNet DacFx
-3. Verify tables with ALTER TABLE constraints have all their constraints
-
-**Expected Result:**
-- All ALTER TABLE...ADD CONSTRAINT PRIMARY KEY statements parsed
-- All ALTER TABLE...ADD CONSTRAINT FOREIGN KEY statements parsed
-- Inline constraint edge cases handled correctly
-- `GO;` batch separator treated same as `GO`
-
----
-
-## Known Issues
-
-| Issue | Location | Description | Status |
-|-------|----------|-------------|--------|
-| TVF MAX column IsMax property | Integration tests `tvf_column_tests` | Tests `test_tvf_column_nvarchar_max_property`, `test_tvf_column_varchar_max_property`, `test_tvf_column_varbinary_max_property` fail - IsMax=True not being set despite commit c2e9b32 claiming to fix it | ⬜ See Phase 23 |
-| Missing SqlDynamicColumnSource elements | Real-world comparison | CTEs, temp tables, table variables in procedure bodies not tracked | ⬜ See Phase 24 |
-| Missing constraints from ALTER TABLE | Real-world comparison | Some PKs/FKs/defaults missing - ALTER TABLE...ADD CONSTRAINT not parsed, `GO;` separator issue | ⬜ See Phase 25 |
