@@ -6320,84 +6320,107 @@ fn write_body_dependencies<W: Write>(
     Ok(())
 }
 
-/// Extract just the body after AS from a procedure definition
+/// Extract just the body after AS from a procedure definition using token-based parsing.
 fn extract_procedure_body_only(definition: &str) -> String {
-    // Find the standalone AS keyword that separates header from body
-    // This AS must be followed by whitespace/newline and then BEGIN or a statement
-    // We look for AS that's at the end of a line (followed by newline) or followed by BEGIN
-    let as_pos = find_body_separator_as(definition);
-    if let Some(pos) = as_pos {
-        let after_as = &definition[pos..];
-        // Skip "AS" and any following whitespace
-        let trimmed = after_as.trim_start();
-        if trimmed.to_uppercase().starts_with("AS") {
-            let body = trimmed[2..].trim_start();
-            return body.to_string();
-        }
+    // Use tokenized parsing to find the AS keyword that separates header from body
+    if let Some((_as_start, as_end)) = find_procedure_body_separator_as_tokenized(definition) {
+        // as_end points to the first token after AS (after any whitespace)
+        // Return the body starting from that position
+        return definition[as_end..].to_string();
     }
     definition.to_string()
 }
 
-/// Find the AS keyword that separates procedure header from body
-/// This is the AS that's:
-/// 1. At the end of a line (AS\n or AS\r\n) followed by BEGIN or other body content
-/// 2. Or followed directly by BEGIN (AS BEGIN)
+/// Find the AS keyword that separates procedure header from body using token-based parsing.
 ///
-/// We avoid matching "AS alias" patterns in SELECT statements
-fn find_body_separator_as(s: &str) -> Option<usize> {
-    let upper = s.to_uppercase();
-    let chars: Vec<char> = upper.chars().collect();
+/// This function tokenizes the input string and looks for the AS keyword that is followed
+/// by BEGIN, SET, SELECT, or other body-starting statements. Unlike `find_function_body_as_tokenized`,
+/// this scans from the beginning of the definition (procedures don't have a RETURNS keyword).
+///
+/// # Arguments
+/// * `definition` - The full CREATE PROCEDURE definition
+///
+/// # Returns
+/// * `Some((as_start, as_end))` - The start and end byte positions of the AS keyword
+///   where `as_end` includes any trailing whitespace after AS
+/// * `None` - If no valid body separator AS was found
+fn find_procedure_body_separator_as_tokenized(definition: &str) -> Option<(usize, usize)> {
+    let dialect = MsSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, definition).tokenize_with_location() else {
+        return None;
+    };
+
+    if tokens.is_empty() {
+        return None;
+    }
+
+    // Build line offset map for byte position calculation
+    let line_offsets = compute_line_offsets(definition);
+
+    let len = tokens.len();
     let mut i = 0;
 
-    while i < chars.len() {
-        // Look for AS preceded by whitespace/newline
-        if i + 2 <= chars.len() && chars[i] == 'A' && chars[i + 1] == 'S' {
-            let prev_ok = i == 0 || chars[i - 1].is_whitespace();
-            if !prev_ok {
-                i += 1;
-                continue;
+    // Helper to skip whitespace tokens, returns the next non-whitespace index
+    let skip_whitespace =
+        |tokens: &[sqlparser::tokenizer::TokenWithSpan], mut idx: usize| -> usize {
+            while idx < tokens.len() && matches!(&tokens[idx].token, Token::Whitespace(_)) {
+                idx += 1;
             }
+            idx
+        };
 
-            // Check what comes after AS
-            if i + 2 < chars.len() {
-                let after_as = &upper[i + 2..];
-                let after_as_trimmed = after_as.trim_start();
+    // Keywords that can start a procedure body after AS
+    let body_start_keywords = [
+        "BEGIN", "RETURN", "SET", "SELECT", "IF", "WHILE", "DECLARE", "WITH", "INSERT", "UPDATE",
+        "DELETE", "EXEC", "EXECUTE",
+    ];
 
-                // AS must be followed by:
-                // 1. Newline only (AS at end of line, body on next line)
-                // 2. BEGIN (AS BEGIN or AS\nBEGIN)
-                // 3. RETURN (for functions: AS RETURN ...)
-                // 4. SET, SELECT, IF, WHILE, etc. (direct statement after AS)
+    while i < len {
+        // Look for AS keyword (unquoted word)
+        if let Token::Word(w) = &tokens[i].token {
+            if w.quote_style.is_none() && w.value.eq_ignore_ascii_case("AS") {
+                // Calculate byte position of AS keyword
+                let as_byte_start = location_to_byte_offset(
+                    &line_offsets,
+                    tokens[i].span.start.line,
+                    tokens[i].span.start.column,
+                );
 
-                // Check if followed by newline then BEGIN/body
-                if chars[i + 2] == '\n' || chars[i + 2] == '\r' {
-                    // AS is at end of line - this is likely the body separator
-                    return Some(i);
+                // Look at what comes after AS
+                let j = skip_whitespace(&tokens, i + 1);
+
+                // Calculate end position (after AS and any whitespace)
+                let as_byte_end = if j < len {
+                    location_to_byte_offset(
+                        &line_offsets,
+                        tokens[j].span.start.line,
+                        tokens[j].span.start.column,
+                    )
+                } else {
+                    // AS is at the end, end is after "AS" (2 chars)
+                    as_byte_start + 2
+                };
+
+                // Check if followed by a body-starting keyword
+                if j < len {
+                    if let Token::Word(next_word) = &tokens[j].token {
+                        if next_word.quote_style.is_none() {
+                            let next_upper = next_word.value.to_uppercase();
+                            if body_start_keywords.contains(&next_upper.as_str()) {
+                                // This AS is the body separator
+                                return Some((as_byte_start, as_byte_end));
+                            }
+                        }
+                    }
+                } else {
+                    // AS is at the very end - still a valid body separator
+                    return Some((as_byte_start, as_byte_end));
                 }
-
-                // Check if followed by whitespace then BEGIN/RETURN/statement keyword
-                if after_as_trimmed.starts_with("BEGIN")
-                    || after_as_trimmed.starts_with("RETURN")
-                    || after_as_trimmed.starts_with("SET")
-                    || after_as_trimmed.starts_with("SELECT")
-                    || after_as_trimmed.starts_with("IF")
-                    || after_as_trimmed.starts_with("WHILE")
-                    || after_as_trimmed.starts_with("DECLARE")
-                    || after_as_trimmed.starts_with("WITH")
-                    || after_as_trimmed.starts_with("INSERT")
-                    || after_as_trimmed.starts_with("UPDATE")
-                    || after_as_trimmed.starts_with("DELETE")
-                    || after_as_trimmed.starts_with("EXEC")
-                {
-                    return Some(i);
-                }
-            } else if i + 2 == chars.len() {
-                // AS is at the very end - return it
-                return Some(i);
             }
         }
         i += 1;
     }
+
     None
 }
 
@@ -12055,5 +12078,234 @@ FROM [dbo].[Account] A
         let header = extract_function_header(sql);
         assert!(header.contains("CREATE FUNCTION"));
         assert!(header.contains("RETURNS INT"));
+    }
+
+    // ============================================================================
+    // find_procedure_body_separator_as_tokenized tests (Phase 20.5.2)
+    // ============================================================================
+
+    #[test]
+    fn test_find_procedure_body_as_basic_begin() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc] AS BEGIN SELECT 1 END";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_newline() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc]\nAS\nBEGIN SELECT 1 END";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_tabs() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc]\tAS\tBEGIN SELECT 1 END";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_set() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc] AS SET NOCOUNT ON; SELECT 1";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("SET"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_select() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc] AS SELECT * FROM t";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("SELECT"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_lowercase() {
+        let sql = "create procedure [dbo].[myproc] as begin select 1 end";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().to_uppercase().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_mixed_case() {
+        let sql = "CREATE Procedure [dbo].[MyProc] As Begin SELECT 1 End";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("Begin"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_declare() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc] AS DECLARE @x INT; SELECT @x";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("DECLARE"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_if() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc] @x INT AS IF @x > 0 SELECT 1 ELSE SELECT 0";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("IF"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_with_cte() {
+        let sql =
+            "CREATE PROCEDURE [dbo].[MyProc] AS WITH cte AS (SELECT 1 AS x) SELECT * FROM cte";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("WITH"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_multiple_whitespace() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc]   AS   BEGIN SELECT 1 END";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_crlf() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc]\r\nAS\r\nBEGIN SELECT 1 END";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_parameters() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc] @id INT, @name VARCHAR(50) AS BEGIN SELECT @id, @name END";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_insert() {
+        let sql = "CREATE PROCEDURE [dbo].[InsertProc] @val INT AS INSERT INTO t VALUES (@val)";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("INSERT"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_update() {
+        let sql = "CREATE PROCEDURE [dbo].[UpdateProc] @id INT, @val INT AS UPDATE t SET x = @val WHERE id = @id";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("UPDATE"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_delete() {
+        let sql = "CREATE PROCEDURE [dbo].[DeleteProc] @id INT AS DELETE FROM t WHERE id = @id";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("DELETE"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_exec() {
+        let sql = "CREATE PROCEDURE [dbo].[ExecProc] AS EXEC sp_help";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("EXEC"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_with_execute() {
+        let sql = "CREATE PROCEDURE [dbo].[ExecProc] AS EXECUTE sp_help";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("EXECUTE"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_no_match() {
+        // No AS keyword followed by body-starting keyword
+        let sql = "CREATE PROCEDURE [dbo].[MyProc] @x INT";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_empty() {
+        let sql = "";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_procedure_body_only_basic() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc] AS BEGIN SELECT 1 END";
+        let body = extract_procedure_body_only(sql);
+        assert!(body.starts_with("BEGIN"));
+        assert!(body.contains("SELECT 1"));
+    }
+
+    #[test]
+    fn test_extract_procedure_body_only_with_tabs() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc]\tAS\tBEGIN SELECT 1 END";
+        let body = extract_procedure_body_only(sql);
+        assert!(body.starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_extract_procedure_body_only_with_params() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc] @id INT, @name VARCHAR(50) AS SET NOCOUNT ON; SELECT @id, @name";
+        let body = extract_procedure_body_only(sql);
+        assert!(body.starts_with("SET"));
+    }
+
+    #[test]
+    fn test_extract_procedure_body_only_multiline() {
+        let sql = "CREATE PROCEDURE [dbo].[MyProc]\n@id INT\nAS\nBEGIN\n    SELECT @id\nEND";
+        let body = extract_procedure_body_only(sql);
+        assert!(body.trim().starts_with("BEGIN"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_while() {
+        let sql = "CREATE PROCEDURE [dbo].[LoopProc] @count INT AS WHILE @count > 0 BEGIN SET @count = @count - 1 END";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("WHILE"));
+    }
+
+    #[test]
+    fn test_find_procedure_body_as_return() {
+        let sql = "CREATE PROCEDURE [dbo].[ReturnProc] AS RETURN 0";
+        let result = find_procedure_body_separator_as_tokenized(sql);
+        assert!(result.is_some());
+        let (_start, end) = result.unwrap();
+        assert!(sql[end..].trim().starts_with("RETURN"));
     }
 }
