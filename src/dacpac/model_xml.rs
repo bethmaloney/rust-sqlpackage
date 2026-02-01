@@ -16,8 +16,8 @@ use crate::model::{
     SchemaElement, SequenceElement, SortDirection, TableElement, TableTypeColumnElement,
     TableTypeConstraint, TriggerElement, UserDefinedTypeElement, ViewElement,
 };
-use crate::parser::extract_function_parameters_tokens;
 use crate::parser::identifier_utils::format_word;
+use crate::parser::{extract_function_parameters_tokens, extract_procedure_parameters_tokens};
 use crate::project::SqlProject;
 
 const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
@@ -90,13 +90,8 @@ static GROUP_TERMINATOR_RE: LazyLock<Regex> =
 static BARE_COL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:^|[^.\w])\[(\w+)\](?:[^.\w]|$)").unwrap());
 
-/// Procedure parameter pattern
-static PROC_PARAM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"@(\w+)\s+(\[[^\]]+\]\s*\.\s*\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*\s*\.\s*[A-Za-z_][A-Za-z0-9_]*|[A-Za-z0-9_]+(?:\s*\([^)]*\))?)(?:\s+(READONLY))?(?:\s*=\s*([^,@\n]+?))?(?:\s+(OUTPUT|OUT))?(?:\s*,|\s*$|\s*\n)",
-    )
-    .unwrap()
-});
+// Note: PROC_PARAM_RE has been removed and replaced with token-based parsing in Phase 20.1.3.
+// Procedure parameter extraction now uses extract_procedure_parameters_tokens() from procedure_parser.rs.
 
 // Note: FUNC_PARAM_RE has been removed and replaced with token-based parsing in Phase 20.1.2.
 // Function parameter extraction now uses extract_function_parameters_tokens() from function_parser.rs.
@@ -2526,16 +2521,14 @@ fn extract_body_dependencies_with_tvp(
     let mut deps = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    // Build a map of TVP param names to their table type columns
+    // Build a map of TVP param names (with @ prefix for body matching) to their table type columns
+    // Note: param.name is stored WITHOUT @ prefix (Phase 20.1.3)
     let tvp_columns: std::collections::HashMap<String, Vec<String>> = tvp_params
         .iter()
         .filter_map(|(param, tt_opt)| {
             tt_opt.map(|tt| {
-                let param_name = if param.name.starts_with('@') {
-                    param.name.clone()
-                } else {
-                    format!("@{}", param.name)
-                };
+                // Add @ prefix for body pattern matching
+                let param_name = format!("@{}", param.name);
                 let cols = tt.columns.iter().map(|c| c.name.clone()).collect();
                 (param_name, cols)
             })
@@ -2544,18 +2537,11 @@ fn extract_body_dependencies_with_tvp(
 
     // First, add the TVP parameter reference with disambiguator
     // This reference appears first in BodyDependencies with the same disambiguator as in Parameters
+    // Note: param.name is stored WITHOUT @ prefix (Phase 20.1.3)
     for (idx, (param, _)) in tvp_params.iter().enumerate() {
-        let param_name_with_at = if param.name.starts_with('@') {
-            param.name.clone()
-        } else {
-            format!("@{}", param.name)
-        };
         let disambiguator = 2 + idx as u32;
-        let param_ref = format!(
-            "{}.[@{}]",
-            full_name,
-            param_name_with_at.trim_start_matches('@')
-        );
+        // Use param.name directly - it's already without @ prefix
+        let param_ref = format!("{}.[@{}]", full_name, param.name);
         // Store with disambiguator info - we'll need to emit this specially
         if !seen.contains(&param_ref) {
             seen.insert(param_ref.clone());
@@ -2605,65 +2591,27 @@ struct ProcedureParameter {
     default_value: Option<String>,
 }
 
-/// Extract parameters from a CREATE PROCEDURE definition
+/// Extract parameters from a CREATE PROCEDURE definition using token-based parsing.
+///
+/// Phase 20.1.3: Replaced PROC_PARAM_RE regex with token-based parser.
+/// Uses the same token-based infrastructure as function parameter parsing.
+/// Parameter names are stored WITHOUT the @ prefix for consistency.
 fn extract_procedure_parameters(definition: &str) -> Vec<ProcedureParameter> {
-    let mut params = Vec::new();
+    // Use token-based parameter extraction
+    let token_params = extract_procedure_parameters_tokens(definition);
 
-    // Find the procedure name and the parameters that follow
-    let def_upper = definition.to_uppercase();
-    let proc_start = def_upper
-        .find("CREATE PROCEDURE")
-        .or_else(|| def_upper.find("CREATE PROC"));
-
-    if proc_start.is_none() {
-        return params;
-    }
-
-    let after_create = &definition[proc_start.unwrap()..];
-
-    // Find the AS keyword that ends the parameter section
-    // Parameters are between procedure name and AS
-    let as_pos = find_standalone_as(after_create);
-    if as_pos.is_none() {
-        return params;
-    }
-
-    let header = &after_create[..as_pos.unwrap()];
-
-    // Find parameters - they start with @
-    // Parameters can be on the same line or multiple lines
-    // Updated regex to handle:
-    // 1. Simple types like INT, VARCHAR(50), DECIMAL(10,2)
-    // 2. Schema-qualified types like [dbo].[TableType] or dbo.TableType
-    // 3. READONLY keyword for table-valued parameters
-    // 4. OUTPUT/OUT modifiers
-    for cap in PROC_PARAM_RE.captures_iter(header) {
-        let name = cap
-            .get(1)
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_default();
-        let data_type = cap
-            .get(2)
-            .map(|m| m.as_str().trim().to_string())
-            .unwrap_or_default();
-        let is_readonly = cap.get(3).is_some();
-        let default_value = cap.get(4).map(|m| m.as_str().trim().to_string());
-        let is_output = cap.get(5).is_some();
-
-        if !name.is_empty() && !data_type.is_empty() {
-            // Clean up data type (remove trailing keywords like NULL)
-            let clean_type = clean_data_type(&data_type);
-            params.push(ProcedureParameter {
-                name,
-                data_type: clean_type,
-                is_output,
-                is_readonly,
-                default_value,
-            });
-        }
-    }
-
-    params
+    // Convert TokenParsedProcedureParameter to ProcedureParameter
+    // Note: TokenParsedProcedureParameter.name does NOT include @ prefix
+    token_params
+        .into_iter()
+        .map(|p| ProcedureParameter {
+            name: p.name, // Already without @ prefix
+            data_type: p.data_type,
+            is_output: p.is_output,
+            is_readonly: p.is_readonly,
+            default_value: p.default_value,
+        })
+        .collect()
 }
 
 /// Represents an extracted function parameter with full details
@@ -2745,6 +2693,9 @@ fn write_function_parameters<W: Write>(
 }
 
 /// Find the standalone AS keyword that separates procedure header from body
+/// Note: Previously used by regex-based procedure parsing (pre-Phase 20.1.3).
+/// Kept for tests and potential future use.
+#[allow(dead_code)]
 fn find_standalone_as(s: &str) -> Option<usize> {
     let upper = s.to_uppercase();
     let chars: Vec<char> = upper.chars().collect();
@@ -2774,6 +2725,9 @@ fn find_standalone_as(s: &str) -> Option<usize> {
 /// (spaces, tabs, multiple spaces) before READONLY, NULL, or NOT NULL.
 ///
 /// Phase 19.1: Replaced space-only trim_end_matches patterns with token-based parsing.
+/// Note: Previously used by regex-based procedure parsing (pre-Phase 20.1.3).
+/// Kept for tests and potential future use.
+#[allow(dead_code)]
 fn clean_data_type(dt: &str) -> String {
     let trimmed = dt.trim();
     if trimmed.is_empty() {
@@ -3010,10 +2964,8 @@ fn extract_body_dependencies(
             let param_name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
 
             // Check if this is a declared parameter (not a local variable)
-            if params.iter().any(|p| {
-                let p_name = p.trim_start_matches('@');
-                p_name.eq_ignore_ascii_case(param_name)
-            }) {
+            // Note: params contains parameter names WITHOUT @ prefix (Phase 20.1.3)
+            if params.iter().any(|p| p.eq_ignore_ascii_case(param_name)) {
                 let param_ref = format!("{}.[@{}]", full_name, param_name);
                 // DotNet deduplicates parameter references
                 if !seen_params.contains(&param_ref) {

@@ -373,7 +373,7 @@ The `clean_data_type()` function in `src/dacpac/model_xml.rs` was refactored to 
 
 **Background:** Phase 15 converted many regex patterns to token-based parsing, but several complex patterns remain in `src/dacpac/model_xml.rs` and other modules. These patterns are fragile and can fail on edge cases involving tabs, multiple spaces, or nested expressions.
 
-### Phase 20.1: Parameter Parsing (1/3)
+### Phase 20.1: Parameter Parsing (3/3) ✅
 
 **Location:** `src/dacpac/model_xml.rs`
 
@@ -381,7 +381,7 @@ The `clean_data_type()` function in `src/dacpac/model_xml.rs` was refactored to 
 |----|------|--------|-------|
 | 20.1.1 | Replace PROC_PARAM_RE with token-based parser | ✅ | Implemented in `src/parser/procedure_parser.rs` |
 | 20.1.2 | Replace FUNC_PARAM_RE with token-based parser | ✅ | Implemented in `src/parser/function_parser.rs` |
-| 20.1.3 | Replace parameter name trim_start_matches('@') | ⬜ | Lines 2551, 2575, 2938: Use tokenizer to identify parameters |
+| 20.1.3 | Replace parameter name trim_start_matches('@') | ✅ | Integrated token parser; param names now stored without @ prefix |
 
 **Implementation Approach:** Create a `ParameterParser` using sqlparser-rs tokenization to extract parameter declarations from procedure/function signatures. Parse parameter attributes (OUTPUT, READONLY) as tokens rather than regex captures.
 
@@ -429,6 +429,24 @@ The following changes were made in `src/parser/function_parser.rs` and `src/dacp
 5. **Added 9 unit tests** - Comprehensive tests covering simple parameters, multiple parameters, default values, decimal precision, multiline with tabs, empty parameters, and ALTER FUNCTION.
 
 6. **Whitespace-agnostic** - Handles tabs, multiple spaces, and newlines between parameter components.
+
+**Implementation Notes (20.1.3 - Consistent Parameter Name Storage):**
+
+The following changes were made in `src/dacpac/model_xml.rs`:
+
+1. **Integrated `extract_procedure_parameters_tokens()`** - Replaced the regex-based `extract_procedure_parameters()` with a call to the token-based parser.
+
+2. **Removed `PROC_PARAM_RE` regex pattern** - The regex is no longer needed and has been removed from model_xml.rs.
+
+3. **Consistent parameter name storage** - Parameter names are now stored WITHOUT the `@` prefix for both procedures and functions:
+   - `ProcedureParameter.name` - No `@` prefix (via `TokenParsedProcedureParameter`)
+   - `FunctionParameter.name` - No `@` prefix (via `TokenParsedParameter` + strip_prefix)
+
+4. **Simplified parameter matching** - In `extract_body_dependencies()`, the comparison `p.trim_start_matches('@').eq_ignore_ascii_case(param_name)` was simplified to `p.eq_ignore_ascii_case(param_name)` since param names no longer have `@` prefix.
+
+5. **Preserved TVP column reference handling** - The `trim_start_matches('@')` in TVP column reference formatting (`tvp_param_name.trim_start_matches('@')`) was kept since `tvp_param_name` in the HashMap still has the `@` prefix for body pattern matching.
+
+6. **Deprecated functions preserved** - `find_standalone_as()` and `clean_data_type()` are no longer used but kept with `#[allow(dead_code)]` for tests and potential future use.
 
 ### Phase 20.2: Body Dependency Token Extraction (0/8)
 
