@@ -126,17 +126,17 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 24: Track Dynamic Column Sources in Procedure Bodies (0/8)
+## Phase 24: Track Dynamic Column Sources in Procedure Bodies (1/8)
 
 **Goal:** Generate `SqlDynamicColumnSource` elements for CTEs, temp tables, and table variables.
 
 **Impact:** 177 missing SqlDynamicColumnSource, 181 missing SqlSimpleColumn/SqlTypeSpecifier elements.
 
-### Phase 24.1: CTE Column Source Extraction (0/3)
+### Phase 24.1: CTE Column Source Extraction (1/3)
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 24.1.1 | Create `DynamicColumnSource` struct | ⬜ | name, source_type, columns |
+| 24.1.1 | Create `DynamicColumnSource` struct | ✅ | Added `DynamicColumnSource`, `DynamicColumn`, `DynamicColumnSourceType` to elements.rs; added `dynamic_sources` field to ProcedureElement and FunctionElement |
 | 24.1.2 | Extract CTE definitions from bodies | ⬜ | Parse `WITH cte AS (SELECT ...)` |
 | 24.1.3 | Write `SqlDynamicColumnSource` for CTEs | ⬜ | With `SqlComputedColumn` for each column |
 

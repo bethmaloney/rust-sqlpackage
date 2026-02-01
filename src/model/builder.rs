@@ -77,6 +77,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         definition: parsed.sql_text.clone(),
                         parameters: vec![], // T-SQL params not extracted - stored in definition
                         is_natively_compiled,
+                        dynamic_sources: Vec::new(),
                     }));
                 }
                 FallbackStatementType::Function {
@@ -102,6 +103,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         parameters: param_elements,
                         return_type: return_type.clone(),
                         is_natively_compiled,
+                        dynamic_sources: Vec::new(),
                     }));
                 }
                 FallbackStatementType::Index {
@@ -682,6 +684,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     definition: parsed.sql_text.clone(),
                     parameters: vec![], // Parameters stored in definition
                     is_natively_compiled: is_native,
+                    dynamic_sources: Vec::new(),
                 }));
             }
 
@@ -721,6 +724,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     parameters: vec![], // Parameters stored in definition
                     return_type: create_func.return_type.as_ref().map(|t| t.to_string()),
                     is_natively_compiled: is_native,
+                    dynamic_sources: Vec::new(),
                 }));
             }
 

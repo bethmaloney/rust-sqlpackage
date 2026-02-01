@@ -207,6 +207,8 @@ pub struct ProcedureElement {
     pub parameters: Vec<ParameterElement>,
     /// Whether this procedure is natively compiled (WITH NATIVE_COMPILATION)
     pub is_natively_compiled: bool,
+    /// Dynamic column sources discovered in the procedure body (CTEs, temp tables, table variables)
+    pub dynamic_sources: Vec<DynamicColumnSource>,
 }
 
 /// Parameter element
@@ -216,6 +218,48 @@ pub struct ParameterElement {
     pub data_type: String,
     pub is_output: bool,
     pub default_value: Option<String>,
+}
+
+/// Type of dynamic column source in procedure/function bodies
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynamicColumnSourceType {
+    /// Common Table Expression (WITH cte AS (...))
+    Cte,
+    /// Temporary table (CREATE TABLE #name (...))
+    TempTable,
+    /// Table variable (DECLARE @name TABLE (...))
+    TableVariable,
+}
+
+/// A column within a dynamic column source (CTE, temp table, or table variable)
+#[derive(Debug, Clone)]
+pub struct DynamicColumn {
+    /// Column name
+    pub name: String,
+    /// Data type (e.g., "int", "varchar(50)") - for temp tables and table variables
+    pub data_type: Option<String>,
+    /// Whether the column is nullable
+    pub is_nullable: bool,
+    /// Precision for decimal types
+    pub precision: Option<u8>,
+    /// Scale for decimal types
+    pub scale: Option<u8>,
+    /// Expression dependencies for CTE columns (references to source columns)
+    /// e.g., ["[dbo].[Products].[Id]", "[dbo].[Products].[Name]"]
+    pub expression_dependencies: Vec<String>,
+}
+
+/// A dynamic column source discovered in a procedure or function body.
+/// These are CTEs, temp tables, and table variables that DotNet DacFx
+/// tracks as SqlDynamicColumnSource elements.
+#[derive(Debug, Clone)]
+pub struct DynamicColumnSource {
+    /// Name of the source (CTE name, temp table name with #, or table variable name with @)
+    pub name: String,
+    /// Type of dynamic source
+    pub source_type: DynamicColumnSourceType,
+    /// Columns in this source
+    pub columns: Vec<DynamicColumn>,
 }
 
 /// Function type
@@ -265,6 +309,8 @@ pub struct FunctionElement {
     pub return_type: Option<String>,
     /// Whether this function is natively compiled (WITH NATIVE_COMPILATION)
     pub is_natively_compiled: bool,
+    /// Dynamic column sources discovered in the function body (CTEs, temp tables, table variables)
+    pub dynamic_sources: Vec<DynamicColumnSource>,
 }
 
 /// Index element
