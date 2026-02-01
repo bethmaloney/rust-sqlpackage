@@ -320,6 +320,11 @@ pub(crate) fn write_sequence<W: Write>(
         write_property(writer, "StartValue", &start.to_string())?;
     }
 
+    // CacheSize - write if explicitly specified (not None which means default)
+    if let Some(cache) = seq.cache_size {
+        write_property(writer, "CacheSize", &cache.to_string())?;
+    }
+
     // Relationship to schema
     write_schema_relationship(writer, &seq.schema)?;
 

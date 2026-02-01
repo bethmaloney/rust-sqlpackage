@@ -3853,6 +3853,17 @@ fn test_parity_views() {
     );
 }
 
+/// Parity test for stress_test fixture.
+/// Tests large database with many tables, procedures, and functions.
+#[test]
+fn test_parity_stress_test() {
+    run_standard_parity_test(
+        "stress_test",
+        "Testing large database stress test",
+        "40 tables, 25 procedures, 15 scalar functions, 10 TVFs, multiple indexes",
+    );
+}
+
 /// Parity test for body_dependencies_aliases fixture.
 /// Tests that table aliases in procedure/view bodies are NOT included in BodyDependencies.
 /// Aliases like A, ATTAG, TagDetails should be resolved to actual table references,
