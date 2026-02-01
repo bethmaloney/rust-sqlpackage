@@ -1231,7 +1231,7 @@ fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
                     disambiguators.sort();
 
                     // Calculate median threshold
-                    let median = if disambiguators.len() % 2 == 0 {
+                    let median = if disambiguators.len().is_multiple_of(2) {
                         // Even count: average of two middle values
                         let mid = disambiguators.len() / 2;
                         (disambiguators[mid - 1] + disambiguators[mid]) as f64 / 2.0
