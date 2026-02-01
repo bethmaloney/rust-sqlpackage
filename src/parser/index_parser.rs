@@ -299,8 +299,7 @@ impl IndexTokenParser {
         let tokens = self.base.tokens();
         let mut result = String::new();
 
-        for i in start..end.min(tokens.len()) {
-            let token = &tokens[i];
+        for token in tokens.iter().take(end.min(tokens.len())).skip(start) {
             match &token.token {
                 Token::Word(w) => {
                     result.push_str(&format_word_bracketed(w));
