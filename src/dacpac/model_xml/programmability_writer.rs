@@ -95,7 +95,9 @@ pub(crate) fn write_procedure<W: Write>(
     write_body_dependencies(writer, &body_deps)?;
 
     // Write DynamicObjects relationship for TVP parameters and CTEs
-    write_all_dynamic_objects(writer, &full_name, &body, &proc.schema, &tvp_params)?;
+    // NOTE: Use "dbo" as default_schema for unqualified table resolution, NOT the procedure's schema.
+    // DotNet always resolves unqualified table names to [dbo], regardless of the containing object's schema.
+    write_all_dynamic_objects(writer, &full_name, &body, "dbo", &tvp_params)?;
 
     // Write Parameters relationship
     if !params.is_empty() {
@@ -214,15 +216,19 @@ pub(crate) fn write_function<W: Write>(
 
     // Write DynamicObjects relationship for CTEs, temp tables, and table variables
     // Functions don't have TVP parameters like procedures, so we pass an empty slice
+    // NOTE: Use "dbo" as default_schema for unqualified table resolution, NOT the function's schema.
+    // DotNet always resolves unqualified table names to [dbo], regardless of the containing object's schema.
     let empty_tvp_params: Vec<(&ProcedureParameter, Option<&UserDefinedTypeElement>)> = Vec::new();
-    write_all_dynamic_objects(writer, &full_name, &body, &func.schema, &empty_tvp_params)?;
+    write_all_dynamic_objects(writer, &full_name, &body, "dbo", &empty_tvp_params)?;
 
     // For inline TVFs, write Columns relationship (after BodyDependencies, before FunctionBody)
+    // NOTE: Use "dbo" as default_schema for unqualified table resolution, NOT the function's schema.
+    // DotNet always resolves unqualified table names to [dbo], regardless of the containing object's schema.
     if matches!(
         func.function_type,
         crate::model::FunctionType::InlineTableValued
     ) {
-        let inline_tvf_columns = extract_inline_tvf_columns(&body, &full_name, &func.schema, model);
+        let inline_tvf_columns = extract_inline_tvf_columns(&body, &full_name, "dbo", model);
         if !inline_tvf_columns.is_empty() {
             write_view_columns(writer, &full_name, &inline_tvf_columns)?;
         }

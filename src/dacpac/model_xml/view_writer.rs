@@ -74,8 +74,10 @@ pub(crate) fn write_view<W: Write>(
     // DotNet emits Columns and QueryDependencies for ALL views
     // Pass the model to enable SELECT * expansion to actual table columns
     // Pass is_schema_bound to control GROUP BY duplicate handling
+    // NOTE: Use "dbo" as default_schema for unqualified table resolution, NOT the view's schema.
+    // DotNet always resolves unqualified table names to [dbo], regardless of the containing object's schema.
     let (columns, query_deps) =
-        extract_view_columns_and_deps(&query_script, &view.schema, model, view.is_schema_bound);
+        extract_view_columns_and_deps(&query_script, "dbo", model, view.is_schema_bound);
 
     // 6. Write Columns relationship with SqlComputedColumn elements
     if !columns.is_empty() {
@@ -83,7 +85,8 @@ pub(crate) fn write_view<W: Write>(
     }
 
     // 7. Write DynamicObjects relationship for CTEs
-    write_view_cte_dynamic_objects(writer, &full_name, &query_script, &view.schema)?;
+    // NOTE: Use "dbo" as default_schema for unqualified table resolution, NOT the view's schema.
+    write_view_cte_dynamic_objects(writer, &full_name, &query_script, "dbo")?;
 
     // 8. Write QueryDependencies relationship
     if !query_deps.is_empty() {
@@ -152,8 +155,10 @@ pub(crate) fn write_raw_view<W: Write>(
 
     // Extract view columns and dependencies from the query
     // DotNet emits Columns and QueryDependencies for ALL views
+    // NOTE: Use "dbo" as default_schema for unqualified table resolution, NOT the view's schema.
+    // DotNet always resolves unqualified table names to [dbo], regardless of the containing object's schema.
     let (columns, query_deps) =
-        extract_view_columns_and_deps(&query_script, &raw.schema, model, is_schema_bound);
+        extract_view_columns_and_deps(&query_script, "dbo", model, is_schema_bound);
 
     // 6. Write Columns relationship with SqlComputedColumn elements
     if !columns.is_empty() {
@@ -161,7 +166,8 @@ pub(crate) fn write_raw_view<W: Write>(
     }
 
     // 7. Write DynamicObjects relationship for CTEs
-    write_view_cte_dynamic_objects(writer, &full_name, &query_script, &raw.schema)?;
+    // NOTE: Use "dbo" as default_schema for unqualified table resolution, NOT the view's schema.
+    write_view_cte_dynamic_objects(writer, &full_name, &query_script, "dbo")?;
 
     // 8. Write QueryDependencies relationship
     if !query_deps.is_empty() {
