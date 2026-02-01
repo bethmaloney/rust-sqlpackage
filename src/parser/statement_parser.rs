@@ -2,6 +2,7 @@
 //!
 //! This module provides token-based parsing for detecting statement types that
 //! sqlparser-rs doesn't support natively. Part of Phase 15.5 of the implementation plan.
+//! Refactored in Phase 27 to use base TokenParser.
 //!
 //! ## Supported Patterns
 //!
@@ -32,9 +33,10 @@
 //! DROP PROC [schema].[name]
 //! ```
 
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use sqlparser::tokenizer::Token;
+
+use super::token_parser_base::TokenParser;
 
 /// Result of parsing a CTE followed by DML using tokens
 #[derive(Debug, Clone)]
@@ -125,19 +127,15 @@ impl DropType {
 
 /// Token-based statement parser
 pub struct StatementTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl StatementTokenParser {
     /// Create a new parser for a SQL statement
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(sql)?,
+        })
     }
 
     /// Try to parse a CTE followed by DML (DELETE, UPDATE, INSERT, MERGE)
@@ -148,19 +146,19 @@ impl StatementTokenParser {
     /// - WITH cte AS (...) INSERT INTO ...
     /// - WITH cte AS (...) MERGE INTO ...
     pub fn try_parse_cte_dml(&mut self) -> Option<TokenParsedCteDml> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Must start with WITH keyword
-        if !self.check_keyword(Keyword::WITH) {
+        if !self.base.check_keyword(Keyword::WITH) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Skip RECURSIVE if present (for recursive CTEs)
-        if self.check_word_ci("RECURSIVE") {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_word_ci("RECURSIVE") {
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Now we need to find the end of the CTE definition(s) and look for a DML keyword
@@ -170,28 +168,28 @@ impl StatementTokenParser {
         let mut paren_depth = 0;
         let mut found_as = false;
 
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
+        while !self.base.is_at_end() {
+            if let Some(token) = self.base.current_token() {
                 match &token.token {
                     Token::LParen => {
                         paren_depth += 1;
-                        self.advance();
+                        self.base.advance();
                     }
                     Token::RParen => {
                         if paren_depth > 0 {
                             paren_depth -= 1;
                         }
-                        self.advance();
+                        self.base.advance();
 
                         // After closing paren at depth 0, check for DML keyword
                         if paren_depth == 0 && found_as {
-                            self.skip_whitespace();
+                            self.base.skip_whitespace();
 
                             // Check for comma (more CTEs) or DML keyword
-                            if self.check_token(&Token::Comma) {
+                            if self.base.check_token(&Token::Comma) {
                                 // More CTEs coming
-                                self.advance();
-                                self.skip_whitespace();
+                                self.base.advance();
+                                self.base.skip_whitespace();
                                 found_as = false;
                                 continue;
                             }
@@ -202,17 +200,17 @@ impl StatementTokenParser {
                             }
 
                             // If SELECT, this is a normal CTE that sqlparser can handle
-                            if self.check_keyword(Keyword::SELECT) {
+                            if self.base.check_keyword(Keyword::SELECT) {
                                 return None;
                             }
                         }
                     }
                     Token::Word(w) if w.keyword == Keyword::AS && paren_depth == 0 => {
                         found_as = true;
-                        self.advance();
+                        self.base.advance();
                     }
                     _ => {
-                        self.advance();
+                        self.base.advance();
                     }
                 }
             } else {
@@ -225,33 +223,33 @@ impl StatementTokenParser {
 
     /// Try to parse a MERGE statement with OUTPUT clause
     pub fn try_parse_merge_output(&mut self) -> Option<TokenParsedMergeOutput> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Must start with MERGE keyword
-        if !self.check_keyword(Keyword::MERGE) {
+        if !self.base.check_keyword(Keyword::MERGE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Optional INTO keyword
-        if self.check_keyword(Keyword::INTO) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_keyword(Keyword::INTO) {
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Parse target table name (schema-qualified)
-        let (schema, name) = self.parse_schema_qualified_name()?;
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
 
         // Now scan for OUTPUT keyword
-        while !self.is_at_end() {
-            self.skip_whitespace();
+        while !self.base.is_at_end() {
+            self.base.skip_whitespace();
 
-            if self.check_word_ci("OUTPUT") {
+            if self.base.check_word_ci("OUTPUT") {
                 return Some(TokenParsedMergeOutput { schema, name });
             }
 
-            self.advance();
+            self.base.advance();
         }
 
         None
@@ -259,37 +257,37 @@ impl StatementTokenParser {
 
     /// Try to parse an UPDATE statement with XML method calls
     pub fn try_parse_xml_update(&mut self) -> Option<TokenParsedXmlUpdate> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Must start with UPDATE keyword
-        if !self.check_keyword(Keyword::UPDATE) {
+        if !self.base.check_keyword(Keyword::UPDATE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse target table name (schema-qualified)
-        let (schema, name) = self.parse_schema_qualified_name()?;
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
 
         // Now scan for XML method patterns: .modify( or .value(
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
+        while !self.base.is_at_end() {
+            if let Some(token) = self.base.current_token() {
                 if matches!(&token.token, Token::Period) {
-                    self.advance();
-                    self.skip_whitespace();
+                    self.base.advance();
+                    self.base.skip_whitespace();
 
                     // Check for modify or value keywords
-                    if self.check_word_ci("MODIFY") || self.check_word_ci("VALUE") {
-                        self.advance();
-                        self.skip_whitespace();
+                    if self.base.check_word_ci("MODIFY") || self.base.check_word_ci("VALUE") {
+                        self.base.advance();
+                        self.base.skip_whitespace();
 
                         // Must be followed by opening paren for method call
-                        if self.check_token(&Token::LParen) {
+                        if self.base.check_token(&Token::LParen) {
                             return Some(TokenParsedXmlUpdate { schema, name });
                         }
                     }
                 } else {
-                    self.advance();
+                    self.base.advance();
                 }
             } else {
                 break;
@@ -301,21 +299,21 @@ impl StatementTokenParser {
 
     /// Try to parse a DROP statement (SYNONYM, TRIGGER, INDEX, PROC)
     pub fn try_parse_drop(&mut self) -> Option<TokenParsedDrop> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Must start with DROP keyword
-        if !self.check_keyword(Keyword::DROP) {
+        if !self.base.check_keyword(Keyword::DROP) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Determine what type of DROP this is
-        if self.check_word_ci("SYNONYM") {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_word_ci("SYNONYM") {
+            self.base.advance();
+            self.base.skip_whitespace();
             self.skip_if_exists();
-            let (schema, name) = self.parse_schema_qualified_name()?;
+            let (schema, name) = self.base.parse_schema_qualified_name()?;
             return Some(TokenParsedDrop {
                 drop_type: DropType::Synonym,
                 schema,
@@ -323,11 +321,11 @@ impl StatementTokenParser {
             });
         }
 
-        if self.check_keyword(Keyword::TRIGGER) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_keyword(Keyword::TRIGGER) {
+            self.base.advance();
+            self.base.skip_whitespace();
             self.skip_if_exists();
-            let (schema, name) = self.parse_schema_qualified_name()?;
+            let (schema, name) = self.base.parse_schema_qualified_name()?;
             return Some(TokenParsedDrop {
                 drop_type: DropType::Trigger,
                 schema,
@@ -335,24 +333,24 @@ impl StatementTokenParser {
             });
         }
 
-        if self.check_keyword(Keyword::INDEX) {
+        if self.base.check_keyword(Keyword::INDEX) {
             // DROP INDEX index_name ON [schema].[table]
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
             self.skip_if_exists();
 
-            let index_name = self.parse_identifier()?;
-            self.skip_whitespace();
+            let index_name = self.base.parse_identifier()?;
+            self.base.skip_whitespace();
 
             // Expect ON keyword
-            if !self.check_keyword(Keyword::ON) {
+            if !self.base.check_keyword(Keyword::ON) {
                 return None;
             }
-            self.advance();
-            self.skip_whitespace();
+            self.base.advance();
+            self.base.skip_whitespace();
 
             // Parse table name (schema-qualified)
-            let (table_schema, table_name) = self.parse_schema_qualified_name()?;
+            let (table_schema, table_name) = self.base.parse_schema_qualified_name()?;
 
             // Combined name: table_name_index_name (matching existing behavior)
             let combined_name = format!("{}_{}", table_name, index_name);
@@ -365,17 +363,17 @@ impl StatementTokenParser {
         }
 
         // Check for PROC (but not PROCEDURE - sqlparser handles that)
-        if self.check_word_ci("PROC") {
+        if self.base.check_word_ci("PROC") {
             // Make sure it's not PROCEDURE
-            if let Some(token) = self.current_token() {
+            if let Some(token) = self.base.current_token() {
                 if let Token::Word(w) = &token.token {
                     if w.value.eq_ignore_ascii_case("PROC")
                         && !w.value.eq_ignore_ascii_case("PROCEDURE")
                     {
-                        self.advance();
-                        self.skip_whitespace();
+                        self.base.advance();
+                        self.base.skip_whitespace();
                         self.skip_if_exists();
-                        let (schema, name) = self.parse_schema_qualified_name()?;
+                        let (schema, name) = self.base.parse_schema_qualified_name()?;
                         return Some(TokenParsedDrop {
                             drop_type: DropType::Procedure,
                             schema,
@@ -399,23 +397,23 @@ impl StatementTokenParser {
     /// - CREATE OR ALTER TYPE [schema].[name] ...
     /// - CREATE SYNONYM [schema].[name] ...
     pub fn try_parse_generic_create(&mut self) -> Option<TokenParsedGenericCreate> {
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Must start with CREATE keyword
-        if !self.check_keyword(Keyword::CREATE) {
+        if !self.base.check_keyword(Keyword::CREATE) {
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Handle optional "OR ALTER" clause
-        if self.check_keyword(Keyword::OR) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_keyword(Keyword::OR) {
+            self.base.advance();
+            self.base.skip_whitespace();
 
-            if self.check_word_ci("ALTER") {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_word_ci("ALTER") {
+                self.base.advance();
+                self.base.skip_whitespace();
             } else {
                 // "OR" without "ALTER" is not valid
                 return None;
@@ -423,11 +421,11 @@ impl StatementTokenParser {
         }
 
         // Extract the object type (e.g., TABLE, VIEW, PROCEDURE, RULE, SYNONYM)
-        let object_type = self.parse_identifier()?;
-        self.skip_whitespace();
+        let object_type = self.base.parse_identifier()?;
+        self.base.skip_whitespace();
 
         // Parse the schema-qualified name
-        let (schema, name) = self.parse_schema_qualified_name()?;
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
 
         Some(TokenParsedGenericCreate {
             object_type,
@@ -442,13 +440,13 @@ impl StatementTokenParser {
 
     /// Check if current token is a DML keyword and return the type
     fn check_dml_keyword(&self) -> Option<DmlType> {
-        if self.check_keyword(Keyword::DELETE) {
+        if self.base.check_keyword(Keyword::DELETE) {
             Some(DmlType::Delete)
-        } else if self.check_keyword(Keyword::UPDATE) {
+        } else if self.base.check_keyword(Keyword::UPDATE) {
             Some(DmlType::Update)
-        } else if self.check_keyword(Keyword::INSERT) {
+        } else if self.base.check_keyword(Keyword::INSERT) {
             Some(DmlType::Insert)
-        } else if self.check_keyword(Keyword::MERGE) {
+        } else if self.base.check_keyword(Keyword::MERGE) {
             Some(DmlType::Merge)
         } else {
             None
@@ -457,110 +455,14 @@ impl StatementTokenParser {
 
     /// Skip optional IF EXISTS clause
     fn skip_if_exists(&mut self) {
-        if self.check_keyword(Keyword::IF) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_keyword(Keyword::IF) {
+            self.base.advance();
+            self.base.skip_whitespace();
 
-            if self.check_keyword(Keyword::EXISTS) {
-                self.advance();
-                self.skip_whitespace();
+            if self.base.check_keyword(Keyword::EXISTS) {
+                self.base.advance();
+                self.base.skip_whitespace();
             }
-        }
-    }
-
-    /// Parse a schema-qualified name: [schema].[name] or schema.name or [name] or name
-    fn parse_schema_qualified_name(&mut self) -> Option<(String, String)> {
-        let first_ident = self.parse_identifier()?;
-        self.skip_whitespace();
-
-        // Check if there's a dot (schema.name pattern)
-        if self.check_token(&Token::Period) {
-            self.advance();
-            self.skip_whitespace();
-
-            let second_ident = self.parse_identifier()?;
-
-            Some((first_ident, second_ident))
-        } else {
-            // No dot - just a name, default schema to "dbo"
-            Some(("dbo".to_string(), first_ident))
-        }
-    }
-
-    /// Parse an identifier (bracketed or unbracketed)
-    fn parse_identifier(&mut self) -> Option<String> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        let token = self.current_token()?;
-        match &token.token {
-            Token::Word(w) => {
-                let name = w.value.clone();
-                self.advance();
-                Some(name)
-            }
-            _ => None,
-        }
-    }
-
-    /// Skip whitespace tokens
-    fn skip_whitespace(&mut self) {
-        while !self.is_at_end() {
-            if let Some(token) = self.current_token() {
-                match &token.token {
-                    Token::Whitespace(_) => {
-                        self.advance();
-                    }
-                    _ => break,
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Check if at end of tokens
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-    }
-
-    /// Get current token without consuming
-    fn current_token(&self) -> Option<&TokenWithSpan> {
-        self.tokens.get(self.pos)
-    }
-
-    /// Advance to next token
-    fn advance(&mut self) {
-        if !self.is_at_end() {
-            self.pos += 1;
-        }
-    }
-
-    /// Check if current token is a specific keyword
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.keyword == keyword)
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token is a word matching (case-insensitive)
-    fn check_word_ci(&self, word: &str) -> bool {
-        if let Some(token) = self.current_token() {
-            matches!(&token.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word))
-        } else {
-            false
-        }
-    }
-
-    /// Check if current token matches a specific token type
-    fn check_token(&self, expected: &Token) -> bool {
-        if let Some(token) = self.current_token() {
-            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
-        } else {
-            false
         }
     }
 }
