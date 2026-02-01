@@ -16,11 +16,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.7 complete: CTE and subquery pattern matching (4/4 tasks)
 - ✅ Phase 20.8 complete: Fix alias resolution bugs in BodyDependencies (11/11 tasks)
 
-**Current Focus: Phase 21 - Split model_xml.rs into Submodules** (5/10 tasks)
+**Current Focus: Phase 21 - Split model_xml.rs into Submodules** (6/10 tasks)
 - ✅ Phase 21.1 complete: Create module structure (2/2 tasks)
 - ✅ Phase 21.2 complete: Extract XML Writing Helpers (2/2 tasks)
 - ✅ Phase 21.3.1 complete: Create table_writer.rs for table/column XML
-- Target: Break 13,413-line file into ~9 logical submodules (currently ~12,600 lines)
+- Target: Break 13,413-line file into ~9 logical submodules (currently ~12,073 lines)
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -214,7 +214,7 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 21.3.1 | Create `table_writer.rs` for table/column XML | ✅ | 650 lines including 10 unit tests. Extracted: `write_table`, `write_column`, `write_computed_column`, `write_column_with_type`, `write_type_specifier`, `sql_type_to_reference`, `write_column_type_specifier`, `write_table_type_column_with_annotation`, `write_table_type_relationship`, `parse_qualified_table_name`, `is_builtin_type_reference`, `write_expression_dependencies`. |
-| 21.3.2 | Create `view_writer.rs` for view XML | ⬜ | `write_view`, `write_view_columns`, `extract_view_*` functions, `ViewColumn` struct (~700 lines) |
+| 21.3.2 | Create `view_writer.rs` for view XML | ✅ | 574 lines including 8 unit tests. Extracted: `write_view`, `write_raw_view`, `extract_view_query`, `ViewColumn` struct, `expand_select_star`, `extract_view_columns_and_deps`, `write_view_columns`, `write_query_dependencies`. |
 | 21.3.3 | Create `programmability_writer.rs` for procs/functions | ⬜ | `write_procedure`, `write_function`, parameter extraction, `write_dynamic_objects` (~800 lines) |
 
 ### Phase 21.4: Extract Body Dependencies (0/2)
@@ -249,7 +249,7 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 | `xml_helpers.rs` | ~244 | Low-level XML utilities |
 | `header.rs` | ~324 | Header/metadata generation |
 | `table_writer.rs` | ~650 | Table/column XML (extracted in 21.3.1) |
-| `view_writer.rs` | ~700 | View XML and column extraction |
+| `view_writer.rs` | ~574 | View XML and column extraction |
 | `programmability_writer.rs` | ~800 | Procedures/functions |
 | `body_deps.rs` | ~1,500 | Body dependency extraction |
 | `qualified_name.rs` | ~300 | Qualified name parsing |
