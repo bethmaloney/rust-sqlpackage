@@ -16,11 +16,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.7 complete: CTE and subquery pattern matching (4/4 tasks)
 - ✅ Phase 20.8 complete: Fix alias resolution bugs in BodyDependencies (11/11 tasks)
 
-**Current Focus: Phase 21 - Split model_xml.rs into Submodules** (6/10 tasks)
+**Current Focus: Phase 21 - Split model_xml.rs into Submodules** (7/10 tasks)
 - ✅ Phase 21.1 complete: Create module structure (2/2 tasks)
 - ✅ Phase 21.2 complete: Extract XML Writing Helpers (2/2 tasks)
-- ✅ Phase 21.3.1 complete: Create table_writer.rs for table/column XML
-- Target: Break 13,413-line file into ~9 logical submodules (currently ~12,073 lines)
+- ✅ Phase 21.3 complete: Extract Element Writers (3/3 tasks)
+- Target: Break 13,413-line file into ~9 logical submodules (currently ~10,235 lines)
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -187,7 +187,7 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 
 ---
 
-## Phase 21: Split model_xml.rs into Submodules (5/10)
+## Phase 21: Split model_xml.rs into Submodules (7/10)
 
 **Location:** `src/dacpac/model_xml/mod.rs` (~12,600 lines after 21.3.1)
 
@@ -209,13 +209,13 @@ The original root cause was that `extract_table_aliases_for_body_deps()` uses re
 | 21.2.1 | Create `xml_helpers.rs` with low-level XML utilities | ✅ | Created with `write_property`, `write_script_property`, `write_relationship`, `write_builtin_type_relationship`, `write_schema_relationship`, `write_type_specifier_builtin`, `normalize_script_content`, `is_builtin_schema`, `BUILTIN_SCHEMAS`. 244 lines including 9 unit tests. |
 | 21.2.2 | Create `header.rs` with header/metadata writing | ✅ | Created with `write_header`, `write_custom_data`, `write_database_options`, `write_package_reference`, `write_sqlcmd_variables`, `extract_dacpac_name`. 324 lines including 9 unit tests. |
 
-### Phase 21.3: Extract Element Writers (1/3)
+### Phase 21.3: Extract Element Writers (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 21.3.1 | Create `table_writer.rs` for table/column XML | ✅ | 650 lines including 10 unit tests. Extracted: `write_table`, `write_column`, `write_computed_column`, `write_column_with_type`, `write_type_specifier`, `sql_type_to_reference`, `write_column_type_specifier`, `write_table_type_column_with_annotation`, `write_table_type_relationship`, `parse_qualified_table_name`, `is_builtin_type_reference`, `write_expression_dependencies`. |
 | 21.3.2 | Create `view_writer.rs` for view XML | ✅ | 574 lines including 8 unit tests. Extracted: `write_view`, `write_raw_view`, `extract_view_query`, `ViewColumn` struct, `expand_select_star`, `extract_view_columns_and_deps`, `write_view_columns`, `write_query_dependencies`. |
-| 21.3.3 | Create `programmability_writer.rs` for procs/functions | ⬜ | `write_procedure`, `write_function`, parameter extraction, `write_dynamic_objects` (~800 lines) |
+| 21.3.3 | Create `programmability_writer.rs` for procs/functions | ✅ | 1838 lines including 35 unit tests. Extracted: `write_procedure`, `write_function`, `ProcedureParameter`, `FunctionParameter`, TVF column handling (`TvfColumn`, `TvfColumnTypeInfo`, `extract_inline_tvf_columns`, `extract_multistatement_tvf_columns`), procedure/function body extraction (`extract_procedure_body_only`, `extract_function_body`, `extract_function_header`). |
 
 ### Phase 21.4: Extract Body Dependencies (0/2)
 
