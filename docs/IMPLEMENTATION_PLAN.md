@@ -4,23 +4,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-20.8 complete (250 tasks). Full parity achieved.**
-
-**Current Focus: Phase 20 - Replace Remaining Regex with Tokenization/AST**
-- ✅ Phase 20.1 complete: Token-based parameter parsing (3/3 tasks)
-- ✅ Phase 20.2 complete: Body dependency token extraction (8/8 tasks)
-- ✅ Phase 20.3 complete: Type and declaration parsing (4/4 tasks)
-- ✅ Phase 20.4 complete: Table and alias pattern matching (7/7 tasks)
-- ✅ Phase 20.5 complete: SQL keyword detection (6/6 tasks)
-- ✅ Phase 20.6 complete: Semicolon and whitespace handling (3/3 tasks)
-- ✅ Phase 20.7 complete: CTE and subquery pattern matching (4/4 tasks)
-- ✅ Phase 20.8 complete: Fix alias resolution bugs in BodyDependencies (11/11 tasks)
+**Phases 1-20 complete (250 tasks). Full parity achieved.**
 
 **Current Focus: Phase 21 - Split model_xml.rs into Submodules** (7/10 tasks)
-- ✅ Phase 21.1 complete: Create module structure (2/2 tasks)
-- ✅ Phase 21.2 complete: Extract XML Writing Helpers (2/2 tasks)
-- ✅ Phase 21.3 complete: Extract Element Writers (3/3 tasks)
-- Target: Break 13,413-line file into ~9 logical submodules (currently ~10,235 lines)
+- ✅ Phase 21.1-21.3 complete: Module structure and element writers extracted
+- ⬜ Phase 21.4-21.5 remaining: Body dependencies and other writers
+- Target: Break 13,413-line file into ~9 logical submodules
 
 **Discovered: Phase 22 - Layer 7 Canonical XML Parity** (2/4 tasks)
 - Layer 7 now performs true 1-1 XML comparison (no sorting/normalization)
