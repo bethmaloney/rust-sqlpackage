@@ -24,7 +24,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Added MAX keyword detection in scalar type parser
 
 **Remaining Parity Issues (Phases 24-25):**
-- Phase 24: Dynamic column sources in procedures (3/8) - 177 missing elements
+- Phase 24: Dynamic column sources in procedures (5/8) - CTE and temp table extraction complete, table variables remaining
 - Phase 25: ALTER TABLE constraints (0/6) - 14 PKs, 19 FKs missing
 
 **Phase 26 Complete: APPLY Subquery Alias Capture (4/4) ✅**
@@ -126,7 +126,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 24: Track Dynamic Column Sources in Procedure Bodies (3/8)
+## Phase 24: Track Dynamic Column Sources in Procedure Bodies (5/8)
 
 **Goal:** Generate `SqlDynamicColumnSource` elements for CTEs, temp tables, and table variables.
 
@@ -147,12 +147,24 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 - `test_extract_cte_definitions_no_cte` - Body without CTE returns empty
 - `test_extract_cte_definitions_column_with_alias` - Column expressions with AS aliases
 
-### Phase 24.2: Temp Table Column Source Extraction (0/2)
+### Phase 24.2: Temp Table Column Source Extraction (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 24.2.1 | Extract temp table definitions | ⬜ | `CREATE TABLE #name`, INSERT...SELECT inference |
-| 24.2.2 | Write `SqlDynamicColumnSource` for temp tables | ⬜ | Include column elements |
+| 24.2.1 | Extract temp table definitions | ✅ | Added `TempTableDefinition`, `TempTableColumn` structs; `extract_temp_table_definitions()`, `extract_temp_table_name()`, `extract_temp_table_columns()`, `extract_column_data_type()` in body_deps.rs |
+| 24.2.2 | Write `SqlDynamicColumnSource` for temp tables | ✅ | Added `write_temp_table_columns()`, `write_temp_table_column_type_specifier()`, `parse_temp_table_data_type()` in programmability_writer.rs; integrated into `write_all_dynamic_objects()` |
+
+**Unit Tests Added (body_deps.rs):**
+- `test_extract_temp_table_single_table` - Single temp table with basic columns
+- `test_extract_temp_table_with_varchar_lengths` - VARCHAR/NVARCHAR with lengths and MAX
+- `test_extract_temp_table_with_decimal` - DECIMAL/NUMERIC with precision/scale
+- `test_extract_temp_table_multiple_tables` - Multiple temp tables in one body
+- `test_extract_temp_table_global_temp` - Global temp table (##name)
+- `test_extract_temp_table_no_temp_table` - Body without temp tables
+- `test_extract_temp_table_with_constraint` - Temp table with table-level constraint
+- `test_extract_temp_table_with_primary_key_inline` - Inline PRIMARY KEY on column
+
+**Note:** INSERT...SELECT column inference not implemented (would require complex type resolution from source tables). Temp tables with explicit column definitions are fully supported.
 
 ### Phase 24.3: Table Variable Column Source Extraction (0/2)
 

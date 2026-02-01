@@ -53,6 +53,32 @@ pub(crate) struct CteDefinition {
 }
 
 // =============================================================================
+// Temp Table Extraction (Phase 24.2)
+// =============================================================================
+
+/// Represents a column extracted from a CREATE TABLE #temp definition
+#[derive(Debug, Clone)]
+pub(crate) struct TempTableColumn {
+    /// Column name
+    pub name: String,
+    /// Data type (e.g., "int", "varchar(50)")
+    pub data_type: String,
+    /// Whether the column is nullable (defaults to true)
+    pub is_nullable: bool,
+}
+
+/// Represents a temp table extracted from a CREATE TABLE #name statement
+#[derive(Debug, Clone)]
+pub(crate) struct TempTableDefinition {
+    /// Temp table name (including the # prefix, e.g., "#TempOrders")
+    pub name: String,
+    /// Temp table sequence number within the procedure (TempTable1, TempTable2, etc.)
+    pub temp_table_number: u32,
+    /// Columns in this temp table
+    pub columns: Vec<TempTableColumn>,
+}
+
+// =============================================================================
 // Body Dependency Token Scanner (Phase 20.2.1)
 // =============================================================================
 // Replaces TOKEN_RE regex with tokenizer-based scanning for body dependency extraction.
@@ -3005,6 +3031,418 @@ fn is_sql_reserved_word(word: &str) -> bool {
 }
 
 // =============================================================================
+// Temp Table Definition Extraction (Phase 24.2.1)
+// =============================================================================
+
+/// Extract temp table definitions from a SQL body (procedure or function).
+/// Returns a list of temp table definitions with their columns.
+///
+/// # Arguments
+/// * `sql` - The SQL body text containing CREATE TABLE #... statements
+///
+/// # Returns
+/// Vector of TempTableDefinition structs, one per temp table found in the body
+pub(crate) fn extract_temp_table_definitions(sql: &str) -> Vec<TempTableDefinition> {
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, sql).tokenize_with_location() {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut temp_tables = Vec::new();
+    let mut temp_table_number = 0u32;
+    let mut pos = 0;
+
+    while pos < tokens.len() {
+        // Skip whitespace
+        while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+            pos += 1;
+        }
+        if pos >= tokens.len() {
+            break;
+        }
+
+        // Look for CREATE keyword
+        if matches!(tokens[pos].token, Token::Word(ref w) if w.keyword == Keyword::CREATE) {
+            pos += 1;
+
+            // Skip whitespace
+            while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                pos += 1;
+            }
+
+            // Look for TABLE keyword
+            if pos < tokens.len()
+                && matches!(tokens[pos].token, Token::Word(ref w) if w.keyword == Keyword::TABLE)
+            {
+                pos += 1;
+
+                // Skip whitespace
+                while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                    pos += 1;
+                }
+
+                // Check for temp table name starting with # (using Hashtag token or Word starting with #)
+                let temp_name = extract_temp_table_name(&tokens, &mut pos);
+                if let Some(name) = temp_name {
+                    // Skip whitespace
+                    while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                        pos += 1;
+                    }
+
+                    // Expect opening paren for column definitions
+                    if pos < tokens.len() && matches!(tokens[pos].token, Token::LParen) {
+                        let columns_start = pos + 1;
+
+                        // Find matching closing paren
+                        let mut depth = 1;
+                        pos += 1;
+                        while pos < tokens.len() && depth > 0 {
+                            match tokens[pos].token {
+                                Token::LParen => depth += 1,
+                                Token::RParen => depth -= 1,
+                                _ => {}
+                            }
+                            pos += 1;
+                        }
+                        let columns_end = pos - 1;
+
+                        // Extract columns from the definition
+                        if columns_start < columns_end {
+                            let column_tokens = &tokens[columns_start..columns_end];
+                            let columns = extract_temp_table_columns(column_tokens);
+
+                            if !columns.is_empty() {
+                                temp_table_number += 1;
+                                temp_tables.push(TempTableDefinition {
+                                    name,
+                                    temp_table_number,
+                                    columns,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            pos += 1;
+        }
+    }
+
+    temp_tables
+}
+
+/// Extract temp table name from tokens (handles #name and ##name patterns)
+fn extract_temp_table_name(
+    tokens: &[sqlparser::tokenizer::TokenWithSpan],
+    pos: &mut usize,
+) -> Option<String> {
+    if *pos >= tokens.len() {
+        return None;
+    }
+
+    // MsSqlDialect tokenizes temp table names like #TempOrders as a single Word token
+    // with the # included in the value
+    if let Token::Word(w) = &tokens[*pos].token {
+        if w.value.starts_with('#') {
+            *pos += 1;
+            return Some(w.value.clone());
+        }
+    }
+
+    None
+}
+
+/// Extract column definitions from temp table CREATE TABLE tokens
+fn extract_temp_table_columns(
+    tokens: &[sqlparser::tokenizer::TokenWithSpan],
+) -> Vec<TempTableColumn> {
+    let mut columns = Vec::new();
+    let mut pos = 0;
+
+    while pos < tokens.len() {
+        // Skip whitespace
+        while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+            pos += 1;
+        }
+        if pos >= tokens.len() {
+            break;
+        }
+
+        // Check for CONSTRAINT keyword (skip constraint definitions)
+        if matches!(&tokens[pos].token, Token::Word(w) if w.keyword == Keyword::CONSTRAINT) {
+            // Skip to next comma or end
+            while pos < tokens.len() && !matches!(tokens[pos].token, Token::Comma) {
+                // Handle nested parentheses in constraint definitions
+                if matches!(tokens[pos].token, Token::LParen) {
+                    let mut depth = 1;
+                    pos += 1;
+                    while pos < tokens.len() && depth > 0 {
+                        match tokens[pos].token {
+                            Token::LParen => depth += 1,
+                            Token::RParen => depth -= 1,
+                            _ => {}
+                        }
+                        pos += 1;
+                    }
+                } else {
+                    pos += 1;
+                }
+            }
+            // Skip comma
+            if pos < tokens.len() && matches!(tokens[pos].token, Token::Comma) {
+                pos += 1;
+            }
+            continue;
+        }
+
+        // Check for PRIMARY, FOREIGN, UNIQUE, CHECK keywords (table-level constraints)
+        if matches!(&tokens[pos].token, Token::Word(w) if matches!(w.keyword,
+            Keyword::PRIMARY | Keyword::FOREIGN | Keyword::UNIQUE | Keyword::CHECK))
+        {
+            // Skip to next comma or end
+            while pos < tokens.len() && !matches!(tokens[pos].token, Token::Comma) {
+                if matches!(tokens[pos].token, Token::LParen) {
+                    let mut depth = 1;
+                    pos += 1;
+                    while pos < tokens.len() && depth > 0 {
+                        match tokens[pos].token {
+                            Token::LParen => depth += 1,
+                            Token::RParen => depth -= 1,
+                            _ => {}
+                        }
+                        pos += 1;
+                    }
+                } else {
+                    pos += 1;
+                }
+            }
+            if pos < tokens.len() && matches!(tokens[pos].token, Token::Comma) {
+                pos += 1;
+            }
+            continue;
+        }
+
+        // Try to extract column name
+        let column_name = match &tokens[pos].token {
+            Token::Word(w) => {
+                // Skip if it's a keyword that starts a constraint
+                if matches!(
+                    w.keyword,
+                    Keyword::PRIMARY
+                        | Keyword::FOREIGN
+                        | Keyword::UNIQUE
+                        | Keyword::CHECK
+                        | Keyword::INDEX
+                        | Keyword::CONSTRAINT
+                ) {
+                    pos += 1;
+                    continue;
+                }
+                pos += 1;
+                w.value.clone()
+            }
+            Token::SingleQuotedString(s) | Token::DoubleQuotedString(s) => {
+                pos += 1;
+                s.clone()
+            }
+            _ => {
+                pos += 1;
+                continue;
+            }
+        };
+
+        // Skip whitespace
+        while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+            pos += 1;
+        }
+
+        // Extract data type
+        let (data_type, new_pos) = extract_column_data_type(tokens, pos);
+        pos = new_pos;
+
+        // Look for NULL/NOT NULL and skip to end of column definition
+        let mut is_nullable = true;
+        while pos < tokens.len() && !matches!(tokens[pos].token, Token::Comma) {
+            match &tokens[pos].token {
+                Token::Word(w) if w.keyword == Keyword::NOT => {
+                    // Check if followed by NULL
+                    let mut check_pos = pos + 1;
+                    while check_pos < tokens.len()
+                        && matches!(tokens[check_pos].token, Token::Whitespace(_))
+                    {
+                        check_pos += 1;
+                    }
+                    if check_pos < tokens.len() {
+                        if let Token::Word(w2) = &tokens[check_pos].token {
+                            if w2.keyword == Keyword::NULL {
+                                is_nullable = false;
+                                pos = check_pos + 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                Token::Word(w) if w.keyword == Keyword::NULL => {
+                    is_nullable = true;
+                }
+                Token::LParen => {
+                    // Skip nested parentheses (e.g., DEFAULT expressions, constraints)
+                    let mut depth = 1;
+                    pos += 1;
+                    while pos < tokens.len() && depth > 0 {
+                        match tokens[pos].token {
+                            Token::LParen => depth += 1,
+                            Token::RParen => depth -= 1,
+                            _ => {}
+                        }
+                        pos += 1;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            pos += 1;
+        }
+
+        // Add column if we have a data type
+        if !data_type.is_empty() {
+            columns.push(TempTableColumn {
+                name: column_name,
+                data_type,
+                is_nullable,
+            });
+        }
+
+        // Skip comma
+        if pos < tokens.len() && matches!(tokens[pos].token, Token::Comma) {
+            pos += 1;
+        }
+    }
+
+    columns
+}
+
+/// Extract data type from column definition tokens
+fn extract_column_data_type(
+    tokens: &[sqlparser::tokenizer::TokenWithSpan],
+    start_pos: usize,
+) -> (String, usize) {
+    let mut pos = start_pos;
+    let mut type_parts = Vec::new();
+
+    // Get base type name (could be multi-word like "NATIONAL CHARACTER VARYING")
+    while pos < tokens.len() {
+        match &tokens[pos].token {
+            Token::Whitespace(_) => {
+                pos += 1;
+            }
+            Token::Word(w) => {
+                // Check if this is a type name or a modifier
+                let upper = w.value.to_uppercase();
+                if is_data_type_name(&upper) || type_parts.is_empty() {
+                    type_parts.push(w.value.clone());
+                    pos += 1;
+                } else {
+                    // Not a type name, stop here
+                    break;
+                }
+            }
+            Token::LParen => {
+                // Type parameters like varchar(50), decimal(18,2)
+                let mut params = String::from("(");
+                pos += 1;
+                let mut depth = 1;
+                while pos < tokens.len() && depth > 0 {
+                    match &tokens[pos].token {
+                        Token::LParen => {
+                            depth += 1;
+                            params.push('(');
+                        }
+                        Token::RParen => {
+                            depth -= 1;
+                            if depth > 0 {
+                                params.push(')');
+                            }
+                        }
+                        Token::Comma => params.push(','),
+                        Token::Number(n, _) => params.push_str(n),
+                        Token::Word(w) => {
+                            // Handle MAX keyword
+                            if w.value.to_uppercase() == "MAX" {
+                                params.push_str("MAX");
+                            } else {
+                                params.push_str(&w.value);
+                            }
+                        }
+                        Token::Whitespace(_) => {}
+                        _ => {}
+                    }
+                    pos += 1;
+                }
+                params.push(')');
+                if let Some(last) = type_parts.last_mut() {
+                    last.push_str(&params);
+                }
+                break;
+            }
+            Token::Period => {
+                // Schema-qualified type like [dbo].[MyType]
+                pos += 1;
+            }
+            _ => break,
+        }
+    }
+
+    (type_parts.join(" "), pos)
+}
+
+/// Check if a word is a SQL data type name
+fn is_data_type_name(word: &str) -> bool {
+    matches!(
+        word,
+        "INT"
+            | "INTEGER"
+            | "BIGINT"
+            | "SMALLINT"
+            | "TINYINT"
+            | "BIT"
+            | "DECIMAL"
+            | "NUMERIC"
+            | "MONEY"
+            | "SMALLMONEY"
+            | "FLOAT"
+            | "REAL"
+            | "CHAR"
+            | "VARCHAR"
+            | "NCHAR"
+            | "NVARCHAR"
+            | "TEXT"
+            | "NTEXT"
+            | "BINARY"
+            | "VARBINARY"
+            | "IMAGE"
+            | "DATE"
+            | "TIME"
+            | "DATETIME"
+            | "DATETIME2"
+            | "DATETIMEOFFSET"
+            | "SMALLDATETIME"
+            | "TIMESTAMP"
+            | "UNIQUEIDENTIFIER"
+            | "XML"
+            | "SQL_VARIANT"
+            | "GEOGRAPHY"
+            | "GEOMETRY"
+            | "HIERARCHYID"
+            | "SYSNAME"
+            | "NATIONAL"
+            | "CHARACTER"
+            | "VARYING"
+    )
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -3527,5 +3965,161 @@ mod tests {
         let col_names: Vec<_> = cte_defs[0].columns.iter().map(|c| &c.name).collect();
         assert!(col_names.contains(&&"AccountId".to_string()));
         assert!(col_names.contains(&&"AccountName".to_string()));
+    }
+
+    // ============================================================================
+    // Temp Table Extraction tests (Phase 24.2)
+    // ============================================================================
+
+    #[test]
+    fn test_extract_temp_table_single_table() {
+        let sql = r#"
+            CREATE TABLE #TempOrders (
+                OrderId INT NOT NULL,
+                CustomerId INT,
+                OrderDate DATETIME
+            )
+        "#;
+        let temp_tables = extract_temp_table_definitions(sql);
+        assert_eq!(temp_tables.len(), 1);
+        assert_eq!(temp_tables[0].name, "#TempOrders");
+        assert_eq!(temp_tables[0].temp_table_number, 1);
+        assert_eq!(temp_tables[0].columns.len(), 3);
+
+        assert_eq!(temp_tables[0].columns[0].name, "OrderId");
+        assert_eq!(temp_tables[0].columns[0].data_type, "INT");
+        assert!(!temp_tables[0].columns[0].is_nullable);
+
+        assert_eq!(temp_tables[0].columns[1].name, "CustomerId");
+        assert_eq!(temp_tables[0].columns[1].data_type, "INT");
+        assert!(temp_tables[0].columns[1].is_nullable);
+
+        assert_eq!(temp_tables[0].columns[2].name, "OrderDate");
+        assert_eq!(temp_tables[0].columns[2].data_type, "DATETIME");
+        assert!(temp_tables[0].columns[2].is_nullable);
+    }
+
+    #[test]
+    fn test_extract_temp_table_with_varchar_lengths() {
+        let sql = r#"
+            CREATE TABLE #TempCustomers (
+                Id INT,
+                Name VARCHAR(100),
+                Email NVARCHAR(255) NOT NULL,
+                Description NVARCHAR(MAX)
+            )
+        "#;
+        let temp_tables = extract_temp_table_definitions(sql);
+        assert_eq!(temp_tables.len(), 1);
+        assert_eq!(temp_tables[0].columns.len(), 4);
+
+        assert_eq!(temp_tables[0].columns[1].name, "Name");
+        assert_eq!(temp_tables[0].columns[1].data_type, "VARCHAR(100)");
+
+        assert_eq!(temp_tables[0].columns[2].name, "Email");
+        assert_eq!(temp_tables[0].columns[2].data_type, "NVARCHAR(255)");
+        assert!(!temp_tables[0].columns[2].is_nullable);
+
+        assert_eq!(temp_tables[0].columns[3].name, "Description");
+        assert_eq!(temp_tables[0].columns[3].data_type, "NVARCHAR(MAX)");
+    }
+
+    #[test]
+    fn test_extract_temp_table_with_decimal() {
+        let sql = r#"
+            CREATE TABLE #TempAmounts (
+                Id INT,
+                Amount DECIMAL(18,2) NOT NULL,
+                Quantity NUMERIC(10,4)
+            )
+        "#;
+        let temp_tables = extract_temp_table_definitions(sql);
+        assert_eq!(temp_tables.len(), 1);
+        assert_eq!(temp_tables[0].columns.len(), 3);
+
+        assert_eq!(temp_tables[0].columns[1].name, "Amount");
+        assert_eq!(temp_tables[0].columns[1].data_type, "DECIMAL(18,2)");
+        assert!(!temp_tables[0].columns[1].is_nullable);
+
+        assert_eq!(temp_tables[0].columns[2].name, "Quantity");
+        assert_eq!(temp_tables[0].columns[2].data_type, "NUMERIC(10,4)");
+    }
+
+    #[test]
+    fn test_extract_temp_table_multiple_tables() {
+        let sql = r#"
+            CREATE TABLE #TempA (
+                Id INT
+            )
+
+            SELECT * FROM #TempA
+
+            CREATE TABLE #TempB (
+                Name VARCHAR(50)
+            )
+        "#;
+        let temp_tables = extract_temp_table_definitions(sql);
+        assert_eq!(temp_tables.len(), 2);
+        assert_eq!(temp_tables[0].name, "#TempA");
+        assert_eq!(temp_tables[0].temp_table_number, 1);
+        assert_eq!(temp_tables[1].name, "#TempB");
+        assert_eq!(temp_tables[1].temp_table_number, 2);
+    }
+
+    #[test]
+    fn test_extract_temp_table_global_temp() {
+        let sql = r#"
+            CREATE TABLE ##GlobalTemp (
+                Id INT,
+                Value FLOAT
+            )
+        "#;
+        let temp_tables = extract_temp_table_definitions(sql);
+        assert_eq!(temp_tables.len(), 1);
+        assert_eq!(temp_tables[0].name, "##GlobalTemp");
+        assert_eq!(temp_tables[0].columns.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_temp_table_no_temp_table() {
+        let sql = r#"
+            SELECT * FROM [dbo].[Orders]
+            WHERE OrderDate > GETDATE()
+        "#;
+        let temp_tables = extract_temp_table_definitions(sql);
+        assert!(temp_tables.is_empty());
+    }
+
+    #[test]
+    fn test_extract_temp_table_with_constraint() {
+        let sql = r#"
+            CREATE TABLE #TempWithPK (
+                Id INT NOT NULL,
+                Name VARCHAR(50),
+                CONSTRAINT PK_Temp PRIMARY KEY (Id)
+            )
+        "#;
+        let temp_tables = extract_temp_table_definitions(sql);
+        assert_eq!(temp_tables.len(), 1);
+        // Should only have 2 columns, not the constraint
+        assert_eq!(temp_tables[0].columns.len(), 2);
+        assert_eq!(temp_tables[0].columns[0].name, "Id");
+        assert_eq!(temp_tables[0].columns[1].name, "Name");
+    }
+
+    #[test]
+    fn test_extract_temp_table_with_primary_key_inline() {
+        let sql = r#"
+            CREATE TABLE #TempWithPK (
+                Id INT NOT NULL PRIMARY KEY,
+                Name VARCHAR(50)
+            )
+        "#;
+        let temp_tables = extract_temp_table_definitions(sql);
+        assert_eq!(temp_tables.len(), 1);
+        assert_eq!(temp_tables[0].columns.len(), 2);
+        // First column should still be extracted even with inline PRIMARY KEY
+        assert_eq!(temp_tables[0].columns[0].name, "Id");
+        assert!(!temp_tables[0].columns[0].is_nullable);
     }
 }

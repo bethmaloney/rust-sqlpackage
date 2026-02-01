@@ -439,7 +439,7 @@ fn write_dynamic_columns<W: Write>(
 // CTE DynamicObjects Writing (Phase 24.1.3)
 // =============================================================================
 
-use super::{extract_cte_definitions, CteColumn};
+use super::{extract_cte_definitions, extract_temp_table_definitions, CteColumn, TempTableColumn};
 
 /// Write Columns relationship for a CTE SqlDynamicColumnSource.
 /// Each column is a SqlComputedColumn with ExpressionDependencies.
@@ -493,7 +493,124 @@ fn write_expression_dependencies<W: Write>(
     Ok(())
 }
 
-/// Extract CTE definitions and write combined DynamicObjects (both TVPs and CTEs)
+// =============================================================================
+// Temp Table DynamicObjects Writing (Phase 24.2.2)
+// =============================================================================
+
+/// Write Columns relationship for a temp table SqlDynamicColumnSource.
+/// Each column is a SqlSimpleColumn with TypeSpecifier.
+fn write_temp_table_columns<W: Write>(
+    writer: &mut Writer<W>,
+    temp_table_source_name: &str,
+    columns: &[TempTableColumn],
+) -> anyhow::Result<()> {
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
+    writer.write_event(Event::Start(rel))?;
+
+    for col in columns {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        let col_full_name = format!("{}.[{}]", temp_table_source_name, col.name);
+        let col_elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlSimpleColumn"),
+            ("Name", col_full_name.as_str()),
+        ]);
+        writer.write_event(Event::Start(col_elem))?;
+
+        // Write IsNullable property
+        if !col.is_nullable {
+            write_property(writer, "IsNullable", "False")?;
+        }
+
+        // Write TypeSpecifier relationship for the column's data type
+        write_temp_table_column_type_specifier(writer, &col.data_type)?;
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Write TypeSpecifier for a temp table column
+fn write_temp_table_column_type_specifier<W: Write>(
+    writer: &mut Writer<W>,
+    data_type: &str,
+) -> anyhow::Result<()> {
+    // Parse the data type to extract precision/scale/length
+    let (base_type, precision, scale) = parse_temp_table_data_type(data_type);
+
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "TypeSpecifier")]);
+    writer.write_event(Event::Start(rel))?;
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
+    writer.write_event(Event::Start(elem))?;
+
+    // Write type reference
+    let type_ref_rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
+    writer.write_event(Event::Start(type_ref_rel))?;
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    let type_ref = format!("[{}]", base_type.to_lowercase());
+    let refs_elem = BytesStart::new("References")
+        .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_ref.as_str())]);
+    writer.write_event(Event::Empty(refs_elem))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    // Write precision/scale/length if present
+    if let Some(prec) = precision {
+        if let Some(sc) = scale {
+            // Decimal/numeric type with precision and scale
+            write_property(writer, "Precision", &prec.to_string())?;
+            write_property(writer, "Scale", &sc.to_string())?;
+        } else if prec == -1 {
+            // MAX type
+            write_property(writer, "IsMax", "True")?;
+        } else {
+            // Length-based type (varchar, char, binary, etc.)
+            write_property(writer, "Length", &prec.to_string())?;
+        }
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    Ok(())
+}
+
+/// Parse a data type string to extract base type name and precision/scale/length
+fn parse_temp_table_data_type(data_type: &str) -> (String, Option<i32>, Option<i32>) {
+    // Handle types with parentheses like varchar(50), decimal(18,2), nvarchar(MAX)
+    if let Some(paren_idx) = data_type.find('(') {
+        let base = data_type[..paren_idx].trim().to_string();
+        let params = &data_type[paren_idx + 1..].trim_end_matches(')');
+
+        if params.to_uppercase() == "MAX" {
+            return (base, Some(-1), None);
+        }
+
+        let parts: Vec<&str> = params.split(',').collect();
+        if parts.len() == 2 {
+            // Precision and scale (decimal, numeric)
+            let prec = parts[0].trim().parse::<i32>().ok();
+            let scale = parts[1].trim().parse::<i32>().ok();
+            return (base, prec, scale);
+        } else if parts.len() == 1 {
+            // Length (varchar, char, binary, etc.)
+            let len = parts[0].trim().parse::<i32>().ok();
+            return (base, len, None);
+        }
+    }
+
+    // No parameters, just return the base type
+    (data_type.to_string(), None, None)
+}
+
+/// Extract CTE definitions and temp tables, write combined DynamicObjects (TVPs, CTEs, and temp tables)
 pub(crate) fn write_all_dynamic_objects<W: Write>(
     writer: &mut Writer<W>,
     full_name: &str,
@@ -504,8 +621,11 @@ pub(crate) fn write_all_dynamic_objects<W: Write>(
     // Extract CTEs from body
     let cte_defs = extract_cte_definitions(body, default_schema);
 
-    // If no TVPs and no CTEs, nothing to write
-    if tvp_params.is_empty() && cte_defs.is_empty() {
+    // Extract temp tables from body (Phase 24.2)
+    let temp_table_defs = extract_temp_table_definitions(body);
+
+    // If no TVPs, CTEs, or temp tables, nothing to write
+    if tvp_params.is_empty() && cte_defs.is_empty() && temp_table_defs.is_empty() {
         return Ok(());
     }
 
@@ -553,6 +673,30 @@ pub(crate) fn write_all_dynamic_objects<W: Write>(
 
         if !cte.columns.is_empty() {
             write_cte_columns(writer, &cte_source_name, &cte.columns)?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Element")))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    }
+
+    // Write temp table entries (Phase 24.2)
+    for temp_table in &temp_table_defs {
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+        // Format: [schema].[proc].[TempTable1].[#TempName]
+        let temp_table_source_name = format!(
+            "{}.[TempTable{}].[{}]",
+            full_name, temp_table.temp_table_number, temp_table.name
+        );
+
+        let elem = BytesStart::new("Element").with_attributes([
+            ("Type", "SqlDynamicColumnSource"),
+            ("Name", temp_table_source_name.as_str()),
+        ]);
+        writer.write_event(Event::Start(elem))?;
+
+        if !temp_table.columns.is_empty() {
+            write_temp_table_columns(writer, &temp_table_source_name, &temp_table.columns)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("Element")))?;
