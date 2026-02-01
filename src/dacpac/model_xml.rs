@@ -58,14 +58,11 @@ static MULTI_STMT_TVF_RE: LazyLock<Regex> =
 // Note: TABLE_ALIAS_RE has been removed and replaced with token-based parsing in Phase 20.4.1.
 // Table alias extraction now uses TableAliasTokenParser::extract_aliases_with_table_names().
 
-/// ON keyword pattern for join clause parsing
-static ON_KEYWORD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bON\s+").unwrap());
+// Note: ON_KEYWORD_RE has been removed and replaced with token-based parsing in Phase 20.5.4.
+// ON clause boundary detection now uses extract_on_clause_boundaries_tokenized().
 
-/// Terminator pattern for ON clause (WHERE, GROUP, ORDER, etc.)
-static ON_TERMINATOR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(?:WHERE|GROUP|ORDER|HAVING|UNION|INNER|LEFT|RIGHT|OUTER|CROSS|JOIN)\b|;")
-        .unwrap()
-});
+// Note: ON_TERMINATOR_RE has been removed and replaced with token-based parsing in Phase 20.5.4.
+// ON clause termination detection is now handled by extract_on_clause_boundaries_tokenized().
 
 // Note: COL_REF_RE has been removed and replaced with token-based parsing in Phase 20.2.2.
 // Column reference extraction now uses extract_column_refs_tokenized() with BodyDependencyTokenScanner.
@@ -2305,6 +2302,8 @@ fn resolve_column_reference(
 
 /// Extract column references from JOIN ON clauses
 /// These need to come before SELECT columns in QueryDependencies to match DotNet ordering
+///
+/// Phase 20.5.4: Uses token-based ON clause boundary detection instead of ON_KEYWORD_RE regex.
 fn extract_join_on_columns(
     query: &str,
     table_aliases: &[(String, String)],
@@ -2312,19 +2311,9 @@ fn extract_join_on_columns(
 ) -> Vec<String> {
     let mut refs = Vec::new();
 
-    // Find all ON clauses by matching "ON" followed by condition
-    // We use a simpler approach: find each ON keyword and extract until we hit a terminating keyword
-    for on_match in ON_KEYWORD_RE.find_iter(query) {
-        let start = on_match.end();
-        let remaining = &query[start..];
-
-        // Find where this ON clause ends
-        let end = ON_TERMINATOR_RE
-            .find(remaining)
-            .map(|m| m.start())
-            .unwrap_or(remaining.len());
-
-        let clause_text = &remaining[..end];
+    // Phase 20.5.4: Use token-based ON clause boundary detection
+    for (start, end) in extract_on_clause_boundaries_tokenized(query) {
+        let clause_text = &query[start..end];
 
         // Phase 20.2.2: Use token-based extraction instead of COL_REF_RE regex
         for col_ref in extract_column_refs_tokenized(clause_text) {
@@ -6527,6 +6516,118 @@ fn find_function_body_as_tokenized(
     }
 
     None
+}
+
+/// Extract all ON clause boundaries from a SQL query using token-based parsing.
+///
+/// This function tokenizes the input string and finds all ON keywords that introduce
+/// JOIN conditions. It returns a vector of (start, end) byte positions for each ON clause,
+/// where start is the position after "ON " and end is where the clause terminates.
+///
+/// # Arguments
+/// * `query` - The SQL query text
+///
+/// # Returns
+/// * `Vec<(usize, usize)>` - Vector of (start, end) byte positions for ON clause content
+///
+/// # Terminating Keywords
+/// ON clauses terminate at: WHERE, GROUP, ORDER, HAVING, UNION, INNER, LEFT, RIGHT,
+/// OUTER, CROSS, JOIN, or semicolon.
+fn extract_on_clause_boundaries_tokenized(query: &str) -> Vec<(usize, usize)> {
+    let dialect = MsSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, query).tokenize_with_location() else {
+        return Vec::new();
+    };
+
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+
+    let line_offsets = compute_line_offsets(query);
+    let mut results = Vec::new();
+    let len = tokens.len();
+    let mut i = 0;
+
+    // Helper to skip whitespace tokens
+    let skip_whitespace =
+        |tokens: &[sqlparser::tokenizer::TokenWithSpan], mut idx: usize| -> usize {
+            while idx < tokens.len() && matches!(&tokens[idx].token, Token::Whitespace(_)) {
+                idx += 1;
+            }
+            idx
+        };
+
+    // Keywords that terminate an ON clause
+    let terminator_keywords = [
+        "WHERE", "GROUP", "ORDER", "HAVING", "UNION", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS",
+        "JOIN",
+    ];
+
+    while i < len {
+        // Look for ON keyword (unquoted word)
+        if let Token::Word(w) = &tokens[i].token {
+            if w.quote_style.is_none() && w.value.eq_ignore_ascii_case("ON") {
+                // Skip the ON keyword and any whitespace after it
+                let j = skip_whitespace(&tokens, i + 1);
+
+                // Calculate start position (after ON and whitespace)
+                let clause_start = if j < len {
+                    location_to_byte_offset(
+                        &line_offsets,
+                        tokens[j].span.start.line,
+                        tokens[j].span.start.column,
+                    )
+                } else {
+                    // ON is at the end
+                    query.len()
+                };
+
+                // Find where the ON clause ends
+                let mut k = j;
+                let mut clause_end = query.len();
+                while k < len {
+                    match &tokens[k].token {
+                        // Check for terminator keywords
+                        Token::Word(word) => {
+                            if word.quote_style.is_none() {
+                                let upper = word.value.to_uppercase();
+                                if terminator_keywords.contains(&upper.as_str()) {
+                                    clause_end = location_to_byte_offset(
+                                        &line_offsets,
+                                        tokens[k].span.start.line,
+                                        tokens[k].span.start.column,
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                        // Check for semicolon
+                        Token::SemiColon => {
+                            clause_end = location_to_byte_offset(
+                                &line_offsets,
+                                tokens[k].span.start.line,
+                                tokens[k].span.start.column,
+                            );
+                            break;
+                        }
+                        _ => {}
+                    }
+                    k += 1;
+                }
+
+                if clause_start < clause_end {
+                    results.push((clause_start, clause_end));
+                }
+
+                // Move past the ON clause we just found
+                i = k;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    results
 }
 
 /// Write the data type relationship for a parameter with inline type specifier
@@ -12307,5 +12408,187 @@ FROM [dbo].[Account] A
         assert!(result.is_some());
         let (_start, end) = result.unwrap();
         assert!(sql[end..].trim().starts_with("RETURN"));
+    }
+
+    // ============================================================================
+    // extract_on_clause_boundaries_tokenized tests (Phase 20.5.4)
+    // ============================================================================
+
+    #[test]
+    fn test_on_clause_basic_join() {
+        let sql = "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        assert!(sql[start..end].contains("t1.id"));
+        assert!(sql[start..end].contains("t2.id"));
+    }
+
+    #[test]
+    fn test_on_clause_with_where() {
+        let sql = "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id WHERE t1.active = 1";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        let clause = &sql[start..end];
+        assert!(clause.contains("t1.id"));
+        // WHERE should not be included
+        assert!(!clause.to_uppercase().contains("WHERE"));
+    }
+
+    #[test]
+    fn test_on_clause_with_group_by() {
+        let sql = "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id GROUP BY t1.name";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        let clause = &sql[start..end];
+        assert!(clause.contains("t1.id"));
+        // GROUP should not be included
+        assert!(!clause.to_uppercase().contains("GROUP"));
+    }
+
+    #[test]
+    fn test_on_clause_with_order_by() {
+        let sql = "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id ORDER BY t1.name";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        let clause = &sql[start..end];
+        assert!(clause.contains("t1.id"));
+        // ORDER should not be included
+        assert!(!clause.to_uppercase().contains("ORDER"));
+    }
+
+    #[test]
+    fn test_on_clause_multiple_joins() {
+        let sql = "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id JOIN t3 ON t2.id = t3.id";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 2);
+        // First ON clause
+        let clause1 = &sql[result[0].0..result[0].1];
+        assert!(clause1.contains("t1.id"));
+        assert!(clause1.contains("t2.id"));
+        // Second ON clause
+        let clause2 = &sql[result[1].0..result[1].1];
+        assert!(clause2.contains("t2.id"));
+        assert!(clause2.contains("t3.id"));
+    }
+
+    #[test]
+    fn test_on_clause_left_join() {
+        let sql = "SELECT * FROM t1 LEFT JOIN t2 ON t1.id = t2.id LEFT JOIN t3 ON t2.id = t3.id";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_on_clause_inner_join() {
+        let sql = "SELECT * FROM t1 INNER JOIN t2 ON t1.id = t2.id";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        assert!(sql[start..end].contains("t1.id"));
+    }
+
+    #[test]
+    fn test_on_clause_with_semicolon() {
+        let sql = "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id;";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        let clause = &sql[start..end];
+        assert!(!clause.contains(";"));
+    }
+
+    #[test]
+    fn test_on_clause_with_tabs() {
+        let sql = "SELECT * FROM t1 JOIN t2\tON\tt1.id = t2.id";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        assert!(sql[start..end].contains("t1.id"));
+    }
+
+    #[test]
+    fn test_on_clause_with_newlines() {
+        let sql = "SELECT * FROM t1 JOIN t2\nON\nt1.id = t2.id";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        assert!(sql[start..end].contains("t1.id"));
+    }
+
+    #[test]
+    fn test_on_clause_case_insensitive() {
+        let sql = "SELECT * FROM t1 join t2 on t1.id = t2.id";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        assert!(sql[start..end].contains("t1.id"));
+    }
+
+    #[test]
+    fn test_on_clause_with_having() {
+        let sql = "SELECT t1.id FROM t1 JOIN t2 ON t1.id = t2.id HAVING COUNT(*) > 1";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        let clause = &sql[start..end];
+        assert!(!clause.to_uppercase().contains("HAVING"));
+    }
+
+    #[test]
+    fn test_on_clause_with_union() {
+        let sql =
+            "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id UNION SELECT * FROM t3 JOIN t4 ON t3.id = t4.id";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 2);
+        let clause1 = &sql[result[0].0..result[0].1];
+        assert!(!clause1.to_uppercase().contains("UNION"));
+    }
+
+    #[test]
+    fn test_on_clause_no_join() {
+        let sql = "SELECT * FROM t1 WHERE t1.id = 1";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_on_clause_empty_string() {
+        let sql = "";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_on_clause_with_complex_condition() {
+        let sql =
+            "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id AND t1.status = 'active' WHERE t1.x = 1";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        let clause = &sql[start..end];
+        assert!(clause.contains("t1.id"));
+        assert!(clause.contains("status"));
+        assert!(!clause.to_uppercase().contains("WHERE"));
+    }
+
+    #[test]
+    fn test_on_clause_cross_join_terminates() {
+        let sql = "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id CROSS JOIN t3";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 1);
+        let (start, end) = result[0];
+        let clause = &sql[start..end];
+        assert!(!clause.to_uppercase().contains("CROSS"));
+    }
+
+    #[test]
+    fn test_on_clause_outer_join_terminates() {
+        let sql = "SELECT * FROM t1 JOIN t2 ON t1.id = t2.id OUTER JOIN t3 ON t3.id = t2.id";
+        let result = extract_on_clause_boundaries_tokenized(sql);
+        assert_eq!(result.len(), 2);
     }
 }
