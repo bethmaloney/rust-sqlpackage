@@ -11,7 +11,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.2 complete: Body dependency token extraction (8/8 tasks)
 - ✅ Phase 20.3 complete: Type and declaration parsing (4/4 tasks)
 - ✅ Phase 20.4 complete: Table and alias pattern matching (7/7 tasks)
-- 🔄 Phase 20.5-20.7: Keyword, semicolon, and CTE parsing (9 tasks remaining)
+- ✅ Phase 20.5 complete: SQL keyword detection (6/6 tasks)
+- ✅ Phase 20.6 complete: Semicolon and whitespace handling (3/3 tasks)
+- 🔄 Phase 20.7: CTE and subquery pattern matching (4 tasks remaining)
 - 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (11 tasks)
 
 **Upcoming: Phase 21 - Split model_xml.rs into Submodules** (0/10 tasks)
@@ -106,17 +108,17 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Implementation Approach:** Scan SQL body text with tokenizer and identify keywords as `Token::Word` instances. Check token values instead of string prefix/suffix matching.
 
-### Phase 20.6: Semicolon and Whitespace Handling (0/3)
+### Phase 20.6: Semicolon and Whitespace Handling (3/3) ✅
 
 **Location:** Multiple files
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 20.6.1 | Replace trim_end_matches(';') in tsql_parser.rs | ⬜ | Line 1472: Predicate semicolon removal |
-| 20.6.2 | Replace trim_end_matches(';') in builder.rs | ⬜ | Line 1647: Predicate semicolon removal |
-| 20.6.3 | Replace trim_end_matches([';', ' ']) in model_xml.rs | ⬜ | Line 1525: Table name cleanup |
+| 20.6.1 | Replace trim_end_matches(';') in tsql_parser.rs | ✅ | Replaced with `extract_index_filter_predicate_tokenized()` in index_parser.rs. Token-based parsing stops at SemiColon tokens, no string manipulation needed. 17 unit tests. |
+| 20.6.2 | Replace trim_end_matches(';') in builder.rs | ✅ | Uses same `extract_index_filter_predicate_tokenized()` function. Removed regex-based `extract_filter_predicate_from_sql()`. |
+| 20.6.3 | Replace trim_end_matches([';', ' ']) in model_xml.rs | ✅ | Already completed in a previous phase - no `trim_end_matches` call exists at the referenced location. |
 
-**Implementation Approach:** Use tokenizer to parse statements. Semicolons and whitespace are automatically handled as separate tokens. Extract statement content without string manipulation.
+**Implementation Approach:** Created `extract_index_filter_predicate_tokenized()` in `index_parser.rs` using sqlparser-rs tokenizer. Scans for WHERE keyword after closing parenthesis, collects tokens until WITH/semicolon/end, reconstructs predicate string without semicolons. Handles tabs, multiple spaces, and newlines correctly.
 
 ### Phase 20.7: CTE and Subquery Pattern Matching (0/4)
 

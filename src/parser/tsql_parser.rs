@@ -22,7 +22,7 @@ use super::function_parser::{
     parse_create_function_tokens, TokenParsedFunctionType,
 };
 use super::identifier_utils::format_token_sql;
-use super::index_parser::parse_create_index_tokens;
+use super::index_parser::{extract_index_filter_predicate_tokenized, parse_create_index_tokens};
 use super::preprocess_parser::preprocess_tsql_tokens;
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
 use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
@@ -1393,8 +1393,8 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     // Extract DATA_COMPRESSION from WITH clause if present
     let data_compression = extract_index_data_compression(sql);
 
-    // Extract filter predicate from WHERE clause if present
-    let filter_predicate = extract_index_filter_predicate(sql);
+    // Extract filter predicate from WHERE clause if present (token-based, Phase 20.6.1)
+    let filter_predicate = extract_index_filter_predicate_tokenized(sql);
 
     Some(FallbackStatementType::Index {
         name,
@@ -1459,21 +1459,8 @@ fn extract_index_data_compression(sql: &str) -> Option<String> {
         .map(|m| m.as_str().to_uppercase())
 }
 
-/// Extract filter predicate from filtered index WHERE clause
-fn extract_index_filter_predicate(sql: &str) -> Option<String> {
-    // Match WHERE clause in filtered index
-    // WHERE clause comes after column specification and before WITH/; or end
-    // Pattern: WHERE <predicate> [WITH (...)] [;]
-    let re = regex::Regex::new(r"(?is)\)\s*WHERE\s+(.+?)(?:\s+WITH\s*\(|;|\s*$)").ok()?;
-
-    re.captures(sql).and_then(|caps| {
-        caps.get(1).map(|m| {
-            let predicate = m.as_str().trim();
-            // Remove trailing semicolon if present
-            predicate.trim_end_matches(';').trim().to_string()
-        })
-    })
-}
+// Phase 20.6.1: Removed extract_index_filter_predicate() - replaced with token-based
+// extract_index_filter_predicate_tokenized() from index_parser.rs
 
 /// Extract full table structure from CREATE TABLE statement
 ///

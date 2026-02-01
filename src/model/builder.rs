@@ -14,10 +14,11 @@ use sqlparser::ast::{
 };
 
 use crate::parser::{
-    identifier_utils::normalize_identifier, ExtractedExtendedProperty, ExtractedFullTextColumn,
-    ExtractedFunctionParameter, ExtractedTableColumn, ExtractedTableConstraint,
-    ExtractedTableTypeColumn, ExtractedTableTypeConstraint, FallbackFunctionType,
-    FallbackStatementType, ParsedStatement, BINARY_MAX_SENTINEL,
+    identifier_utils::normalize_identifier, index_parser::extract_index_filter_predicate_tokenized,
+    ExtractedExtendedProperty, ExtractedFullTextColumn, ExtractedFunctionParameter,
+    ExtractedTableColumn, ExtractedTableConstraint, ExtractedTableTypeColumn,
+    ExtractedTableTypeConstraint, FallbackFunctionType, FallbackStatementType, ParsedStatement,
+    BINARY_MAX_SENTINEL,
 };
 use crate::project::SqlProject;
 
@@ -643,8 +644,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 let fill_factor = extract_fill_factor(&create_index.with);
                 let data_compression = extract_data_compression(&create_index.with);
 
-                // Extract filter predicate from raw SQL (sqlparser doesn't expose it directly)
-                let filter_predicate = extract_filter_predicate_from_sql(&parsed.sql_text);
+                // Extract filter predicate from raw SQL using token-based parsing (Phase 20.6.2)
+                // sqlparser doesn't expose filter predicates directly
+                let filter_predicate = extract_index_filter_predicate_tokenized(&parsed.sql_text);
 
                 model.add_element(ModelElement::Index(IndexElement {
                     name: index_name,
@@ -1630,21 +1632,8 @@ fn extract_data_compression(with_options: &[Expr]) -> Option<DataCompressionType
     None
 }
 
-/// Extract filter predicate from filtered index WHERE clause
-fn extract_filter_predicate_from_sql(sql: &str) -> Option<String> {
-    // Match WHERE clause in filtered index
-    // WHERE clause comes after column specification and before WITH/; or end
-    // Pattern: ) WHERE <predicate> [WITH (...)] [;]
-    let re = regex::Regex::new(r"(?is)\)\s*WHERE\s+(.+?)(?:\s+WITH\s*\(|;|\s*$)").ok()?;
-
-    re.captures(sql).and_then(|caps| {
-        caps.get(1).map(|m| {
-            let predicate = m.as_str().trim();
-            // Remove trailing semicolon if present
-            predicate.trim_end_matches(';').trim().to_string()
-        })
-    })
-}
+// Phase 20.6.2: Removed extract_filter_predicate_from_sql() - replaced with token-based
+// extract_index_filter_predicate_tokenized() from index_parser.rs
 
 /// Convert an extracted extended property to a model ExtendedPropertyElement
 fn extended_property_from_extracted(

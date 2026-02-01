@@ -520,6 +520,158 @@ pub fn parse_create_index_tokens(sql: &str) -> Option<TokenParsedIndex> {
     parser.parse_create_index()
 }
 
+/// Extract the filter predicate from a CREATE INDEX WHERE clause using token-based parsing.
+///
+/// This function scans the SQL for a WHERE clause after a closing parenthesis (indicating
+/// the column list has ended) and extracts the predicate text until it encounters:
+/// - A WITH keyword (index options)
+/// - A semicolon (statement terminator)
+/// - End of the SQL text
+///
+/// This replaces the regex-based approach that used `trim_end_matches(';')` which was
+/// fragile with varying whitespace (tabs, multiple spaces).
+///
+/// # Examples
+///
+/// ```
+/// use rust_sqlpackage::parser::index_parser::extract_index_filter_predicate_tokenized;
+///
+/// let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) WHERE [Status] = 'Active';";
+/// assert_eq!(
+///     extract_index_filter_predicate_tokenized(sql),
+///     Some("[Status] = 'Active'".to_string())
+/// );
+///
+/// let sql_with_tabs = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) WHERE\t[Status] = 'Active'\t;";
+/// assert_eq!(
+///     extract_index_filter_predicate_tokenized(sql_with_tabs),
+///     Some("[Status] = 'Active'".to_string())
+/// );
+/// ```
+pub fn extract_index_filter_predicate_tokenized(sql: &str) -> Option<String> {
+    let dialect = MsSqlDialect {};
+    let tokens = Tokenizer::new(&dialect, sql)
+        .tokenize_with_location()
+        .ok()?;
+
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let len = tokens.len();
+    let mut i = 0;
+    let mut found_rparen = false;
+
+    // Helper closure to skip whitespace tokens
+    let skip_whitespace = |tokens: &[TokenWithSpan], mut idx: usize| -> usize {
+        while idx < tokens.len() {
+            if matches!(&tokens[idx].token, Token::Whitespace(_)) {
+                idx += 1;
+            } else {
+                break;
+            }
+        }
+        idx
+    };
+
+    // First, scan for a closing parenthesis followed by WHERE keyword
+    // This ensures we're finding the WHERE after the column list, not in some other context
+    while i < len {
+        if matches!(&tokens[i].token, Token::RParen) {
+            found_rparen = true;
+        }
+
+        if found_rparen {
+            if let Token::Word(w) = &tokens[i].token {
+                if w.keyword == Keyword::WHERE {
+                    // Found WHERE after a closing paren, skip whitespace after WHERE
+                    let predicate_start = skip_whitespace(&tokens, i + 1);
+
+                    if predicate_start >= len {
+                        return None;
+                    }
+
+                    // Collect tokens until WITH, semicolon, or end
+                    let mut predicate_end = predicate_start;
+                    let mut j = predicate_start;
+
+                    while j < len {
+                        match &tokens[j].token {
+                            Token::Word(word) if word.keyword == Keyword::WITH => {
+                                break;
+                            }
+                            Token::SemiColon => {
+                                break;
+                            }
+                            _ => {
+                                predicate_end = j + 1;
+                                j += 1;
+                            }
+                        }
+                    }
+
+                    if predicate_end <= predicate_start {
+                        return None;
+                    }
+
+                    // Reconstruct predicate from tokens
+                    let predicate =
+                        tokens_to_predicate_string(&tokens[predicate_start..predicate_end]);
+                    let predicate = predicate.trim().to_string();
+
+                    if predicate.is_empty() {
+                        return None;
+                    } else {
+                        return Some(predicate);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    None
+}
+
+/// Convert a slice of tokens back to a predicate string
+fn tokens_to_predicate_string(tokens: &[TokenWithSpan]) -> String {
+    use crate::parser::identifier_utils::format_word_bracketed;
+
+    let mut result = String::new();
+
+    for token in tokens {
+        match &token.token {
+            Token::Word(w) => {
+                result.push_str(&format_word_bracketed(w));
+            }
+            Token::Number(n, _) => result.push_str(n),
+            Token::SingleQuotedString(s) => result.push_str(&format!("'{}'", s)),
+            Token::DoubleQuotedString(s) => result.push_str(&format!("\"{}\"", s)),
+            Token::Whitespace(_) => result.push(' '),
+            Token::Eq => result.push('='),
+            Token::Neq => result.push_str("<>"),
+            Token::Lt => result.push('<'),
+            Token::Gt => result.push('>'),
+            Token::LtEq => result.push_str("<="),
+            Token::GtEq => result.push_str(">="),
+            Token::LParen => result.push('('),
+            Token::RParen => result.push(')'),
+            Token::Comma => result.push(','),
+            Token::Period => result.push('.'),
+            Token::Plus => result.push('+'),
+            Token::Minus => result.push('-'),
+            Token::Mul => result.push('*'),
+            Token::Div => result.push('/'),
+            _ => {
+                // For other tokens, use the Display impl
+                result.push_str(&format!("{}", token.token));
+            }
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,5 +1046,164 @@ WITH (FILLFACTOR = 90, DATA_COMPRESSION = PAGE)
         let sql = "CREATE NONCLUSTERED INDEX [IX_Archive] ON [dbo].[Archive] ([Date]) WITH (DATA_COMPRESSION = COLUMNSTORE)";
         let result = parse_create_index_tokens(sql).unwrap();
         assert_eq!(result.data_compression, Some("COLUMNSTORE".to_string()));
+    }
+
+    // ========================================================================
+    // extract_index_filter_predicate_tokenized tests
+    // ========================================================================
+
+    #[test]
+    fn test_extract_filter_predicate_simple() {
+        let sql =
+            "CREATE NONCLUSTERED INDEX [IX_Filter] ON [dbo].[Orders] ([OrderDate]) WHERE [Status] = 'Active'";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Status"));
+        assert!(result.contains("Active"));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_with_semicolon() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) WHERE [Status] = 'Active';";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert_eq!(result.trim(), "[Status] = 'Active'");
+        // Ensure semicolon is NOT included
+        assert!(!result.contains(';'));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_with_tabs() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) WHERE\t[Status] = 'Active'\t;";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Status"));
+        assert!(result.contains("Active"));
+        assert!(!result.contains(';'));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_with_multiple_spaces() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) WHERE    [Status] = 'Active'    ;";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Status"));
+        assert!(result.contains("Active"));
+        assert!(!result.contains(';'));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_with_newlines() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) WHERE\n[Status] = 'Active'\n;";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Status"));
+        assert!(result.contains("Active"));
+        assert!(!result.contains(';'));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_before_with_clause() {
+        let sql =
+            "CREATE INDEX [IX] ON [dbo].[T] ([Col]) WHERE [Status] = 1 WITH (FILLFACTOR = 80)";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Status"));
+        assert!(result.contains("1"));
+        // Ensure WITH clause is NOT included
+        assert!(!result.to_uppercase().contains("WITH"));
+        assert!(!result.to_uppercase().contains("FILLFACTOR"));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_is_not_null() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[Users] ([Email]) WHERE [Email] IS NOT NULL;";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Email"));
+        assert!(result.contains("IS"));
+        assert!(result.contains("NOT"));
+        assert!(result.contains("NULL"));
+        assert!(!result.contains(';'));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_complex_expression() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) WHERE ([Status] > 0 AND [Status] < 10);";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Status"));
+        assert!(result.contains(">"));
+        assert!(result.contains("<"));
+        assert!(result.contains("AND"));
+        assert!(!result.contains(';'));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_no_where() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col])";
+        let result = extract_index_filter_predicate_tokenized(sql);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_no_where_with_with() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) WITH (FILLFACTOR = 80)";
+        let result = extract_index_filter_predicate_tokenized(sql);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_clustered_index() {
+        let sql = "CREATE CLUSTERED INDEX [IX] ON [dbo].[T] ([Col]) WHERE [Active] = 1;";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Active"));
+        assert!(result.contains("1"));
+        assert!(!result.contains(';'));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_nonclustered_index() {
+        let sql = "CREATE NONCLUSTERED INDEX [IX] ON [dbo].[T] ([Col]) WHERE [Deleted] = 0;";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Deleted"));
+        assert!(result.contains("0"));
+        assert!(!result.contains(';'));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_with_in_clause() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) WHERE [Status] IN ('A', 'B', 'C');";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Status"));
+        assert!(result.contains("IN"));
+        assert!(!result.contains(';'));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_multiline_complex() {
+        let sql = r#"
+CREATE NONCLUSTERED INDEX [IX_Filtered]
+ON [dbo].[LargeTable] ([CategoryId], [StatusCode])
+WHERE
+    [IsActive] = 1
+    AND [DeletedDate] IS NULL
+WITH (FILLFACTOR = 90);
+"#;
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("IsActive"));
+        assert!(result.contains("DeletedDate"));
+        assert!(result.contains("IS"));
+        assert!(result.contains("NULL"));
+        assert!(!result.to_uppercase().contains("FILLFACTOR"));
+        assert!(!result.contains(';'));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_lowercase_where() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) where [Status] = 'Active';";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Status"));
+        assert!(result.contains("Active"));
+    }
+
+    #[test]
+    fn test_extract_filter_predicate_mixed_case_where() {
+        let sql = "CREATE INDEX [IX] ON [dbo].[T] ([Col]) Where [Status] = 'Active';";
+        let result = extract_index_filter_predicate_tokenized(sql).unwrap();
+        assert!(result.contains("Status"));
+        assert!(result.contains("Active"));
     }
 }

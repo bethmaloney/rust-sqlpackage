@@ -6,7 +6,7 @@ mod extended_property_parser;
 mod fulltext_parser;
 mod function_parser;
 pub mod identifier_utils;
-mod index_parser;
+pub mod index_parser;
 mod preprocess_parser;
 mod procedure_parser;
 mod sequence_parser;
