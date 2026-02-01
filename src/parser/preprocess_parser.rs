@@ -27,11 +27,11 @@
 
 use std::borrow::Cow;
 
-use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
+use sqlparser::tokenizer::Token;
 
 use super::identifier_utils::format_token_sql_cow;
+use super::token_parser_base::TokenParser;
 use super::tsql_parser::ExtractedDefaultConstraint;
 
 /// Sentinel value for BINARY(MAX) and VARBINARY(MAX) types
@@ -53,19 +53,15 @@ pub struct TokenPreprocessResult {
 /// us to selectively modify certain patterns while preserving string literals
 /// and comments exactly as they were.
 pub struct PreprocessTokenParser {
-    tokens: Vec<TokenWithSpan>,
-    pos: usize,
+    base: TokenParser,
 }
 
 impl PreprocessTokenParser {
     /// Create a new preprocessor for SQL content
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
-
-        Some(Self { tokens, pos: 0 })
+        Some(Self {
+            base: TokenParser::new(sql)?,
+        })
     }
 
     /// Preprocess the SQL and return the result
@@ -76,11 +72,11 @@ impl PreprocessTokenParser {
         let mut extracted_defaults = Vec::new();
         // Pre-allocate output buffer - estimate roughly same size as input
         // The actual capacity is based on token count * average token size
-        let estimated_capacity = self.tokens.len() * 4; // Average ~4 chars per token
+        let estimated_capacity = self.base.tokens().len() * 4; // Average ~4 chars per token
         let mut output = String::with_capacity(estimated_capacity);
 
-        self.pos = 0;
-        while !self.is_at_end() {
+        self.base.set_pos(0);
+        while !self.base.is_at_end() {
             // Check for BINARY(MAX) or VARBINARY(MAX)
             if let Some(replacement) = self.try_parse_binary_max() {
                 output.push_str(&replacement);
@@ -97,13 +93,15 @@ impl PreprocessTokenParser {
             // Check for trailing comma before closing paren (H3)
             if self.is_trailing_comma() {
                 // Skip the comma - don't add to output
-                self.advance();
+                self.base.advance();
                 continue;
             }
 
             // Output the token unchanged - uses Cow to avoid allocations for static tokens
-            output.push_str(&self.token_to_string(&self.tokens[self.pos].token));
-            self.advance();
+            if let Some(token) = self.base.current_token() {
+                output.push_str(&self.token_to_string(&token.token));
+            }
+            self.base.advance();
         }
 
         TokenPreprocessResult {
@@ -119,53 +117,55 @@ impl PreprocessTokenParser {
             return None;
         }
 
-        let start_pos = self.pos;
+        let start_pos = self.base.pos();
 
         // Check for BINARY or VARBINARY keyword
-        if !self.check_word_ci("BINARY") && !self.check_word_ci("VARBINARY") {
+        if !self.base.check_word_ci("BINARY") && !self.base.check_word_ci("VARBINARY") {
             return None;
         }
 
         let type_name = self.get_word_value()?.to_uppercase();
-        self.advance();
+        self.base.advance();
 
         // Collect any whitespace - pre-allocate with small capacity since whitespace is typically short
         let mut whitespace = String::with_capacity(4);
-        while !self.is_at_end() && matches!(&self.tokens[self.pos].token, Token::Whitespace(_)) {
-            whitespace.push_str(&self.token_to_string(&self.tokens[self.pos].token));
-            self.advance();
+        while !self.base.is_at_end() {
+            if let Some(token) = self.base.current_token() {
+                if matches!(&token.token, Token::Whitespace(_)) {
+                    whitespace.push_str(&self.token_to_string(&token.token));
+                    self.base.advance();
+                    continue;
+                }
+            }
+            break;
         }
 
         // Check for opening paren
-        if !self.check_token(&Token::LParen) {
-            self.pos = start_pos;
+        if !self.base.check_token(&Token::LParen) {
+            self.base.set_pos(start_pos);
             return None;
         }
-        self.advance();
+        self.base.advance();
 
         // Skip whitespace inside parens
-        while !self.is_at_end() && matches!(&self.tokens[self.pos].token, Token::Whitespace(_)) {
-            self.advance();
-        }
+        self.base.skip_whitespace();
 
         // Check for MAX keyword
-        if !self.check_keyword(Keyword::MAX) {
-            self.pos = start_pos;
+        if !self.base.check_keyword(Keyword::MAX) {
+            self.base.set_pos(start_pos);
             return None;
         }
-        self.advance();
+        self.base.advance();
 
         // Skip whitespace inside parens
-        while !self.is_at_end() && matches!(&self.tokens[self.pos].token, Token::Whitespace(_)) {
-            self.advance();
-        }
+        self.base.skip_whitespace();
 
         // Check for closing paren
-        if !self.check_token(&Token::RParen) {
-            self.pos = start_pos;
+        if !self.base.check_token(&Token::RParen) {
+            self.base.set_pos(start_pos);
             return None;
         }
-        self.advance();
+        self.base.advance();
 
         // Return replacement with sentinel value
         Some(format!(
@@ -181,59 +181,59 @@ impl PreprocessTokenParser {
             return None;
         }
 
-        let start_pos = self.pos;
+        let start_pos = self.base.pos();
 
         // Check for optional leading comma
-        if self.check_token(&Token::Comma) {
-            self.advance();
-            self.skip_whitespace();
+        if self.base.check_token(&Token::Comma) {
+            self.base.advance();
+            self.base.skip_whitespace();
         }
 
         // Check for CONSTRAINT keyword
-        if !self.check_keyword(Keyword::CONSTRAINT) {
-            self.pos = start_pos;
+        if !self.base.check_keyword(Keyword::CONSTRAINT) {
+            self.base.set_pos(start_pos);
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse constraint name
-        let constraint_name = self.parse_identifier()?;
+        let constraint_name = self.base.parse_identifier()?;
         if constraint_name.is_empty() {
-            self.pos = start_pos;
+            self.base.set_pos(start_pos);
             return None;
         }
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Check for DEFAULT keyword
-        if !self.check_keyword(Keyword::DEFAULT) {
-            self.pos = start_pos;
+        if !self.base.check_keyword(Keyword::DEFAULT) {
+            self.base.set_pos(start_pos);
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse default expression (parenthesized)
-        if !self.check_token(&Token::LParen) {
-            self.pos = start_pos;
+        if !self.base.check_token(&Token::LParen) {
+            self.base.set_pos(start_pos);
             return None;
         }
 
         let expression = self.parse_parenthesized_expression()?;
-        self.skip_whitespace();
+        self.base.skip_whitespace();
 
         // Check for FOR keyword - this is what distinguishes DEFAULT FOR from inline DEFAULT
-        if !self.check_keyword(Keyword::FOR) {
-            self.pos = start_pos;
+        if !self.base.check_keyword(Keyword::FOR) {
+            self.base.set_pos(start_pos);
             return None;
         }
-        self.advance();
-        self.skip_whitespace();
+        self.base.advance();
+        self.base.skip_whitespace();
 
         // Parse column name
-        let column_name = self.parse_identifier()?;
+        let column_name = self.base.parse_identifier()?;
         if column_name.is_empty() {
-            self.pos = start_pos;
+            self.base.set_pos(start_pos);
             return None;
         }
 
@@ -246,14 +246,15 @@ impl PreprocessTokenParser {
 
     /// Check if current position has a trailing comma (comma followed only by whitespace and close paren)
     fn is_trailing_comma(&self) -> bool {
-        if !self.check_token(&Token::Comma) {
+        if !self.base.check_token(&Token::Comma) {
             return false;
         }
 
         // Look ahead, skipping whitespace, for closing paren
-        let mut i = self.pos + 1;
-        while i < self.tokens.len() {
-            match &self.tokens[i].token {
+        let tokens = self.base.tokens();
+        let mut i = self.base.pos() + 1;
+        while i < tokens.len() {
+            match &tokens[i].token {
                 Token::Whitespace(_) => {
                     i += 1;
                     continue;
@@ -267,92 +268,32 @@ impl PreprocessTokenParser {
 
     /// Check if current token is a string literal
     fn is_string_literal(&self) -> bool {
-        if self.is_at_end() {
-            return false;
-        }
-        matches!(
-            &self.tokens[self.pos].token,
-            Token::SingleQuotedString(_)
-                | Token::NationalStringLiteral(_)
-                | Token::HexStringLiteral(_)
-                | Token::DoubleQuotedString(_)
-                | Token::SingleQuotedByteStringLiteral(_)
-                | Token::DoubleQuotedByteStringLiteral(_)
-        )
-    }
-
-    // === Helper methods ===
-
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
-    }
-
-    fn advance(&mut self) {
-        if !self.is_at_end() {
-            self.pos += 1;
+        if let Some(token) = self.base.current_token() {
+            matches!(
+                &token.token,
+                Token::SingleQuotedString(_)
+                    | Token::NationalStringLiteral(_)
+                    | Token::HexStringLiteral(_)
+                    | Token::DoubleQuotedString(_)
+                    | Token::SingleQuotedByteStringLiteral(_)
+                    | Token::DoubleQuotedByteStringLiteral(_)
+            )
+        } else {
+            false
         }
     }
 
-    fn skip_whitespace(&mut self) {
-        while !self.is_at_end() {
-            if matches!(&self.tokens[self.pos].token, Token::Whitespace(_)) {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
-    }
+    // === Helper methods unique to PreprocessTokenParser ===
 
-    fn check_token(&self, expected: &Token) -> bool {
-        if self.is_at_end() {
-            return false;
-        }
-        std::mem::discriminant(&self.tokens[self.pos].token) == std::mem::discriminant(expected)
-    }
-
-    fn check_keyword(&self, keyword: Keyword) -> bool {
-        if self.is_at_end() {
-            return false;
-        }
-        matches!(
-            &self.tokens[self.pos].token,
-            Token::Word(w) if w.keyword == keyword
-        )
-    }
-
-    fn check_word_ci(&self, word: &str) -> bool {
-        if self.is_at_end() {
-            return false;
-        }
-        matches!(
-            &self.tokens[self.pos].token,
-            Token::Word(w) if w.value.eq_ignore_ascii_case(word)
-        )
-    }
-
+    /// Get the current word value without consuming it
     fn get_word_value(&self) -> Option<&str> {
-        if self.is_at_end() {
-            return None;
-        }
-        match &self.tokens[self.pos].token {
-            Token::Word(w) => Some(&w.value),
-            _ => None,
-        }
-    }
-
-    /// Parse an identifier (quoted or unquoted)
-    fn parse_identifier(&mut self) -> Option<String> {
-        if self.is_at_end() {
-            return None;
-        }
-
-        match &self.tokens[self.pos].token {
-            Token::Word(w) => {
-                let name = w.value.clone();
-                self.advance();
-                Some(name)
+        if let Some(token) = self.base.current_token() {
+            match &token.token {
+                Token::Word(w) => Some(&w.value),
+                _ => None,
             }
-            _ => None,
+        } else {
+            None
         }
     }
 
@@ -361,35 +302,37 @@ impl PreprocessTokenParser {
     ///
     /// Pre-allocates result buffer based on remaining tokens to reduce reallocations.
     fn parse_parenthesized_expression(&mut self) -> Option<String> {
-        if !self.check_token(&Token::LParen) {
+        if !self.base.check_token(&Token::LParen) {
             return None;
         }
 
-        self.advance(); // Skip opening paren
+        self.base.advance(); // Skip opening paren
 
         // Estimate capacity based on remaining tokens (average ~4 chars per token)
-        let remaining_tokens = self.tokens.len().saturating_sub(self.pos);
+        let remaining_tokens = self.base.tokens().len().saturating_sub(self.base.pos());
         let estimated_capacity = remaining_tokens.min(64) * 4; // Cap at 256 bytes initial
         let mut result = String::with_capacity(estimated_capacity);
         let mut depth = 1;
 
-        while !self.is_at_end() && depth > 0 {
-            match &self.tokens[self.pos].token {
-                Token::LParen => {
-                    depth += 1;
-                    result.push_str(&self.token_to_string(&self.tokens[self.pos].token));
-                }
-                Token::RParen => {
-                    depth -= 1;
-                    if depth > 0 {
-                        result.push_str(&self.token_to_string(&self.tokens[self.pos].token));
+        while !self.base.is_at_end() && depth > 0 {
+            if let Some(token) = self.base.current_token() {
+                match &token.token {
+                    Token::LParen => {
+                        depth += 1;
+                        result.push_str(&self.token_to_string(&token.token));
+                    }
+                    Token::RParen => {
+                        depth -= 1;
+                        if depth > 0 {
+                            result.push_str(&self.token_to_string(&token.token));
+                        }
+                    }
+                    _ => {
+                        result.push_str(&self.token_to_string(&token.token));
                     }
                 }
-                _ => {
-                    result.push_str(&self.token_to_string(&self.tokens[self.pos].token));
-                }
             }
-            self.advance();
+            self.base.advance();
         }
 
         if depth != 0 {
