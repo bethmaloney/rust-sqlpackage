@@ -4,11 +4,12 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-20.1 complete (224 tasks). Full parity achieved.**
+**Phases 1-20.2 complete (232 tasks). Full parity achieved.**
 
 **Current Focus: Phase 20 - Replace Remaining Regex with Tokenization/AST**
 - ✅ Phase 20.1 complete: Token-based parameter parsing (3/3 tasks)
-- 🔄 Phase 20.2-20.7: Body dependency, type, table, keyword, and CTE parsing (25 tasks remaining)
+- ✅ Phase 20.2 complete: Body dependency token extraction (8/8 tasks)
+- 🔄 Phase 20.3-20.7: Type, table, keyword, and CTE parsing (24 tasks remaining)
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -36,7 +37,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Status:** Phase 20.1 complete (parameter parsing). Phases 20.2-20.7 remain.
 
-### Phase 20.2: Body Dependency Token Extraction (7/8)
+### Phase 20.2: Body Dependency Token Extraction (8/8) ✅
 
 **Location:** `src/dacpac/model_xml.rs`
 
@@ -49,7 +50,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 | 20.2.5 | Replace ALIAS_COL_RE with tokenizer | ✅ | Replaced with `extract_alias_column_refs_tokenized()` using `BodyDepToken::AliasDotBracketedColumn`. Used in `extract_trigger_body_dependencies()` for ON/SET/SELECT clauses. 17 unit tests. |
 | 20.2.6 | Replace SINGLE_BRACKET_RE with tokenizer | ✅ | Replaced with `extract_single_bracketed_identifiers()` using `BodyDepToken::SingleBracketed`. Used in `extract_trigger_body_dependencies()` for INSERT column lists. 17 unit tests. |
 | 20.2.7 | Replace COLUMN_ALIAS_RE with tokenizer | ✅ | Replaced with `extract_column_aliases_tokenized()` using sqlparser-rs tokenizer. Detects AS keyword and extracts following identifier, filters SQL keywords. 17 unit tests. |
-| 20.2.8 | Replace split('.') with qualified name parser | ⬜ | Lines 1563, 1578-1580, 1819, 1848, 2333: Use tokenizer for dotted names |
+| 20.2.8 | Replace split('.') with qualified name parser | ✅ | Replaced with `parse_qualified_name_tokenized()` using `BodyDependencyTokenScanner`. New `QualifiedName` struct for 1-3 part names. Used in `extract_simple_table_name`, `normalize_table_reference`, `extract_column_name_from_expr_simple`, `resolve_column_reference`, `normalize_type_name`, `expand_select_star`. 28 unit tests. |
 
 **Implementation Approach:** Use sqlparser-rs `Tokenizer` to scan body text and identify SQL tokens. Build a token stream and pattern-match against token sequences instead of regex. This handles whitespace, comments, and nested expressions correctly.
 

@@ -1093,7 +1093,8 @@ struct ViewColumn {
 }
 
 /// Expand SELECT * to actual table columns using the database model
-/// When a view uses SELECT *, DotNet expands it to the actual columns from the referenced table(s)
+/// When a view uses SELECT *, DotNet expands it to the actual columns from the referenced table(s).
+/// Uses token-based parsing for proper handling of table references.
 fn expand_select_star(
     table_aliases: &[(String, String)],
     model: &DatabaseModel,
@@ -1104,18 +1105,14 @@ fn expand_select_star(
     // For each table in the FROM clause, look up its columns in the model
     for (_alias, table_ref) in table_aliases {
         // table_ref is like "[dbo].[TableName]"
-        // Parse schema and table name from the reference
-        let parts: Vec<&str> = table_ref
-            .trim_matches(|c| c == '[' || c == ']')
-            .split("].[")
-            .collect();
-
-        if parts.len() != 2 {
+        // Parse schema and table name from the reference using tokenization
+        let Some(qn) = parse_qualified_name_tokenized(table_ref) else {
             continue;
-        }
+        };
 
-        let schema = parts[0].trim_matches(|c| c == '[' || c == ']');
-        let table_name = parts[1].trim_matches(|c| c == '[' || c == ']');
+        let Some((schema, table_name)) = qn.schema_and_table() else {
+            continue;
+        };
 
         // Find the table in the model
         for element in &model.elements {
@@ -1532,33 +1529,37 @@ fn extract_table_aliases(query: &str, default_schema: &str) -> Vec<(String, Stri
 }
 
 /// Extract simple table name from full reference like "[dbo].[Products]" -> "Products"
+/// Uses token-based parsing for proper handling of whitespace and various bracket styles.
 fn extract_simple_table_name(full_ref: &str) -> String {
-    let parts: Vec<&str> = full_ref.split('.').collect();
-    if parts.len() >= 2 {
-        parts[1].trim_matches(|c| c == '[' || c == ']').to_string()
-    } else if !parts.is_empty() {
-        parts[0].trim_matches(|c| c == '[' || c == ']').to_string()
+    // Use tokenized parsing to handle qualified names properly
+    if let Some(qn) = parse_qualified_name_tokenized(full_ref) {
+        // Return the last part (table name for 2-part, or name for 1-part)
+        qn.last_part().to_string()
     } else {
-        String::new()
+        // Fallback: if tokenization fails, treat entire string as name
+        full_ref
+            .trim()
+            .trim_matches(|c| c == '[' || c == ']')
+            .to_string()
     }
 }
 
-/// Normalize a table reference to [schema].[table] format
+/// Normalize a table reference to [schema].[table] format.
+/// Uses token-based parsing for proper handling of whitespace and various bracket styles.
 fn normalize_table_reference(table_name: &str, default_schema: &str) -> String {
     let cleaned = table_name.trim();
 
-    // Check if already has schema
-    if cleaned.contains('.') {
-        // Split and normalize
-        let parts: Vec<&str> = cleaned.split('.').collect();
-        if parts.len() >= 2 {
-            let schema = parts[0].trim_matches(|c| c == '[' || c == ']');
-            let table = parts[1].trim_matches(|c| c == '[' || c == ']');
+    // Use tokenized parsing to handle qualified names properly
+    if let Some(qn) = parse_qualified_name_tokenized(cleaned) {
+        if let Some((schema, table)) = qn.schema_and_table() {
+            // Already has schema, normalize to bracketed format
             return format!("[{}].[{}]", schema, table);
         }
+        // Single part - use default schema
+        return format!("[{}].[{}]", default_schema, qn.first);
     }
 
-    // No schema, add default
+    // Fallback: if tokenization fails, treat as simple name
     let table = cleaned.trim_matches(|c| c == '[' || c == ']');
     format!("[{}].[{}]", default_schema, table)
 }
@@ -1777,7 +1778,8 @@ fn extract_expression_before_as(expr: &str) -> String {
 }
 
 /// Extract the column name from a simple expression like "[Id]", "t.[Name]", "COUNT(*)"
-/// This is a fallback for when we don't have an AS alias
+/// This is a fallback for when we don't have an AS alias.
+/// Uses token-based parsing for proper handling of qualified references.
 fn extract_column_name_from_expr_simple(expr: &str) -> String {
     let trimmed = expr.trim();
 
@@ -1786,12 +1788,12 @@ fn extract_column_name_from_expr_simple(expr: &str) -> String {
         return trimmed.to_string();
     }
 
-    // If it's a qualified reference like "t.[Name]" or "[dbo].[Products].[Name]"
-    let parts: Vec<&str> = trimmed.split('.').collect();
-    if let Some(last) = parts.last() {
-        return last.trim_matches(|c| c == '[' || c == ']').to_string();
+    // Use tokenized parsing to handle qualified references like "t.[Name]" or "[dbo].[Products].[Name]"
+    if let Some(qn) = parse_qualified_name_tokenized(trimmed) {
+        return qn.last_part().to_string();
     }
 
+    // Fallback: if tokenization fails, just strip brackets
     trimmed.trim_matches(|c| c == '[' || c == ']').to_string()
 }
 
@@ -1986,6 +1988,7 @@ fn extract_column_aliases_tokenized(sql: &str) -> Vec<String> {
 
 /// Resolve a column reference to its full [schema].[table].[column] form
 /// Returns None for aggregate/function expressions or complex expressions (CASE, etc.)
+/// Uses token-based parsing for proper handling of qualified names.
 fn resolve_column_reference(
     expr: &str,
     table_aliases: &[(String, String)],
@@ -2004,13 +2007,13 @@ fn resolve_column_reference(
         return None;
     }
 
-    // Parse the column reference
-    let parts: Vec<&str> = trimmed.split('.').collect();
+    // Parse the column reference using tokenization
+    let qn = parse_qualified_name_tokenized(trimmed)?;
 
-    match parts.len() {
+    match qn.part_count() {
         1 => {
             // Just column name, try to resolve using first table alias
-            let col_name = parts[0].trim_matches(|c| c == '[' || c == ']');
+            let col_name = &qn.first;
             // Don't emit [*] column reference for SELECT * - matches DotNet behavior
             if col_name == "*" {
                 return None;
@@ -2022,8 +2025,8 @@ fn resolve_column_reference(
         }
         2 => {
             // alias.column or schema.table
-            let alias_or_schema = parts[0].trim_matches(|c| c == '[' || c == ']');
-            let col_or_table = parts[1].trim_matches(|c| c == '[' || c == ']');
+            let alias_or_schema = &qn.first;
+            let col_or_table = qn.second.as_ref()?;
 
             // Don't emit [*] column reference for alias.* - matches DotNet behavior
             if col_or_table == "*" {
@@ -2042,9 +2045,9 @@ fn resolve_column_reference(
         }
         3 => {
             // schema.table.column
-            let schema = parts[0].trim_matches(|c| c == '[' || c == ']');
-            let table = parts[1].trim_matches(|c| c == '[' || c == ']');
-            let column = parts[2].trim_matches(|c| c == '[' || c == ']');
+            let schema = &qn.first;
+            let table = qn.second.as_ref()?;
+            let column = qn.third.as_ref()?;
             // Don't emit [*] column reference for schema.table.* - matches DotNet behavior
             if column == "*" {
                 return None;
@@ -2493,7 +2496,8 @@ fn find_table_type_for_parameter<'a>(
     None
 }
 
-/// Normalize a type name to [schema].[name] format
+/// Normalize a type name to [schema].[name] format.
+/// Uses token-based parsing for proper handling of various identifier formats.
 fn normalize_type_name(type_name: &str) -> String {
     let trimmed = type_name.trim();
 
@@ -2502,11 +2506,10 @@ fn normalize_type_name(type_name: &str) -> String {
         return trimmed.to_string();
     }
 
-    // Handle dbo.TypeName format (no brackets)
-    if trimmed.contains('.') && !trimmed.contains('[') {
-        let parts: Vec<&str> = trimmed.split('.').collect();
-        if parts.len() == 2 {
-            return format!("[{}].[{}]", parts[0].trim(), parts[1].trim());
+    // Use tokenized parsing to handle qualified names
+    if let Some(qn) = parse_qualified_name_tokenized(trimmed) {
+        if let Some((schema, name)) = qn.schema_and_table() {
+            return format!("[{}].[{}]", schema, name);
         }
     }
 
@@ -4262,6 +4265,146 @@ impl BodyDependencyTokenScanner {
         } else {
             false
         }
+    }
+}
+
+// =============================================================================
+// Qualified Name Tokenization (Phase 20.2.8)
+// =============================================================================
+// Token-based parsing for qualified SQL names like [schema].[table].[column].
+// Replaces split('.') string operations with proper tokenization that handles
+// whitespace, comments, and various bracket/quote styles correctly.
+
+/// Represents a parsed qualified name with 1-3 parts.
+/// Used for schema.table or schema.table.column references.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct QualifiedName {
+    /// The first part (schema for 2+ parts, or name for single part)
+    pub first: String,
+    /// The second part (table name for 2+ parts)
+    pub second: Option<String>,
+    /// The third part (column name for 3 parts)
+    pub third: Option<String>,
+}
+
+impl QualifiedName {
+    /// Creates a single-part name
+    pub fn single(name: String) -> Self {
+        Self {
+            first: name,
+            second: None,
+            third: None,
+        }
+    }
+
+    /// Creates a two-part name (schema.table)
+    pub fn two_part(first: String, second: String) -> Self {
+        Self {
+            first,
+            second: Some(second),
+            third: None,
+        }
+    }
+
+    /// Creates a three-part name (schema.table.column)
+    pub fn three_part(first: String, second: String, third: String) -> Self {
+        Self {
+            first,
+            second: Some(second),
+            third: Some(third),
+        }
+    }
+
+    /// Returns the number of parts in this qualified name
+    pub fn part_count(&self) -> usize {
+        if self.third.is_some() {
+            3
+        } else if self.second.is_some() {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// Returns the last part of the name (column for 3-part, table for 2-part, name for 1-part)
+    pub fn last_part(&self) -> &str {
+        self.third
+            .as_deref()
+            .or(self.second.as_deref())
+            .unwrap_or(&self.first)
+    }
+
+    /// Returns the schema and table as a tuple if this is a 2+ part name
+    pub fn schema_and_table(&self) -> Option<(&str, &str)> {
+        self.second
+            .as_ref()
+            .map(|table| (self.first.as_str(), table.as_str()))
+    }
+
+    /// Formats as a bracketed reference: [first].[second] or [first].[second].[third]
+    pub fn to_bracketed(&self) -> String {
+        match (&self.second, &self.third) {
+            (Some(second), Some(third)) => {
+                format!("[{}].[{}].[{}]", self.first, second, third)
+            }
+            (Some(second), None) => format!("[{}].[{}]", self.first, second),
+            (None, _) => format!("[{}]", self.first),
+        }
+    }
+}
+
+/// Parse a qualified name from a string using tokenization.
+///
+/// Handles all combinations of bracketed and unbracketed identifiers:
+/// - `[schema].[table].[column]` → 3-part
+/// - `[schema].[table]` → 2-part
+/// - `schema.table` → 2-part (unbracketed)
+/// - `alias.[column]` → 2-part (mixed)
+/// - `[alias].column` → 2-part (mixed)
+/// - `[name]` or `name` → 1-part
+///
+/// This replaces split('.') operations with proper tokenization that handles
+/// whitespace and SQL syntax correctly.
+pub(crate) fn parse_qualified_name_tokenized(sql: &str) -> Option<QualifiedName> {
+    let mut scanner = BodyDependencyTokenScanner::new(sql)?;
+    scanner.skip_whitespace();
+
+    if scanner.is_at_end() {
+        return None;
+    }
+
+    // Try to parse a token pattern - this will give us the qualified name structure
+    let token = scanner.try_scan_token()?;
+
+    // Convert BodyDepToken to QualifiedName
+    match token {
+        BodyDepToken::ThreePartBracketed {
+            schema,
+            table,
+            column,
+        } => Some(QualifiedName::three_part(schema, table, column)),
+
+        BodyDepToken::TwoPartBracketed { first, second } => {
+            Some(QualifiedName::two_part(first, second))
+        }
+
+        BodyDepToken::AliasDotBracketedColumn { alias, column } => {
+            Some(QualifiedName::two_part(alias, column))
+        }
+
+        BodyDepToken::BracketedAliasDotColumn { alias, column } => {
+            Some(QualifiedName::two_part(alias, column))
+        }
+
+        BodyDepToken::TwoPartUnbracketed { first, second } => {
+            Some(QualifiedName::two_part(first, second))
+        }
+
+        BodyDepToken::SingleBracketed(name) => Some(QualifiedName::single(name)),
+
+        BodyDepToken::SingleUnbracketed(name) => Some(QualifiedName::single(name)),
+
+        BodyDepToken::Parameter(_) => None, // Parameters are not qualified names
     }
 }
 
@@ -8881,5 +9024,220 @@ FROM [dbo].[Account] A
         let aliases = extract_column_aliases_tokenized("SELECT col AS my_alias");
         assert_eq!(aliases.len(), 1);
         assert_eq!(aliases[0], "my_alias");
+    }
+
+    // ============================================================================
+    // QualifiedName and parse_qualified_name_tokenized tests (Phase 20.2.8)
+    // ============================================================================
+
+    #[test]
+    fn test_qualified_name_single_bracketed() {
+        let qn = parse_qualified_name_tokenized("[TableName]").unwrap();
+        assert_eq!(qn.part_count(), 1);
+        assert_eq!(qn.first, "TableName");
+        assert!(qn.second.is_none());
+        assert!(qn.third.is_none());
+        assert_eq!(qn.last_part(), "TableName");
+        assert_eq!(qn.to_bracketed(), "[TableName]");
+    }
+
+    #[test]
+    fn test_qualified_name_single_unbracketed() {
+        let qn = parse_qualified_name_tokenized("TableName").unwrap();
+        assert_eq!(qn.part_count(), 1);
+        assert_eq!(qn.first, "TableName");
+        assert!(qn.second.is_none());
+        assert_eq!(qn.last_part(), "TableName");
+    }
+
+    #[test]
+    fn test_qualified_name_two_part_bracketed() {
+        let qn = parse_qualified_name_tokenized("[dbo].[Products]").unwrap();
+        assert_eq!(qn.part_count(), 2);
+        assert_eq!(qn.first, "dbo");
+        assert_eq!(qn.second.as_deref(), Some("Products"));
+        assert!(qn.third.is_none());
+        assert_eq!(qn.last_part(), "Products");
+        assert_eq!(qn.schema_and_table(), Some(("dbo", "Products")));
+        assert_eq!(qn.to_bracketed(), "[dbo].[Products]");
+    }
+
+    #[test]
+    fn test_qualified_name_two_part_unbracketed() {
+        let qn = parse_qualified_name_tokenized("dbo.Products").unwrap();
+        assert_eq!(qn.part_count(), 2);
+        assert_eq!(qn.first, "dbo");
+        assert_eq!(qn.second.as_deref(), Some("Products"));
+        assert_eq!(qn.last_part(), "Products");
+    }
+
+    #[test]
+    fn test_qualified_name_three_part_bracketed() {
+        let qn = parse_qualified_name_tokenized("[dbo].[Products].[Id]").unwrap();
+        assert_eq!(qn.part_count(), 3);
+        assert_eq!(qn.first, "dbo");
+        assert_eq!(qn.second.as_deref(), Some("Products"));
+        assert_eq!(qn.third.as_deref(), Some("Id"));
+        assert_eq!(qn.last_part(), "Id");
+        assert_eq!(qn.to_bracketed(), "[dbo].[Products].[Id]");
+    }
+
+    #[test]
+    fn test_qualified_name_mixed_alias_dot_bracketed() {
+        // alias.[column] pattern
+        let qn = parse_qualified_name_tokenized("t.[Name]").unwrap();
+        assert_eq!(qn.part_count(), 2);
+        assert_eq!(qn.first, "t");
+        assert_eq!(qn.second.as_deref(), Some("Name"));
+        assert_eq!(qn.last_part(), "Name");
+    }
+
+    #[test]
+    fn test_qualified_name_mixed_bracketed_dot_unbracketed() {
+        // [alias].column pattern
+        let qn = parse_qualified_name_tokenized("[t].Name").unwrap();
+        assert_eq!(qn.part_count(), 2);
+        assert_eq!(qn.first, "t");
+        assert_eq!(qn.second.as_deref(), Some("Name"));
+        assert_eq!(qn.last_part(), "Name");
+    }
+
+    #[test]
+    fn test_qualified_name_with_whitespace() {
+        // Tokenizer should handle spaces between parts
+        let qn = parse_qualified_name_tokenized("[dbo] . [Products]").unwrap();
+        assert_eq!(qn.part_count(), 2);
+        assert_eq!(qn.first, "dbo");
+        assert_eq!(qn.second.as_deref(), Some("Products"));
+    }
+
+    #[test]
+    fn test_qualified_name_with_tabs() {
+        // Tokenizer should handle tabs between parts
+        let qn = parse_qualified_name_tokenized("[dbo]\t.\t[Products]").unwrap();
+        assert_eq!(qn.part_count(), 2);
+        assert_eq!(qn.first, "dbo");
+        assert_eq!(qn.second.as_deref(), Some("Products"));
+    }
+
+    #[test]
+    fn test_qualified_name_with_special_chars() {
+        // Names with spaces inside brackets
+        let qn = parse_qualified_name_tokenized("[dbo].[My Table Name]").unwrap();
+        assert_eq!(qn.part_count(), 2);
+        assert_eq!(qn.first, "dbo");
+        assert_eq!(qn.second.as_deref(), Some("My Table Name"));
+    }
+
+    #[test]
+    fn test_qualified_name_empty() {
+        assert!(parse_qualified_name_tokenized("").is_none());
+    }
+
+    #[test]
+    fn test_qualified_name_whitespace_only() {
+        assert!(parse_qualified_name_tokenized("   ").is_none());
+    }
+
+    #[test]
+    fn test_qualified_name_parameter_returns_none() {
+        // Parameters are not qualified names
+        assert!(parse_qualified_name_tokenized("@param").is_none());
+    }
+
+    // ============================================================================
+    // Tests for functions that use parse_qualified_name_tokenized
+    // ============================================================================
+
+    #[test]
+    fn test_extract_simple_table_name_two_part() {
+        assert_eq!(extract_simple_table_name("[dbo].[Products]"), "Products");
+    }
+
+    #[test]
+    fn test_extract_simple_table_name_single_part() {
+        assert_eq!(extract_simple_table_name("[Products]"), "Products");
+    }
+
+    #[test]
+    fn test_extract_simple_table_name_unbracketed() {
+        assert_eq!(extract_simple_table_name("dbo.Products"), "Products");
+    }
+
+    #[test]
+    fn test_extract_simple_table_name_with_whitespace() {
+        assert_eq!(extract_simple_table_name("[dbo] . [Products]"), "Products");
+    }
+
+    #[test]
+    fn test_normalize_table_reference_two_part() {
+        assert_eq!(
+            normalize_table_reference("[dbo].[Products]", "dbo"),
+            "[dbo].[Products]"
+        );
+    }
+
+    #[test]
+    fn test_normalize_table_reference_single_part() {
+        assert_eq!(
+            normalize_table_reference("[Products]", "dbo"),
+            "[dbo].[Products]"
+        );
+    }
+
+    #[test]
+    fn test_normalize_table_reference_unbracketed() {
+        assert_eq!(
+            normalize_table_reference("schema.table", "dbo"),
+            "[schema].[table]"
+        );
+    }
+
+    #[test]
+    fn test_normalize_table_reference_single_unbracketed() {
+        assert_eq!(
+            normalize_table_reference("Products", "dbo"),
+            "[dbo].[Products]"
+        );
+    }
+
+    #[test]
+    fn test_normalize_type_name_already_bracketed() {
+        assert_eq!(normalize_type_name("[dbo].[MyType]"), "[dbo].[MyType]");
+    }
+
+    #[test]
+    fn test_normalize_type_name_unbracketed() {
+        assert_eq!(normalize_type_name("dbo.MyType"), "[dbo].[MyType]");
+    }
+
+    #[test]
+    fn test_normalize_type_name_no_schema() {
+        // Can't normalize single-part type without schema
+        assert_eq!(normalize_type_name("MyType"), "MyType");
+    }
+
+    #[test]
+    fn test_extract_column_name_from_expr_simple_qualified() {
+        assert_eq!(
+            extract_column_name_from_expr_simple("[dbo].[Products].[Id]"),
+            "Id"
+        );
+    }
+
+    #[test]
+    fn test_extract_column_name_from_expr_simple_alias() {
+        assert_eq!(extract_column_name_from_expr_simple("t.[Name]"), "Name");
+    }
+
+    #[test]
+    fn test_extract_column_name_from_expr_simple_single() {
+        assert_eq!(extract_column_name_from_expr_simple("[Id]"), "Id");
+    }
+
+    #[test]
+    fn test_extract_column_name_from_expr_simple_function() {
+        // Functions should be returned as-is
+        assert_eq!(extract_column_name_from_expr_simple("COUNT(*)"), "COUNT(*)");
     }
 }
