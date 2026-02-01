@@ -9,7 +9,8 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Current Focus: Phase 20 - Replace Remaining Regex with Tokenization/AST**
 - ✅ Phase 20.1 complete: Token-based parameter parsing (3/3 tasks)
 - ✅ Phase 20.2 complete: Body dependency token extraction (8/8 tasks)
-- 🔄 Phase 20.3-20.7: Type, table, keyword, and CTE parsing (23 tasks remaining)
+- 🔄 Phase 20.3: Type and declaration parsing (2/4 tasks)
+- 🔄 Phase 20.4-20.7: Table, keyword, and CTE parsing (20 tasks remaining)
 - 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (11 tasks)
 
 | Layer | Passing | Rate |
@@ -55,14 +56,14 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Implementation Approach:** Use sqlparser-rs `Tokenizer` to scan body text and identify SQL tokens. Build a token stream and pattern-match against token sequences instead of regex. This handles whitespace, comments, and nested expressions correctly.
 
-### Phase 20.3: Type and Declaration Parsing (1/4)
+### Phase 20.3: Type and Declaration Parsing (2/4)
 
 **Location:** `src/dacpac/model_xml.rs`
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 20.3.1 | Replace DECLARE_TYPE_RE with tokenizer | ✅ | Replaced with `extract_declare_types_tokenized()` using sqlparser-rs tokenizer. Scans for DECLARE keyword followed by @variable and type name. Handles whitespace correctly. Returns base type names in lowercase. 17 unit tests. |
-| 20.3.2 | Replace TVF_COL_TYPE_RE with tokenizer | ⬜ | Line 55-57: TVF column type with precision/scale |
+| 20.3.2 | Replace TVF_COL_TYPE_RE with tokenizer | ✅ | Replaced with `parse_tvf_column_type_tokenized()` using sqlparser-rs tokenizer. Parses type strings like INT, NVARCHAR(100), DECIMAL(18,2). Handles MAX keyword, whitespace (tabs/spaces), and case-insensitive matching. Returns TvfColumnTypeInfo struct with data_type, first_num (length/precision), second_num (scale). 17 unit tests. |
 | 20.3.3 | Replace CAST_EXPR_RE with tokenizer | ⬜ | Line 141-142: `CAST(expr AS type)` extraction |
 | 20.3.4 | Replace bracket trimming with tokenizer | ⬜ | Lines 754-755, 748-749: trim_start_matches('['), trim_end_matches(']') |
 

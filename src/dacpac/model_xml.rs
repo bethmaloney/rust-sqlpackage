@@ -53,10 +53,8 @@ static QUALIFIED_TABLE_NAME_RE: LazyLock<Regex> =
 static MULTI_STMT_TVF_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)RETURNS\s+@\w+\s+TABLE\s*\(").unwrap());
 
-/// Parse TVF column definition type with optional precision/scale
-static TVF_COL_TYPE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^\[?(\w+)\]?(?:\s*\(\s*(\d+)(?:\s*,\s*(\d+))?\s*\))?").unwrap()
-});
+// Note: TVF_COL_TYPE_RE has been removed and replaced with token-based parsing in Phase 20.3.2.
+// TVF column type extraction now uses parse_tvf_column_type_tokenized() with sqlparser-rs tokenizer.
 
 /// Extract table aliases from FROM/JOIN clauses
 static TABLE_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -1417,6 +1415,9 @@ fn split_column_definitions(input: &str) -> Vec<String> {
 }
 
 /// Parse a single column definition like "Id INT" or "Name NVARCHAR(100)"
+///
+/// Uses token-based parsing via `parse_tvf_column_type_tokenized()` to handle
+/// type specifications with optional length/precision/scale parameters.
 fn parse_tvf_column_definition(def: &str) -> Option<TvfColumn> {
     let def = def.trim();
     if def.is_empty() {
@@ -1438,24 +1439,22 @@ fn parse_tvf_column_definition(def: &str) -> Option<TvfColumn> {
     // Join remaining parts and parse type with optional length/precision/scale
     let type_part = parts[1..].join(" ");
 
-    if let Some(cap) = TVF_COL_TYPE_RE.captures(&type_part) {
-        let data_type = cap
-            .get(1)
-            .map(|m| m.as_str().to_lowercase())
-            .unwrap_or_default();
-        let first_num = cap.get(2).and_then(|m| m.as_str().parse::<u32>().ok());
-        let second_num = cap.get(3).and_then(|m| m.as_str().parse::<u8>().ok());
-
+    // Use token-based parsing instead of regex (Phase 20.3.2)
+    if let Some(type_info) = parse_tvf_column_type_tokenized(&type_part) {
         // Determine if first_num is length or precision based on type
-        let (length, precision, scale) = if is_precision_scale_type(&data_type) {
-            (None, first_num.map(|n| n as u8), second_num)
+        let (length, precision, scale) = if is_precision_scale_type(&type_info.data_type) {
+            (
+                None,
+                type_info.first_num.map(|n| n as u8),
+                type_info.second_num,
+            )
         } else {
-            (first_num, None, None)
+            (type_info.first_num, None, None)
         };
 
         Some(TvfColumn {
             name,
-            data_type,
+            data_type: type_info.data_type,
             length,
             precision,
             scale,
@@ -1978,6 +1977,151 @@ fn extract_declare_types_tokenized(sql: &str) -> Vec<String> {
     }
 
     results
+}
+
+/// Parsed TVF column type result from tokenized parsing.
+///
+/// Contains the extracted data type name and optional length/precision/scale values.
+#[derive(Debug, PartialEq)]
+struct TvfColumnTypeInfo {
+    data_type: String,
+    first_num: Option<u32>,
+    second_num: Option<u8>,
+}
+
+/// Parse TVF column type definition using tokenization.
+///
+/// This function replaces TVF_COL_TYPE_RE regex pattern. It parses type strings like:
+/// - `INT` -> TvfColumnTypeInfo { data_type: "int", first_num: None, second_num: None }
+/// - `NVARCHAR(100)` -> TvfColumnTypeInfo { data_type: "nvarchar", first_num: Some(100), second_num: None }
+/// - `DECIMAL(18, 2)` -> TvfColumnTypeInfo { data_type: "decimal", first_num: Some(18), second_num: Some(2) }
+///
+/// # Arguments
+/// * `type_str` - Type specification string (e.g., "NVARCHAR(100)" or "[DECIMAL](18, 2)")
+///
+/// # Returns
+/// `Some(TvfColumnTypeInfo)` with parsed type information, or `None` if parsing fails.
+fn parse_tvf_column_type_tokenized(type_str: &str) -> Option<TvfColumnTypeInfo> {
+    let type_str = type_str.trim();
+    if type_str.is_empty() {
+        return None;
+    }
+
+    let dialect = MsSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, type_str).tokenize() else {
+        return None;
+    };
+
+    let mut i = 0;
+
+    // Helper to skip whitespace tokens
+    let skip_whitespace = |tokens: &[Token], mut idx: usize| -> usize {
+        while idx < tokens.len() && matches!(&tokens[idx], Token::Whitespace(_)) {
+            idx += 1;
+        }
+        idx
+    };
+
+    i = skip_whitespace(&tokens, i);
+    if i >= tokens.len() {
+        return None;
+    }
+
+    // Extract the type name from first token (Word token, possibly quoted with brackets)
+    let data_type = match &tokens[i] {
+        Token::Word(w) => w.value.to_lowercase(),
+        _ => return None,
+    };
+    i += 1;
+
+    // Check for optional parameters: (num) or (num, num)
+    i = skip_whitespace(&tokens, i);
+
+    // If no more tokens, return type without parameters
+    if i >= tokens.len() {
+        return Some(TvfColumnTypeInfo {
+            data_type,
+            first_num: None,
+            second_num: None,
+        });
+    }
+
+    // Look for opening parenthesis
+    if !matches!(&tokens[i], Token::LParen) {
+        return Some(TvfColumnTypeInfo {
+            data_type,
+            first_num: None,
+            second_num: None,
+        });
+    }
+    i += 1;
+
+    // Skip whitespace inside parentheses
+    i = skip_whitespace(&tokens, i);
+    if i >= tokens.len() {
+        return None;
+    }
+
+    // Check for MAX keyword (e.g., VARCHAR(MAX))
+    if let Token::Word(w) = &tokens[i] {
+        if w.value.eq_ignore_ascii_case("MAX") {
+            return Some(TvfColumnTypeInfo {
+                data_type,
+                first_num: Some(u32::MAX), // Special marker for MAX
+                second_num: None,
+            });
+        }
+    }
+
+    // First number (length or precision)
+    let first_num = match &tokens[i] {
+        Token::Number(n, _) => n.parse::<u32>().ok(),
+        _ => return None,
+    };
+    i += 1;
+
+    // Skip whitespace
+    i = skip_whitespace(&tokens, i);
+    if i >= tokens.len() {
+        return None;
+    }
+
+    // Check for comma (second parameter) or closing paren
+    if matches!(&tokens[i], Token::RParen) {
+        return Some(TvfColumnTypeInfo {
+            data_type,
+            first_num,
+            second_num: None,
+        });
+    }
+
+    // Expect comma for second parameter
+    if !matches!(&tokens[i], Token::Comma) {
+        return Some(TvfColumnTypeInfo {
+            data_type,
+            first_num,
+            second_num: None,
+        });
+    }
+    i += 1;
+
+    // Skip whitespace after comma
+    i = skip_whitespace(&tokens, i);
+    if i >= tokens.len() {
+        return None;
+    }
+
+    // Second number (scale)
+    let second_num = match &tokens[i] {
+        Token::Number(n, _) => n.parse::<u8>().ok(),
+        _ => None,
+    };
+
+    Some(TvfColumnTypeInfo {
+        data_type,
+        first_num,
+        second_num,
+    })
 }
 
 /// Extract column aliases from SQL text using tokenization.
@@ -9431,5 +9575,216 @@ FROM [dbo].[Account] A
         "#;
         let types = extract_declare_types_tokenized(body);
         assert_eq!(types, vec!["decimal", "int", "nvarchar"]);
+    }
+
+    // ============================================================================
+    // parse_tvf_column_type_tokenized tests (Phase 20.3.2)
+    // ============================================================================
+
+    #[test]
+    fn test_tvf_type_simple_int() {
+        let result = parse_tvf_column_type_tokenized("INT");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "int".to_string(),
+                first_num: None,
+                second_num: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_simple_nvarchar() {
+        let result = parse_tvf_column_type_tokenized("NVARCHAR");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "nvarchar".to_string(),
+                first_num: None,
+                second_num: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_nvarchar_with_length() {
+        let result = parse_tvf_column_type_tokenized("NVARCHAR(100)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "nvarchar".to_string(),
+                first_num: Some(100),
+                second_num: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_varchar_with_length() {
+        let result = parse_tvf_column_type_tokenized("VARCHAR(50)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "varchar".to_string(),
+                first_num: Some(50),
+                second_num: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_decimal_with_precision_scale() {
+        let result = parse_tvf_column_type_tokenized("DECIMAL(18, 2)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "decimal".to_string(),
+                first_num: Some(18),
+                second_num: Some(2),
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_decimal_no_spaces() {
+        let result = parse_tvf_column_type_tokenized("DECIMAL(18,2)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "decimal".to_string(),
+                first_num: Some(18),
+                second_num: Some(2),
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_numeric_with_precision() {
+        let result = parse_tvf_column_type_tokenized("NUMERIC(10, 0)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "numeric".to_string(),
+                first_num: Some(10),
+                second_num: Some(0),
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_varchar_max() {
+        let result = parse_tvf_column_type_tokenized("VARCHAR(MAX)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "varchar".to_string(),
+                first_num: Some(u32::MAX),
+                second_num: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_nvarchar_max() {
+        let result = parse_tvf_column_type_tokenized("NVARCHAR(MAX)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "nvarchar".to_string(),
+                first_num: Some(u32::MAX),
+                second_num: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_case_insensitive() {
+        let result = parse_tvf_column_type_tokenized("decimal(18, 2)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "decimal".to_string(),
+                first_num: Some(18),
+                second_num: Some(2),
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_mixed_case() {
+        let result = parse_tvf_column_type_tokenized("Decimal(18, 2)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "decimal".to_string(),
+                first_num: Some(18),
+                second_num: Some(2),
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_with_tabs() {
+        let result = parse_tvf_column_type_tokenized("DECIMAL(\t18\t,\t2\t)");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "decimal".to_string(),
+                first_num: Some(18),
+                second_num: Some(2),
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_with_multiple_spaces() {
+        let result = parse_tvf_column_type_tokenized("DECIMAL(   18   ,   2   )");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "decimal".to_string(),
+                first_num: Some(18),
+                second_num: Some(2),
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_empty() {
+        let result = parse_tvf_column_type_tokenized("");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_tvf_type_whitespace_only() {
+        let result = parse_tvf_column_type_tokenized("   ");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_tvf_type_datetime() {
+        let result = parse_tvf_column_type_tokenized("DATETIME");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "datetime".to_string(),
+                first_num: None,
+                second_num: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_tvf_type_bit() {
+        let result = parse_tvf_column_type_tokenized("BIT");
+        assert_eq!(
+            result,
+            Some(TvfColumnTypeInfo {
+                data_type: "bit".to_string(),
+                first_num: None,
+                second_num: None,
+            })
+        );
     }
 }
