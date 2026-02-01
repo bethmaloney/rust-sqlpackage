@@ -44,10 +44,14 @@ use programmability_writer::{write_function, write_procedure};
 // Re-export body dependency extraction functions and types
 use body_deps::{
     compute_line_offsets, extract_body_dependencies, extract_bracketed_identifiers_tokenized,
+    is_sql_keyword, location_to_byte_offset, parse_qualified_name_tokenized, BodyDepToken,
+    BodyDependency, BodyDependencyTokenScanner, TableAliasTokenParser,
+};
+
+#[cfg(test)]
+use body_deps::{
     extract_column_aliases_tokenized, extract_declare_types_tokenized,
-    extract_table_aliases_for_body_deps, extract_table_refs_tokenized, is_sql_keyword,
-    is_sql_keyword_not_column, location_to_byte_offset, parse_qualified_name_tokenized,
-    BodyDepToken, BodyDependency, BodyDependencyTokenScanner, QualifiedName, TableAliasTokenParser,
+    extract_table_aliases_for_body_deps, extract_table_refs_tokenized,
 };
 
 #[cfg(test)]
