@@ -23,10 +23,13 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - Fixed TVF column and scalar type MAX handling to write `IsMax="True"` instead of invalid Length values
 - Added MAX keyword detection in scalar type parser
 
-**Remaining Parity Issues (Phases 24-26):**
+**Remaining Parity Issues (Phases 24-25):**
 - Phase 24: Dynamic column sources in procedures (0/8) - 177 missing elements
 - Phase 25: ALTER TABLE constraints (0/6) - 14 PKs, 19 FKs missing
-- Phase 26: APPLY subquery alias capture (0/4) - Deployment failures from unresolved references
+
+**Phase 26 Complete: APPLY Subquery Alias Capture (4/4) ✅**
+- Fixed `extract_table_refs_tokenized()` to check `subquery_aliases` for APPLY aliases
+- Prevents APPLY subquery aliases (e.g., `d` from `CROSS APPLY (...) d`) from being treated as schema names
 
 **Code Simplification (Phases 27-31):**
 - Phase 27: Parser token helper consolidation (0/4) - ~400-500 lines reduction
@@ -188,44 +191,41 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 26: Fix OUTER/CROSS APPLY Subquery Alias Capture (0/4)
+## Phase 26: Fix OUTER/CROSS APPLY Subquery Alias Capture (4/4) ✅
 
 **Goal:** Fix deployment failure caused by unresolved references to APPLY subquery aliases.
 
 **Error:** `The reference to the element that has the name [AliasName].[Column] could not be resolved because no element with that name exists.`
 
-**Root Cause Analysis:**
-- OUTER APPLY and CROSS APPLY create derived table aliases (e.g., `) AliasName`)
-- These aliases should be added to `subquery_aliases` set in `body_deps.rs`
-- Currently, column references like `AliasName.Column` are being treated as `[schema].[table]` references
-- This generates invalid BodyDependencies that cause deployment to fail
+**Root Cause (Identified):**
+- `extract_table_refs_tokenized()` was not checking `subquery_aliases` when processing `TwoPartUnbracketed` tokens
+- APPLY subquery aliases (like `d` from `CROSS APPLY (...) d`) were being treated as schema names
+- This caused column references like `d.TagCount` to be emitted as `[d].[TagCount]` dependencies
 
-**Example Pattern:**
-```sql
-OUTER APPLY (
-    SELECT TOP(1) * FROM SomeTable
-    WHERE ...
-) AliasName  -- This alias should be captured
+**Fix Applied:**
+- Updated `extract_table_refs_tokenized()` function signature to take `subquery_aliases: &HashSet<String>` as a new parameter
+- Added checks for `subquery_aliases.contains(&first.to_lowercase())` in:
+  - `TwoPartUnbracketed` handler
+  - `AliasDotBracketedColumn` handler
+  - `BracketedAliasDotColumn` handler
+  - `TwoPartBracketed` handler
+- Updated all callers to pass the `subquery_aliases` parameter
 
--- Later in the procedure:
-WHERE Column = AliasName.Id  -- Should NOT emit [AliasName].[Id] as a dependency
-```
-
-### Phase 26.1: Diagnose Alias Capture Failure (0/2)
+### Phase 26.1: Diagnose Alias Capture Failure (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 26.1.1 | Add unit test reproducing APPLY alias not captured | ⬜ | Test `extract_table_aliases_for_body_deps` with OUTER APPLY pattern |
-| 26.1.2 | Debug `try_parse_subquery_alias` after `)` token | ⬜ | Verify tokenization of `) AliasName` pattern works |
+| 26.1.1 | Add unit test reproducing APPLY alias not captured | ✅ | `test_body_dependencies_cross_apply_alias_column` - verifies `d.TagCount` is not emitted as `[d].[TagCount]` |
+| 26.1.2 | Debug `try_parse_subquery_alias` after `)` token | ✅ | Root cause was in `extract_table_refs_tokenized()`, not alias capture itself |
 
-### Phase 26.2: Fix Alias Extraction (0/2)
+### Phase 26.2: Fix Alias Extraction (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 26.2.1 | Fix APPLY subquery alias capture in `TableAliasTokenParser` | ⬜ | Ensure `) alias` pattern after APPLY subquery is captured |
-| 26.2.2 | Add integration test for procedure with APPLY aliases | ⬜ | Verify no invalid references emitted in BodyDependencies |
+| 26.2.1 | Fix APPLY subquery alias capture in `TableAliasTokenParser` | ✅ | Fixed in `extract_table_refs_tokenized()` by adding `subquery_aliases` parameter |
+| 26.2.2 | Add integration test for procedure with APPLY aliases | ✅ | `test_procedure_apply_clause_alias_resolution` for `GetAccountWithApply` procedure |
 
-**Location:** `src/dacpac/model_xml/body_deps.rs` lines 1162-1179 (RParen handling), 1507-1596 (`try_parse_subquery_alias`)
+**Location:** `src/dacpac/model_xml/body_deps.rs` - `extract_table_refs_tokenized()` function
 
 **Validation:** Deploy dacpac to SQL Server without unresolved reference errors.
 
@@ -363,7 +363,6 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 |-------|----------|-------|
 | Missing SqlDynamicColumnSource elements | procedure bodies | Phase 24 |
 | Missing constraints from ALTER TABLE | parser/builder | Phase 25 |
-| APPLY subquery aliases not captured | body_deps.rs | Phase 26 |
 
 ## Code Simplification Opportunities
 
@@ -399,6 +398,7 @@ if let Some(val) = find_property_value(root, "PropertyName") {
 | Phase 21 | Split model_xml.rs into submodules | 10/10 |
 | Phase 22.1-22.3 | Layer 7 XML parity (CollationCaseSensitive, CustomData, ordering) | 4/5 |
 | Phase 23 | Fix IsMax property for MAX types | 4/4 |
+| Phase 26 | Fix APPLY subquery alias capture in body dependencies | 4/4 |
 
 ## Phase 21: Split model_xml.rs into Submodules (10/10) ✅
 
@@ -429,6 +429,21 @@ Fixed deployment failure where `Length="4294967295"` caused Int32 format errors.
 - `write_tvf_columns()`: Checks `col.length == Some(u32::MAX)`, writes `IsMax="True"`
 - `write_scalar_type()`: Checks `scalar.length == Some(-1)`, writes `IsMax="True"`
 - `extract_scalar_type_info()`: Added MAX keyword detection in type parsing
+
+## Phase 26: Fix APPLY Subquery Alias Capture (4/4) ✅
+
+Fixed deployment failure caused by unresolved references to APPLY subquery aliases.
+
+**Root Cause:** `extract_table_refs_tokenized()` was not checking `subquery_aliases` when processing `TwoPartUnbracketed` tokens, causing APPLY subquery aliases (like `d` from `CROSS APPLY (...) d`) to be treated as schema names.
+
+**Fix Applied:**
+- Updated `extract_table_refs_tokenized()` function signature to take `subquery_aliases: &HashSet<String>` as a new parameter
+- Added checks for `subquery_aliases.contains(&first.to_lowercase())` in `TwoPartUnbracketed`, `AliasDotBracketedColumn`, `BracketedAliasDotColumn`, and `TwoPartBracketed` handlers
+- Updated all callers to pass the `subquery_aliases` parameter
+
+**Tests Added:**
+- `test_body_dependencies_cross_apply_alias_column` - Unit test verifying `d.TagCount` is not emitted as `[d].[TagCount]`
+- `test_procedure_apply_clause_alias_resolution` - Integration test for `GetAccountWithApply` procedure
 
 ## Phase 20: Replace Remaining Regex with Tokenization/AST (43/43) ✅
 

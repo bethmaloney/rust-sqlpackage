@@ -588,6 +588,7 @@ pub(crate) fn extract_bracketed_identifiers_tokenized(sql: &str) -> Vec<Brackete
 pub(crate) fn extract_table_refs_tokenized(
     body: &str,
     table_aliases: &HashMap<String, String>,
+    subquery_aliases: &HashSet<String>,
 ) -> Vec<String> {
     let mut table_refs: Vec<String> = Vec::with_capacity(5);
 
@@ -601,6 +602,10 @@ pub(crate) fn extract_table_refs_tokenized(
                 // [schema].[table] pattern - equivalent to BRACKETED_TABLE_RE
                 // Skip if either part starts with @ (parameter)
                 if !first.starts_with('@') && !second.starts_with('@') {
+                    // Skip if first part is a subquery alias (APPLY alias)
+                    if subquery_aliases.contains(&first.to_lowercase()) {
+                        continue;
+                    }
                     let table_ref = format!("[{}].[{}]", first, second);
                     if !table_refs.contains(&table_ref) {
                         table_refs.push(table_ref);
@@ -617,6 +622,10 @@ pub(crate) fn extract_table_refs_tokenized(
                 if table_aliases.contains_key(&first.to_lowercase()) {
                     continue;
                 }
+                // Skip if first part is a subquery alias (APPLY alias)
+                if subquery_aliases.contains(&first.to_lowercase()) {
+                    continue;
+                }
                 let table_ref = format!("[{}].[{}]", first, second);
                 if !table_refs.contains(&table_ref) {
                     table_refs.push(table_ref);
@@ -628,7 +637,10 @@ pub(crate) fn extract_table_refs_tokenized(
                     continue;
                 }
                 // If not a known alias, treat as potential schema.table reference
-                if !table_aliases.contains_key(&alias.to_lowercase()) {
+                let alias_lower = alias.to_lowercase();
+                if !table_aliases.contains_key(&alias_lower)
+                    && !subquery_aliases.contains(&alias_lower)
+                {
                     let table_ref = format!("[{}].[{}]", alias, column);
                     if !table_refs.contains(&table_ref) {
                         table_refs.push(table_ref);
@@ -642,7 +654,10 @@ pub(crate) fn extract_table_refs_tokenized(
                         continue;
                     }
                     // If not a known alias, treat as potential schema.table reference
-                    if !table_aliases.contains_key(&alias.to_lowercase()) {
+                    let alias_lower = alias.to_lowercase();
+                    if !table_aliases.contains_key(&alias_lower)
+                        && !subquery_aliases.contains(&alias_lower)
+                    {
                         let table_ref = format!("[{}].[{}]", alias, column);
                         if !table_refs.contains(&table_ref) {
                             table_refs.push(table_ref);
@@ -727,7 +742,7 @@ pub(crate) fn extract_body_dependencies(
     // First pass: collect all table references using token-based extraction
     // Phase 20.4.3: Replaced BRACKETED_TABLE_RE and UNBRACKETED_TABLE_RE with tokenization
     // This handles whitespace (tabs, multiple spaces, newlines) correctly and is more robust
-    let table_refs = extract_table_refs_tokenized(body, &table_aliases);
+    let table_refs = extract_table_refs_tokenized(body, &table_aliases, &subquery_aliases);
 
     // Scan body sequentially for all references in order of appearance using token-based scanner
     // Note: DotNet has a complex ordering that depends on SQL clause structure (FROM first, etc.)
@@ -1073,16 +1088,44 @@ impl TableAliasTokenParser {
                 self.skip_join_keywords();
                 self.extract_table_reference_after_from_join(table_aliases, subquery_aliases);
             } else if self.check_word_ci("CROSS") || self.check_word_ci("OUTER") {
-                // Check for APPLY - just skip past the APPLY keyword and let the loop
-                // continue to find FROM/JOIN inside the APPLY subquery
-                // The subquery alias will be captured via the ) AS/alias pattern
+                // Check for APPLY - first save position after APPLY to scan subquery contents,
+                // then skip to end and capture the APPLY alias
                 let saved_pos = self.pos;
                 self.advance();
                 self.skip_whitespace();
                 if self.check_keyword(Keyword::APPLY) || self.check_word_ci("APPLY") {
                     self.advance();
-                    // Don't extract alias here - let the loop continue to scan content
-                    // The ) alias pattern will capture the APPLY alias
+                    self.skip_whitespace();
+
+                    // Check if followed by opening paren (subquery)
+                    if self.check_token(&Token::LParen) {
+                        // Save position after LParen to scan subquery contents
+                        let subquery_start = self.pos;
+
+                        // Skip to end of balanced parens to find APPLY alias
+                        self.skip_balanced_parens();
+                        self.skip_whitespace();
+
+                        // Check for AS keyword (optional)
+                        if self.check_keyword(Keyword::AS) {
+                            self.advance();
+                            self.skip_whitespace();
+                        }
+
+                        // Capture the APPLY alias (e.g., "d" in CROSS APPLY (...) d)
+                        if let Some(alias) = self.try_parse_subquery_alias() {
+                            let alias_lower = alias.to_lowercase();
+                            if !Self::is_alias_keyword(&alias_lower) {
+                                subquery_aliases.insert(alias_lower);
+                            }
+                        }
+
+                        // Now go back and scan the subquery contents for table aliases
+                        // Advance past the opening paren
+                        self.pos = subquery_start + 1;
+                        // The main loop will continue scanning FROM/JOIN inside the subquery
+                    }
+                    // If not followed by paren, it might be OUTER JOIN, handle in else branch
                 } else {
                     // Not an APPLY, restore position and continue
                     self.pos = saved_pos;

@@ -3796,6 +3796,51 @@ OUTER APPLY (
     }
 
     #[test]
+    fn test_body_dependencies_cross_apply_alias_column() {
+        // Test that d.TagCount is NOT emitted as [d].[TagCount]
+        let sql = r#"
+SELECT
+    a.Id,
+    a.AccountNumber,
+    d.TagCount
+FROM
+    [dbo].[Account] a
+CROSS APPLY (
+    SELECT COUNT(*) AS TagCount
+    FROM [dbo].[AccountTag]
+    WHERE AccountId = a.Id
+) d
+WHERE a.Status = 1
+"#;
+
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+
+        // Should NOT contain [d].[TagCount] - d is a subquery alias
+        let has_d_tagcount = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r.starts_with("[d]."),
+            _ => false,
+        });
+        assert!(
+            !has_d_tagcount,
+            "Should NOT have [d].* in body deps - d is CROSS APPLY alias. Got: {:?}",
+            deps
+        );
+
+        // Should contain actual table references
+        let has_account = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Account]",
+            _ => false,
+        });
+        assert!(has_account, "Expected [dbo].[Account] in body deps");
+
+        let has_accounttag = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[AccountTag]",
+            _ => false,
+        });
+        assert!(has_accounttag, "Expected [dbo].[AccountTag] in body deps");
+    }
+
+    #[test]
     fn test_extract_table_aliases_cte_single() {
         use std::collections::{HashMap, HashSet};
 
@@ -6000,7 +6045,12 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_bracketed() {
         // Basic bracketed table reference
         let aliases = std::collections::HashMap::new();
-        let refs = extract_table_refs_tokenized("SELECT * FROM [dbo].[Employees]", &aliases);
+        let subquery_aliases = std::collections::HashSet::new();
+        let refs = extract_table_refs_tokenized(
+            "SELECT * FROM [dbo].[Employees]",
+            &aliases,
+            &subquery_aliases,
+        );
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
     }
 
@@ -6008,7 +6058,12 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_unbracketed() {
         // Basic unbracketed table reference
         let aliases = std::collections::HashMap::new();
-        let refs = extract_table_refs_tokenized("SELECT * FROM dbo.Employees", &aliases);
+        let subquery_aliases = std::collections::HashSet::new();
+        let refs = extract_table_refs_tokenized(
+            "SELECT * FROM dbo.Employees",
+            &aliases,
+            &subquery_aliases,
+        );
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
     }
 
@@ -6016,9 +6071,11 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_mixed() {
         // Mix of bracketed and unbracketed
         let aliases = std::collections::HashMap::new();
+        let subquery_aliases = std::collections::HashSet::new();
         let refs = extract_table_refs_tokenized(
             "SELECT * FROM [dbo].[Employees] e JOIN sales.Orders o ON e.Id = o.EmployeeId",
             &aliases,
+            &subquery_aliases,
         );
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
         assert!(refs.contains(&"[sales].[Orders]".to_string()));
@@ -6028,8 +6085,13 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_skip_aliases() {
         // Should skip alias.column references
         let mut aliases = std::collections::HashMap::new();
+        let subquery_aliases = std::collections::HashSet::new();
         aliases.insert("e".to_string(), "[dbo].[Employees]".to_string());
-        let refs = extract_table_refs_tokenized("SELECT e.Name FROM [dbo].[Employees] e", &aliases);
+        let refs = extract_table_refs_tokenized(
+            "SELECT e.Name FROM [dbo].[Employees] e",
+            &aliases,
+            &subquery_aliases,
+        );
         // Should contain the table but not treat e.Name as a table
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
         assert!(!refs.contains(&"[e].[Name]".to_string()));
@@ -6039,9 +6101,11 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_skip_parameters() {
         // Should skip @ prefixed identifiers
         let aliases = std::collections::HashMap::new();
+        let subquery_aliases = std::collections::HashSet::new();
         let refs = extract_table_refs_tokenized(
             "SELECT * FROM [dbo].[Employees] WHERE [@Schema].[@Table] = 1",
             &aliases,
+            &subquery_aliases,
         );
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
         // Parameters with @ should be excluded
@@ -6052,7 +6116,12 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_skip_keywords() {
         // Should skip keyword.something patterns like FROM.anything
         let aliases = std::collections::HashMap::new();
-        let refs = extract_table_refs_tokenized("SELECT * FROM dbo.Employees", &aliases);
+        let subquery_aliases = std::collections::HashSet::new();
+        let refs = extract_table_refs_tokenized(
+            "SELECT * FROM dbo.Employees",
+            &aliases,
+            &subquery_aliases,
+        );
         // Should not treat FROM as a schema
         assert!(!refs.contains(&"[FROM].[dbo]".to_string()));
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
@@ -6062,7 +6131,12 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_whitespace() {
         // Handles whitespace between parts
         let aliases = std::collections::HashMap::new();
-        let refs = extract_table_refs_tokenized("SELECT * FROM [dbo] . [Employees]", &aliases);
+        let subquery_aliases = std::collections::HashSet::new();
+        let refs = extract_table_refs_tokenized(
+            "SELECT * FROM [dbo] . [Employees]",
+            &aliases,
+            &subquery_aliases,
+        );
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
     }
 
@@ -6070,7 +6144,12 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_tabs() {
         // Handles tabs and newlines
         let aliases = std::collections::HashMap::new();
-        let refs = extract_table_refs_tokenized("SELECT * FROM [dbo]\t.\n[Employees]", &aliases);
+        let subquery_aliases = std::collections::HashSet::new();
+        let refs = extract_table_refs_tokenized(
+            "SELECT * FROM [dbo]\t.\n[Employees]",
+            &aliases,
+            &subquery_aliases,
+        );
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
     }
 
@@ -6078,9 +6157,11 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_three_part() {
         // Extracts table from three-part references [schema].[table].[column]
         let aliases = std::collections::HashMap::new();
+        let subquery_aliases = std::collections::HashSet::new();
         let refs = extract_table_refs_tokenized(
             "SELECT [dbo].[Employees].[Name] FROM [dbo].[Employees]",
             &aliases,
+            &subquery_aliases,
         );
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
     }
@@ -6089,9 +6170,11 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_deduplicates() {
         // Deduplicates repeated references
         let aliases = std::collections::HashMap::new();
+        let subquery_aliases = std::collections::HashSet::new();
         let refs = extract_table_refs_tokenized(
             "SELECT * FROM [dbo].[Employees] WHERE EXISTS (SELECT 1 FROM [dbo].[Employees])",
             &aliases,
+            &subquery_aliases,
         );
         // Should only appear once
         assert_eq!(refs.iter().filter(|r| *r == "[dbo].[Employees]").count(), 1);
@@ -6101,11 +6184,13 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_multiple_tables() {
         // Multiple different tables
         let aliases = std::collections::HashMap::new();
+        let subquery_aliases = std::collections::HashSet::new();
         let refs = extract_table_refs_tokenized(
             "SELECT * FROM [dbo].[Employees] e
              JOIN [dbo].[Departments] d ON e.DeptId = d.Id
              JOIN [hr].[Managers] m ON d.ManagerId = m.Id",
             &aliases,
+            &subquery_aliases,
         );
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
         assert!(refs.contains(&"[dbo].[Departments]".to_string()));
@@ -6116,10 +6201,12 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_alias_dot_bracketed() {
         // alias.[column] pattern - should not be treated as table if alias is known
         let mut aliases = std::collections::HashMap::new();
+        let subquery_aliases = std::collections::HashSet::new();
         aliases.insert("e".to_string(), "[dbo].[Employees]".to_string());
         let refs = extract_table_refs_tokenized(
             "SELECT e.[Name], e.[Age] FROM [dbo].[Employees] e",
             &aliases,
+            &subquery_aliases,
         );
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
         // e.[Name] should NOT be treated as a table reference
@@ -6131,10 +6218,12 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_bracketed_alias_dot_column() {
         // [alias].column pattern - should not be treated as table if alias is known
         let mut aliases = std::collections::HashMap::new();
+        let subquery_aliases = std::collections::HashSet::new();
         aliases.insert("e".to_string(), "[dbo].[Employees]".to_string());
         let refs = extract_table_refs_tokenized(
             "SELECT [e].Name, [e].Age FROM [dbo].[Employees] e",
             &aliases,
+            &subquery_aliases,
         );
         assert!(refs.contains(&"[dbo].[Employees]".to_string()));
         // [e].Name should NOT be treated as a table reference
@@ -6145,7 +6234,8 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_empty() {
         // Empty body
         let aliases = std::collections::HashMap::new();
-        let refs = extract_table_refs_tokenized("", &aliases);
+        let subquery_aliases = std::collections::HashSet::new();
+        let refs = extract_table_refs_tokenized("", &aliases, &subquery_aliases);
         assert!(refs.is_empty());
     }
 
@@ -6153,7 +6243,9 @@ FROM [dbo].[Account] A
     fn test_extract_table_refs_tokenized_no_tables() {
         // SQL with no table references
         let aliases = std::collections::HashMap::new();
-        let refs = extract_table_refs_tokenized("SELECT 1 + 2 AS Result", &aliases);
+        let subquery_aliases = std::collections::HashSet::new();
+        let refs =
+            extract_table_refs_tokenized("SELECT 1 + 2 AS Result", &aliases, &subquery_aliases);
         assert!(refs.is_empty());
     }
 

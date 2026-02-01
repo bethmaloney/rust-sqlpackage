@@ -248,6 +248,41 @@ fn test_apply_clause_alias_resolution() {
 }
 
 #[test]
+fn test_procedure_apply_clause_alias_resolution() {
+    // Test CROSS APPLY and OUTER APPLY with aliases in procedures (Phase 26.2.2)
+    let ctx = TestContext::with_fixture("body_dependencies_aliases");
+    let result = ctx.build();
+    assert!(result.success, "Build should succeed");
+
+    let dacpac_path = result.dacpac_path.unwrap();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    let deps = get_procedure_body_dependencies("GetAccountWithApply", &model_xml);
+
+    println!("\nGetAccountWithApply procedure dependencies:");
+    for dep in &deps {
+        println!("  - {}", dep);
+    }
+
+    // Should NOT contain invalid APPLY subquery alias references
+    // 'd' is CROSS APPLY alias, 't' is OUTER APPLY alias
+    // They should not appear as schema names (e.g., [d].[TagCount]) or column prefixes
+    assert!(
+        !deps
+            .iter()
+            .any(|d| d.starts_with("[d].") || d.starts_with("[t].")),
+        "APPLY aliases 'd' and 't' should NOT appear as schema-qualified references. Got: {:?}",
+        deps
+    );
+
+    // Should contain proper table references
+    assert!(deps.iter().any(|d| d == "[dbo].[Account]"));
+    assert!(deps.iter().any(|d| d == "[dbo].[AccountTag]"));
+    assert!(deps.iter().any(|d| d == "[dbo].[Tag]"));
+}
+
+#[test]
 fn test_cte_alias_recognition() {
     // Test that CTE names are NOT treated as table references
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
