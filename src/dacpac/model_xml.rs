@@ -1903,6 +1903,87 @@ fn extract_single_bracketed_identifiers(sql: &str) -> Vec<String> {
     results
 }
 
+/// Extract column aliases from SQL text using tokenization.
+///
+/// This function scans SQL and extracts identifiers that follow the AS keyword.
+/// Pattern: `expr AS alias` or `expr AS [alias]`
+///
+/// Used in `extract_column_aliases_for_body_deps()` to find output column names
+/// that should not be treated as column references.
+///
+/// # Arguments
+/// * `sql` - SQL text to scan (e.g., SELECT clause with aliases)
+///
+/// # Returns
+/// A vector of alias names (without brackets, lowercase) in order of appearance.
+fn extract_column_aliases_tokenized(sql: &str) -> Vec<String> {
+    let mut results = Vec::new();
+
+    let dialect = MsSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, sql).tokenize_with_location() else {
+        return results;
+    };
+
+    // SQL keywords that should not be treated as aliases
+    let alias_keywords = [
+        "ON", "WHERE", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "JOIN", "GROUP", "ORDER",
+        "HAVING", "UNION", "WITH", "AND", "OR", "NOT", "SET", "FROM", "SELECT", "INTO", "BEGIN",
+        "END", "NULL", "INT", "VARCHAR", "NVARCHAR", "DATETIME", "BIT", "DECIMAL",
+    ];
+
+    let mut i = 0;
+    while i < tokens.len() {
+        // Skip whitespace
+        while i < tokens.len() {
+            if matches!(&tokens[i].token, Token::Whitespace(_)) {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if i >= tokens.len() {
+            break;
+        }
+
+        // Look for the AS keyword
+        if let Token::Word(w) = &tokens[i].token {
+            if w.quote_style.is_none() && w.value.eq_ignore_ascii_case("AS") {
+                i += 1;
+
+                // Skip whitespace after AS
+                while i < tokens.len() {
+                    if matches!(&tokens[i].token, Token::Whitespace(_)) {
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                // Extract the alias (next identifier, bracketed or unbracketed)
+                if i < tokens.len() {
+                    if let Token::Word(alias_word) = &tokens[i].token {
+                        let alias_name = &alias_word.value;
+                        let alias_upper = alias_name.to_uppercase();
+
+                        // Skip if alias is a SQL keyword
+                        if !alias_keywords.iter().any(|&k| k == alias_upper)
+                            && !alias_name.is_empty()
+                        {
+                            results.push(alias_name.to_lowercase());
+                        }
+                        i += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    results
+}
+
 /// Resolve a column reference to its full [schema].[table].[column] form
 /// Returns None for aggregate/function expressions or complex expressions (CASE, etc.)
 fn resolve_column_reference(
@@ -4365,31 +4446,9 @@ fn extract_column_aliases_for_body_deps(
     body: &str,
     column_aliases: &mut std::collections::HashSet<String>,
 ) {
-    // Regex for column alias pattern: expr AS alias (with or without brackets)
-    // Matches: COUNT(*) AS Occurrences, A.Id AS AccountBusinessKey, etc.
-    static COLUMN_ALIAS_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)\bAS\s+(\[?[A-Za-z_]\w*\]?)").unwrap());
-
-    // SQL keywords that should not be treated as aliases
-    let alias_keywords = [
-        "ON", "WHERE", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "JOIN", "GROUP", "ORDER",
-        "HAVING", "UNION", "WITH", "AND", "OR", "NOT", "SET", "FROM", "SELECT", "INTO", "BEGIN",
-        "END", "NULL", "INT", "VARCHAR", "NVARCHAR", "DATETIME", "BIT", "DECIMAL",
-    ];
-
-    for cap in COLUMN_ALIAS_RE.captures_iter(body) {
-        let alias = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let alias_clean = alias.trim_matches(|c| c == '[' || c == ']');
-        let alias_upper = alias_clean.to_uppercase();
-
-        // Skip if alias is a keyword
-        if alias_keywords.iter().any(|&k| k == alias_upper) {
-            continue;
-        }
-
-        if !alias_clean.is_empty() {
-            column_aliases.insert(alias_clean.to_lowercase());
-        }
+    // Use tokenizer-based extraction (replaces COLUMN_ALIAS_RE regex)
+    for alias in extract_column_aliases_tokenized(body) {
+        column_aliases.insert(alias);
     }
 }
 
@@ -8681,5 +8740,146 @@ FROM [dbo].[Account] A
         assert_eq!(idents.len(), 2);
         assert_eq!(idents[0], "名前");
         assert_eq!(idents[1], "価格");
+    }
+
+    // ============================================================================
+    // Tests for extract_column_aliases_tokenized (Phase 20.2.7)
+    // ============================================================================
+
+    #[test]
+    fn test_column_alias_simple() {
+        // Basic AS alias pattern
+        let aliases = extract_column_aliases_tokenized("SELECT col AS alias");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0], "alias");
+    }
+
+    #[test]
+    fn test_column_alias_bracketed() {
+        // AS [alias] pattern with brackets
+        let aliases = extract_column_aliases_tokenized("SELECT col AS [MyAlias]");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0], "myalias");
+    }
+
+    #[test]
+    fn test_column_alias_multiple() {
+        // Multiple aliases in SELECT
+        let aliases =
+            extract_column_aliases_tokenized("SELECT a.Id AS Id1, b.Name AS Name2, c.Val AS Val3");
+        assert_eq!(aliases.len(), 3);
+        assert_eq!(aliases[0], "id1");
+        assert_eq!(aliases[1], "name2");
+        assert_eq!(aliases[2], "val3");
+    }
+
+    #[test]
+    fn test_column_alias_with_tabs() {
+        // Tabs instead of spaces
+        let aliases = extract_column_aliases_tokenized("SELECT col\tAS\talias");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0], "alias");
+    }
+
+    #[test]
+    fn test_column_alias_with_multiple_spaces() {
+        // Multiple spaces
+        let aliases = extract_column_aliases_tokenized("SELECT col   AS   alias");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0], "alias");
+    }
+
+    #[test]
+    fn test_column_alias_with_newlines() {
+        // Newlines between tokens
+        let aliases = extract_column_aliases_tokenized("SELECT col\nAS\nalias");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0], "alias");
+    }
+
+    #[test]
+    fn test_column_alias_case_insensitive() {
+        // AS keyword is case-insensitive
+        let aliases = extract_column_aliases_tokenized("SELECT col as alias1, val As alias2");
+        assert_eq!(aliases.len(), 2);
+        assert_eq!(aliases[0], "alias1");
+        assert_eq!(aliases[1], "alias2");
+    }
+
+    #[test]
+    fn test_column_alias_skip_keywords() {
+        // SQL keywords after AS should be skipped
+        let aliases = extract_column_aliases_tokenized("SELECT col AS FROM");
+        assert!(aliases.is_empty());
+    }
+
+    #[test]
+    fn test_column_alias_skip_join_keyword() {
+        // JOIN keyword after AS should be skipped
+        let aliases = extract_column_aliases_tokenized("SELECT col AS LEFT");
+        assert!(aliases.is_empty());
+    }
+
+    #[test]
+    fn test_column_alias_skip_null_keyword() {
+        // NULL keyword after AS should be skipped
+        let aliases = extract_column_aliases_tokenized("SELECT col AS NULL");
+        assert!(aliases.is_empty());
+    }
+
+    #[test]
+    fn test_column_alias_count_function() {
+        // COUNT(*) AS alias pattern
+        let aliases = extract_column_aliases_tokenized("SELECT COUNT(*) AS Occurrences");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0], "occurrences");
+    }
+
+    #[test]
+    fn test_column_alias_qualified_column() {
+        // Qualified column AS alias
+        let aliases = extract_column_aliases_tokenized("SELECT A.Id AS AccountBusinessKey");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0], "accountbusinesskey");
+    }
+
+    #[test]
+    fn test_column_alias_empty() {
+        let aliases = extract_column_aliases_tokenized("");
+        assert!(aliases.is_empty());
+    }
+
+    #[test]
+    fn test_column_alias_no_aliases() {
+        // SELECT without aliases
+        let aliases = extract_column_aliases_tokenized("SELECT col1, col2, col3");
+        assert!(aliases.is_empty());
+    }
+
+    #[test]
+    fn test_column_alias_mixed() {
+        // Mix of aliased and non-aliased columns
+        let aliases = extract_column_aliases_tokenized("SELECT col1, col2 AS alias2, col3");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0], "alias2");
+    }
+
+    #[test]
+    fn test_column_alias_complex_expression() {
+        // Complex expression with AS
+        let aliases = extract_column_aliases_tokenized(
+            "SELECT CASE WHEN a = 1 THEN b ELSE c END AS Result, d + e AS Total",
+        );
+        assert_eq!(aliases.len(), 2);
+        assert_eq!(aliases[0], "result");
+        assert_eq!(aliases[1], "total");
+    }
+
+    #[test]
+    fn test_column_alias_underscore() {
+        // Alias with underscore
+        let aliases = extract_column_aliases_tokenized("SELECT col AS my_alias");
+        assert_eq!(aliases.len(), 1);
+        assert_eq!(aliases[0], "my_alias");
     }
 }
