@@ -1,6 +1,8 @@
 //! Generate model.xml for dacpac
 
-use quick_xml::events::{BytesCData, BytesDecl, BytesEnd, BytesStart, Event};
+mod xml_helpers;
+
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
 use regex::Regex;
 use sqlparser::dialect::MsSqlDialect;
@@ -20,24 +22,13 @@ use crate::parser::identifier_utils::{format_word, normalize_identifier};
 use crate::parser::{extract_function_parameters_tokens, extract_procedure_parameters_tokens};
 use crate::project::SqlProject;
 
-const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
+// Re-export XML helper functions for use within this module
+use xml_helpers::{
+    is_builtin_schema, write_builtin_type_relationship, write_property, write_relationship,
+    write_schema_relationship, write_script_property, write_type_specifier_builtin,
+};
 
-/// Built-in schemas that exist by default in SQL Server
-const BUILTIN_SCHEMAS: &[&str] = &[
-    "dbo",
-    "guest",
-    "INFORMATION_SCHEMA",
-    "sys",
-    "db_owner",
-    "db_accessadmin",
-    "db_securityadmin",
-    "db_ddladmin",
-    "db_backupoperator",
-    "db_datareader",
-    "db_datawriter",
-    "db_denydatareader",
-    "db_denydatawriter",
-];
+const NAMESPACE: &str = "http://schemas.microsoft.com/sqlserver/dac/Serialization/2012/02";
 
 // =============================================================================
 // Cached Regex Patterns
@@ -112,13 +103,6 @@ static MULTI_STMT_TVF_RE: LazyLock<Regex> =
 // INSERT_SELECT_RE removed - replaced by InsertSelectTokenParser (Phase 20.4.6)
 // INSERT_SELECT_JOIN_RE removed - replaced by InsertSelectTokenParser (Phase 20.4.6)
 // UPDATE_ALIAS_RE removed - replaced by UpdateTokenParser (Phase 20.4.7)
-
-/// Check if a schema name is a built-in SQL Server schema
-fn is_builtin_schema(schema: &str) -> bool {
-    BUILTIN_SCHEMAS
-        .iter()
-        .any(|&s| s.eq_ignore_ascii_case(schema))
-}
 
 pub fn generate_model_xml<W: Write>(
     writer: W,
@@ -7568,151 +7552,6 @@ fn write_constraint<W: Write>(
     }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    Ok(())
-}
-
-fn write_property<W: Write>(writer: &mut Writer<W>, name: &str, value: &str) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let prop = BytesStart::new("Property").with_attributes([("Name", name), ("Value", value)]);
-    writer.write_event(Event::Empty(prop))?;
-    Ok(())
-}
-
-/// Normalize script content for consistent output.
-///
-/// DotNet DacFx normalizes line endings in script content to LF (Unix-style).
-/// This ensures consistent output regardless of the source file's line endings.
-fn normalize_script_content(script: &str) -> String {
-    // Convert CRLF to LF for consistent line endings
-    script.replace("\r\n", "\n")
-}
-
-/// Write a property with a CDATA value (for script content like QueryScript, BodyScript)
-fn write_script_property<W: Write>(
-    writer: &mut Writer<W>,
-    name: &str,
-    script: &str,
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let prop = BytesStart::new("Property").with_attributes([("Name", name)]);
-    writer.write_event(Event::Start(prop))?;
-
-    // Normalize line endings before writing
-    let normalized_script = normalize_script_content(script);
-
-    // Write Value element with CDATA content
-    writer.write_event(Event::Start(BytesStart::new("Value")))?;
-    writer.write_event(Event::CData(BytesCData::new(&normalized_script)))?;
-    writer.write_event(Event::End(BytesEnd::new("Value")))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Property")))?;
-    Ok(())
-}
-
-fn write_relationship<W: Write>(
-    writer: &mut Writer<W>,
-    name: &str,
-    references: &[&str],
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", name)]);
-    writer.write_event(Event::Start(rel))?;
-
-    for reference in references {
-        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-        let refs = BytesStart::new("References").with_attributes([("Name", *reference)]);
-        writer.write_event(Event::Empty(refs))?;
-
-        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    }
-
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-    Ok(())
-}
-
-fn write_builtin_type_relationship<W: Write>(
-    writer: &mut Writer<W>,
-    name: &str,
-    type_ref: &str,
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", name)]);
-    writer.write_event(Event::Start(rel))?;
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    // Batch both attributes in a single with_attributes call
-    let refs = BytesStart::new("References")
-        .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_ref)]);
-    writer.write_event(Event::Empty(refs))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-    Ok(())
-}
-
-/// Write a Schema relationship, using ExternalSource="BuiltIns" for built-in schemas
-fn write_schema_relationship<W: Write>(writer: &mut Writer<W>, schema: &str) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Schema")]);
-    writer.write_event(Event::Start(rel))?;
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    let schema_ref = format!("[{}]", schema);
-    // Conditional attribute - use with_attributes with appropriate attributes
-    let refs = if is_builtin_schema(schema) {
-        BytesStart::new("References").with_attributes([
-            ("ExternalSource", "BuiltIns"),
-            ("Name", schema_ref.as_str()),
-        ])
-    } else {
-        BytesStart::new("References").with_attributes([("Name", schema_ref.as_str())])
-    };
-    writer.write_event(Event::Empty(refs))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-    Ok(())
-}
-
-/// Write TypeSpecifier relationship for sequences referencing a built-in type
-/// Format: <Relationship Name="TypeSpecifier"><Entry><Element Type="SqlTypeSpecifier">
-///           <Relationship Name="Type"><Entry><References ExternalSource="BuiltIns" Name="[int]"/></Entry></Relationship>
-///         </Element></Entry></Relationship>
-fn write_type_specifier_builtin<W: Write>(
-    writer: &mut Writer<W>,
-    type_name: &str,
-) -> anyhow::Result<()> {
-    // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-    let rel = BytesStart::new("Relationship").with_attributes([("Name", "TypeSpecifier")]);
-    writer.write_event(Event::Start(rel))?;
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    let elem = BytesStart::new("Element").with_attributes([("Type", "SqlTypeSpecifier")]);
-    writer.write_event(Event::Start(elem))?;
-
-    // Nested Type relationship referencing the built-in type
-    let inner_rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
-    writer.write_event(Event::Start(inner_rel))?;
-
-    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
-
-    let refs = BytesStart::new("References")
-        .with_attributes([("ExternalSource", "BuiltIns"), ("Name", type_name)]);
-    writer.write_event(Event::Empty(refs))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-
-    writer.write_event(Event::End(BytesEnd::new("Element")))?;
-    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
-    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
-
     Ok(())
 }
 
