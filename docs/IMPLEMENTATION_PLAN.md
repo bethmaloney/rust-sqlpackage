@@ -7,6 +7,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phases 1-34 complete. Full parity achieved.**
 
 **Remaining Work:**
+- **Phase 35: Fix schema resolution for unqualified tables** - Tables in nested subqueries incorrectly resolve to containing object's schema instead of [dbo]
+- **Phase 36: DacMetadata.xml dynamic properties** - Replace hardcoded version with sqlproj DacVersion/DacDescription
+- **Phase 37: Collation LCID and case sensitivity** - Derive from DefaultCollation instead of hardcoding
 - Phase 22.4.4: Disambiguator numbering (lower priority - dacpac functions correctly)
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
 
@@ -104,11 +107,199 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
+## Phase 35: Fix Default Schema Resolution for Unqualified Table Names
+
+**Goal:** Fix unqualified table names resolving to the containing object's schema instead of the default schema ([dbo]).
+
+**Problem:** When a view/procedure/function in a non-dbo schema (e.g., `[reporting]`) references unqualified table names (e.g., `Tag` instead of `[dbo].[Tag]`), the table is incorrectly resolved to the object's schema (`[reporting].[Tag]`) instead of `[dbo].[Tag]`.
+
+**Root Cause:** Multiple call sites incorrectly pass the containing object's schema as the `default_schema` parameter:
+
+| Location | Current (Incorrect) | Should Be |
+|----------|---------------------|-----------|
+| `view_writer.rs:78` | `&view.schema` | `"dbo"` |
+| `view_writer.rs:86` | `&view.schema` | `"dbo"` |
+| `view_writer.rs:156` | `&raw.schema` | `"dbo"` |
+| `view_writer.rs:164` | `&raw.schema` | `"dbo"` |
+| `programmability_writer.rs:98` | `&proc.schema` | `"dbo"` |
+| `programmability_writer.rs:218` | `&func.schema` | `"dbo"` |
+| `programmability_writer.rs:225` | `&func.schema` | `"dbo"` |
+
+**Example (causes deployment failure):**
+```sql
+CREATE VIEW [reporting].[MyView] AS
+SELECT ...
+LEFT JOIN (
+    SELECT STUFF((
+        SELECT ', ' + [ITTAG].[Name]
+        FROM InstrumentTag [IT2]           -- Bug: resolves to [reporting].[InstrumentTag]
+        INNER JOIN Tag [ITTAG] ON ...      -- Bug: resolves to [reporting].[Tag]
+        FOR XML PATH('')
+    ), 1, 2, '') AS TagList
+    FROM ...
+) Tags ON ...
+```
+
+**Impact:** Deployment fails with "The reference to the element ... could not be resolved because no element with that name exists"
+
+**DotNet Behavior:** Always uses `[dbo]` for unqualified table names regardless of the containing object's schema. Verified in fixture test output.
+
+**Fixture:** `tests/fixtures/body_dependencies_aliases/Views/InstrumentWithTagsUnqualified.sql`
+
+### Phase 35.1: Fix View Writer Schema Resolution (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 35.1.1 | Change `extract_view_columns_and_deps` calls to use "dbo" | ⬜ | Lines 78, 156 in view_writer.rs |
+| 35.1.2 | Change `write_view_cte_dynamic_objects` calls to use "dbo" | ⬜ | Lines 86, 164 in view_writer.rs |
+
+### Phase 35.2: Fix Programmability Writer Schema Resolution (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 35.2.1 | Change `write_all_dynamic_objects` calls to use "dbo" | ⬜ | Lines 98, 218 in programmability_writer.rs |
+| 35.2.2 | Change `extract_inline_tvf_columns` call to use "dbo" | ⬜ | Line 225 in programmability_writer.rs |
+
+### Phase 35.3: Validation (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 35.3.1 | Run parity tests for body_dependencies_aliases fixture | ⬜ | Should reduce relationship errors |
+| 35.3.2 | Validate deployment succeeds for InstrumentWithTagsUnqualified | ⬜ | No unresolved reference errors |
+
+### Phase 35.4: Thread Project Default Schema Through Call Chain (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 35.4.1 | Pass `project.default_schema` to `write_view()` and `write_raw_view()` | ⬜ | Currently not available in writer context |
+| 35.4.2 | Pass `project.default_schema` to `write_procedure()` and `write_function()` | ⬜ | Thread through programmability_writer |
+| 35.4.3 | Update `TableAliasTokenParser::new()` to accept project default schema | ⬜ | Replace hardcoded "dbo" in body_deps.rs |
+
+**Background:** The `.sqlproj` file can specify `<DefaultSchema>` (parsed in `sqlproj_parser.rs:208`), but this value is not currently threaded through to the body dependency extraction. Projects using non-dbo default schemas (e.g., `app`, `core`) would need this for correct unqualified name resolution.
+
+---
+
+## Phase 36: DacMetadata.xml Dynamic Properties
+
+**Goal:** Replace hardcoded DacMetadata.xml values with properties from the sqlproj file, aligning with DacFx behavior.
+
+**Problem:** Currently `DacMetadata.xml` uses a hardcoded version `"1.0.0.0"` (`src/dacpac/packager.rs:51`) and doesn't support the optional `<Description>` element. DacFx reads these from `<DacVersion>` and `<DacDescription>` properties in the sqlproj file.
+
+**Reference:** [SQL Projects Properties - Microsoft Learn](https://learn.microsoft.com/en-us/sql/tools/sql-database-projects/concepts/project-properties)
+
+### Phase 36.1: Add SqlProject Fields (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 36.1.1 | Add `dac_version: String` field to SqlProject struct | ⬜ | Default: "1.0.0.0" |
+| 36.1.2 | Add `dac_description: Option<String>` field to SqlProject struct | ⬜ | Optional, omit element if None |
+
+### Phase 36.2: Parse Properties from sqlproj (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 36.2.1 | Parse `<DacVersion>` from PropertyGroup elements | ⬜ | In `sqlproj_parser.rs`, similar to existing property parsing |
+| 36.2.2 | Parse `<DacDescription>` from PropertyGroup elements | ⬜ | Optional property |
+
+### Phase 36.3: Update Metadata Generation (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 36.3.1 | Update `packager.rs` to pass `project.dac_version` | ⬜ | Replace hardcoded "1.0.0.0" on line 51 |
+| 36.3.2 | Update `metadata_xml.rs` to emit `<Description>` when present | ⬜ | Only emit element if `dac_description.is_some()` |
+
+### Phase 36.4: Validation (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 36.4.1 | Add unit test for DacVersion/DacDescription parsing | ⬜ | Test fixture with custom version |
+| 36.4.2 | Verify parity with DacFx output for custom version | ⬜ | Compare DacMetadata.xml contents |
+
+---
+
+## Phase 37: Derive CollationLcid and CollationCaseSensitive from Collation Name
+
+**Goal:** Replace hardcoded `CollationLcid="1033"` and `CollationCaseSensitive="True"` in model.xml with values derived from the project's `<DefaultCollation>` setting.
+
+**Problem:** Currently these values are hardcoded:
+- `CollationLcid` → `1033` (hardcoded in `sqlproj_parser.rs:212`)
+- `CollationCaseSensitive` → `"True"` (hardcoded in `model_xml/mod.rs:160`)
+
+DacFx derives these from the collation name (e.g., `Latin1_General_CI_AS`):
+- **LCID**: Mapped from collation prefix (e.g., `Latin1_General` → 1033, `Japanese` → 1041)
+- **CaseSensitive**: Parsed from `_CI_` (False) vs `_CS_` (True) in the name
+
+**Reference:** [Collation and Unicode Support - Microsoft Learn](https://learn.microsoft.com/en-us/sql/relational-databases/collations/collation-and-unicode-support)
+
+### Generating the LCID Mapping Table
+
+Run this query against SQL Server to generate a collation-to-LCID mapping:
+
+```sql
+SELECT DISTINCT
+    -- Extract prefix before _CI/_CS/_BIN (the locale identifier)
+    CASE
+        WHEN CHARINDEX('_CI', [Name]) > 0 THEN LEFT([Name], CHARINDEX('_CI', [Name]) - 1)
+        WHEN CHARINDEX('_CS', [Name]) > 0 THEN LEFT([Name], CHARINDEX('_CS', [Name]) - 1)
+        WHEN CHARINDEX('_BIN', [Name]) > 0 THEN LEFT([Name], CHARINDEX('_BIN', [Name]) - 1)
+        ELSE [Name]
+    END AS CollationPrefix,
+    COLLATIONPROPERTY([Name], 'LCID') AS LCID
+FROM sys.fn_helpcollations()
+WHERE COLLATIONPROPERTY([Name], 'LCID') IS NOT NULL
+ORDER BY CollationPrefix;
+```
+
+This produces a mapping like:
+| CollationPrefix | LCID |
+|-----------------|------|
+| Latin1_General | 1033 |
+| Japanese | 1041 |
+| Chinese_PRC | 2052 |
+| SQL_Latin1_General_CP1 | 1033 |
+
+**Alternative:** Use the Docker SQL Server instance (`docker/compose.yml`) to generate this mapping.
+
+### Phase 37.1: Create Collation Parser Module (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 37.1.1 | Create `src/project/collation.rs` module | ⬜ | New module for collation utilities |
+| 37.1.2 | Add static `COLLATION_LCID_MAP: &[(&str, u32)]` mapping | ⬜ | Generated from SQL Server query above |
+| 37.1.3 | Implement `parse_collation_info(name: &str) -> CollationInfo` | ⬜ | Returns struct with `lcid: u32`, `case_sensitive: bool` |
+
+### Phase 37.2: Parse Case Sensitivity from Collation Name (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 37.2.1 | Detect `_CS_` suffix → case_sensitive = true | ⬜ | Case-sensitive collations |
+| 37.2.2 | Detect `_CI_` suffix → case_sensitive = false | ⬜ | Case-insensitive collations (most common) |
+
+### Phase 37.3: Integrate with Model XML Generation (0/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 37.3.1 | Update `SqlProject` to store parsed `CollationInfo` | ⬜ | Or compute on-demand from `database_options.collation` |
+| 37.3.2 | Update `model_xml/mod.rs` to use derived LCID | ⬜ | Replace hardcoded "1033" |
+| 37.3.3 | Update `model_xml/mod.rs` to use derived case sensitivity | ⬜ | Replace hardcoded "True" |
+
+### Phase 37.4: Validation (0/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 37.4.1 | Add unit tests for collation parsing | ⬜ | Test various collation names |
+| 37.4.2 | Verify parity with DacFx for non-default collations | ⬜ | Test fixture with Japanese_CI_AS or similar |
+
+---
+
 ## Known Issues
 
 | Issue | Location | Phase | Status |
 |-------|----------|-------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | N/A | 61 errors (ordering/deduplication differences) |
+| Schema resolution for unqualified tables in non-dbo objects | body_deps.rs | Phase 35 | Deployment failure (unresolved references) |
+| DacMetadata.xml hardcoded version | packager.rs, metadata_xml.rs | Phase 36 | Hardcoded "1.0.0.0" instead of reading DacVersion from sqlproj |
+| Collation LCID/CaseSensitive hardcoded | sqlproj_parser.rs, model_xml/mod.rs | Phase 37 | Hardcoded 1033/True instead of deriving from DefaultCollation |
 
 ---
 
