@@ -72,7 +72,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Implementation Approach:** Parse DECLARE, CAST, and type definitions using sqlparser-rs AST or tokenizer. Extract type names as tokens rather than string manipulation.
 
-### Phase 20.4: Table and Alias Pattern Matching (1/7)
+### Phase 20.4: Table and Alias Pattern Matching (2/7)
 
 **Location:** `src/dacpac/model_xml.rs`
 
@@ -81,12 +81,12 @@ These test Rust's ability to build projects that DotNet cannot handle.
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
 | 20.4.1 | Replace TABLE_ALIAS_RE with tokenizer | ✅ | Reused TableAliasTokenParser with new `extract_aliases_with_table_names()` method. Added `default_schema` field to parser. Removed TABLE_ALIAS_RE regex and related helper functions. |
-| 20.4.2 | Replace TRIGGER_ALIAS_RE with tokenizer | ⬜ | Line 149-151: Trigger table aliases |
-| 20.4.3 | Replace BRACKETED_TABLE_RE with tokenizer | ⬜ | Line 110-111: `[schema].[table]` pattern |
-| 20.4.4 | Replace UNBRACKETED_TABLE_RE with tokenizer | ⬜ | Line 114-116: `schema.table` pattern |
-| 20.4.5 | Replace QUALIFIED_TABLE_NAME_RE with tokenizer | ⬜ | Line 47-48: `^\[schema\]\.\[table\]$` |
-| 20.4.6 | Replace INSERT_SELECT_RE with tokenizer | ⬜ | Line 161-166: Complex INSERT...SELECT pattern |
-| 20.4.7 | Replace UPDATE_ALIAS_RE with tokenizer | ⬜ | Line 177-182: UPDATE with JOIN pattern |
+| 20.4.2 | Replace TRIGGER_ALIAS_RE with tokenizer | ✅ | Reused `TableAliasTokenParser::extract_aliases_with_table_names()` in `extract_trigger_body_dependencies()`. Removed TRIGGER_ALIAS_RE regex. Handles whitespace (tabs/spaces/newlines), bracketed and unbracketed table names, AS keyword, and multiple JOINs. 17 unit tests. |
+| 20.4.3 | Replace BRACKETED_TABLE_RE with tokenizer | ⬜ | Line 94-96: `[schema].[table]` pattern |
+| 20.4.4 | Replace UNBRACKETED_TABLE_RE with tokenizer | ⬜ | Line 98-100: `schema.table` pattern |
+| 20.4.5 | Replace QUALIFIED_TABLE_NAME_RE with tokenizer | ⬜ | Line 49-51: `^\[schema\]\.\[table\]$` |
+| 20.4.6 | Replace INSERT_SELECT_RE with tokenizer | ⬜ | Line 121-129: Complex INSERT...SELECT pattern |
+| 20.4.7 | Replace UPDATE_ALIAS_RE with tokenizer | ⬜ | Line 137-143: UPDATE with JOIN pattern |
 
 **Implementation Approach:** Use sqlparser-rs to parse FROM clauses, JOIN clauses, and table references. Extract table names and aliases from AST nodes rather than regex pattern matching.
 

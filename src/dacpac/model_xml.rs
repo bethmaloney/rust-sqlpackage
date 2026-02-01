@@ -112,10 +112,7 @@ static UNBRACKETED_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
 static AS_KEYWORD_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)[\s\n]AS[\s\n]").unwrap());
 
-/// Trigger table alias pattern: FROM/JOIN [schema].[table] alias
-static TRIGGER_ALIAS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:FROM|JOIN)\s+\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s+([A-Za-z_]\w*)").unwrap()
-});
+// TRIGGER_ALIAS_RE removed - replaced by TableAliasTokenParser::extract_aliases_with_table_names() (Phase 20.4.2)
 
 // SINGLE_BRACKET_RE removed - replaced by extract_single_bracketed_identifiers() (Phase 20.2.6)
 // ALIAS_COL_RE removed - replaced by extract_alias_column_refs_tokenized() (Phase 20.2.5)
@@ -7170,14 +7167,17 @@ fn extract_trigger_body_dependencies(body: &str, parent_ref: &str) -> Vec<BodyDe
     table_aliases.insert("inserted".to_string(), parent_ref.to_string());
     table_aliases.insert("deleted".to_string(), parent_ref.to_string());
 
-    // First pass: find all table aliases
+    // First pass: find all table aliases using token-based parsing (Phase 20.4.2)
     // Pattern: FROM [schema].[table] alias or JOIN [schema].[table] alias
-    for cap in TRIGGER_ALIAS_RE.captures_iter(body) {
-        let schema = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let table = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let alias = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-        let table_ref = format!("[{}].[{}]", schema, table);
-        table_aliases.insert(alias.to_lowercase(), table_ref);
+    // Uses TableAliasTokenParser which handles whitespace, comments, and nested queries correctly
+    if let Some(mut parser) = TableAliasTokenParser::new(body) {
+        for (alias_or_name, table_ref) in parser.extract_aliases_with_table_names() {
+            let alias_lower = alias_or_name.to_lowercase();
+            // Don't overwrite inserted/deleted mappings
+            if alias_lower != "inserted" && alias_lower != "deleted" {
+                table_aliases.insert(alias_lower, table_ref);
+            }
+        }
     }
 
     // Process INSERT statements with SELECT FROM inserted/deleted (without JOIN)
@@ -10021,5 +10021,185 @@ FROM [dbo].[Account] A
     fn test_cast_expr_whitespace_only() {
         let result = extract_cast_expressions_tokenized("   \t\n   ");
         assert_eq!(result.len(), 0);
+    }
+
+    // ========== Phase 20.4.2: Trigger Alias Token Extraction Tests ==========
+    // These tests verify that TableAliasTokenParser correctly extracts table aliases
+    // for trigger body dependency analysis (replacing TRIGGER_ALIAS_RE regex).
+
+    #[test]
+    fn test_trigger_alias_basic_from() {
+        // Basic FROM clause with alias
+        let sql = "FROM [dbo].[Products] p";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        // Should have both "p" and "Products" as keys
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+        assert_eq!(
+            alias_map.get("Products"),
+            Some(&"[dbo].[Products]".to_string())
+        );
+    }
+
+    #[test]
+    fn test_trigger_alias_basic_join() {
+        // JOIN clause with alias
+        let sql = "FROM [dbo].[Orders] o JOIN [dbo].[Products] p ON o.[ProductId] = p.[Id]";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("o"), Some(&"[dbo].[Orders]".to_string()));
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_with_tabs() {
+        // Tabs instead of spaces (edge case that regex would fail on)
+        let sql = "FROM\t[dbo].[Products]\tp";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_with_newlines() {
+        // Newlines in statement
+        let sql = "FROM\n    [dbo].[Products]\n    p";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_multiple_spaces() {
+        // Multiple spaces between tokens (edge case that single \s+ regex handles but fragile)
+        let sql = "FROM   [dbo].[Products]   prod";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("prod"), Some(&"[dbo].[Products]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_inner_join() {
+        // INNER JOIN keyword
+        let sql =
+            "FROM [dbo].[Products] p INNER JOIN [dbo].[Categories] c ON p.[CategoryId] = c.[Id]";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+        assert_eq!(alias_map.get("c"), Some(&"[dbo].[Categories]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_left_join() {
+        // LEFT JOIN keyword
+        let sql =
+            "FROM [dbo].[Products] p LEFT JOIN [dbo].[Categories] c ON p.[CategoryId] = c.[Id]";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+        assert_eq!(alias_map.get("c"), Some(&"[dbo].[Categories]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_custom_schema() {
+        // Non-dbo schema
+        let sql = "FROM [sales].[Products] p";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("p"), Some(&"[sales].[Products]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_with_as_keyword() {
+        // Using AS keyword
+        let sql = "FROM [dbo].[Products] AS p";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_no_alias() {
+        // Table without alias - should still include table name as key
+        let sql = "FROM [dbo].[Products]";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(
+            alias_map.get("Products"),
+            Some(&"[dbo].[Products]".to_string())
+        );
+    }
+
+    #[test]
+    fn test_trigger_alias_unbracketed_table() {
+        // Unbracketed table name (should still work)
+        let sql = "FROM dbo.Products p";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_multiple_joins() {
+        // Multiple JOINs
+        let sql = "FROM [dbo].[Orders] o \
+                   JOIN [dbo].[Products] p ON o.[ProductId] = p.[Id] \
+                   JOIN [dbo].[Categories] c ON p.[CategoryId] = c.[Id]";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("o"), Some(&"[dbo].[Orders]".to_string()));
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+        assert_eq!(alias_map.get("c"), Some(&"[dbo].[Categories]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_empty_string() {
+        let parser = TableAliasTokenParser::new("");
+        assert!(parser.is_some());
+        let mut parser = parser.unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        assert!(aliases.is_empty());
+    }
+
+    #[test]
+    fn test_trigger_alias_whitespace_only() {
+        let parser = TableAliasTokenParser::new("   \t\n   ");
+        assert!(parser.is_some());
+        let mut parser = parser.unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        assert!(aliases.is_empty());
+    }
+
+    #[test]
+    fn test_trigger_alias_case_insensitive_from() {
+        // Case insensitive FROM keyword
+        let sql = "from [dbo].[Products] p";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+    }
+
+    #[test]
+    fn test_trigger_alias_case_insensitive_join() {
+        // Case insensitive JOIN keyword
+        let sql = "FROM [dbo].[Products] p join [dbo].[Categories] c ON p.[CatId] = c.[Id]";
+        let mut parser = TableAliasTokenParser::new(sql).unwrap();
+        let aliases = parser.extract_aliases_with_table_names();
+        let alias_map: std::collections::HashMap<_, _> = aliases.into_iter().collect();
+        assert_eq!(alias_map.get("p"), Some(&"[dbo].[Products]".to_string()));
+        assert_eq!(alias_map.get("c"), Some(&"[dbo].[Categories]".to_string()));
     }
 }
