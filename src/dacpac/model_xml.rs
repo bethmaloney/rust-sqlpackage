@@ -94,10 +94,8 @@ static GROUP_TERMINATOR_RE: LazyLock<Regex> =
 // Note: FUNC_PARAM_RE has been removed and replaced with token-based parsing in Phase 20.1.2.
 // Function parameter extraction now uses extract_function_parameters_tokens() from function_parser.rs.
 
-/// DECLARE statement pattern for type extraction
-static DECLARE_TYPE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)DECLARE\s+@\w+\s+([A-Za-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?)").unwrap()
-});
+// Note: DECLARE_TYPE_RE has been removed and replaced with token-based parsing in Phase 20.3.1.
+// DECLARE type extraction now uses extract_declare_types_tokenized().
 
 /// Bracketed table reference: [schema].[table]
 static BRACKETED_TABLE_RE: LazyLock<Regex> =
@@ -1905,6 +1903,83 @@ fn extract_single_bracketed_identifiers(sql: &str) -> Vec<String> {
     results
 }
 
+/// Extract DECLARE variable types from SQL text using tokenization.
+///
+/// This function scans SQL and extracts type names from DECLARE statements.
+/// Pattern: `DECLARE @varname typename` or `DECLARE @varname typename(precision)`
+///
+/// Used in `extract_body_dependencies()` to find built-in type dependencies
+/// from DECLARE statements in function/procedure bodies.
+///
+/// # Arguments
+/// * `sql` - SQL text to scan (e.g., function or procedure body)
+///
+/// # Returns
+/// A vector of type names (lowercase) in order of appearance.
+/// Types include base names without precision/scale (e.g., "nvarchar" not "nvarchar(50)").
+fn extract_declare_types_tokenized(sql: &str) -> Vec<String> {
+    let mut results = Vec::new();
+
+    let dialect = MsSqlDialect {};
+    let Ok(tokens) = Tokenizer::new(&dialect, sql).tokenize_with_location() else {
+        return results;
+    };
+
+    let mut i = 0;
+    while i < tokens.len() {
+        // Skip whitespace
+        while i < tokens.len() && matches!(&tokens[i].token, Token::Whitespace(_)) {
+            i += 1;
+        }
+        if i >= tokens.len() {
+            break;
+        }
+
+        // Look for DECLARE keyword
+        if let Token::Word(w) = &tokens[i].token {
+            if w.quote_style.is_none() && w.value.eq_ignore_ascii_case("DECLARE") {
+                i += 1;
+
+                // Skip whitespace after DECLARE
+                while i < tokens.len() && matches!(&tokens[i].token, Token::Whitespace(_)) {
+                    i += 1;
+                }
+                if i >= tokens.len() {
+                    break;
+                }
+
+                // Expect variable name (@name) - MsSqlDialect tokenizes as a single Word
+                if let Token::Word(var_word) = &tokens[i].token {
+                    if var_word.value.starts_with('@') {
+                        i += 1;
+
+                        // Skip whitespace after variable name
+                        while i < tokens.len() && matches!(&tokens[i].token, Token::Whitespace(_)) {
+                            i += 1;
+                        }
+                        if i >= tokens.len() {
+                            break;
+                        }
+
+                        // Extract type name (next identifier)
+                        if let Token::Word(type_word) = &tokens[i].token {
+                            // Get the base type name (without any precision/scale)
+                            let type_name = type_word.value.to_lowercase();
+                            results.push(type_name);
+                            i += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    results
+}
+
 /// Extract column aliases from SQL text using tokenization.
 ///
 /// This function scans SQL and extracts identifiers that follow the AS keyword.
@@ -3049,20 +3124,13 @@ fn extract_body_dependencies(
     let mut seen_direct_columns: HashSet<String> = HashSet::with_capacity(10);
 
     // Extract DECLARE type dependencies first (for scalar functions)
-    for cap in DECLARE_TYPE_RE.captures_iter(body) {
-        if let Some(type_match) = cap.get(1) {
-            let type_str = type_match.as_str().trim();
-            let base_type = if let Some(paren_pos) = type_str.find('(') {
-                &type_str[..paren_pos]
-            } else {
-                type_str
-            };
-            let type_ref = format!("[{}]", base_type.to_lowercase());
-            // Only deduplicate built-in types
-            if !seen_types.contains(&type_ref) {
-                seen_types.insert(type_ref.clone());
-                deps.push(BodyDependency::BuiltInType(type_ref));
-            }
+    // Uses token-based extraction (Phase 20.3.1) for proper whitespace handling
+    for type_name in extract_declare_types_tokenized(body) {
+        let type_ref = format!("[{}]", type_name);
+        // Only deduplicate built-in types
+        if !seen_types.contains(&type_ref) {
+            seen_types.insert(type_ref.clone());
+            deps.push(BodyDependency::BuiltInType(type_ref));
         }
     }
 
@@ -9240,5 +9308,128 @@ FROM [dbo].[Account] A
     fn test_extract_column_name_from_expr_simple_function() {
         // Functions should be returned as-is
         assert_eq!(extract_column_name_from_expr_simple("COUNT(*)"), "COUNT(*)");
+    }
+
+    // ============================================================================
+    // extract_declare_types_tokenized tests (Phase 20.3.1)
+    // ============================================================================
+
+    #[test]
+    fn test_declare_type_simple_int() {
+        let types = extract_declare_types_tokenized("DECLARE @Count INT");
+        assert_eq!(types, vec!["int"]);
+    }
+
+    #[test]
+    fn test_declare_type_simple_nvarchar() {
+        let types = extract_declare_types_tokenized("DECLARE @Name NVARCHAR(50)");
+        assert_eq!(types, vec!["nvarchar"]);
+    }
+
+    #[test]
+    fn test_declare_type_decimal_with_precision() {
+        let types = extract_declare_types_tokenized("DECLARE @Total DECIMAL(18, 2)");
+        assert_eq!(types, vec!["decimal"]);
+    }
+
+    #[test]
+    fn test_declare_type_multiple_variables() {
+        let types = extract_declare_types_tokenized(
+            "DECLARE @Count INT; DECLARE @Name NVARCHAR(100); DECLARE @Value DECIMAL(10,2)",
+        );
+        assert_eq!(types, vec!["int", "nvarchar", "decimal"]);
+    }
+
+    #[test]
+    fn test_declare_type_with_tabs() {
+        let types = extract_declare_types_tokenized("DECLARE\t@Count\tINT");
+        assert_eq!(types, vec!["int"]);
+    }
+
+    #[test]
+    fn test_declare_type_with_multiple_spaces() {
+        let types = extract_declare_types_tokenized("DECLARE   @Count   INT");
+        assert_eq!(types, vec!["int"]);
+    }
+
+    #[test]
+    fn test_declare_type_with_newlines() {
+        let types = extract_declare_types_tokenized("DECLARE\n@Count\nINT");
+        assert_eq!(types, vec!["int"]);
+    }
+
+    #[test]
+    fn test_declare_type_mixed_whitespace() {
+        let types = extract_declare_types_tokenized("DECLARE \t @Count \n INT");
+        assert_eq!(types, vec!["int"]);
+    }
+
+    #[test]
+    fn test_declare_type_case_insensitive() {
+        let types = extract_declare_types_tokenized("declare @count int");
+        assert_eq!(types, vec!["int"]);
+    }
+
+    #[test]
+    fn test_declare_type_mixed_case() {
+        let types = extract_declare_types_tokenized("Declare @Count Int");
+        assert_eq!(types, vec!["int"]);
+    }
+
+    #[test]
+    fn test_declare_type_empty() {
+        let types = extract_declare_types_tokenized("");
+        assert!(types.is_empty());
+    }
+
+    #[test]
+    fn test_declare_type_no_declare() {
+        let types = extract_declare_types_tokenized("SELECT * FROM Table");
+        assert!(types.is_empty());
+    }
+
+    #[test]
+    fn test_declare_type_datetime() {
+        let types = extract_declare_types_tokenized("DECLARE @Date DATETIME");
+        assert_eq!(types, vec!["datetime"]);
+    }
+
+    #[test]
+    fn test_declare_type_varchar_max() {
+        let types = extract_declare_types_tokenized("DECLARE @Content VARCHAR(MAX)");
+        assert_eq!(types, vec!["varchar"]);
+    }
+
+    #[test]
+    fn test_declare_type_bit() {
+        let types = extract_declare_types_tokenized("DECLARE @Active BIT");
+        assert_eq!(types, vec!["bit"]);
+    }
+
+    #[test]
+    fn test_declare_type_in_function_body() {
+        let body = r#"
+            DECLARE @Count INT;
+            SET @Count = (SELECT COUNT(*) FROM Users);
+            RETURN @Count;
+        "#;
+        let types = extract_declare_types_tokenized(body);
+        assert_eq!(types, vec!["int"]);
+    }
+
+    #[test]
+    fn test_declare_type_multiple_in_procedure_body() {
+        let body = r#"
+            DECLARE @Total DECIMAL(18, 2);
+            DECLARE @Count INT;
+            DECLARE @Result NVARCHAR(100);
+
+            SELECT @Count = COUNT(*) FROM Orders;
+            SELECT @Total = SUM(Amount) FROM Orders;
+            SET @Result = CAST(@Count AS NVARCHAR) + ' orders totaling ' + CAST(@Total AS NVARCHAR);
+            SELECT @Result;
+        "#;
+        let types = extract_declare_types_tokenized(body);
+        assert_eq!(types, vec!["decimal", "int", "nvarchar"]);
     }
 }
