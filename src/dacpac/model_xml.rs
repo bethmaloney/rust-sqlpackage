@@ -2400,7 +2400,20 @@ fn extract_all_column_references(
 
                 // Single bracketed identifier (e.g., [IsActive] in WHERE clause)
                 // This replaces BARE_COL_RE functionality
-                BodyDepToken::SingleBracketed(ident) => Some(ident),
+                // Skip if this identifier is a known table alias (to avoid treating alias
+                // definitions like [ITTAG] in "JOIN [dbo].[Tag] [ITTAG]" as column refs)
+                BodyDepToken::SingleBracketed(ident) => {
+                    let ident_lower = ident.to_lowercase();
+                    // Check if this is a table alias - if so, skip it
+                    let is_alias = table_aliases
+                        .iter()
+                        .any(|(alias, _)| alias.eq_ignore_ascii_case(&ident));
+                    if is_alias {
+                        None
+                    } else {
+                        Some(ident)
+                    }
+                }
 
                 // Skip parameters and single unbracketed identifiers
                 BodyDepToken::SingleUnbracketed(_) | BodyDepToken::Parameter(_) => None,
@@ -12886,5 +12899,179 @@ FROM [dbo].[Account] A
         let clause = &sql[start..end];
         assert!(clause.contains("dept"));
         assert!(!clause.to_uppercase().contains("HAVING"));
+    }
+
+    #[test]
+    fn test_extract_table_aliases_stuff_nested_subquery() {
+        use std::collections::{HashMap, HashSet};
+
+        // Test the exact pattern from InstrumentWithTags fixture
+        // Note: Subquery alias is without AS (Tags not AS Tags)
+        let sql = r#"
+SELECT
+    I.Id,
+    I.Name,
+    Tags.TagList
+FROM [dbo].[Instrument] I
+LEFT JOIN (
+    SELECT
+        IT.InstrumentId,
+        STUFF((
+            SELECT ', ' + [ITTAG].[Name]
+            FROM [dbo].[InstrumentTag] [IT2]
+            INNER JOIN [dbo].[Tag] [ITTAG] ON [IT2].TagId = [ITTAG].Id
+            WHERE IT.InstrumentId = [IT2].InstrumentId
+            FOR XML PATH('')
+        ), 1, 2, '') AS TagList
+    FROM [dbo].[InstrumentTag] IT
+    GROUP BY IT.InstrumentId
+) Tags ON Tags.InstrumentId = I.Id
+"#;
+        let mut table_aliases: HashMap<String, String> = HashMap::new();
+        let mut subquery_aliases: HashSet<String> = HashSet::new();
+
+        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+
+        // 'I' should be a table alias for [dbo].[Instrument]
+        assert_eq!(
+            table_aliases.get("i"),
+            Some(&"[dbo].[Instrument]".to_string()),
+            "Expected 'I' -> [dbo].[Instrument]"
+        );
+
+        // 'IT' should be a table alias for [dbo].[InstrumentTag] (first level nested)
+        assert_eq!(
+            table_aliases.get("it"),
+            Some(&"[dbo].[InstrumentTag]".to_string()),
+            "Expected 'IT' -> [dbo].[InstrumentTag]"
+        );
+
+        // '[IT2]' should be a table alias for [dbo].[InstrumentTag] (second level nested)
+        assert_eq!(
+            table_aliases.get("it2"),
+            Some(&"[dbo].[InstrumentTag]".to_string()),
+            "Expected 'IT2' -> [dbo].[InstrumentTag]"
+        );
+
+        // '[ITTAG]' should be a table alias for [dbo].[Tag] (second level nested)
+        assert_eq!(
+            table_aliases.get("ittag"),
+            Some(&"[dbo].[Tag]".to_string()),
+            "Expected 'ITTAG' -> [dbo].[Tag]"
+        );
+
+        // 'Tags' should be recognized as a subquery alias (without AS keyword)
+        assert!(
+            subquery_aliases.contains("tags"),
+            "Expected 'Tags' to be in subquery_aliases: {:?}",
+            subquery_aliases
+        );
+    }
+
+    #[test]
+    fn test_extract_table_aliases_for_view_stuff_nested_subquery() {
+        // This tests the VIEW path using extract_table_aliases (not extract_table_aliases_for_body_deps)
+        // This is what views use for QueryDependencies
+        let sql = r#"
+SELECT
+    I.Id,
+    I.Name,
+    Tags.TagList
+FROM [dbo].[Instrument] I
+LEFT JOIN (
+    SELECT
+        IT.InstrumentId,
+        STUFF((
+            SELECT ', ' + [ITTAG].[Name]
+            FROM [dbo].[InstrumentTag] [IT2]
+            INNER JOIN [dbo].[Tag] [ITTAG] ON [IT2].TagId = [ITTAG].Id
+            WHERE IT.InstrumentId = [IT2].InstrumentId
+            FOR XML PATH('')
+        ), 1, 2, '') AS TagList
+    FROM [dbo].[InstrumentTag] IT
+    GROUP BY IT.InstrumentId
+) Tags ON Tags.InstrumentId = I.Id
+"#;
+        // Use the view-specific function
+        let aliases = extract_table_aliases(sql, "dbo");
+
+        // 'I' should be a table alias for [dbo].[Instrument]
+        assert!(
+            aliases
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("I") && v == "[dbo].[Instrument]"),
+            "Expected 'I' -> [dbo].[Instrument], got: {:?}",
+            aliases
+        );
+
+        // 'IT' should be a table alias for [dbo].[InstrumentTag] (first level nested)
+        assert!(
+            aliases
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("IT") && v == "[dbo].[InstrumentTag]"),
+            "Expected 'IT' -> [dbo].[InstrumentTag], got: {:?}",
+            aliases
+        );
+
+        // '[IT2]' should be a table alias for [dbo].[InstrumentTag] (second level nested)
+        assert!(
+            aliases
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("IT2") && v == "[dbo].[InstrumentTag]"),
+            "Expected 'IT2' -> [dbo].[InstrumentTag], got: {:?}",
+            aliases
+        );
+
+        // '[ITTAG]' should be a table alias for [dbo].[Tag] (second level nested)
+        assert!(
+            aliases
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("ITTAG") && v == "[dbo].[Tag]"),
+            "Expected 'ITTAG' -> [dbo].[Tag], got: {:?}",
+            aliases
+        );
+    }
+
+    #[test]
+    fn test_view_all_column_references_stuff_nested_subquery() {
+        // This tests the full extract_all_column_references path
+        let sql = r#"
+SELECT
+    I.Id,
+    I.Name,
+    Tags.TagList
+FROM [dbo].[Instrument] I
+LEFT JOIN (
+    SELECT
+        IT.InstrumentId,
+        STUFF((
+            SELECT ', ' + [ITTAG].[Name]
+            FROM [dbo].[InstrumentTag] [IT2]
+            INNER JOIN [dbo].[Tag] [ITTAG] ON [IT2].TagId = [ITTAG].Id
+            WHERE IT.InstrumentId = [IT2].InstrumentId
+            FOR XML PATH('')
+        ), 1, 2, '') AS TagList
+    FROM [dbo].[InstrumentTag] IT
+    GROUP BY IT.InstrumentId
+) Tags ON Tags.InstrumentId = I.Id
+"#;
+        let aliases = extract_table_aliases(sql, "dbo");
+        let all_refs = extract_all_column_references(sql, &aliases, "dbo");
+
+        // Should NOT contain [Instrument].[IT2] or [Instrument].[ITTAG]
+        assert!(
+            !all_refs
+                .iter()
+                .any(|r| r.contains("[Instrument].[IT2]") || r.contains("[Instrument].[ITTAG]")),
+            "Should not have [Instrument].[IT2] or [Instrument].[ITTAG]. Got: {:?}",
+            all_refs
+        );
+
+        // Should have [dbo].[Tag].[Name] for [ITTAG].[Name]
+        assert!(
+            all_refs.iter().any(|r| r == "[dbo].[Tag].[Name]"),
+            "Expected [dbo].[Tag].[Name]. Got: {:?}",
+            all_refs
+        );
     }
 }

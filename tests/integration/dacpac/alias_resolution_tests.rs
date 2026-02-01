@@ -139,7 +139,6 @@ fn get_procedure_body_dependencies(proc_name: &str, model_xml: &str) -> Vec<Stri
 }
 
 #[test]
-#[ignore] // Known bug - remove this when fixed
 fn test_stuff_nested_subquery_alias_resolution() {
     // Test the ITTAG alias bug: aliases in STUFF() nested subqueries should be resolved
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
@@ -185,7 +184,6 @@ fn test_stuff_nested_subquery_alias_resolution() {
 }
 
 #[test]
-#[ignore] // Known bug - remove this when fixed
 fn test_nested_subquery_alias_resolution() {
     // Test multiple levels of nested subqueries with aliases
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
@@ -218,7 +216,6 @@ fn test_nested_subquery_alias_resolution() {
 }
 
 #[test]
-#[ignore] // Known bug - remove this when fixed
 fn test_apply_clause_alias_resolution() {
     // Test CROSS APPLY and OUTER APPLY with aliases
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
@@ -251,7 +248,6 @@ fn test_apply_clause_alias_resolution() {
 }
 
 #[test]
-#[ignore] // Known bug - CTEs are incorrectly added to dependencies
 fn test_cte_alias_recognition() {
     // Test that CTE names are NOT treated as table references
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
@@ -469,7 +465,6 @@ fn test_multiple_ctes_in_procedure() {
 // ============================================================================
 
 #[test]
-#[ignore] // Known bug - remove this when fixed
 fn test_exists_subquery_alias_resolution() {
     // Test aliases inside EXISTS and NOT EXISTS subqueries
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
@@ -507,7 +502,6 @@ fn test_exists_subquery_alias_resolution() {
 // ============================================================================
 
 #[test]
-#[ignore] // Known bug - remove this when fixed
 fn test_in_subquery_alias_resolution() {
     // Test aliases inside IN clause subqueries (including nested IN)
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
@@ -544,7 +538,6 @@ fn test_in_subquery_alias_resolution() {
 // ============================================================================
 
 #[test]
-#[ignore] // Known bug - remove this when fixed
 fn test_correlated_subquery_alias_resolution() {
     // Test aliases in correlated subqueries in SELECT list
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
@@ -620,7 +613,6 @@ fn test_union_alias_resolution() {
 // ============================================================================
 
 #[test]
-#[ignore] // Known bug - remove this when fixed
 fn test_case_subquery_alias_resolution() {
     // Test aliases in subqueries inside CASE expressions
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
@@ -694,7 +686,6 @@ fn test_window_function_alias_resolution() {
 // ============================================================================
 
 #[test]
-#[ignore] // Known bug - remove this when fixed
 fn test_derived_table_chain_alias_resolution() {
     // Test aliases through multiple levels of derived tables
     let ctx = TestContext::with_fixture("body_dependencies_aliases");
@@ -730,7 +721,6 @@ fn test_derived_table_chain_alias_resolution() {
 // ============================================================================
 
 #[test]
-#[ignore] // Known bug - CTE references incorrectly added
 fn test_recursive_cte_alias_resolution() {
     // Test that recursive CTE self-references don't appear as dependencies
     let ctx = TestContext::with_fixture("body_dependencies_aliases");

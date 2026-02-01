@@ -14,7 +14,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 20.5 complete: SQL keyword detection (6/6 tasks)
 - ✅ Phase 20.6 complete: Semicolon and whitespace handling (3/3 tasks)
 - ✅ Phase 20.7 complete: CTE and subquery pattern matching (4/4 tasks)
-- 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (11 tasks)
+- 🔄 Phase 20.8: Fix alias resolution bugs in BodyDependencies (10/11 tasks)
 
 **Upcoming: Phase 21 - Split model_xml.rs into Submodules** (0/10 tasks)
 - Target: Break 9,790-line file into ~9 logical submodules
@@ -133,7 +133,7 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 **Implementation Approach:** All patterns replaced with token-based parsing using `TableAliasTokenParser` struct and sqlparser-rs tokenizer. CTE extraction runs as first pass, followed by table/subquery alias extraction in second pass.
 
-### Phase 20.8: Fix Alias Resolution Bugs in BodyDependencies (0/11)
+### Phase 20.8: Fix Alias Resolution Bugs in BodyDependencies (10/11)
 
 **Location:** `src/dacpac/model_xml.rs` - `extract_table_aliases_for_body_deps()` and related functions
 
@@ -143,21 +143,31 @@ These test Rust's ability to build projects that DotNet cannot handle.
 
 | ID | Task | Status | Test | Notes |
 |----|------|--------|------|-------|
-| 20.8.1 | Fix STUFF() nested subquery alias extraction | ⬜ | `test_stuff_nested_subquery_alias_resolution` | Aliases inside STUFF() with FOR XML PATH not captured |
-| 20.8.2 | Fix multi-level nested subquery alias extraction | ⬜ | `test_nested_subquery_alias_resolution` | Aliases at depth > 1 not captured |
-| 20.8.3 | Fix CROSS/OUTER APPLY alias extraction in views | ⬜ | `test_apply_clause_alias_resolution` | APPLY subquery aliases not captured in view context |
-| 20.8.4 | Exclude CTE names from view dependencies | ⬜ | `test_cte_alias_recognition` | CTE names incorrectly appear as `[dbo].[CteName]` |
-| 20.8.5 | Fix EXISTS/NOT EXISTS subquery alias extraction | ⬜ | `test_exists_subquery_alias_resolution` | Aliases inside EXISTS clauses not captured |
-| 20.8.6 | Fix IN clause subquery alias extraction | ⬜ | `test_in_subquery_alias_resolution` | Aliases inside IN (SELECT...) not captured |
-| 20.8.7 | Fix correlated subquery alias extraction in SELECT | ⬜ | `test_correlated_subquery_alias_resolution` | Aliases in scalar subqueries not captured |
-| 20.8.8 | Fix CASE expression subquery alias extraction | ⬜ | `test_case_subquery_alias_resolution` | Aliases inside CASE WHEN subqueries not captured |
-| 20.8.9 | Fix derived table chain alias extraction | ⬜ | `test_derived_table_chain_alias_resolution` | Nested derived table aliases not captured |
-| 20.8.10 | Exclude recursive CTE self-references from dependencies | ⬜ | `test_recursive_cte_alias_resolution` | Recursive CTE name appears as dependency |
+| 20.8.1 | Fix STUFF() nested subquery alias extraction | ✅ | `test_stuff_nested_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
+| 20.8.2 | Fix multi-level nested subquery alias extraction | ✅ | `test_nested_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
+| 20.8.3 | Fix CROSS/OUTER APPLY alias extraction in views | ✅ | `test_apply_clause_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
+| 20.8.4 | Exclude CTE names from view dependencies | ✅ | `test_cte_alias_recognition` | Fixed via table alias filtering in `extract_all_column_references()` |
+| 20.8.5 | Fix EXISTS/NOT EXISTS subquery alias extraction | ✅ | `test_exists_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
+| 20.8.6 | Fix IN clause subquery alias extraction | ✅ | `test_in_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
+| 20.8.7 | Fix correlated subquery alias extraction in SELECT | ✅ | `test_correlated_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
+| 20.8.8 | Fix CASE expression subquery alias extraction | ✅ | `test_case_subquery_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
+| 20.8.9 | Fix derived table chain alias extraction | ✅ | `test_derived_table_chain_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
+| 20.8.10 | Exclude recursive CTE self-references from dependencies | ✅ | `test_recursive_cte_alias_resolution` | Fixed via table alias filtering in `extract_all_column_references()` |
 | 20.8.11 | Fix MERGE TARGET/SOURCE alias handling | ⬜ | `test_merge_alias_resolution` | MERGE aliases and keywords parsed incorrectly |
 
-**Implementation Approach:**
+**Fix Applied (20.8.1-20.8.10):**
 
-The root cause is that `extract_table_aliases_for_body_deps()` uses regex patterns that only capture aliases from top-level FROM/JOIN clauses. Aliases defined in:
+The fix was implemented in the `extract_all_column_references()` function in `src/dacpac/model_xml.rs`. The root cause was that single bracketed identifiers like `[ITTAG]` that are actually table aliases were being incorrectly treated as column names.
+
+**Solution:** Before treating a `SingleBracketed` token as a column reference, the function now checks if the identifier (case-insensitively) matches any known table alias in the `alias_names` set. If it matches a table alias, it is skipped rather than being added as a column reference. This prevents table aliases from being misinterpreted as column dependencies.
+
+**Remaining Issue (20.8.11):**
+
+The MERGE statement uses TARGET and SOURCE as implicit aliases, but these are not currently tracked by the alias extraction logic. The MERGE syntax also differs from standard SELECT/INSERT/UPDATE/DELETE patterns.
+
+**Original Implementation Approach (for reference):**
+
+The original root cause was that `extract_table_aliases_for_body_deps()` uses regex patterns that only capture aliases from top-level FROM/JOIN clauses. Aliases defined in:
 - Nested subqueries (any depth)
 - APPLY clause subqueries
 - CTE definitions
@@ -166,13 +176,7 @@ The root cause is that `extract_table_aliases_for_body_deps()` uses regex patter
 
 ...are not added to the alias map. When `[ALIAS].[Column]` is encountered, the alias lookup fails and the reference is incorrectly constructed.
 
-**Fix Strategy:**
-1. Use sqlparser-rs AST to recursively walk all subqueries and extract table aliases
-2. Track CTE names separately and exclude them from dependency output
-3. Handle MERGE statement TARGET/SOURCE as special alias cases
-4. For each context (STUFF, APPLY, EXISTS, IN, CASE), ensure the subquery walker visits all nested SELECT statements
-
-**Validation:** Remove `#[ignore]` from each test after fixing. All 11 tests should pass.
+**Validation:** 10 of 11 tests now pass. Only `test_merge_alias_resolution` (20.8.11) remains to be fixed.
 
 ---
 
