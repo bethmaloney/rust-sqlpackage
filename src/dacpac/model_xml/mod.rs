@@ -152,17 +152,15 @@ pub fn generate_model_xml<W: Write>(
 
     // Root element - pre-compute collation values before batching attributes (Phase 16.3.3 optimization)
     let collation_lcid = project.collation_lcid.to_string();
-    let collation_case_sensitive = if project.collation_case_sensitive {
-        "True"
-    } else {
-        "False"
-    };
+    // CollationCaseSensitive is always "True" in DotNet output, regardless of whether the
+    // collation is case-insensitive (_CI_) or case-sensitive (_CS_). The attribute appears
+    // to indicate that case sensitivity rules are enforced, not the collation's sensitivity.
     let root = BytesStart::new("DataSchemaModel").with_attributes([
         ("FileFormatVersion", model.file_format_version.as_str()),
         ("SchemaVersion", model.schema_version.as_str()),
         ("DspName", project.target_platform.dsp_name()),
         ("CollationLcid", collation_lcid.as_str()),
-        ("CollationCaseSensitive", collation_case_sensitive),
+        ("CollationCaseSensitive", "True"),
         ("xmlns", NAMESPACE),
     ]);
     xml_writer.write_event(Event::Start(root))?;

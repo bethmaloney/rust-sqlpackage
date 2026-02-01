@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "updated": "2026-01-31T20:02:15.584371353+00:00",
-  "commit": "982805e",
+  "updated": "2026-02-01T21:54:11.341256638+00:00",
+  "commit": "3bfd33e",
   "fixtures": [
     {
       "name": "all_constraints",
@@ -55,7 +55,7 @@
       "name": "commaless_constraints",
       "layer1_pass": true,
       "layer2_pass": true,
-      "relationship_pass": false,
+      "relationship_pass": true,
       "layer4_pass": true,
       "metadata_pass": true
     },
@@ -334,13 +334,21 @@
     {
       "name": "stress_test",
       "layer1_pass": true,
-      "layer2_pass": false,
+      "layer2_pass": true,
       "relationship_pass": true,
       "layer4_pass": false,
       "metadata_pass": true
     },
     {
       "name": "table_types",
+      "layer1_pass": true,
+      "layer2_pass": true,
+      "relationship_pass": true,
+      "layer4_pass": true,
+      "metadata_pass": true
+    },
+    {
+      "name": "tvf_max_columns",
       "layer1_pass": true,
       "layer2_pass": true,
       "relationship_pass": true,
