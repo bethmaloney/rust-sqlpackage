@@ -110,31 +110,8 @@ static UNBRACKETED_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)").unwrap()
 });
 
-/// Token regex for body dependency scanning
-/// Patterns matched (in order):
-/// 1. @param - parameter references (groups 1-2)
-/// 2. [a].[b].[c] - three-part bracketed reference (groups 3-6)
-/// 3. [a].[b] - two-part bracketed reference (groups 7-9)
-/// 4. alias.[column] - unbracketed alias with bracketed column (groups 10-12)
-/// 5. [alias].column - bracketed alias with unbracketed column (groups 13-15)
-/// 6. [ident] - single bracketed identifier (groups 16-17)
-/// 7. schema.table - unbracketed two-part reference (groups 18-19)
-/// 8. ident - unbracketed single identifier (group 20)
-///
-/// NOTE: Patterns 4, 7, 8 use (?:^|[^@\w\]]) as boundary to prevent partial matches
-static TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(concat!(
-        r"(@([A-Za-z_]\w*))",                                       // 1-2: @param
-        r"|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])", // 3-6: [a].[b].[c]
-        r"|(\[([^\]]+)\]\s*\.\s*\[([^\]]+)\])",                     // 7-9: [a].[b]
-        r"|(?:^|[^@\w\]])(([A-Za-z_]\w*)\s*\.\s*\[([^\]]+)\])",     // 10-12: alias.[column]
-        r"|(\[([^\]]+)\]\s*\.([A-Za-z_][A-Za-z0-9_]*))",            // 13-15: [alias].column
-        r"|(\[([A-Za-z_][A-Za-z0-9_]*)\])",                         // 16-17: [ident]
-        r"|(?:^|[^@\w\]])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)", // 18-19: schema.table
-        r"|(?:^|[^@\w\.\]])([A-Za-z_][A-Za-z0-9_]*)",               // 20: ident
-    ))
-    .unwrap()
-});
+// Note: TOKEN_RE has been replaced with BodyDependencyTokenScanner in Phase 20.2.1
+// The token-based scanner handles whitespace (tabs, multiple spaces, newlines) correctly.
 
 /// Bracketed identifier pattern: [Name]
 static BRACKETED_IDENT_RE: LazyLock<Regex> =
@@ -2946,270 +2923,263 @@ fn extract_body_dependencies(
         }
     }
 
-    // Scan body sequentially for all references in order of appearance
+    // Scan body sequentially for all references in order of appearance using token-based scanner
     // Note: DotNet has a complex ordering that depends on SQL clause structure (FROM first, etc.)
     // We process in textual order which may differ from DotNet's order but contains the same refs
-    // This complex regex matches (in order of priority):
-    // 1. @param - parameter references (groups 1-2)
-    // 2. [a].[b].[c] - three-part bracketed reference (groups 3-6)
-    // 3. [a].[b] - two-part bracketed reference (groups 7-9)
-    // 4. alias.[column] - unbracketed alias with bracketed column (groups 10-12)
-    // 5. [alias].column - bracketed alias with unbracketed column (groups 13-15)
-    // 6. [ident] - single bracketed identifier (groups 16-17)
-    // 7. schema.table - unbracketed two-part reference (groups 18-19)
-    // 8. ident - unbracketed single identifier (group 20)
-    for cap in TOKEN_RE.captures_iter(body) {
-        if cap.get(1).is_some() {
-            // Pattern 1: Parameter reference: @param
-            let param_name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+    // Phase 20.2.1: Replaced TOKEN_RE regex with BodyDependencyTokenScanner for robust whitespace handling
 
-            // Check if this is a declared parameter (not a local variable)
-            // Note: params contains parameter names WITHOUT @ prefix (Phase 20.1.3)
-            if params.iter().any(|p| p.eq_ignore_ascii_case(param_name)) {
-                let param_ref = format!("{}.[@{}]", full_name, param_name);
-                // DotNet deduplicates parameter references
-                if !seen_params.contains(&param_ref) {
-                    seen_params.insert(param_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(param_ref));
+    if let Some(mut scanner) = BodyDependencyTokenScanner::new(body) {
+        for token in scanner.scan() {
+            match token {
+                BodyDepToken::Parameter(param_name) => {
+                    // Pattern 1: Parameter reference: @param
+                    // Check if this is a declared parameter (not a local variable)
+                    // Note: params contains parameter names WITHOUT @ prefix (Phase 20.1.3)
+                    if params.iter().any(|p| p.eq_ignore_ascii_case(&param_name)) {
+                        let param_ref = format!("{}.[@{}]", full_name, param_name);
+                        // DotNet deduplicates parameter references
+                        if !seen_params.contains(&param_ref) {
+                            seen_params.insert(param_ref.clone());
+                            deps.push(BodyDependency::ObjectRef(param_ref));
+                        }
+                    }
                 }
-            }
-        } else if cap.get(3).is_some() {
-            // Pattern 2: Three-part bracketed reference: [schema].[table].[column]
-            let schema = cap.get(4).map(|m| m.as_str()).unwrap_or("");
-            let table = cap.get(5).map(|m| m.as_str()).unwrap_or("");
-            let column = cap.get(6).map(|m| m.as_str()).unwrap_or("");
+                BodyDepToken::ThreePartBracketed {
+                    schema,
+                    table,
+                    column,
+                } => {
+                    // Pattern 2: Three-part bracketed reference: [schema].[table].[column]
+                    if !schema.starts_with('@') && !table.starts_with('@') {
+                        // First emit the table reference if not seen (DotNet deduplicates tables)
+                        let table_ref = format!("[{}].[{}]", schema, table);
+                        if !seen_tables.contains(&table_ref) {
+                            seen_tables.insert(table_ref.clone());
+                            deps.push(BodyDependency::ObjectRef(table_ref));
+                        }
 
-            if !schema.starts_with('@') && !table.starts_with('@') {
-                // First emit the table reference if not seen (DotNet deduplicates tables)
-                let table_ref = format!("[{}].[{}]", schema, table);
-                if !seen_tables.contains(&table_ref) {
-                    seen_tables.insert(table_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(table_ref));
+                        // Direct three-part column refs ARE deduplicated by DotNet
+                        let col_ref = format!("[{}].[{}].[{}]", schema, table, column);
+                        if !seen_direct_columns.contains(&col_ref) {
+                            seen_direct_columns.insert(col_ref.clone());
+                            deps.push(BodyDependency::ObjectRef(col_ref));
+                        }
+                    }
                 }
-
-                // Direct three-part column refs ARE deduplicated by DotNet
-                let col_ref = format!("[{}].[{}].[{}]", schema, table, column);
-                if !seen_direct_columns.contains(&col_ref) {
-                    seen_direct_columns.insert(col_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(col_ref));
-                }
-            }
-        } else if cap.get(7).is_some() {
-            // Pattern 3: Two-part bracketed reference: [schema].[table] or [alias].[column]
-            let first_part = cap.get(8).map(|m| m.as_str()).unwrap_or("");
-            let second_part = cap.get(9).map(|m| m.as_str()).unwrap_or("");
-            let first_lower = first_part.to_lowercase();
-
-            if first_part.starts_with('@') || second_part.starts_with('@') {
-                continue;
-            }
-
-            // Check if first_part is a subquery/derived table alias - skip entirely
-            if subquery_aliases.contains(&first_lower) {
-                continue;
-            }
-
-            // Check if first_part is a table alias that should be resolved
-            if let Some(resolved_table) = table_aliases.get(&first_lower) {
-                // This is alias.column - resolve to [schema].[table].[column]
-                // First emit the table reference if not seen (DotNet deduplicates tables)
-                if !seen_tables.contains(resolved_table) {
-                    seen_tables.insert(resolved_table.clone());
-                    deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
-                }
-
-                // Then emit the column reference (DotNet does NOT deduplicate columns)
-                let col_ref = format!("{}.[{}]", resolved_table, second_part);
-                deps.push(BodyDependency::ObjectRef(col_ref));
-            } else {
-                // Not an alias - treat as [schema].[table] (DotNet deduplicates tables)
-                let table_ref = format!("[{}].[{}]", first_part, second_part);
-                if !seen_tables.contains(&table_ref) {
-                    seen_tables.insert(table_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(table_ref));
-                }
-            }
-        } else if cap.get(10).is_some() {
-            // Pattern 4: Unbracketed alias with bracketed column: alias.[column]
-            let alias = cap.get(11).map(|m| m.as_str()).unwrap_or("");
-            let column = cap.get(12).map(|m| m.as_str()).unwrap_or("");
-            let alias_lower = alias.to_lowercase();
-
-            // Check if alias is a subquery/derived table alias - skip entirely
-            if subquery_aliases.contains(&alias_lower) {
-                continue;
-            }
-
-            // Check if alias is a table alias that should be resolved
-            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
-                // This is alias.[column] - resolve to [schema].[table].[column]
-                // First emit the table reference if not seen (DotNet deduplicates tables)
-                if !seen_tables.contains(resolved_table) {
-                    seen_tables.insert(resolved_table.clone());
-                    deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
-                }
-
-                // Then emit the column reference (DotNet does NOT deduplicate columns)
-                let col_ref = format!("{}.[{}]", resolved_table, column);
-                deps.push(BodyDependency::ObjectRef(col_ref));
-            } else {
-                // Not a known alias - treat as [alias].[column] (might be schema.table)
-                let table_ref = format!("[{}].[{}]", alias, column);
-                if !seen_tables.contains(&table_ref) {
-                    seen_tables.insert(table_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(table_ref));
-                }
-            }
-        } else if cap.get(13).is_some() {
-            // Pattern 5: Bracketed alias with unbracketed column: [alias].column
-            let alias = cap.get(14).map(|m| m.as_str()).unwrap_or("");
-            let column = cap.get(15).map(|m| m.as_str()).unwrap_or("");
-            let alias_lower = alias.to_lowercase();
-
-            // Check if alias is a subquery/derived table alias - skip entirely
-            if subquery_aliases.contains(&alias_lower) {
-                continue;
-            }
-
-            // Check if alias is a table alias that should be resolved
-            if let Some(resolved_table) = table_aliases.get(&alias_lower) {
-                // This is [alias].column - resolve to [schema].[table].[column]
-                // First emit the table reference if not seen (DotNet deduplicates tables)
-                if !seen_tables.contains(resolved_table) {
-                    seen_tables.insert(resolved_table.clone());
-                    deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
-                }
-
-                // Then emit the column reference (DotNet does NOT deduplicate columns)
-                let col_ref = format!("{}.[{}]", resolved_table, column);
-                deps.push(BodyDependency::ObjectRef(col_ref));
-            } else {
-                // Not a known alias - treat as [alias].[column] (might be schema.table)
-                let table_ref = format!("[{}].[{}]", alias, column);
-                if !seen_tables.contains(&table_ref) {
-                    seen_tables.insert(table_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(table_ref));
-                }
-            }
-        } else if cap.get(16).is_some() {
-            // Pattern 6: Single bracketed identifier: [ident]
-            let ident = cap.get(17).map(|m| m.as_str()).unwrap_or("");
-            let ident_lower = ident.to_lowercase();
-            let upper_ident = ident.to_uppercase();
-
-            // Skip SQL keywords (but allow column names that happen to match type names)
-            if is_sql_keyword_not_column(&upper_ident) {
-                continue;
-            }
-
-            // Skip if this is a known table alias, subquery alias, or column alias
-            if table_aliases.contains_key(&ident_lower)
-                || subquery_aliases.contains(&ident_lower)
-                || column_aliases.contains(&ident_lower)
-            {
-                continue;
-            }
-
-            // Skip if this is part of a table reference (schema or table name)
-            let is_table_or_schema = table_refs.iter().any(|t| {
-                t.ends_with(&format!("].[{}]", ident)) || t.starts_with(&format!("[{}].", ident))
-            });
-
-            // If not a table/schema, treat as unqualified column -> resolve against first table
-            if !is_table_or_schema {
-                if let Some(first_table) = table_refs.first() {
-                    // First emit the table reference if not seen (DotNet deduplicates tables)
-                    if !seen_tables.contains(first_table) {
-                        seen_tables.insert(first_table.clone());
-                        deps.push(BodyDependency::ObjectRef(first_table.clone()));
+                BodyDepToken::TwoPartBracketed { first, second } => {
+                    // Pattern 3: Two-part bracketed reference: [schema].[table] or [alias].[column]
+                    if first.starts_with('@') || second.starts_with('@') {
+                        continue;
                     }
 
-                    // Direct column refs (single bracketed) ARE deduplicated by DotNet
-                    let col_ref = format!("{}.[{}]", first_table, ident);
-                    if !seen_direct_columns.contains(&col_ref) {
-                        seen_direct_columns.insert(col_ref.clone());
+                    let first_lower = first.to_lowercase();
+
+                    // Check if first_part is a subquery/derived table alias - skip entirely
+                    if subquery_aliases.contains(&first_lower) {
+                        continue;
+                    }
+
+                    // Check if first_part is a table alias that should be resolved
+                    if let Some(resolved_table) = table_aliases.get(&first_lower) {
+                        // This is alias.column - resolve to [schema].[table].[column]
+                        // First emit the table reference if not seen (DotNet deduplicates tables)
+                        if !seen_tables.contains(resolved_table) {
+                            seen_tables.insert(resolved_table.clone());
+                            deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
+                        }
+
+                        // Then emit the column reference (DotNet does NOT deduplicate columns)
+                        let col_ref = format!("{}.[{}]", resolved_table, second);
                         deps.push(BodyDependency::ObjectRef(col_ref));
+                    } else {
+                        // Not an alias - treat as [schema].[table] (DotNet deduplicates tables)
+                        let table_ref = format!("[{}].[{}]", first, second);
+                        if !seen_tables.contains(&table_ref) {
+                            seen_tables.insert(table_ref.clone());
+                            deps.push(BodyDependency::ObjectRef(table_ref));
+                        }
                     }
                 }
-            }
-        } else if cap.get(18).is_some() {
-            // Pattern 7: Unbracketed two-part reference: schema.table or alias.column
-            let first_part = cap.get(18).map(|m| m.as_str()).unwrap_or("");
-            let second_part = cap.get(19).map(|m| m.as_str()).unwrap_or("");
-            let first_lower = first_part.to_lowercase();
-            let first_upper = first_part.to_uppercase();
+                BodyDepToken::AliasDotBracketedColumn { alias, column } => {
+                    // Pattern 4: Unbracketed alias with bracketed column: alias.[column]
+                    let alias_lower = alias.to_lowercase();
 
-            // Skip if first part is a keyword
-            if is_sql_keyword(&first_upper) {
-                continue;
-            }
-
-            // Check if first_part is a subquery/derived table alias - skip entirely
-            if subquery_aliases.contains(&first_lower) {
-                continue;
-            }
-
-            // Check if first_part is a table alias that should be resolved
-            if let Some(resolved_table) = table_aliases.get(&first_lower) {
-                // This is alias.column - resolve to [schema].[table].[column]
-                // First emit the table reference if not seen (DotNet deduplicates tables)
-                if !seen_tables.contains(resolved_table) {
-                    seen_tables.insert(resolved_table.clone());
-                    deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
-                }
-
-                // Then emit the column reference (DotNet does NOT deduplicate columns)
-                let col_ref = format!("{}.[{}]", resolved_table, second_part);
-                deps.push(BodyDependency::ObjectRef(col_ref));
-            } else {
-                // Not an alias - treat as schema.table (DotNet deduplicates tables)
-                let table_ref = format!("[{}].[{}]", first_part, second_part);
-                if !seen_tables.contains(&table_ref) {
-                    seen_tables.insert(table_ref.clone());
-                    deps.push(BodyDependency::ObjectRef(table_ref));
-                }
-            }
-        } else if cap.get(20).is_some() {
-            // Pattern 8: Unbracketed single identifier: might be a column name
-            let ident = cap.get(20).map(|m| m.as_str()).unwrap_or("");
-            let ident_lower = ident.to_lowercase();
-            let upper_ident = ident.to_uppercase();
-
-            // Skip SQL keywords
-            if is_sql_keyword_not_column(&upper_ident) {
-                continue;
-            }
-
-            // Skip if this is a known table alias, subquery alias, or column alias
-            if table_aliases.contains_key(&ident_lower)
-                || subquery_aliases.contains(&ident_lower)
-                || column_aliases.contains(&ident_lower)
-            {
-                continue;
-            }
-
-            // Skip if this is part of a table reference (schema or table name)
-            let is_table_or_schema = table_refs.iter().any(|t| {
-                // Check case-insensitive match for unbracketed identifiers
-                let t_lower = t.to_lowercase();
-                t_lower.ends_with(&format!("].[{}]", ident_lower))
-                    || t_lower.starts_with(&format!("[{}].", ident_lower))
-            });
-
-            // If not a table/schema, treat as unqualified column -> resolve against first table
-            if !is_table_or_schema {
-                if let Some(first_table) = table_refs.first() {
-                    // First emit the table reference if not seen (DotNet deduplicates tables)
-                    if !seen_tables.contains(first_table) {
-                        seen_tables.insert(first_table.clone());
-                        deps.push(BodyDependency::ObjectRef(first_table.clone()));
+                    // Check if alias is a subquery/derived table alias - skip entirely
+                    if subquery_aliases.contains(&alias_lower) {
+                        continue;
                     }
 
-                    // Direct column refs (single unbracketed) ARE deduplicated by DotNet
-                    let col_ref = format!("{}.[{}]", first_table, ident);
-                    if !seen_direct_columns.contains(&col_ref) {
-                        seen_direct_columns.insert(col_ref.clone());
+                    // Check if alias is a table alias that should be resolved
+                    if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                        // This is alias.[column] - resolve to [schema].[table].[column]
+                        // First emit the table reference if not seen (DotNet deduplicates tables)
+                        if !seen_tables.contains(resolved_table) {
+                            seen_tables.insert(resolved_table.clone());
+                            deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
+                        }
+
+                        // Then emit the column reference (DotNet does NOT deduplicate columns)
+                        let col_ref = format!("{}.[{}]", resolved_table, column);
                         deps.push(BodyDependency::ObjectRef(col_ref));
+                    } else {
+                        // Not a known alias - treat as [alias].[column] (might be schema.table)
+                        let table_ref = format!("[{}].[{}]", alias, column);
+                        if !seen_tables.contains(&table_ref) {
+                            seen_tables.insert(table_ref.clone());
+                            deps.push(BodyDependency::ObjectRef(table_ref));
+                        }
+                    }
+                }
+                BodyDepToken::BracketedAliasDotColumn { alias, column } => {
+                    // Pattern 5: Bracketed alias with unbracketed column: [alias].column
+                    let alias_lower = alias.to_lowercase();
+
+                    // Check if alias is a subquery/derived table alias - skip entirely
+                    if subquery_aliases.contains(&alias_lower) {
+                        continue;
+                    }
+
+                    // Check if alias is a table alias that should be resolved
+                    if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                        // This is [alias].column - resolve to [schema].[table].[column]
+                        // First emit the table reference if not seen (DotNet deduplicates tables)
+                        if !seen_tables.contains(resolved_table) {
+                            seen_tables.insert(resolved_table.clone());
+                            deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
+                        }
+
+                        // Then emit the column reference (DotNet does NOT deduplicate columns)
+                        let col_ref = format!("{}.[{}]", resolved_table, column);
+                        deps.push(BodyDependency::ObjectRef(col_ref));
+                    } else {
+                        // Not a known alias - treat as [alias].[column] (might be schema.table)
+                        let table_ref = format!("[{}].[{}]", alias, column);
+                        if !seen_tables.contains(&table_ref) {
+                            seen_tables.insert(table_ref.clone());
+                            deps.push(BodyDependency::ObjectRef(table_ref));
+                        }
+                    }
+                }
+                BodyDepToken::SingleBracketed(ident) => {
+                    // Pattern 6: Single bracketed identifier: [ident]
+                    let ident_lower = ident.to_lowercase();
+                    let upper_ident = ident.to_uppercase();
+
+                    // Skip SQL keywords (but allow column names that happen to match type names)
+                    if is_sql_keyword_not_column(&upper_ident) {
+                        continue;
+                    }
+
+                    // Skip if this is a known table alias, subquery alias, or column alias
+                    if table_aliases.contains_key(&ident_lower)
+                        || subquery_aliases.contains(&ident_lower)
+                        || column_aliases.contains(&ident_lower)
+                    {
+                        continue;
+                    }
+
+                    // Skip if this is part of a table reference (schema or table name)
+                    let is_table_or_schema = table_refs.iter().any(|t| {
+                        t.ends_with(&format!("].[{}]", ident))
+                            || t.starts_with(&format!("[{}].", ident))
+                    });
+
+                    // If not a table/schema, treat as unqualified column -> resolve against first table
+                    if !is_table_or_schema {
+                        if let Some(first_table) = table_refs.first() {
+                            // First emit the table reference if not seen (DotNet deduplicates tables)
+                            if !seen_tables.contains(first_table) {
+                                seen_tables.insert(first_table.clone());
+                                deps.push(BodyDependency::ObjectRef(first_table.clone()));
+                            }
+
+                            // Direct column refs (single bracketed) ARE deduplicated by DotNet
+                            let col_ref = format!("{}.[{}]", first_table, ident);
+                            if !seen_direct_columns.contains(&col_ref) {
+                                seen_direct_columns.insert(col_ref.clone());
+                                deps.push(BodyDependency::ObjectRef(col_ref));
+                            }
+                        }
+                    }
+                }
+                BodyDepToken::TwoPartUnbracketed { first, second } => {
+                    // Pattern 7: Unbracketed two-part reference: schema.table or alias.column
+                    let first_lower = first.to_lowercase();
+                    let first_upper = first.to_uppercase();
+
+                    // Skip if first part is a keyword
+                    if is_sql_keyword(&first_upper) {
+                        continue;
+                    }
+
+                    // Check if first_part is a subquery/derived table alias - skip entirely
+                    if subquery_aliases.contains(&first_lower) {
+                        continue;
+                    }
+
+                    // Check if first_part is a table alias that should be resolved
+                    if let Some(resolved_table) = table_aliases.get(&first_lower) {
+                        // This is alias.column - resolve to [schema].[table].[column]
+                        // First emit the table reference if not seen (DotNet deduplicates tables)
+                        if !seen_tables.contains(resolved_table) {
+                            seen_tables.insert(resolved_table.clone());
+                            deps.push(BodyDependency::ObjectRef(resolved_table.clone()));
+                        }
+
+                        // Then emit the column reference (DotNet does NOT deduplicate columns)
+                        let col_ref = format!("{}.[{}]", resolved_table, second);
+                        deps.push(BodyDependency::ObjectRef(col_ref));
+                    } else {
+                        // Not an alias - treat as schema.table (DotNet deduplicates tables)
+                        let table_ref = format!("[{}].[{}]", first, second);
+                        if !seen_tables.contains(&table_ref) {
+                            seen_tables.insert(table_ref.clone());
+                            deps.push(BodyDependency::ObjectRef(table_ref));
+                        }
+                    }
+                }
+                BodyDepToken::SingleUnbracketed(ident) => {
+                    // Pattern 8: Unbracketed single identifier: might be a column name
+                    let ident_lower = ident.to_lowercase();
+                    let upper_ident = ident.to_uppercase();
+
+                    // Skip SQL keywords
+                    if is_sql_keyword_not_column(&upper_ident) {
+                        continue;
+                    }
+
+                    // Skip if this is a known table alias, subquery alias, or column alias
+                    if table_aliases.contains_key(&ident_lower)
+                        || subquery_aliases.contains(&ident_lower)
+                        || column_aliases.contains(&ident_lower)
+                    {
+                        continue;
+                    }
+
+                    // Skip if this is part of a table reference (schema or table name)
+                    let is_table_or_schema = table_refs.iter().any(|t| {
+                        // Check case-insensitive match for unbracketed identifiers
+                        let t_lower = t.to_lowercase();
+                        t_lower.ends_with(&format!("].[{}]", ident_lower))
+                            || t_lower.starts_with(&format!("[{}].", ident_lower))
+                    });
+
+                    // If not a table/schema, treat as unqualified column -> resolve against first table
+                    if !is_table_or_schema {
+                        if let Some(first_table) = table_refs.first() {
+                            // First emit the table reference if not seen (DotNet deduplicates tables)
+                            if !seen_tables.contains(first_table) {
+                                seen_tables.insert(first_table.clone());
+                                deps.push(BodyDependency::ObjectRef(first_table.clone()));
+                            }
+
+                            // Direct column refs (single unbracketed) ARE deduplicated by DotNet
+                            let col_ref = format!("{}.[{}]", first_table, ident);
+                            if !seen_direct_columns.contains(&col_ref) {
+                                seen_direct_columns.insert(col_ref.clone());
+                                deps.push(BodyDependency::ObjectRef(col_ref));
+                            }
+                        }
                     }
                 }
             }
@@ -3786,6 +3756,306 @@ impl TableAliasTokenParser {
             matches!(&token.token, Token::Word(w) if w.value.eq_ignore_ascii_case(word))
         } else {
             false
+        }
+    }
+
+    /// Check if current token matches a specific token type
+    fn check_token(&self, expected: &Token) -> bool {
+        if let Some(token) = self.current_token() {
+            std::mem::discriminant(&token.token) == std::mem::discriminant(expected)
+        } else {
+            false
+        }
+    }
+}
+
+// =============================================================================
+// Body Dependency Token Scanner (Phase 20.2.1)
+// =============================================================================
+// Replaces TOKEN_RE regex with tokenizer-based scanning for body dependency extraction.
+// Handles 8 token patterns:
+// 1. @param - parameter references
+// 2. [a].[b].[c] - three-part bracketed reference (schema.table.column)
+// 3. [a].[b] - two-part bracketed reference (schema.table or alias.column)
+// 4. alias.[column] - unbracketed alias with bracketed column
+// 5. [alias].column - bracketed alias with unbracketed column
+// 6. [ident] - single bracketed identifier
+// 7. schema.table - unbracketed two-part reference
+// 8. ident - unbracketed single identifier
+
+/// Represents a token pattern matched by the body dependency scanner
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum BodyDepToken {
+    /// @param - parameter reference
+    Parameter(String),
+    /// [schema].[table].[column] - three-part bracketed
+    ThreePartBracketed {
+        schema: String,
+        table: String,
+        column: String,
+    },
+    /// [first].[second] - two-part bracketed (schema.table or alias.column)
+    TwoPartBracketed { first: String, second: String },
+    /// alias.[column] - unbracketed alias with bracketed column
+    AliasDotBracketedColumn { alias: String, column: String },
+    /// [alias].column - bracketed alias with unbracketed column
+    BracketedAliasDotColumn { alias: String, column: String },
+    /// [ident] - single bracketed identifier
+    SingleBracketed(String),
+    /// schema.table - unbracketed two-part reference
+    TwoPartUnbracketed { first: String, second: String },
+    /// ident - single unbracketed identifier
+    SingleUnbracketed(String),
+}
+
+/// Token-based scanner for body dependency extraction.
+/// Replaces TOKEN_RE regex with proper tokenization for handling whitespace, comments,
+/// and SQL syntax correctly.
+pub(crate) struct BodyDependencyTokenScanner {
+    tokens: Vec<sqlparser::tokenizer::TokenWithSpan>,
+    pos: usize,
+}
+
+impl BodyDependencyTokenScanner {
+    /// Create a new scanner for SQL body text
+    pub fn new(sql: &str) -> Option<Self> {
+        let dialect = MsSqlDialect {};
+        let tokens = Tokenizer::new(&dialect, sql)
+            .tokenize_with_location()
+            .ok()?;
+        Some(Self { tokens, pos: 0 })
+    }
+
+    /// Scan the body and return all matched tokens in order of appearance
+    pub fn scan(&mut self) -> Vec<BodyDepToken> {
+        let mut results = Vec::new();
+
+        while !self.is_at_end() {
+            self.skip_whitespace();
+            if self.is_at_end() {
+                break;
+            }
+
+            // Try to match patterns in order of specificity
+            if let Some(token) = self.try_scan_token() {
+                results.push(token);
+            } else {
+                // No pattern matched, advance to next token
+                self.advance();
+            }
+        }
+
+        results
+    }
+
+    /// Try to scan a single token pattern at the current position
+    fn try_scan_token(&mut self) -> Option<BodyDepToken> {
+        // Pattern 1: @param - parameter reference
+        // MsSqlDialect tokenizes @param as a single Word token with @ prefix
+        if self.is_parameter_word() {
+            return self.try_scan_parameter();
+        }
+
+        // Patterns 2-6: Start with a bracketed identifier [ident]
+        if self.is_bracketed_word() {
+            return self.try_scan_bracketed_pattern();
+        }
+
+        // Patterns 7-8: Unbracketed identifiers (not starting with @)
+        if self.is_unbracketed_word() {
+            return self.try_scan_unbracketed_pattern();
+        }
+
+        None
+    }
+
+    /// Try to scan a parameter reference: @param
+    /// MsSqlDialect tokenizes @param as a single Word with "@param" as value
+    fn try_scan_parameter(&mut self) -> Option<BodyDepToken> {
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                if w.quote_style.is_none() && w.value.starts_with('@') {
+                    // Extract parameter name without @ prefix
+                    let param_name = w.value[1..].to_string();
+                    self.advance();
+                    return Some(BodyDepToken::Parameter(param_name));
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if current token is a parameter word (starts with @)
+    fn is_parameter_word(&self) -> bool {
+        if let Some(token) = self.current_token() {
+            matches!(&token.token, Token::Word(w) if w.quote_style.is_none() && w.value.starts_with('@'))
+        } else {
+            false
+        }
+    }
+
+    /// Try to scan patterns starting with a bracketed identifier
+    fn try_scan_bracketed_pattern(&mut self) -> Option<BodyDepToken> {
+        let first_ident = self.parse_bracketed_identifier()?;
+        self.skip_whitespace();
+
+        // Check for dot separator
+        if self.check_token(&Token::Period) {
+            self.advance(); // consume .
+            self.skip_whitespace();
+
+            // Could be: [a].[b], [a].[b].[c], or [alias].column
+            if self.is_bracketed_word() {
+                // [a].[b] or [a].[b].[c]
+                let second_ident = self.parse_bracketed_identifier()?;
+                self.skip_whitespace();
+
+                // Check for third part
+                if self.check_token(&Token::Period) {
+                    self.advance(); // consume .
+                    self.skip_whitespace();
+
+                    if self.is_bracketed_word() {
+                        // [a].[b].[c] - three-part bracketed
+                        let third_ident = self.parse_bracketed_identifier()?;
+                        return Some(BodyDepToken::ThreePartBracketed {
+                            schema: first_ident,
+                            table: second_ident,
+                            column: third_ident,
+                        });
+                    }
+                }
+
+                // [a].[b] - two-part bracketed
+                return Some(BodyDepToken::TwoPartBracketed {
+                    first: first_ident,
+                    second: second_ident,
+                });
+            } else if self.is_unbracketed_word() {
+                // [alias].column - bracketed alias with unbracketed column
+                let column = self.parse_unbracketed_identifier()?;
+                return Some(BodyDepToken::BracketedAliasDotColumn {
+                    alias: first_ident,
+                    column,
+                });
+            }
+        }
+
+        // Just [ident] - single bracketed identifier
+        Some(BodyDepToken::SingleBracketed(first_ident))
+    }
+
+    /// Try to scan patterns starting with an unbracketed identifier
+    fn try_scan_unbracketed_pattern(&mut self) -> Option<BodyDepToken> {
+        // Check word boundary - we need to make sure we're not continuing from another token
+        // This is handled by checking the previous token isn't a word character
+
+        let first_ident = self.parse_unbracketed_identifier()?;
+        self.skip_whitespace();
+
+        // Check for dot separator
+        if self.check_token(&Token::Period) {
+            self.advance(); // consume .
+            self.skip_whitespace();
+
+            if self.is_bracketed_word() {
+                // alias.[column] - unbracketed alias with bracketed column
+                let column = self.parse_bracketed_identifier()?;
+                return Some(BodyDepToken::AliasDotBracketedColumn {
+                    alias: first_ident,
+                    column,
+                });
+            } else if self.is_unbracketed_word() {
+                // schema.table - unbracketed two-part
+                let second_ident = self.parse_unbracketed_identifier()?;
+                return Some(BodyDepToken::TwoPartUnbracketed {
+                    first: first_ident,
+                    second: second_ident,
+                });
+            }
+        }
+
+        // Just ident - single unbracketed identifier
+        Some(BodyDepToken::SingleUnbracketed(first_ident))
+    }
+
+    /// Parse a bracketed identifier and return the inner value
+    fn parse_bracketed_identifier(&mut self) -> Option<String> {
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                // Check if it's actually bracketed (quote_style shows the quote type)
+                if w.quote_style.is_some() {
+                    let value = w.value.clone();
+                    self.advance();
+                    return Some(value);
+                }
+            }
+        }
+        None
+    }
+
+    /// Parse an unbracketed identifier
+    fn parse_unbracketed_identifier(&mut self) -> Option<String> {
+        if let Some(token) = self.current_token() {
+            if let Token::Word(w) = &token.token {
+                // Check if it's unbracketed (no quote_style)
+                if w.quote_style.is_none() {
+                    let value = w.value.clone();
+                    self.advance();
+                    return Some(value);
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if current token is a bracketed word (identifier with quote_style)
+    fn is_bracketed_word(&self) -> bool {
+        if let Some(token) = self.current_token() {
+            matches!(&token.token, Token::Word(w) if w.quote_style.is_some())
+        } else {
+            false
+        }
+    }
+
+    /// Check if current token is an unbracketed word (identifier without quote_style, not starting with @)
+    fn is_unbracketed_word(&self) -> bool {
+        if let Some(token) = self.current_token() {
+            matches!(&token.token, Token::Word(w) if w.quote_style.is_none() && !w.value.starts_with('@'))
+        } else {
+            false
+        }
+    }
+
+    /// Skip whitespace tokens
+    fn skip_whitespace(&mut self) {
+        while !self.is_at_end() {
+            if let Some(token) = self.current_token() {
+                if matches!(&token.token, Token::Whitespace(_)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Check if at end of tokens
+    fn is_at_end(&self) -> bool {
+        self.pos >= self.tokens.len()
+    }
+
+    /// Get current token without consuming
+    fn current_token(&self) -> Option<&sqlparser::tokenizer::TokenWithSpan> {
+        self.tokens.get(self.pos)
+    }
+
+    /// Advance to next token
+    fn advance(&mut self) {
+        if !self.is_at_end() {
+            self.pos += 1;
         }
     }
 
@@ -7339,5 +7609,320 @@ FROM [dbo].[Account] A
         // NOT NULL in mixed case
         let result = clean_data_type("VARCHAR(MAX) Not Null");
         assert_eq!(result, "VARCHAR(MAX)");
+    }
+
+    // ============================================================================
+    // BodyDependencyTokenScanner tests (Phase 20.2.1)
+    // ============================================================================
+
+    #[test]
+    fn test_body_dep_scanner_parameter() {
+        // @param pattern
+        let mut scanner = BodyDependencyTokenScanner::new("@userId").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], BodyDepToken::Parameter("userId".to_string()));
+    }
+
+    #[test]
+    fn test_body_dep_scanner_parameter_with_whitespace() {
+        // @param with surrounding whitespace
+        let mut scanner = BodyDependencyTokenScanner::new("  @userId  ").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], BodyDepToken::Parameter("userId".to_string()));
+    }
+
+    #[test]
+    fn test_body_dep_scanner_three_part_bracketed() {
+        // [schema].[table].[column]
+        let mut scanner = BodyDependencyTokenScanner::new("[dbo].[Users].[Name]").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::ThreePartBracketed {
+                schema: "dbo".to_string(),
+                table: "Users".to_string(),
+                column: "Name".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_three_part_with_whitespace() {
+        // [schema] . [table] . [column] with whitespace around dots
+        let mut scanner = BodyDependencyTokenScanner::new("[dbo] . [Users] . [Name]").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::ThreePartBracketed {
+                schema: "dbo".to_string(),
+                table: "Users".to_string(),
+                column: "Name".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_three_part_with_tabs() {
+        // [schema]\t.\t[table]\t.\t[column] with tabs
+        let mut scanner = BodyDependencyTokenScanner::new("[dbo]\t.\t[Users]\t.\t[Name]").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::ThreePartBracketed {
+                schema: "dbo".to_string(),
+                table: "Users".to_string(),
+                column: "Name".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_two_part_bracketed() {
+        // [schema].[table]
+        let mut scanner = BodyDependencyTokenScanner::new("[dbo].[Users]").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::TwoPartBracketed {
+                first: "dbo".to_string(),
+                second: "Users".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_two_part_with_whitespace() {
+        // [schema] . [table] with whitespace
+        let mut scanner = BodyDependencyTokenScanner::new("[dbo]  .  [Users]").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::TwoPartBracketed {
+                first: "dbo".to_string(),
+                second: "Users".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_alias_dot_bracketed_column() {
+        // alias.[column]
+        let mut scanner = BodyDependencyTokenScanner::new("u.[Name]").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::AliasDotBracketedColumn {
+                alias: "u".to_string(),
+                column: "Name".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_alias_dot_bracketed_with_whitespace() {
+        // alias . [column] with whitespace
+        let mut scanner = BodyDependencyTokenScanner::new("u  .  [Name]").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::AliasDotBracketedColumn {
+                alias: "u".to_string(),
+                column: "Name".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_bracketed_alias_dot_column() {
+        // [alias].column
+        let mut scanner = BodyDependencyTokenScanner::new("[u].Name").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::BracketedAliasDotColumn {
+                alias: "u".to_string(),
+                column: "Name".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_bracketed_alias_dot_column_with_whitespace() {
+        // [alias] . column with whitespace
+        let mut scanner = BodyDependencyTokenScanner::new("[u]  .  Name").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::BracketedAliasDotColumn {
+                alias: "u".to_string(),
+                column: "Name".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_single_bracketed() {
+        // [ident]
+        let mut scanner = BodyDependencyTokenScanner::new("[Name]").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], BodyDepToken::SingleBracketed("Name".to_string()));
+    }
+
+    #[test]
+    fn test_body_dep_scanner_two_part_unbracketed() {
+        // schema.table
+        let mut scanner = BodyDependencyTokenScanner::new("dbo.Users").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::TwoPartUnbracketed {
+                first: "dbo".to_string(),
+                second: "Users".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_two_part_unbracketed_with_whitespace() {
+        // schema . table with whitespace
+        let mut scanner = BodyDependencyTokenScanner::new("dbo  .  Users").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::TwoPartUnbracketed {
+                first: "dbo".to_string(),
+                second: "Users".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_single_unbracketed() {
+        // ident
+        let mut scanner = BodyDependencyTokenScanner::new("Name").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::SingleUnbracketed("Name".to_string())
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_multiple_tokens() {
+        // Multiple patterns in sequence
+        let sql = "@userId [dbo].[Users] u.[Name]";
+        let mut scanner = BodyDependencyTokenScanner::new(sql).unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(tokens[0], BodyDepToken::Parameter("userId".to_string()));
+        assert_eq!(
+            tokens[1],
+            BodyDepToken::TwoPartBracketed {
+                first: "dbo".to_string(),
+                second: "Users".to_string()
+            }
+        );
+        assert_eq!(
+            tokens[2],
+            BodyDepToken::AliasDotBracketedColumn {
+                alias: "u".to_string(),
+                column: "Name".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_realistic_select() {
+        // Realistic SELECT statement
+        let sql = "SELECT [Id], [Name], u.[Email] FROM [dbo].[Users] u WHERE @userId = u.[Id]";
+        let mut scanner = BodyDependencyTokenScanner::new(sql).unwrap();
+        let tokens = scanner.scan();
+
+        // Expected tokens: SELECT, [Id], [Name], u.[Email], FROM, [dbo].[Users], u, WHERE, @userId, =, u.[Id]
+        // Token scanner should pick up: [Id], [Name], u.[Email], [dbo].[Users], u, @userId, u.[Id]
+        let param_count = tokens
+            .iter()
+            .filter(|t| matches!(t, BodyDepToken::Parameter(_)))
+            .count();
+        let two_part_count = tokens
+            .iter()
+            .filter(|t| matches!(t, BodyDepToken::TwoPartBracketed { .. }))
+            .count();
+        let alias_col_count = tokens
+            .iter()
+            .filter(|t| matches!(t, BodyDepToken::AliasDotBracketedColumn { .. }))
+            .count();
+
+        assert_eq!(param_count, 1); // @userId
+        assert_eq!(two_part_count, 1); // [dbo].[Users]
+        assert_eq!(alias_col_count, 2); // u.[Email], u.[Id]
+    }
+
+    #[test]
+    fn test_body_dep_scanner_with_newlines() {
+        // SQL with newlines
+        let sql = "SELECT\n    [Id],\n    [Name]\nFROM\n    [dbo].[Users]";
+        let mut scanner = BodyDependencyTokenScanner::new(sql).unwrap();
+        let tokens = scanner.scan();
+
+        let single_bracket_count = tokens
+            .iter()
+            .filter(|t| matches!(t, BodyDepToken::SingleBracketed(_)))
+            .count();
+        let two_part_count = tokens
+            .iter()
+            .filter(|t| matches!(t, BodyDepToken::TwoPartBracketed { .. }))
+            .count();
+
+        assert_eq!(single_bracket_count, 2); // [Id], [Name]
+        assert_eq!(two_part_count, 1); // [dbo].[Users]
+    }
+
+    #[test]
+    fn test_body_dep_scanner_special_chars_in_brackets() {
+        // Identifiers with spaces and special chars inside brackets
+        let mut scanner =
+            BodyDependencyTokenScanner::new("[My Schema].[My Table].[My Column]").unwrap();
+        let tokens = scanner.scan();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(
+            tokens[0],
+            BodyDepToken::ThreePartBracketed {
+                schema: "My Schema".to_string(),
+                table: "My Table".to_string(),
+                column: "My Column".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_body_dep_scanner_empty_input() {
+        // Empty input
+        let mut scanner = BodyDependencyTokenScanner::new("").unwrap();
+        let tokens = scanner.scan();
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_body_dep_scanner_whitespace_only() {
+        // Whitespace only
+        let mut scanner = BodyDependencyTokenScanner::new("   \t\n   ").unwrap();
+        let tokens = scanner.scan();
+        assert!(tokens.is_empty());
     }
 }
