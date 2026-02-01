@@ -10,10 +10,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 - ✅ Phase 21.1-21.5.1 complete: Module structure, element writers, body_deps, other_writers extracted
 - ⬜ Phase 21.4.2 optional: qualified_name.rs (already integrated in body_deps.rs)
 
-**Discovered: Phase 22 - Layer 7 Canonical XML Parity** (4/7 tasks)
+**Discovered: Phase 22 - Layer 7 Canonical XML Parity** (4.5/7 tasks)
 - Layer 7 now performs true 1-1 XML comparison (no sorting/normalization)
 - Phase 22.3.2 fixed: AttachedAnnotation capture bug was in TEST infrastructure, not main code
 - Phase 22.4 added: New DotNet SDK (8.0.417) constraint annotation behavior changes
+- ✅ Element ordering improved: Added secondary sort key on DefiningTable reference for deterministic inline constraint ordering
 - See Phase 22 section below for detailed task breakdown
 
 **Phase 23 Complete: IsMax property for MAX types (4/4) ✅**
@@ -124,6 +125,13 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 
 **Background:** The annotation pattern is based on the NUMBER of constraints per table, not just whether they're inline or named.
 
+**Key Finding (2026-02-01):** Fresh DotNet SDK 8.0.417 builds produce **more annotations** than Rust:
+- `all_constraints` fixture: DotNet produces 16 annotations, Rust produces 10
+- DotNet adds `Annotation Type="SqlInlineConstraintAnnotation"` to ALL constraints (PK, FK, UQ, CK, DF)
+- Rust currently only adds annotations to truly inline constraints (DEFAULTs defined in column)
+
+**Root Cause:** DotNet treats ALL constraints as needing annotations, while Rust only annotates inline constraints.
+
 **Detailed DotNet Annotation Behavior (2026-02 findings):**
 
 **Single-constraint tables** (like Categories with only PK):
@@ -139,8 +147,11 @@ Created body_deps.rs with BodyDependency, BodyDepToken, BodyDependencyTokenScann
 **Current Rust Behavior (incorrect):**
 - Named table-level constraints incorrectly get `AttachedAnnotation` instead of `Annotation`
 - Disambiguator values don't match DotNet's numbering scheme
+- Missing annotations on table-level constraints (PK, FK, UQ, CK)
 
-**Important:** The git-tracked fixture dacpacs in `tests/fixtures/*/bin/Debug/` are stale.
+**Important:** The git-tracked fixture dacpacs in `tests/fixtures/*/bin/Debug/` are stale (some built with Rust!).
+
+**Note:** Element ordering within inline constraints was improved in commit `TBD` by adding secondary sort key on DefiningTable reference, ensuring deterministic alphabetical ordering.
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|

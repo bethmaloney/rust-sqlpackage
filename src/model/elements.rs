@@ -108,6 +108,24 @@ impl ModelElement {
             _ => self.full_name(),
         }
     }
+
+    /// Get the secondary sort key for elements with the same (Name, Type).
+    /// For inline constraints without a Name attribute, this returns the DefiningTable reference
+    /// to ensure deterministic ordering that matches DotNet DacFx.
+    /// Returns empty string for elements that don't need secondary sorting.
+    pub fn secondary_sort_key(&self) -> String {
+        match self {
+            ModelElement::Constraint(c) => {
+                if !c.emit_name {
+                    // Inline constraint - sort by DefiningTable reference
+                    format!("[{}].[{}]", c.table_schema, c.table_name)
+                } else {
+                    String::new()
+                }
+            }
+            _ => String::new(),
+        }
+    }
 }
 
 /// Schema element

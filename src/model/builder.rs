@@ -814,25 +814,28 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
     Ok(model)
 }
 
-/// Sort elements by (Name, Type) to match DotNet DacFx ordering.
+/// Sort elements by (Name, Type, SecondaryKey) to match DotNet DacFx ordering.
 ///
 /// DotNet sorts elements alphabetically (case-insensitive) by:
 /// 1. Name attribute value (empty string for elements without Name attribute)
 /// 2. Type attribute value (e.g., "SqlCheckConstraint", "SqlTable")
+/// 3. Secondary key for disambiguation (DefiningTable reference for inline constraints)
 ///
 /// This means elements without Name attribute (inline constraints) sort before
-/// elements with Name, and within the same Name prefix, elements are sorted by Type.
+/// elements with Name, and within the same Name/Type, elements are sorted by their
+/// secondary key (DefiningTable reference for inline constraints).
 ///
 /// Uses `sort_by_cached_key` to pre-compute sort keys once per element,
 /// avoiding repeated `xml_name_attr()`, `type_name()`, and `to_lowercase()` calls
 /// during comparisons.
 fn sort_elements(elements: &mut [ModelElement]) {
-    // Pre-compute sort key: (lowercase_name, lowercase_type)
+    // Pre-compute sort key: (lowercase_name, lowercase_type, lowercase_secondary)
     // This avoids O(n log n) calls to xml_name_attr() and to_lowercase() during sorting
     elements.sort_by_cached_key(|elem| {
         (
             elem.xml_name_attr().to_lowercase(),
             elem.type_name().to_lowercase(),
+            elem.secondary_sort_key().to_lowercase(),
         )
     });
 }
