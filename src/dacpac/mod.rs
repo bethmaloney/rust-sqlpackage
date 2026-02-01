@@ -18,7 +18,7 @@ pub fn generate_model_xml_string(
     model: &DatabaseModel,
     version: SqlServerVersion,
     collation_lcid: u32,
-    _case_sensitive: bool,
+    case_sensitive: bool,
 ) -> String {
     use crate::project::SqlProject;
     use std::path::PathBuf;
@@ -29,6 +29,7 @@ pub fn generate_model_xml_string(
         target_platform: version,
         default_schema: "dbo".to_string(),
         collation_lcid,
+        collation_case_sensitive: case_sensitive,
         sql_files: vec![],
         dacpac_references: vec![],
         package_references: vec![],
@@ -58,6 +59,7 @@ pub fn generate_dac_metadata_xml(name: &str, version: &str) -> String {
         target_platform: SqlServerVersion::Sql160,
         default_schema: "dbo".to_string(),
         collation_lcid: 1033,
+        collation_case_sensitive: false,
         sql_files: vec![],
         dacpac_references: vec![],
         package_references: vec![],

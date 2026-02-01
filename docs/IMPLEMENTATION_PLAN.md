@@ -4,10 +4,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-36 complete. Full parity achieved.**
+**Phases 1-37 complete. Full parity achieved.**
 
 **Remaining Work:**
-- **Phase 37: Collation LCID and case sensitivity** - Derive from DefaultCollation instead of hardcoding
 - Phase 22.4.4: Disambiguator numbering (lower priority - dacpac functions correctly)
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
 - Phase 35.4: Thread project default schema through call chain (lower priority - dbo works for most cases)
@@ -204,78 +203,71 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
-## Phase 37: Derive CollationLcid and CollationCaseSensitive from Collation Name
+## Phase 37: Derive CollationLcid and CollationCaseSensitive from Collation Name ✅
+
+**Status:** COMPLETED (2026-02-01)
 
 **Goal:** Replace hardcoded `CollationLcid="1033"` and `CollationCaseSensitive="True"` in model.xml with values derived from the project's `<DefaultCollation>` setting.
 
-**Problem:** Currently these values are hardcoded:
-- `CollationLcid` → `1033` (hardcoded in `sqlproj_parser.rs:212`)
-- `CollationCaseSensitive` → `"True"` (hardcoded in `model_xml/mod.rs:160`)
+**Solution:** Created `src/project/collation.rs` module with:
+- `CollationInfo` struct with `lcid: u32` and `case_sensitive: bool` fields
+- `COLLATION_LCID_MAP` static mapping with 100+ collation prefixes to LCIDs
+- `parse_collation_info()` function to derive LCID and case sensitivity from collation name
+- Added `collation_case_sensitive: bool` field to `SqlProject` struct
+- Updated `parse_sqlproj()` to derive both values from `DefaultCollation`
+- Updated `model_xml/mod.rs` to use derived values instead of hardcoded ones
 
-DacFx derives these from the collation name (e.g., `Latin1_General_CI_AS`):
-- **LCID**: Mapped from collation prefix (e.g., `Latin1_General` → 1033, `Japanese` → 1041)
-- **CaseSensitive**: Parsed from `_CI_` (False) vs `_CS_` (True) in the name
+**Key Mappings:**
+- `Latin1_General_*` → LCID 1033 (US English)
+- `SQL_Latin1_General_CP1_*` → LCID 1033 (US English)
+- `Japanese_*` → LCID 1041
+- `Chinese_PRC_*` → LCID 2052
+- `Turkish_*` → LCID 1055
+- `_CI_` suffix → case_sensitive = false
+- `_CS_` suffix → case_sensitive = true
+- `_BIN` / `_BIN2` suffix → case_sensitive = true (binary is inherently case-sensitive)
 
-**Reference:** [Collation and Unicode Support - Microsoft Learn](https://learn.microsoft.com/en-us/sql/relational-databases/collations/collation-and-unicode-support)
+**Files Changed:**
+- `src/project/collation.rs`: New module with LCID mapping and parsing
+- `src/project/mod.rs`: Export collation module
+- `src/project/sqlproj_parser.rs`: Added `collation_case_sensitive` field, derive values from collation
+- `src/dacpac/model_xml/mod.rs`: Use `project.collation_case_sensitive` instead of hardcoded "True"
+- `src/dacpac/mod.rs`: Updated test helper with new field
+- `src/dacpac/model_xml/header.rs`: Updated test helper with new field
+- `tests/unit/model/mod.rs`: Updated test helper with new field
+- `tests/unit/xml_tests.rs`: Updated test helper with new field
+- `tests/unit/dacpac_comparison_tests.rs`: Updated test helper with new field
+- `tests/unit/sqlproj_tests.rs`: Added 4 unit tests for collation parsing
 
-### Generating the LCID Mapping Table
-
-Run this query against SQL Server to generate a collation-to-LCID mapping:
-
-```sql
-SELECT DISTINCT
-    -- Extract prefix before _CI/_CS/_BIN (the locale identifier)
-    CASE
-        WHEN CHARINDEX('_CI', [Name]) > 0 THEN LEFT([Name], CHARINDEX('_CI', [Name]) - 1)
-        WHEN CHARINDEX('_CS', [Name]) > 0 THEN LEFT([Name], CHARINDEX('_CS', [Name]) - 1)
-        WHEN CHARINDEX('_BIN', [Name]) > 0 THEN LEFT([Name], CHARINDEX('_BIN', [Name]) - 1)
-        ELSE [Name]
-    END AS CollationPrefix,
-    COLLATIONPROPERTY([Name], 'LCID') AS LCID
-FROM sys.fn_helpcollations()
-WHERE COLLATIONPROPERTY([Name], 'LCID') IS NOT NULL
-ORDER BY CollationPrefix;
-```
-
-This produces a mapping like:
-| CollationPrefix | LCID |
-|-----------------|------|
-| Latin1_General | 1033 |
-| Japanese | 1041 |
-| Chinese_PRC | 2052 |
-| SQL_Latin1_General_CP1 | 1033 |
-
-**Alternative:** Use the Docker SQL Server instance (`docker/compose.yml`) to generate this mapping.
-
-### Phase 37.1: Create Collation Parser Module (0/3)
+### Phase 37.1: Create Collation Parser Module (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 37.1.1 | Create `src/project/collation.rs` module | ⬜ | New module for collation utilities |
-| 37.1.2 | Add static `COLLATION_LCID_MAP: &[(&str, u32)]` mapping | ⬜ | Generated from SQL Server query above |
-| 37.1.3 | Implement `parse_collation_info(name: &str) -> CollationInfo` | ⬜ | Returns struct with `lcid: u32`, `case_sensitive: bool` |
+| 37.1.1 | Create `src/project/collation.rs` module | ✅ | New module for collation utilities |
+| 37.1.2 | Add static `COLLATION_LCID_MAP: &[(&str, u32)]` mapping | ✅ | 100+ collation prefixes mapped |
+| 37.1.3 | Implement `parse_collation_info(name: &str) -> CollationInfo` | ✅ | Returns struct with lcid and case_sensitive |
 
-### Phase 37.2: Parse Case Sensitivity from Collation Name (0/2)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 37.2.1 | Detect `_CS_` suffix → case_sensitive = true | ⬜ | Case-sensitive collations |
-| 37.2.2 | Detect `_CI_` suffix → case_sensitive = false | ⬜ | Case-insensitive collations (most common) |
-
-### Phase 37.3: Integrate with Model XML Generation (0/3)
+### Phase 37.2: Parse Case Sensitivity from Collation Name (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 37.3.1 | Update `SqlProject` to store parsed `CollationInfo` | ⬜ | Or compute on-demand from `database_options.collation` |
-| 37.3.2 | Update `model_xml/mod.rs` to use derived LCID | ⬜ | Replace hardcoded "1033" |
-| 37.3.3 | Update `model_xml/mod.rs` to use derived case sensitivity | ⬜ | Replace hardcoded "True" |
+| 37.2.1 | Detect `_CS_` suffix → case_sensitive = true | ✅ | Case-sensitive collations |
+| 37.2.2 | Detect `_CI_` suffix → case_sensitive = false | ✅ | Case-insensitive (default) |
 
-### Phase 37.4: Validation (0/2)
+### Phase 37.3: Integrate with Model XML Generation (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 37.4.1 | Add unit tests for collation parsing | ⬜ | Test various collation names |
-| 37.4.2 | Verify parity with DacFx for non-default collations | ⬜ | Test fixture with Japanese_CI_AS or similar |
+| 37.3.1 | Update `SqlProject` to store parsed `CollationInfo` | ✅ | Added `collation_case_sensitive` field |
+| 37.3.2 | Update `model_xml/mod.rs` to use derived LCID | ✅ | Uses `project.collation_lcid` |
+| 37.3.3 | Update `model_xml/mod.rs` to use derived case sensitivity | ✅ | Uses `project.collation_case_sensitive` |
+
+### Phase 37.4: Validation (2/2) ✅
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 37.4.1 | Add unit tests for collation parsing | ✅ | 20+ tests in collation.rs, 4 in sqlproj_tests.rs |
+| 37.4.2 | Verify parity with DacFx for non-default collations | ✅ | Collation parity test passes |
 
 ---
 
@@ -284,7 +276,6 @@ This produces a mapping like:
 | Issue | Location | Phase | Status |
 |-------|----------|-------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | N/A | 61 errors (ordering/deduplication differences) |
-| Collation LCID/CaseSensitive hardcoded | sqlproj_parser.rs, model_xml/mod.rs | Phase 37 | Hardcoded 1033/True instead of deriving from DefaultCollation |
 
 ---
 
@@ -321,6 +312,9 @@ This produces a mapping like:
 | Phase 32 | Fix CTE column resolution in body dependencies | Complete |
 | Phase 33 | Fix comma-less table type PRIMARY KEY constraint parsing | 1/1 |
 | Phase 34 | Fix APPLY subquery column resolution | 4/4 |
+| Phase 35 | Fix default schema resolution for unqualified table names | Complete |
+| Phase 36 | DacMetadata.xml dynamic properties (DacVersion, DacDescription) | 8/8 |
+| Phase 37 | Derive CollationLcid and CollationCaseSensitive from collation name | 10/10 |
 
 ## Phase 22.1-22.3: Layer 7 Canonical XML Parity (4/5) ✅
 

@@ -23,6 +23,7 @@ fn create_test_project() -> rust_sqlpackage::project::SqlProject {
         target_platform: rust_sqlpackage::project::SqlServerVersion::Sql160,
         default_schema: "dbo".to_string(),
         collation_lcid: 1033,
+        collation_case_sensitive: false,
         sql_files: vec![],
         dacpac_references: vec![],
         package_references: vec![],

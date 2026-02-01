@@ -373,6 +373,7 @@ mod tests {
             target_platform: SqlServerVersion::Sql160,
             default_schema: "dbo".to_string(),
             collation_lcid: 1033,
+            collation_case_sensitive: false,
             sql_files: Vec::new(),
             dacpac_references: Vec::new(),
             package_references: Vec::new(),

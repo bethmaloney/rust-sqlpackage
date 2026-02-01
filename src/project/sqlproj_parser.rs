@@ -153,8 +153,10 @@ pub struct SqlProject {
     pub target_platform: SqlServerVersion,
     /// Default schema
     pub default_schema: String,
-    /// Collation LCID
+    /// Collation LCID (derived from DefaultCollation)
     pub collation_lcid: u32,
+    /// Collation case sensitivity (derived from DefaultCollation)
+    pub collation_case_sensitive: bool,
     /// SQL files to compile
     pub sql_files: Vec<PathBuf>,
     /// Dacpac references
@@ -212,17 +214,23 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
     let default_schema =
         find_property_value(&root, "DefaultSchema").unwrap_or_else(|| "dbo".to_string());
 
-    // Collation LCID is always 1033 (US English) - actual collation name is in database_options
-    let collation_lcid = 1033;
+    // Parse database options first to get collation name
+    let database_options = parse_database_options(&root);
+
+    // Derive collation LCID and case sensitivity from collation name
+    let collation_info = database_options
+        .collation
+        .as_ref()
+        .map(|c| super::collation::parse_collation_info(c))
+        .unwrap_or_default();
+    let collation_lcid = collation_info.lcid;
+    let collation_case_sensitive = collation_info.case_sensitive;
 
     // Parse ANSI_NULLS setting (default: true)
     let ansi_nulls = parse_bool_property(&root, "AnsiNulls", true);
 
     // Parse QUOTED_IDENTIFIER setting (default: true)
     let quoted_identifier = parse_bool_property(&root, "QuotedIdentifier", true);
-
-    // Parse database options
-    let database_options = parse_database_options(&root);
 
     // Parse DAC version (default: "1.0.0.0" per DacFx behavior)
     let dac_version =
@@ -251,6 +259,7 @@ pub fn parse_sqlproj(path: &Path) -> Result<SqlProject> {
         target_platform,
         default_schema,
         collation_lcid,
+        collation_case_sensitive,
         sql_files,
         dacpac_references,
         package_references,

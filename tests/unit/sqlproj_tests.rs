@@ -1047,3 +1047,103 @@ fn test_parse_dac_version_and_description() {
         Some("Production database schema".to_string())
     );
 }
+
+// ============================================================================
+// Collation LCID and Case Sensitivity Tests
+// ============================================================================
+
+#[test]
+fn test_parse_collation_default_ci_as() {
+    // Default collation SQL_Latin1_General_CP1_CI_AS should be case-insensitive
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let sqlproj_path = temp_dir.path().join("TestProject.sqlproj");
+    std::fs::write(&sqlproj_path, content).unwrap();
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    // Default is SQL_Latin1_General_CP1_CI_AS - LCID 1033, case-insensitive
+    assert_eq!(project.collation_lcid, 1033);
+    assert!(!project.collation_case_sensitive);
+}
+
+#[test]
+fn test_parse_collation_case_sensitive() {
+    // Case-sensitive collation Latin1_General_CS_AS
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultCollation>Latin1_General_CS_AS</DefaultCollation>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let sqlproj_path = temp_dir.path().join("TestProject.sqlproj");
+    std::fs::write(&sqlproj_path, content).unwrap();
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.collation_lcid, 1033);
+    assert!(project.collation_case_sensitive); // CS = case-sensitive
+}
+
+#[test]
+fn test_parse_collation_japanese() {
+    // Japanese collation should have LCID 1041
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultCollation>Japanese_CI_AS</DefaultCollation>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let sqlproj_path = temp_dir.path().join("TestProject.sqlproj");
+    std::fs::write(&sqlproj_path, content).unwrap();
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.collation_lcid, 1041); // Japanese LCID
+    assert!(!project.collation_case_sensitive);
+}
+
+#[test]
+fn test_parse_collation_binary() {
+    // Binary collation is inherently case-sensitive
+    let content = r#"<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Name>TestProject</Name>
+    <DSP>Microsoft.Data.Tools.Schema.Sql.Sql160DatabaseSchemaProvider</DSP>
+    <DefaultCollation>Latin1_General_BIN2</DefaultCollation>
+  </PropertyGroup>
+</Project>"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let sqlproj_path = temp_dir.path().join("TestProject.sqlproj");
+    std::fs::write(&sqlproj_path, content).unwrap();
+
+    let result = rust_sqlpackage::project::parse_sqlproj(&sqlproj_path);
+    assert!(result.is_ok());
+
+    let project = result.unwrap();
+    assert_eq!(project.collation_lcid, 1033);
+    assert!(project.collation_case_sensitive); // Binary is always case-sensitive
+}

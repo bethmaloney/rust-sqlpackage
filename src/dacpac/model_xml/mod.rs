@@ -150,14 +150,19 @@ pub fn generate_model_xml<W: Write>(
     // XML declaration
     xml_writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;
 
-    // Root element - pre-compute collation_lcid before batching attributes (Phase 16.3.3 optimization)
+    // Root element - pre-compute collation values before batching attributes (Phase 16.3.3 optimization)
     let collation_lcid = project.collation_lcid.to_string();
+    let collation_case_sensitive = if project.collation_case_sensitive {
+        "True"
+    } else {
+        "False"
+    };
     let root = BytesStart::new("DataSchemaModel").with_attributes([
         ("FileFormatVersion", model.file_format_version.as_str()),
         ("SchemaVersion", model.schema_version.as_str()),
         ("DspName", project.target_platform.dsp_name()),
         ("CollationLcid", collation_lcid.as_str()),
-        ("CollationCaseSensitive", "True"),
+        ("CollationCaseSensitive", collation_case_sensitive),
         ("xmlns", NAMESPACE),
     ]);
     xml_writer.write_event(Event::Start(root))?;
