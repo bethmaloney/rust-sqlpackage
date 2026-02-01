@@ -12,7 +12,10 @@ use std::io::Write;
 
 use crate::model::{DatabaseModel, ModelElement, RawElement, ViewElement};
 
-use super::xml_helpers::{write_property, write_schema_relationship, write_script_property};
+use super::xml_helpers::{
+    escape_newlines_for_attr, normalize_script_content, write_property, write_property_raw,
+    write_schema_relationship, write_script_property,
+};
 use super::{
     extract_all_column_references, extract_cte_definitions, extract_group_by_columns,
     extract_join_on_columns, extract_select_columns, extract_table_aliases,
@@ -97,6 +100,9 @@ pub(crate) fn write_view<W: Write>(
     // 9. Schema relationship
     write_schema_relationship(writer, &view.schema)?;
 
+    // 10. SysCommentsObjectAnnotation with header/footer contents
+    write_view_annotation(writer, &view.definition)?;
+
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
 }
@@ -179,6 +185,9 @@ pub(crate) fn write_raw_view<W: Write>(
     // 9. Schema relationship
     write_schema_relationship(writer, &raw.schema)?;
 
+    // 10. SysCommentsObjectAnnotation with header/footer contents
+    write_view_annotation(writer, &raw.definition)?;
+
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
 }
@@ -219,6 +228,87 @@ pub(crate) fn extract_view_query(definition: &str) -> String {
 
     // Fallback: return the original definition if we can't find AS
     definition.to_string()
+}
+
+/// Extract the header portion of a CREATE VIEW definition (up to and including AS).
+/// Returns the header text for use in SysCommentsObjectAnnotation.
+/// Uses token-based parsing to handle any whitespace variations.
+fn extract_view_header(definition: &str) -> String {
+    // Tokenize the definition using sqlparser
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, definition).tokenize() {
+        Ok(t) => t,
+        Err(_) => {
+            // Fallback: return empty string if tokenization fails
+            return String::new();
+        }
+    };
+
+    // Find the first AS keyword at top level (after CREATE VIEW [name])
+    let mut paren_depth: i32 = 0;
+    let mut found_view = false;
+
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::LParen => paren_depth += 1,
+            Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+            Token::Word(w) if w.keyword == Keyword::VIEW => {
+                found_view = true;
+            }
+            Token::Word(w) if w.keyword == Keyword::AS && paren_depth == 0 && found_view => {
+                // Found the AS keyword - return everything up to and including it
+                return reconstruct_tokens(&tokens[..=i]);
+            }
+            _ => {}
+        }
+    }
+
+    // Fallback: return empty string if we can't find AS
+    String::new()
+}
+
+/// Write SysCommentsObjectAnnotation for a view.
+/// DotNet emits this annotation with Length, StartLine, StartColumn, HeaderContents, and FooterContents.
+fn write_view_annotation<W: Write>(writer: &mut Writer<W>, definition: &str) -> anyhow::Result<()> {
+    // Normalize the definition to have consistent line endings
+    let normalized_def = normalize_script_content(definition);
+
+    // Extract header (CREATE VIEW ... AS)
+    let header = extract_view_header(&normalized_def);
+    if header.is_empty() {
+        // If we can't extract the header, skip the annotation
+        return Ok(());
+    }
+
+    // Calculate total length
+    let total_length = normalized_def.len();
+
+    // Detect trailing semicolon for FooterContents
+    let footer = if normalized_def.trim_end().ends_with(';') {
+        ";"
+    } else {
+        ""
+    };
+
+    // Write the annotation
+    let annotation =
+        BytesStart::new("Annotation").with_attributes([("Type", "SysCommentsObjectAnnotation")]);
+    writer.write_event(Event::Start(annotation))?;
+
+    write_property(writer, "Length", &total_length.to_string())?;
+    write_property(writer, "StartLine", "1")?;
+    write_property(writer, "StartColumn", "1")?;
+    // Escape newlines for XML attribute value (DotNet uses &#xA; for newlines)
+    // Use write_property_raw to avoid double-escaping the & in &#xA;
+    let escaped_header = escape_newlines_for_attr(&header);
+    write_property_raw(writer, "HeaderContents", &escaped_header)?;
+    if !footer.is_empty() {
+        write_property(writer, "FooterContents", footer)?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+
+    Ok(())
 }
 
 /// Expand SELECT * to actual table columns using the database model

@@ -321,6 +321,44 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
+## Phase 39: Add SysCommentsObjectAnnotation to Views ✅
+
+**Status:** COMPLETED (2026-02-01)
+
+**Goal:** Add `SysCommentsObjectAnnotation` to view elements to match DotNet's output format.
+
+**Problem:** DotNet emits `SysCommentsObjectAnnotation` elements for views containing:
+- `Length` - Total length of the view definition
+- `StartLine` - Always "1"
+- `StartColumn` - Always "1"
+- `HeaderContents` - The CREATE VIEW header with newlines encoded as `&#xA;`
+- `FooterContents` - Trailing semicolon ";" if present
+
+**Solution:**
+1. Added `extract_view_header()` function to extract the header portion (CREATE VIEW ... AS)
+2. Added `write_view_annotation()` function to write the SysCommentsObjectAnnotation
+3. Added `escape_newlines_for_attr()` function for full XML attribute escaping including newlines
+4. Added `write_property_raw()` function to write properties with pre-escaped values (avoiding double-escaping of `&#xA;`)
+5. Updated `write_view()` and `write_raw_view()` to call `write_view_annotation()`
+6. Updated `write_function_body_with_annotation()` to use `write_property_raw()` for HeaderContents
+
+**Key Implementation Detail:** quick_xml automatically escapes `&` to `&amp;` in attribute values, which would turn `&#xA;` into `&amp;#xA;`. To avoid this, we use `push_attribute()` with the `Attribute` struct and raw bytes, which preserves entity references.
+
+**Files Changed:**
+- `src/dacpac/model_xml/xml_helpers.rs`: Added `escape_newlines_for_attr()` (full XML escaping) and `write_property_raw()` (raw attribute writing)
+- `src/dacpac/model_xml/view_writer.rs`: Added `extract_view_header()`, `write_view_annotation()`, updated both `write_view()` and `write_raw_view()`
+- `src/dacpac/model_xml/programmability_writer.rs`: Updated to use `write_property_raw()` for HeaderContents
+
+**Results:**
+- All 964 unit tests pass
+- All 117 e2e tests pass
+- Views now emit SysCommentsObjectAnnotation matching DotNet's format
+- Layer 7 parity remains at 11/48 (22.9%) - other differences still exist
+
+**Note:** Layer 7 parity didn't improve because other differences (element ordering, CDATA formatting, other annotations) still exist between Rust and DotNet output.
+
+---
+
 ## Known Issues
 
 | Issue | Location | Phase | Status |

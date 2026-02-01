@@ -19,7 +19,10 @@ use crate::parser::{extract_function_parameters_tokens, extract_procedure_parame
 
 use super::table_writer::{write_column_type_specifier, write_table_type_relationship};
 use super::view_writer::{extract_view_columns_and_deps, write_view_columns, ViewColumn};
-use super::xml_helpers::{write_property, write_schema_relationship, write_script_property};
+use super::xml_helpers::{
+    escape_newlines_for_attr, write_property, write_property_raw, write_schema_relationship,
+    write_script_property,
+};
 use super::{
     compute_line_offsets, extract_body_dependencies, extract_expression_before_as,
     extract_select_columns, location_to_byte_offset, normalize_type_name, parse_data_type,
@@ -1159,8 +1162,10 @@ fn write_function_body_with_annotation<W: Write>(
     write_property(writer, "StartLine", "1")?;
     write_property(writer, "StartColumn", "1")?;
 
-    // Write HeaderContents with XML-escaped header
-    write_property(writer, "HeaderContents", header)?;
+    // Write HeaderContents with XML-escaped header (newlines encoded as &#xA;)
+    // Use write_property_raw to avoid double-escaping the & in &#xA;
+    let escaped_header = escape_newlines_for_attr(header);
+    write_property_raw(writer, "HeaderContents", &escaped_header)?;
 
     writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
 

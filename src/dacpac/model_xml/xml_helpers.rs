@@ -4,8 +4,11 @@
 //! the model_xml generation code. These are the building blocks for writing
 //! properties, relationships, and other common XML patterns.
 
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesCData, BytesEnd, BytesStart, Event};
+use quick_xml::name::QName;
 use quick_xml::Writer;
+use std::borrow::Cow;
 use std::io::Write;
 
 /// Built-in schemas that exist by default in SQL Server
@@ -53,6 +56,52 @@ pub(crate) fn write_property<W: Write>(
 pub(crate) fn normalize_script_content(script: &str) -> String {
     // Convert CRLF to LF for consistent line endings
     script.replace("\r\n", "\n")
+}
+
+/// Escape a string for use in XML attribute values, including newlines.
+///
+/// This function performs full XML attribute escaping:
+/// - `&` becomes `&amp;`
+/// - `<` becomes `&lt;`
+/// - `>` becomes `&gt;`
+/// - `"` becomes `&quot;`
+/// - LF (\\n, 0x0A) becomes `&#xA;`
+/// - CR (\\r, 0x0D) becomes `&#xD;`
+///
+/// DotNet DacFx uses XML numeric character references for newlines in attribute values.
+/// This function is used with `write_property_raw` to write pre-escaped values.
+pub(crate) fn escape_newlines_for_attr(s: &str) -> String {
+    // First escape XML special characters (order matters: & must be first)
+    let escaped = s
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;");
+    // Then escape newlines
+    escaped.replace('\r', "&#xD;").replace('\n', "&#xA;")
+}
+
+/// Write a Property element with a pre-escaped (raw) value that won't be double-escaped.
+///
+/// This is needed for values containing XML entity references like `&#xA;` (newline)
+/// which should be preserved as-is in the output. Using the standard `write_property`
+/// would cause `&` to be escaped to `&amp;`, resulting in `&amp;#xA;`.
+///
+/// Generates: `<Property Name="name" Value="value"/>`
+pub(crate) fn write_property_raw<W: Write>(
+    writer: &mut Writer<W>,
+    name: &str,
+    raw_value: &str,
+) -> anyhow::Result<()> {
+    let mut prop = BytesStart::new("Property");
+    prop.push_attribute(("Name", name));
+    // Use Attribute struct with raw bytes to avoid escaping
+    prop.push_attribute(Attribute {
+        key: QName(b"Value"),
+        value: Cow::Borrowed(raw_value.as_bytes()),
+    });
+    writer.write_event(Event::Empty(prop))?;
+    Ok(())
 }
 
 /// Write a property with a CDATA value (for script content like QueryScript, BodyScript).
@@ -243,6 +292,9 @@ pub(crate) fn write_type_specifier_builtin<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use quick_xml::events::attributes::Attribute;
+    use quick_xml::name::QName;
+    use std::borrow::Cow;
     use std::io::Cursor;
 
     fn create_test_writer() -> Writer<Cursor<Vec<u8>>> {
@@ -252,6 +304,28 @@ mod tests {
     fn get_output(writer: Writer<Cursor<Vec<u8>>>) -> String {
         let inner = writer.into_inner();
         String::from_utf8(inner.into_inner()).unwrap()
+    }
+
+    #[test]
+    fn test_raw_attribute_with_entity() {
+        // Test that using push_attribute with Attribute struct preserves entity references
+        let mut writer = create_test_writer();
+        let mut elem = BytesStart::new("Property");
+        elem.push_attribute(("Name", "Test"));
+        // Use Attribute struct with raw bytes
+        elem.push_attribute(Attribute {
+            key: QName(b"Value"),
+            value: Cow::Borrowed(b"line1&#xA;line2"),
+        });
+        writer.write_event(Event::Empty(elem)).unwrap();
+        let output = get_output(writer);
+        println!("Raw attribute output: {}", output);
+        // Check if entity reference is preserved
+        assert!(
+            output.contains("&#xA;"),
+            "Should contain raw &#xA; entity, got: {}",
+            output
+        );
     }
 
     #[test]
