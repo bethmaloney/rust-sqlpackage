@@ -185,9 +185,9 @@ pub(crate) fn write_procedure<W: Write>(
 fn extract_procedure_header(definition: &str) -> String {
     // Use tokenized parsing to find the AS keyword
     if let Some((_as_start, as_end)) = find_procedure_body_separator_as_tokenized(definition) {
-        // Return everything up to the end position (after AS)
-        // Trim leading whitespace while preserving trailing content
-        return definition[..as_end].trim_start().trim_end().to_string();
+        // Return everything up to the end position (after AS, including trailing whitespace)
+        // Only trim leading whitespace - trailing whitespace is needed for proper reconstruction
+        return definition[..as_end].trim_start().to_string();
     }
     String::new()
 }
@@ -2105,7 +2105,8 @@ mod tests {
         let def = "CREATE PROCEDURE sp AS BEGIN SELECT 1 END";
         let header = extract_procedure_header(def);
         assert!(header.starts_with("CREATE"));
-        assert!(header.ends_with("AS"));
+        // Header includes trailing whitespace for proper script reconstruction
+        assert!(header.trim_end().ends_with("AS"));
         assert!(!header.contains("BEGIN"));
     }
 
@@ -2115,7 +2116,8 @@ mod tests {
         let header = extract_procedure_header(def);
         assert!(header.starts_with("-- Comment"));
         assert!(header.contains("CREATE"));
-        assert!(header.ends_with("AS"));
+        // Header includes trailing whitespace for proper script reconstruction
+        assert!(header.trim_end().ends_with("AS"));
         assert!(!header.contains("BEGIN"));
     }
 
@@ -2124,7 +2126,8 @@ mod tests {
         let def = "CREATE PROCEDURE sp\nAS\nBEGIN SELECT 1 END";
         let header = extract_procedure_header(def);
         assert!(header.starts_with("CREATE"));
-        assert!(header.ends_with("AS"));
+        // Header includes trailing whitespace (newline) for proper script reconstruction
+        assert!(header.trim_end().ends_with("AS"));
         assert!(!header.contains("BEGIN"));
     }
 

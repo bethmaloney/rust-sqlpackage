@@ -441,12 +441,14 @@ fn extract_alias_from_tokens(tokens: &[Token]) -> Option<String> {
 }
 
 /// Reconstruct SQL text from tokens
+/// Only trims trailing whitespace - leading whitespace is preserved for proper
+/// script reconstruction (e.g., newline after AS in view queries)
 fn reconstruct_tokens(tokens: &[Token]) -> String {
     let mut result = String::new();
     for token in tokens {
         result.push_str(&token_to_sql(token));
     }
-    result.trim().to_string()
+    result.trim_end().to_string()
 }
 
 /// Convert a token back to its SQL representation
