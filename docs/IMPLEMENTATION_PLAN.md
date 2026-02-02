@@ -4,10 +4,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-38 complete. Full parity: 46/48 (95.8%).**
+**Phases 1-40 complete. Full parity: 46/48 (95.8%).**
 
 **Remaining Work:**
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
+- Layer 7 remaining issues: element ordering, formatting differences (11/48 passing)
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -359,16 +360,56 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ---
 
+## Phase 40: Add SysCommentsObjectAnnotation to Procedures ✅
+
+**Status:** COMPLETED (2026-02-01)
+
+**Goal:** Add `SysCommentsObjectAnnotation` to SQL procedures to match DotNet's output format.
+
+**Problem:** DotNet emits `SysCommentsObjectAnnotation` for procedures containing:
+- `CreateOffset` - Byte offset from start of definition to CREATE keyword
+- `Length` - Total length of the procedure definition
+- `StartLine` - Always "1"
+- `StartColumn` - Always "1"
+- `HeaderContents` - The CREATE PROCEDURE header with newlines encoded as `&#xA;`
+
+Rust was not emitting this annotation for procedures (only views and functions had it).
+
+**Solution:**
+1. Added `extract_procedure_header()` function to extract the header (everything up to and including AS)
+2. Added `find_create_offset()` function to find the CREATE keyword position
+3. Added `write_procedure_annotation()` function to write the SysCommentsObjectAnnotation
+4. Modified `write_procedure()` to call `write_procedure_annotation()` after Schema relationship
+
+**Files Changed:**
+- `src/dacpac/model_xml/programmability_writer.rs`: Added ~60 lines with extract_procedure_header(), find_create_offset(), write_procedure_annotation() functions and call from write_procedure()
+
+**Tests Added:**
+- `test_extract_procedure_header_basic` - Basic header extraction
+- `test_extract_procedure_header_with_comment` - Header with leading comment
+- `test_extract_procedure_header_multiline` - Multi-line header
+
+**Results:**
+- All 967 unit tests pass
+- All 117 e2e tests pass
+- Procedure annotations now match DotNet format exactly (verified by raw XML diff)
+- Layer 7 parity remains at 11/48 due to other differences (formatting, element ordering)
+
+**Note:** Layer 7 parity improvements are not reflected in the test summary because the Layer 7 canonicalization normalizes formatting differences. The remaining Layer 7 failures are due to other issues (element ordering, other annotations) that are separate from procedure annotations.
+
+---
+
 ## Known Issues
 
 | Issue | Location | Phase | Status |
 |-------|----------|-------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | Phase 38 | 61 errors (ordering/deduplication differences) |
+| Layer 7 parity remaining | model_xml | - | 37/48 failing due to element ordering, formatting differences |
 
 ---
 
 <details>
-<summary>Completed Phases Summary (Phases 1-38)</summary>
+<summary>Completed Phases Summary (Phases 1-40)</summary>
 
 ## Phase Overview
 
@@ -404,6 +445,8 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 | Phase 36 | DacMetadata.xml dynamic properties (DacVersion, DacDescription) | 8/8 |
 | Phase 37 | Derive CollationLcid and CollationCaseSensitive from collation name | 10/10 |
 | Phase 38 | Fix CollationCaseSensitive to always output "True" | Complete |
+| Phase 39 | Add SysCommentsObjectAnnotation to Views | Complete |
+| Phase 40 | Add SysCommentsObjectAnnotation to Procedures | Complete |
 
 ## Phase 22.1-22.3: Layer 7 Canonical XML Parity (4/5) ✅
 

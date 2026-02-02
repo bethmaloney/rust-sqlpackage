@@ -173,7 +173,65 @@ pub(crate) fn write_procedure<W: Write>(
 
     write_schema_relationship(writer, &proc.schema)?;
 
+    // Write SysCommentsObjectAnnotation with header contents (matching DotNet format)
+    write_procedure_annotation(writer, &proc.definition)?;
+
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Extract the procedure header (everything up to and including AS).
+/// Returns the header text for use in SysCommentsObjectAnnotation.
+fn extract_procedure_header(definition: &str) -> String {
+    // Use tokenized parsing to find the AS keyword
+    if let Some((_as_start, as_end)) = find_procedure_body_separator_as_tokenized(definition) {
+        // Return everything up to the end position (after AS)
+        // Trim leading whitespace while preserving trailing content
+        return definition[..as_end].trim_start().trim_end().to_string();
+    }
+    String::new()
+}
+
+/// Find the byte offset of CREATE within the definition.
+/// This is used for the CreateOffset property in SysCommentsObjectAnnotation.
+fn find_create_offset(definition: &str) -> usize {
+    let def_upper = definition.to_uppercase();
+    def_upper.find("CREATE").unwrap_or(0)
+}
+
+/// Write SysCommentsObjectAnnotation for a procedure.
+/// DotNet emits this annotation with CreateOffset, Length, StartLine, StartColumn, and HeaderContents.
+fn write_procedure_annotation<W: Write>(
+    writer: &mut Writer<W>,
+    definition: &str,
+) -> anyhow::Result<()> {
+    // Extract header (CREATE PROCEDURE ... AS)
+    let header = extract_procedure_header(definition);
+    if header.is_empty() {
+        // If we can't extract the header, skip the annotation
+        return Ok(());
+    }
+
+    // Calculate properties
+    let total_length = definition.len();
+    let create_offset = find_create_offset(definition);
+
+    // Write the annotation
+    let annotation =
+        BytesStart::new("Annotation").with_attributes([("Type", "SysCommentsObjectAnnotation")]);
+    writer.write_event(Event::Start(annotation))?;
+
+    write_property(writer, "CreateOffset", &create_offset.to_string())?;
+    write_property(writer, "Length", &total_length.to_string())?;
+    write_property(writer, "StartLine", "1")?;
+    write_property(writer, "StartColumn", "1")?;
+    // Escape newlines for XML attribute value (DotNet uses &#xA; for newlines)
+    // Use write_property_raw to avoid double-escaping the & in &#xA;
+    let escaped_header = escape_newlines_for_attr(&header);
+    write_property_raw(writer, "HeaderContents", &escaped_header)?;
+
+    writer.write_event(Event::End(BytesEnd::new("Annotation")))?;
+
     Ok(())
 }
 
@@ -2036,6 +2094,38 @@ mod tests {
         assert!(result.is_some());
         let (_, end) = result.unwrap();
         assert!(def[end..].trim().starts_with("SELECT"));
+    }
+
+    // =============================================================================
+    // Extract Procedure Header Tests
+    // =============================================================================
+
+    #[test]
+    fn test_extract_procedure_header_basic() {
+        let def = "CREATE PROCEDURE sp AS BEGIN SELECT 1 END";
+        let header = extract_procedure_header(def);
+        assert!(header.starts_with("CREATE"));
+        assert!(header.ends_with("AS"));
+        assert!(!header.contains("BEGIN"));
+    }
+
+    #[test]
+    fn test_extract_procedure_header_with_comment() {
+        let def = "-- Comment\nCREATE PROCEDURE sp AS BEGIN SELECT 1 END";
+        let header = extract_procedure_header(def);
+        assert!(header.starts_with("-- Comment"));
+        assert!(header.contains("CREATE"));
+        assert!(header.ends_with("AS"));
+        assert!(!header.contains("BEGIN"));
+    }
+
+    #[test]
+    fn test_extract_procedure_header_multiline() {
+        let def = "CREATE PROCEDURE sp\nAS\nBEGIN SELECT 1 END";
+        let header = extract_procedure_header(def);
+        assert!(header.starts_with("CREATE"));
+        assert!(header.ends_with("AS"));
+        assert!(!header.contains("BEGIN"));
     }
 
     // =============================================================================
