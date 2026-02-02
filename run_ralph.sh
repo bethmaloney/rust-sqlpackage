@@ -56,9 +56,9 @@ Conflicting files:
 $CONFLICT_FILES
 
 For each file:
-1. Read the file to see the conflict markers (<<<<<<<, =======, >>>>>>>)
-2. Resolve the conflict by choosing the correct code or merging both changes
-3. Remove all conflict markers
+1. Carefully review the conflicts.
+2. Resolve the conflicts making sure to preserve all intended changes.
+3. Remove all conflict markers (e.g., \`<<<<<<<\`, \`=======\`, \`>>>>>>>\`).
 4. Stage the resolved file with \`git add <file>\`
 
 After resolving ALL conflicts, run \`git rebase --continue\` to complete the rebase.
