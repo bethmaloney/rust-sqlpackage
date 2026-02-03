@@ -151,22 +151,11 @@ pub(crate) struct BodyDepTokenWithPos {
     pub byte_pos: usize,
 }
 
-/// Type of subquery scope for alias tracking
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum ScopeType {
-    /// CROSS APPLY or OUTER APPLY subquery
-    Apply,
-    /// Derived table in JOIN (SELECT...) pattern
-    DerivedTable,
-}
-
 /// Represents a subquery scope with its byte range, internal tables, and aliases.
 /// Used to resolve columns and aliases to the correct table based on position.
 /// Phase 43: Extended to track aliases per scope for scope-aware alias resolution.
 #[derive(Debug, Clone)]
 pub(crate) struct ApplySubqueryScope {
-    /// Type of scope (Apply or DerivedTable)
-    pub scope_type: ScopeType,
     /// Byte position where the subquery starts (after opening paren)
     pub start_pos: usize,
     /// Byte position where the subquery ends (at closing paren)
@@ -1226,17 +1215,6 @@ pub(crate) fn extract_table_aliases_for_body_deps(
     parser.extract_all_aliases(table_aliases, subquery_aliases);
 }
 
-/// Extract APPLY subquery scopes with their byte ranges and internal tables.
-/// This is used to resolve unqualified columns to the correct table when
-/// they appear inside APPLY subqueries.
-pub(crate) fn extract_apply_subquery_scopes(body: &str) -> Vec<ApplySubqueryScope> {
-    let mut parser = match TableAliasTokenParser::new(body) {
-        Some(p) => p,
-        None => return Vec::new(),
-    };
-    parser.extract_apply_scopes(body)
-}
-
 /// Phase 43: Extract ALL subquery scopes (APPLY + derived tables) with their aliases.
 /// This is the primary scope extraction function for body dependency analysis.
 /// Each scope contains byte range, tables, and aliases defined within.
@@ -1501,110 +1479,10 @@ impl TableAliasTokenParser {
         }
     }
 
-    /// Extract APPLY subquery scopes with their byte ranges and internal tables.
-    /// Returns a list of scopes, each containing start/end positions and the tables within.
-    pub fn extract_apply_scopes(&mut self, sql: &str) -> Vec<ApplySubqueryScope> {
-        let line_offsets = compute_line_offsets(sql);
-        let mut scopes = Vec::new();
-
-        self.pos = 0;
-
-        while !self.is_at_end() {
-            self.skip_whitespace();
-
-            // Look for CROSS/OUTER APPLY patterns
-            if self.check_word_ci("CROSS") || self.check_word_ci("OUTER") {
-                let saved_pos = self.pos;
-                self.advance();
-                self.skip_whitespace();
-
-                if self.check_keyword(Keyword::APPLY) || self.check_word_ci("APPLY") {
-                    self.advance();
-                    self.skip_whitespace();
-
-                    // Check if followed by opening paren (subquery)
-                    if self.check_token(&Token::LParen) {
-                        // Get byte position of opening paren
-                        let start_byte_pos = self.get_current_byte_offset(&line_offsets);
-
-                        self.advance(); // Move past opening paren
-
-                        // Find balanced end and collect tables inside
-                        let mut tables_in_scope = Vec::new();
-                        let mut depth = 1;
-
-                        while !self.is_at_end() && depth > 0 {
-                            if self.check_token(&Token::LParen) {
-                                depth += 1;
-                                self.advance();
-                            } else if self.check_token(&Token::RParen) {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
-                                self.advance();
-                            } else if self.check_keyword(Keyword::FROM) && depth == 1 {
-                                // Extract table ref after FROM at top level of APPLY
-                                self.advance();
-                                self.skip_whitespace();
-                                if let Some((schema, table_name)) = self.parse_table_name() {
-                                    let table_ref = format!("[{}].[{}]", schema, table_name);
-                                    if !tables_in_scope.contains(&table_ref) {
-                                        tables_in_scope.push(table_ref);
-                                    }
-                                }
-                            } else if self.is_join_keyword() && depth == 1 {
-                                // Extract table ref after JOIN at top level
-                                self.skip_join_keywords();
-                                self.skip_whitespace();
-                                if !self.check_token(&Token::LParen) {
-                                    if let Some((schema, table_name)) = self.parse_table_name() {
-                                        let table_ref = format!("[{}].[{}]", schema, table_name);
-                                        if !tables_in_scope.contains(&table_ref) {
-                                            tables_in_scope.push(table_ref);
-                                        }
-                                    }
-                                }
-                            } else {
-                                self.advance();
-                            }
-                        }
-
-                        // Get byte position of closing paren
-                        let end_byte_pos = self.get_current_byte_offset(&line_offsets);
-
-                        if !tables_in_scope.is_empty() {
-                            scopes.push(ApplySubqueryScope {
-                                scope_type: ScopeType::Apply,
-                                start_pos: start_byte_pos,
-                                end_pos: end_byte_pos,
-                                tables: tables_in_scope,
-                                aliases: HashMap::new(), // Populated in extract_all_scopes
-                            });
-                        }
-
-                        // Continue past the closing paren
-                        if !self.is_at_end() {
-                            self.advance();
-                        }
-                    }
-                } else {
-                    // Not an APPLY, restore and continue
-                    self.pos = saved_pos;
-                    self.advance();
-                }
-            } else {
-                self.advance();
-            }
-        }
-
-        scopes
-    }
-
-    /// Phase 43: Extract ALL subquery scopes (APPLY + derived tables) with their internal aliases.
     /// This is the main scope extraction function that handles:
     /// - CROSS/OUTER APPLY subqueries
     /// - Derived tables in JOIN (SELECT...) pattern
+    ///
     /// Each scope contains the byte range, tables, and aliases defined within.
     pub fn extract_all_scopes(&mut self, sql: &str) -> Vec<ApplySubqueryScope> {
         let line_offsets = compute_line_offsets(sql);
@@ -1627,9 +1505,7 @@ impl TableAliasTokenParser {
 
                     // Check if followed by opening paren (subquery)
                     if self.check_token(&Token::LParen) {
-                        if let Some(scope) =
-                            self.extract_subquery_scope(&line_offsets, ScopeType::Apply)
-                        {
+                        if let Some(scope) = self.extract_subquery_scope(&line_offsets) {
                             scopes.push(scope);
                         }
                     }
@@ -1646,9 +1522,7 @@ impl TableAliasTokenParser {
 
                 // Check if followed by opening paren (derived table)
                 if self.check_token(&Token::LParen) {
-                    if let Some(scope) =
-                        self.extract_subquery_scope(&line_offsets, ScopeType::DerivedTable)
-                    {
+                    if let Some(scope) = self.extract_subquery_scope(&line_offsets) {
                         scopes.push(scope);
                     }
                 }
@@ -1662,11 +1536,7 @@ impl TableAliasTokenParser {
 
     /// Extract a subquery scope starting at the current position (which should be at LParen).
     /// Collects tables and aliases defined within the subquery.
-    fn extract_subquery_scope(
-        &mut self,
-        line_offsets: &[usize],
-        scope_type: ScopeType,
-    ) -> Option<ApplySubqueryScope> {
+    fn extract_subquery_scope(&mut self, line_offsets: &[usize]) -> Option<ApplySubqueryScope> {
         if !self.check_token(&Token::LParen) {
             return None;
         }
@@ -1709,9 +1579,9 @@ impl TableAliasTokenParser {
                     }
                     // Also add table name as self-alias
                     let table_name_lower = table_name.to_lowercase();
-                    if !aliases_in_scope.contains_key(&table_name_lower) {
-                        aliases_in_scope.insert(table_name_lower, table_ref);
-                    }
+                    aliases_in_scope
+                        .entry(table_name_lower)
+                        .or_insert(table_ref);
                 }
             } else if self.is_join_keyword() && depth == 1 {
                 // Extract table ref and alias after JOIN at top level
@@ -1734,9 +1604,9 @@ impl TableAliasTokenParser {
                         }
                         // Also add table name as self-alias
                         let table_name_lower = table_name.to_lowercase();
-                        if !aliases_in_scope.contains_key(&table_name_lower) {
-                            aliases_in_scope.insert(table_name_lower, table_ref);
-                        }
+                        aliases_in_scope
+                            .entry(table_name_lower)
+                            .or_insert(table_ref);
                     }
                 }
             } else {
@@ -1755,7 +1625,6 @@ impl TableAliasTokenParser {
         // Only return scope if it has tables or aliases
         if !tables_in_scope.is_empty() || !aliases_in_scope.is_empty() {
             Some(ApplySubqueryScope {
-                scope_type,
                 start_pos: start_byte_pos,
                 end_pos: end_byte_pos,
                 tables: tables_in_scope,
@@ -5210,7 +5079,7 @@ mod tests {
                 WHERE AccountId = a.Id
             ) d
         "#;
-        let scopes = extract_apply_subquery_scopes(sql);
+        let scopes = extract_all_subquery_scopes(sql);
         assert_eq!(scopes.len(), 1, "Should find 1 APPLY scope");
         assert_eq!(
             scopes[0].tables,
@@ -5231,7 +5100,7 @@ mod tests {
                 WHERE at.AccountId = a.Id
             ) t
         "#;
-        let scopes = extract_apply_subquery_scopes(sql);
+        let scopes = extract_all_subquery_scopes(sql);
         assert_eq!(scopes.len(), 1, "Should find 1 APPLY scope");
         assert!(
             scopes[0].tables.contains(&"[dbo].[AccountTag]".to_string()),
@@ -5324,13 +5193,12 @@ mod tests {
         "#;
         let scopes = extract_all_subquery_scopes(sql);
         assert_eq!(scopes.len(), 1, "Should find 1 derived table scope");
-        assert_eq!(scopes[0].scope_type, ScopeType::DerivedTable);
         assert!(
             scopes[0].tables.contains(&"[dbo].[OrderItem]".to_string()),
             "Derived table scope should contain OrderItem"
         );
         assert!(
-            scopes[0].aliases.contains_key(&"i".to_string()),
+            scopes[0].aliases.contains_key("i"),
             "Derived table scope should have alias 'i'"
         );
         assert_eq!(
@@ -5386,7 +5254,6 @@ mod tests {
         // Test that innermost scope wins for nested scopes
         let scopes = vec![
             ApplySubqueryScope {
-                scope_type: ScopeType::DerivedTable,
                 start_pos: 100,
                 end_pos: 500,
                 tables: vec!["[dbo].[Outer]".to_string()],
@@ -5397,7 +5264,6 @@ mod tests {
                 },
             },
             ApplySubqueryScope {
-                scope_type: ScopeType::DerivedTable,
                 start_pos: 200,
                 end_pos: 400,
                 tables: vec!["[dbo].[Inner]".to_string()],
@@ -5447,7 +5313,6 @@ mod tests {
     fn test_resolve_alias_falls_back_to_global() {
         // Test that global aliases are used when not inside a scope
         let scopes = vec![ApplySubqueryScope {
-            scope_type: ScopeType::DerivedTable,
             start_pos: 100,
             end_pos: 200,
             tables: vec!["[dbo].[ScopeTable]".to_string()],

@@ -1088,12 +1088,6 @@ fn extract_procedure_body_only(definition: &str) -> String {
     extract_procedure_body_only_impl(definition)
 }
 
-/// Test-accessible version of extract_procedure_body_only
-#[cfg(test)]
-pub(crate) fn extract_procedure_body_only_for_test(definition: &str) -> String {
-    extract_procedure_body_only_impl(definition)
-}
-
 fn extract_procedure_body_only_impl(definition: &str) -> String {
     // Use tokenized parsing to find the AS keyword that separates header from body
     if let Some((_as_start, as_end)) = find_procedure_body_separator_as_tokenized(definition) {
