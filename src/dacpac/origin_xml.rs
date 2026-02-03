@@ -17,6 +17,10 @@ const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn generate_origin_xml<W: Write>(writer: W, model_xml_checksum: &str) -> anyhow::Result<()> {
     let mut xml_writer = Writer::new_with_indent(writer, b' ', 2);
+    // Add space before /> in self-closing tags to match DotNet DacFx output
+    xml_writer
+        .config_mut()
+        .add_space_before_slash_in_empty_elements = true;
 
     // XML declaration
     xml_writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;

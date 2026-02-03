@@ -146,6 +146,10 @@ pub fn generate_model_xml<W: Write>(
     project: &SqlProject,
 ) -> anyhow::Result<()> {
     let mut xml_writer = Writer::new_with_indent(writer, b' ', 2);
+    // Add space before /> in self-closing tags to match DotNet DacFx output (e.g., `<tag />` vs `<tag/>`)
+    xml_writer
+        .config_mut()
+        .add_space_before_slash_in_empty_elements = true;
 
     // XML declaration
     xml_writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;
@@ -2575,28 +2579,34 @@ fn write_constraint<W: Write>(
                         write_relationship(writer, "ForeignTable", &[foreign_table])?;
                     }
                 }
+                ConstraintType::Default => {
+                    // Default constraints: DotNet order is DefaultExpressionScript, DefiningTable, ForColumn
+                    // Write DefaultExpressionScript property FIRST
+                    if let Some(ref definition) = constraint.definition {
+                        write_script_property(writer, "DefaultExpressionScript", definition)?;
+                    }
+                    // DefiningTable comes after property
+                    write_relationship(writer, "DefiningTable", &[&table_ref])?;
+                    // ForColumn relationship to specify the target column
+                    if !constraint.columns.is_empty() {
+                        let col_ref = format!("{}.[{}]", table_ref, constraint.columns[0].name);
+                        write_relationship(writer, "ForColumn", &[&col_ref])?;
+                    }
+                }
                 _ => {
                     // Other constraint types: DefiningTable only
                     write_relationship(writer, "DefiningTable", &[&table_ref])?;
                 }
             }
+        } else if constraint.constraint_type == ConstraintType::Default {
+            // Default constraint without columns in constraint.columns - write property, DefiningTable, and ForColumn
+            if let Some(ref definition) = constraint.definition {
+                write_script_property(writer, "DefaultExpressionScript", definition)?;
+            }
+            write_relationship(writer, "DefiningTable", &[&table_ref])?;
         } else {
             // No columns - still write DefiningTable for constraints that need it
             write_relationship(writer, "DefiningTable", &[&table_ref])?;
-        }
-    }
-
-    // Default constraint expression - handled separately since it has different structure
-    if constraint.constraint_type == ConstraintType::Default {
-        // Default constraint expression
-        if let Some(ref definition) = constraint.definition {
-            write_script_property(writer, "DefaultExpressionScript", definition)?;
-        }
-        // Default constraints need a ForColumn relationship to specify the target column
-        if !constraint.columns.is_empty() {
-            let table_ref = format!("[{}].[{}]", constraint.table_schema, constraint.table_name);
-            let col_ref = format!("{}.[{}]", table_ref, constraint.columns[0].name);
-            write_relationship(writer, "ForColumn", &[&col_ref])?;
         }
     }
 

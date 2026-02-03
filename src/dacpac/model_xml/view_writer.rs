@@ -194,6 +194,7 @@ pub(crate) fn write_raw_view<W: Write>(
 
 /// Extract the query part from a CREATE VIEW definition
 /// Strips the "CREATE VIEW [name] AS" prefix, leaving just the SELECT statement
+/// Also strips trailing semicolon to match DotNet behavior
 /// Uses token-based parsing to handle any whitespace (tabs, multiple spaces, newlines)
 pub(crate) fn extract_view_query(definition: &str) -> String {
     // Tokenize the definition using sqlparser
@@ -220,7 +221,9 @@ pub(crate) fn extract_view_query(definition: &str) -> String {
             }
             Token::Word(w) if w.keyword == Keyword::AS && paren_depth == 0 && found_view => {
                 // Found the AS keyword - return everything after it
-                return reconstruct_tokens(&tokens[i + 1..]);
+                let query = reconstruct_tokens(&tokens[i + 1..]);
+                // Strip trailing semicolon to match DotNet behavior
+                return query.trim_end().trim_end_matches(';').to_string();
             }
             _ => {}
         }

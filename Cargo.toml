@@ -11,7 +11,7 @@ authors = ["Beth"]
 sqlparser = { version = "0.54", features = ["visitor"] }
 
 # XML handling
-quick-xml = { version = "0.37", features = ["serialize"] }
+quick-xml = { version = "0.39", features = ["serialize"] }
 roxmltree = "0.20"
 
 # ZIP file creation

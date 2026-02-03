@@ -144,13 +144,48 @@ cargo test --test e2e_tests test_parity_all_fixtures  # Parity tests
 
 ---
 
+## Phase 44: XML Formatting Improvements for Layer 7 Parity (2026-02-03)
+
+**Status:** COMPLETE
+
+**Goal:** Improve Layer 7 (Canonical XML) parity by fixing XML formatting differences.
+
+### Changes Made
+
+1. **Updated quick-xml from 0.37 to 0.39** (`Cargo.toml`)
+   - Enables `add_space_before_slash_in_empty_elements` config option
+
+2. **Added space before `/>`  in self-closing tags** (`model_xml/mod.rs`, `metadata_xml.rs`, `origin_xml.rs`)
+   - DotNet outputs `<tag />` while Rust was outputting `<tag/>`
+   - Added `xml_writer.config_mut().add_space_before_slash_in_empty_elements = true;` to all XML writers
+
+3. **Fixed Default constraint element ordering** (`model_xml/mod.rs:2582-2599`)
+   - DotNet order: DefaultExpressionScript property → DefiningTable relationship → ForColumn relationship
+   - Rust was writing DefiningTable before DefaultExpressionScript
+
+4. **Strip trailing semicolons from view QueryScript** (`view_writer.rs:extract_view_query`)
+   - DotNet removes trailing semicolons from view query scripts
+   - Added `.trim_end().trim_end_matches(';')` to match
+
+### Results
+- Layer 7 parity improved from 11/48 (22.9%) to 12/48 (25.0%)
+- `views` fixture now passes Layer 7
+
+### Files Modified
+- `Cargo.toml` - Updated quick-xml version
+- `src/dacpac/model_xml/mod.rs` - Added space config, fixed Default constraint ordering
+- `src/dacpac/metadata_xml.rs` - Added space config
+- `src/dacpac/origin_xml.rs` - Added space config
+- `src/dacpac/model_xml/view_writer.rs` - Strip trailing semicolons
+---
+
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-41 complete. Full parity: 46/48 (95.8%).**
+**Phases 1-44 complete. Full parity: 46/48 (95.8%).**
 
 **Remaining Work:**
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
-- Layer 7 remaining issues: element ordering, formatting differences (11/48 passing)
+- Layer 7 remaining issues: element ordering, formatting differences (12/48 passing)
 - Body dependency ordering/deduplication differences (65 relationship errors in `body_dependencies_aliases` fixture - not affecting functionality)
 
 | Layer | Passing | Rate |
@@ -161,7 +196,7 @@ cargo test --test e2e_tests test_parity_all_fixtures  # Parity tests
 | Relationships | 47/48 | 97.9% |
 | Layer 4 (Ordering) | 48/48 | 100% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 11/48 | 22.9% |
+| Layer 7 (Canonical XML) | 12/48 | 25.0% |
 
 **Note:** Full parity (46/48, 95.8%) represents fixtures passing all layers. Phase 22.4.4 (disambiguator numbering) is now complete.
 
@@ -243,7 +278,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 | Layer | Status | Notes |
 |-------|--------|-------|
-| Layer 7 (Canonical XML) | 11/48 (22.9%) | Functionally correct, byte-level parity achieved for fixtures with constraints |
+| Layer 7 (Canonical XML) | 12/48 (25.0%) | Functionally correct, byte-level parity achieved for fixtures with constraints |
 
 **NOTE:** The annotation pattern is now functionally correct and achieves byte-level parity with DotNet.
 
@@ -621,6 +656,7 @@ These differences do not affect deployment functionality - all dependencies are 
 | Phase 41 | Alias resolution for nested subqueries | Complete |
 | Phase 42 | Real-world deployment bug fixes | Complete |
 | Phase 43 | Scope-aware alias tracking | Complete |
+| Phase 44 | XML formatting improvements for Layer 7 parity | Complete |
 
 ## Phase 22.1-22.3: Layer 7 Canonical XML Parity (4/5) ✅
 
