@@ -179,6 +179,37 @@ cargo test --test e2e_tests test_parity_all_fixtures  # Parity tests
 - `src/dacpac/model_xml/view_writer.rs` - Strip trailing semicolons
 ---
 
+## Phase 45: Fix Unit Tests for XML Format Changes (2026-02-03)
+
+**Status:** COMPLETE
+
+**Goal:** Fix unit tests that were broken by Phase 44's XML formatting changes.
+
+**Problem:** Phase 44 added space before `/>` in self-closing XML tags to match DotNet's output format. However, 7 unit tests in `tests/unit/xml_tests.rs` were not updated to expect the new format.
+
+**Failing Tests:**
+1. `test_generate_filestream_column_has_property`
+2. `test_generate_filestream_column_structure`
+3. `test_generate_multiple_filestream_columns`
+4. `test_generate_natively_compiled_function_has_property`
+5. `test_generate_natively_compiled_procedure_has_property`
+6. `test_scalar_function_has_ansi_nulls_property`
+7. `test_scalar_function_header_ends_with_whitespace`
+
+**Solution:** Updated all test assertions to expect ` />` (with space) instead of `/>` (without space):
+- Changed `Value="True"/>` to `Value="True" />`
+- Changed `"/>` to `" />` in HeaderContents pattern matching
+
+**Files Modified:**
+- `tests/unit/xml_tests.rs` - 7 test assertions updated
+
+**Results:**
+- All 500 unit tests pass
+- All 117 e2e tests pass
+- All 46/48 parity tests pass (unchanged)
+
+---
+
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-44 complete. Full parity: 46/48 (95.8%).**

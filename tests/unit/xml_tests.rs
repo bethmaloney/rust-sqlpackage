@@ -1075,7 +1075,7 @@ END
 
     // Should have IsNativelyCompiled property
     assert!(
-        xml.contains(r#"<Property Name="IsNativelyCompiled" Value="True"/>"#),
+        xml.contains(r#"<Property Name="IsNativelyCompiled" Value="True" />"#),
         "Natively compiled procedure should have IsNativelyCompiled=True property. Got:\n{}",
         xml
     );
@@ -1124,7 +1124,7 @@ END
 
     // Should have IsNativelyCompiled property
     assert!(
-        xml.contains(r#"<Property Name="IsNativelyCompiled" Value="True"/>"#),
+        xml.contains(r#"<Property Name="IsNativelyCompiled" Value="True" />"#),
         "Natively compiled function should have IsNativelyCompiled=True property. Got:\n{}",
         xml
     );
@@ -1172,7 +1172,7 @@ CREATE TABLE [dbo].[Documents] (
 
     // Should have IsFileStream property for the FILESTREAM column
     assert!(
-        xml.contains(r#"<Property Name="IsFileStream" Value="True"/>"#),
+        xml.contains(r#"<Property Name="IsFileStream" Value="True" />"#),
         "FILESTREAM column should have IsFileStream=True property. Got:\n{}",
         xml
     );
@@ -1213,7 +1213,7 @@ CREATE TABLE [dbo].[FileArchive] (
         "Should have SqlSimpleColumn elements"
     );
     assert!(
-        xml.contains(r#"<Property Name="IsFileStream" Value="True"/>"#),
+        xml.contains(r#"<Property Name="IsFileStream" Value="True" />"#),
         "FILESTREAM column should have IsFileStream property"
     );
     // Verify data type reference
@@ -1237,7 +1237,7 @@ CREATE TABLE [dbo].[MediaFiles] (
 
     // Count IsFileStream properties - should be 2
     let filestream_count = xml
-        .matches(r#"<Property Name="IsFileStream" Value="True"/>"#)
+        .matches(r#"<Property Name="IsFileStream" Value="True" />"#)
         .count();
     assert!(
         filestream_count == 2,
@@ -1403,13 +1403,13 @@ END
     let xml = generate_model_xml(sql);
 
     // Extract HeaderContents value
-    // The pattern is: <Property Name="HeaderContents" Value="..."/>
+    // The pattern is: <Property Name="HeaderContents" Value="..." />
     let header_start = xml
         .find(r#"<Property Name="HeaderContents" Value=""#)
         .expect("Should have HeaderContents property");
     let value_start = header_start + r#"<Property Name="HeaderContents" Value=""#.len();
     let value_end = xml[value_start..]
-        .find(r#""/>"#)
+        .find(r#"" />"#)
         .expect("Should find end of HeaderContents");
     let header_value = &xml[value_start..value_start + value_end];
 
@@ -1445,7 +1445,7 @@ END
     let xml = generate_model_xml(sql);
 
     assert!(
-        xml.contains(r#"<Property Name="IsAnsiNullsOn" Value="True"/>"#),
+        xml.contains(r#"<Property Name="IsAnsiNullsOn" Value="True" />"#),
         "Scalar function should have IsAnsiNullsOn property. Got:\n{}",
         xml
     );
