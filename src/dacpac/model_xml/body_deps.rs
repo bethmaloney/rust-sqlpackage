@@ -738,8 +738,13 @@ pub(crate) fn extract_table_refs_tokenized(
                 // [schema].[table] pattern - equivalent to BRACKETED_TABLE_RE
                 // Skip if either part starts with @ (parameter)
                 if !first.starts_with('@') && !second.starts_with('@') {
+                    let first_lower = first.to_lowercase();
                     // Skip if first part is a subquery alias (APPLY alias)
-                    if subquery_aliases.contains(&first.to_lowercase()) {
+                    if subquery_aliases.contains(&first_lower) {
+                        continue;
+                    }
+                    // Skip if first part is a table alias - this is alias.column, not schema.table
+                    if table_aliases.contains_key(&first_lower) {
                         continue;
                     }
                     let table_ref = format!("[{}].[{}]", first, second);
@@ -1780,6 +1785,7 @@ impl TableAliasTokenParser {
         }
 
         // Check for alias - must be an identifier that's not a keyword like ON, WHERE, etc.
+        let table_ref = format!("[{}].[{}]", schema, table_name);
         if let Some(alias) = self.try_parse_table_alias() {
             let alias_lower = alias.to_lowercase();
 
@@ -1789,12 +1795,24 @@ impl TableAliasTokenParser {
             }
 
             // Don't overwrite if already captured by a more specific pattern
+            // Note: This can cause issues with same-named aliases in different scopes,
+            // but scope-tracking is complex. The first definition usually wins.
             if table_aliases.contains_key(&alias_lower) {
                 return;
             }
 
-            let table_ref = format!("[{}].[{}]", schema, table_name);
             table_aliases.insert(alias_lower, table_ref);
+        } else {
+            // No explicit alias - use the table name itself as a "self-alias"
+            // This handles patterns like "FROM InstrumentEvent" where the table name
+            // might be referenced later as "[InstrumentEvent].column" or just "[InstrumentEvent]"
+            // Only add if not already present (don't overwrite explicit aliases)
+            let table_name_lower = table_name.to_lowercase();
+            if !Self::is_alias_keyword(&table_name_lower)
+                && !table_aliases.contains_key(&table_name_lower)
+            {
+                table_aliases.insert(table_name_lower, table_ref);
+            }
         }
     }
 
@@ -2195,7 +2213,7 @@ pub(crate) fn location_to_byte_offset(line_offsets: &[usize], line: u64, column:
 /// Strip SQL comments from body text for dependency extraction.
 /// Removes both line comments (-- ...) and block comments (/* ... */).
 /// This prevents words in comments from being treated as column/table references.
-fn strip_sql_comments_for_body_deps(body: &str) -> String {
+pub(crate) fn strip_sql_comments_for_body_deps(body: &str) -> String {
     let mut result = String::with_capacity(body.len());
     let mut chars = body.chars().peekable();
     let mut in_string = false;

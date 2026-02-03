@@ -2,6 +2,134 @@
 
 This document tracks progress toward achieving exact 1-1 matching between rust-sqlpackage and DotNet DacFx dacpac output.
 
+---
+
+## Phase 42: Real-World Deployment Bug Fixes (2026-02-04)
+
+**Status:** COMPLETE - 2 bugs fixed, alias scope conflicts moved to Phase 43
+
+Real-world deployment testing revealed body dependency extraction bugs causing unresolved reference errors.
+
+### Bugs Fixed
+
+1. **TwoPartBracketed alias resolution in table_refs** (`body_deps.rs:737-754`)
+   - `extract_table_refs_tokenized()` wasn't checking `table_aliases` for `TwoPartBracketed` patterns
+   - Caused `[T].[Name]` (alias.column) to be added to `table_refs` as if it were `[schema].[table]`
+   - Later, unqualified columns resolved against this invalid "table", creating refs like `[T].[Name].[Id]`
+
+2. **Unqualified table names without aliases** (`body_deps.rs:1787-1815`)
+   - `FROM SomeTable` (no alias) wasn't tracked, so `SomeTable` tokens treated as columns
+   - Added "self-alias" feature: unqualified table names map to themselves (e.g., `sometable` → `[dbo].[SomeTable]`)
+
+---
+
+## Phase 43: Scope-Aware Alias Tracking
+
+**Status:** IN PROGRESS
+
+**Goal:** Fix alias resolution when the same alias (case-insensitive) is used in different scopes within a single procedure.
+
+### Problem Statement
+
+Current behavior uses "first definition wins" with a flat `HashMap<String, String>` for alias tracking. When the same alias appears in different subquery scopes, only the first definition is recorded.
+
+**Example SQL demonstrating the issue:**
+
+```sql
+CREATE PROCEDURE [dbo].[GetOrderSummary]
+    @CustomerId INT
+AS
+BEGIN
+    SELECT
+        OrderTags.TagList,
+        OrderItems.ItemCount
+    FROM [dbo].[Order] o
+    -- First derived table: 't' aliases [dbo].[OrderTag]
+    LEFT JOIN (
+        SELECT ot.OrderId,
+               STUFF((SELECT ', ' + [t].[Name]
+                      FROM [dbo].[OrderTag] [ot2]
+                      INNER JOIN [dbo].[Tag] [t] ON [ot2].TagId = [t].Id
+                      WHERE [ot2].OrderId = ot.OrderId
+                      FOR XML PATH('')), 1, 2, '') AS TagList
+        FROM [dbo].[OrderTag] ot
+        GROUP BY ot.OrderId
+    ) OrderTags ON OrderTags.OrderId = o.Id
+    -- Second derived table: 't' aliases [dbo].[Task] (CONFLICT!)
+    LEFT JOIN (
+        SELECT i.OrderId,
+               COUNT(*) AS ItemCount
+        FROM [dbo].[OrderItem] i
+        INNER JOIN [dbo].[Task] t ON t.Id = i.TaskId  -- 't' reused here
+        WHERE t.IsActive = 1
+        GROUP BY i.OrderId
+    ) OrderItems ON OrderItems.OrderId = o.Id
+    WHERE o.CustomerId = @CustomerId
+END
+```
+
+**Current behavior:** `t.Id` and `t.IsActive` in the second derived table incorrectly resolve to `[dbo].[Tag]` instead of `[dbo].[Task]` because "first definition wins."
+
+### Solution: Extend ApplySubqueryScope Infrastructure
+
+The existing `ApplySubqueryScope` struct already tracks byte position ranges for APPLY subqueries. Extend this to:
+1. Track all subquery types (derived tables, correlated subqueries)
+2. Store aliases per-scope instead of globally
+3. Use position-aware alias lookup during column resolution
+
+### Phase 43.1: Add Scope Types and Extended Struct (2/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 43.1.1 | Add `ScopeType` enum (Apply, DerivedTable) | | After line 164 in body_deps.rs |
+| 43.1.2 | Add `aliases: HashMap<String, String>` field to scope struct | | Stores aliases defined within each scope |
+
+### Phase 43.2: Add Position-Aware Alias Resolution (2/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 43.2.1 | Create `resolve_alias_for_position()` function | | Returns innermost scope's alias or falls back to global |
+| 43.2.2 | Handle nested scopes (smallest byte range wins) | | For subquery-within-subquery scenarios |
+
+### Phase 43.3: Extend Scope Extraction (3/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 43.3.1 | Detect `JOIN (SELECT...)` derived table pattern | | In extract_apply_scopes() or new function |
+| 43.3.2 | Extract aliases INSIDE each subquery into scope's HashMap | | Track FROM/JOIN within balanced parens |
+| 43.3.3 | Maintain backward compatibility with ApplySubqueryScope | | Type alias or wrapper |
+
+### Phase 43.4: Update Column Resolution (2/2)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 43.4.1 | Replace `table_aliases.get()` with position-aware lookup | | Lines 952, 982, 1012, 1092 in body_deps.rs |
+| 43.4.2 | Update `find_scope_table()` to use new struct | | Lines 1204-1220 |
+
+### Phase 43.5: Testing and Validation (3/3)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 43.5.1 | Add unit test for alias scope conflict resolution | | Verify different scopes have different aliases |
+| 43.5.2 | Add unit test for position-aware resolution | | Verify byte position determines alias used |
+| 43.5.3 | Run full test suite and parity tests | | All 1700+ tests must pass |
+
+### Implementation Notes
+
+**Key insight:** The infrastructure already exists for APPLY subqueries (`ApplySubqueryScope`, `find_scope_table()`, byte position tracking). This phase extends it to cover derived tables.
+
+**Files to modify:**
+- `src/dacpac/model_xml/body_deps.rs` - All implementation changes
+
+**Verification commands:**
+```bash
+just test                                              # All tests
+cargo test --lib body_deps                            # Body deps tests
+cargo test --test e2e_tests test_parity_all_fixtures  # Parity tests
+```
+
+---
+
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-41 complete. Full parity: 46/48 (95.8%).**

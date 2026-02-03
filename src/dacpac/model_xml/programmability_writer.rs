@@ -1085,6 +1085,16 @@ fn find_function_body_as_tokenized(
 
 /// Extract just the body after AS from a procedure definition using token-based parsing.
 fn extract_procedure_body_only(definition: &str) -> String {
+    extract_procedure_body_only_impl(definition)
+}
+
+/// Test-accessible version of extract_procedure_body_only
+#[cfg(test)]
+pub(crate) fn extract_procedure_body_only_for_test(definition: &str) -> String {
+    extract_procedure_body_only_impl(definition)
+}
+
+fn extract_procedure_body_only_impl(definition: &str) -> String {
     // Use tokenized parsing to find the AS keyword that separates header from body
     if let Some((_as_start, as_end)) = find_procedure_body_separator_as_tokenized(definition) {
         // as_end points to the first token after AS (after any whitespace)
