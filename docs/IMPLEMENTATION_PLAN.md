@@ -25,7 +25,7 @@ Real-world deployment testing revealed body dependency extraction bugs causing u
 
 ## Phase 43: Scope-Aware Alias Tracking
 
-**Status:** IN PROGRESS
+**Status:** COMPLETE - 2026-02-03
 
 **Goal:** Fix alias resolution when the same alias (case-insensitive) is used in different scopes within a single procedure.
 
@@ -77,48 +77,62 @@ The existing `ApplySubqueryScope` struct already tracks byte position ranges for
 2. Store aliases per-scope instead of globally
 3. Use position-aware alias lookup during column resolution
 
-### Phase 43.1: Add Scope Types and Extended Struct (2/2)
+### Phase 43.1: Add Scope Types and Extended Struct (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 43.1.1 | Add `ScopeType` enum (Apply, DerivedTable) | | After line 164 in body_deps.rs |
-| 43.1.2 | Add `aliases: HashMap<String, String>` field to scope struct | | Stores aliases defined within each scope |
+| 43.1.1 | Add `ScopeType` enum (Apply, DerivedTable) | ✅ | Added after line ~165 in body_deps.rs |
+| 43.1.2 | Add `aliases: HashMap<String, String>` field to scope struct | ✅ | Extended `ApplySubqueryScope` with `scope_type` and `aliases` fields |
 
-### Phase 43.2: Add Position-Aware Alias Resolution (2/2)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 43.2.1 | Create `resolve_alias_for_position()` function | | Returns innermost scope's alias or falls back to global |
-| 43.2.2 | Handle nested scopes (smallest byte range wins) | | For subquery-within-subquery scenarios |
-
-### Phase 43.3: Extend Scope Extraction (3/3)
+### Phase 43.2: Add Position-Aware Alias Resolution (2/2) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 43.3.1 | Detect `JOIN (SELECT...)` derived table pattern | | In extract_apply_scopes() or new function |
-| 43.3.2 | Extract aliases INSIDE each subquery into scope's HashMap | | Track FROM/JOIN within balanced parens |
-| 43.3.3 | Maintain backward compatibility with ApplySubqueryScope | | Type alias or wrapper |
+| 43.2.1 | Create `resolve_alias_for_position()` function | ✅ | Returns innermost scope's alias or falls back to global |
+| 43.2.2 | Handle nested scopes (smallest byte range wins) | ✅ | Innermost scope wins for subquery-within-subquery scenarios |
 
-### Phase 43.4: Update Column Resolution (2/2)
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 43.4.1 | Replace `table_aliases.get()` with position-aware lookup | | Lines 952, 982, 1012, 1092 in body_deps.rs |
-| 43.4.2 | Update `find_scope_table()` to use new struct | | Lines 1204-1220 |
-
-### Phase 43.5: Testing and Validation (3/3)
+### Phase 43.3: Extend Scope Extraction (3/3) ✅
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 43.5.1 | Add unit test for alias scope conflict resolution | | Verify different scopes have different aliases |
-| 43.5.2 | Add unit test for position-aware resolution | | Verify byte position determines alias used |
-| 43.5.3 | Run full test suite and parity tests | | All 1700+ tests must pass |
+| 43.3.1 | Detect `JOIN (SELECT...)` derived table pattern | ✅ | Added `extract_all_scopes()` function |
+| 43.3.2 | Extract aliases INSIDE each subquery into scope's HashMap | ✅ | Uses `parse_table_name_with_alias()` helper |
+| 43.3.3 | Maintain backward compatibility with ApplySubqueryScope | ✅ | Added `extract_all_subquery_scopes()` public wrapper |
 
-### Implementation Notes
+### Phase 43.4: Update Column Resolution (2/2) ✅
 
-**Key insight:** The infrastructure already exists for APPLY subqueries (`ApplySubqueryScope`, `find_scope_table()`, byte position tracking). This phase extends it to cover derived tables.
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 43.4.1 | Replace `table_aliases.get()` with position-aware lookup | ✅ | Updated 4 alias lookup points (lines ~967, 1003, 1039, 1127) |
+| 43.4.2 | Update `find_scope_table()` to use new struct | ✅ | Updated scope variable from `apply_scopes` to `all_scopes` |
 
-**Files to modify:**
+### Phase 43.5: Testing and Validation (3/3) ✅
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 43.5.1 | Add unit test for alias scope conflict resolution | ✅ | `test_scope_conflict_same_alias_different_scopes`, `test_body_deps_scope_conflict_resolution` |
+| 43.5.2 | Add unit test for position-aware resolution | ✅ | `test_resolve_alias_for_position_innermost_scope`, `test_resolve_alias_falls_back_to_global` |
+| 43.5.3 | Run full test suite and parity tests | ✅ | All 972 unit tests pass, all 117 e2e tests pass |
+
+### Implementation Summary
+
+**Changes made:**
+1. Added `ScopeType` enum with `Apply` and `DerivedTable` variants
+2. Extended `ApplySubqueryScope` struct with `scope_type` and `aliases: HashMap<String, String>` fields
+3. Added `extract_all_scopes()` function to extract APPLY and derived table scopes with internal aliases
+4. Added `extract_all_subquery_scopes()` public function wrapper
+5. Added `resolve_alias_for_position()` function for position-aware alias resolution (innermost scope wins)
+6. Added `parse_table_name_with_alias()` helper function
+7. Updated all 4 alias lookup points to use `resolve_alias_for_position()`
+
+**New tests added:**
+- `test_extract_all_scopes_derived_table`
+- `test_scope_conflict_same_alias_different_scopes`
+- `test_resolve_alias_for_position_innermost_scope`
+- `test_resolve_alias_falls_back_to_global`
+- `test_body_deps_scope_conflict_resolution`
+
+**Files modified:**
 - `src/dacpac/model_xml/body_deps.rs` - All implementation changes
 
 **Verification commands:**
@@ -605,6 +619,8 @@ These differences do not affect deployment functionality - all dependencies are 
 | Phase 39 | Add SysCommentsObjectAnnotation to Views | Complete |
 | Phase 40 | Add SysCommentsObjectAnnotation to Procedures | Complete |
 | Phase 41 | Alias resolution for nested subqueries | Complete |
+| Phase 42 | Real-world deployment bug fixes | Complete |
+| Phase 43 | Scope-aware alias tracking | Complete |
 
 ## Phase 22.1-22.3: Layer 7 Canonical XML Parity (4/5) ✅
 

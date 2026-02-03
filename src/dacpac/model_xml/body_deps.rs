@@ -151,16 +151,31 @@ pub(crate) struct BodyDepTokenWithPos {
     pub byte_pos: usize,
 }
 
-/// Represents an APPLY subquery scope with its byte range and internal tables.
-/// Used to resolve unqualified columns to the correct table based on scope.
+/// Type of subquery scope for alias tracking
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ScopeType {
+    /// CROSS APPLY or OUTER APPLY subquery
+    Apply,
+    /// Derived table in JOIN (SELECT...) pattern
+    DerivedTable,
+}
+
+/// Represents a subquery scope with its byte range, internal tables, and aliases.
+/// Used to resolve columns and aliases to the correct table based on position.
+/// Phase 43: Extended to track aliases per scope for scope-aware alias resolution.
 #[derive(Debug, Clone)]
 pub(crate) struct ApplySubqueryScope {
-    /// Byte position where the APPLY subquery starts (after opening paren)
+    /// Type of scope (Apply or DerivedTable)
+    pub scope_type: ScopeType,
+    /// Byte position where the subquery starts (after opening paren)
     pub start_pos: usize,
-    /// Byte position where the APPLY subquery ends (at closing paren)
+    /// Byte position where the subquery ends (at closing paren)
     pub end_pos: usize,
-    /// Tables referenced inside this APPLY subquery (in order of appearance)
+    /// Tables referenced inside this subquery (in order of appearance)
     pub tables: Vec<String>,
+    /// Aliases defined within this scope: alias (lowercase) -> table reference
+    /// Phase 43.1.2: Per-scope alias tracking for scope conflicts
+    pub aliases: HashMap<String, String>,
 }
 
 /// Token-based scanner for body dependency extraction.
@@ -885,9 +900,9 @@ pub(crate) fn extract_body_dependencies(
     // This handles whitespace (tabs, multiple spaces, newlines) correctly and is more robust
     let table_refs = extract_table_refs_tokenized(body, &table_aliases, &subquery_aliases);
 
-    // Phase 34: Extract APPLY subquery scopes for scope-aware column resolution
-    // Each scope contains the byte range and tables within that APPLY subquery
-    let apply_scopes = extract_apply_subquery_scopes(body);
+    // Phase 34+43: Extract ALL subquery scopes for scope-aware column and alias resolution
+    // Phase 43: Extended to include derived tables and per-scope alias tracking
+    let all_scopes = extract_all_subquery_scopes(body);
 
     // Scan body sequentially for all references in order of appearance using token-based scanner
     // Note: DotNet has a complex ordering that depends on SQL clause structure (FROM first, etc.)
@@ -948,8 +963,14 @@ pub(crate) fn extract_body_dependencies(
                         continue;
                     }
 
+                    // Phase 43: Use position-aware alias resolution for scope conflicts
                     // Check if first_part is a table alias that should be resolved
-                    if let Some(resolved_table) = table_aliases.get(&first_lower) {
+                    if let Some(resolved_table) = resolve_alias_for_position(
+                        &first_lower,
+                        byte_pos,
+                        &all_scopes,
+                        &table_aliases,
+                    ) {
                         // This is alias.column - resolve to [schema].[table].[column]
                         // First emit the table reference if not seen (DotNet deduplicates tables)
                         if !seen_tables.contains(resolved_table) {
@@ -978,8 +999,14 @@ pub(crate) fn extract_body_dependencies(
                         continue;
                     }
 
+                    // Phase 43: Use position-aware alias resolution for scope conflicts
                     // Check if alias is a table alias that should be resolved
-                    if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                    if let Some(resolved_table) = resolve_alias_for_position(
+                        &alias_lower,
+                        byte_pos,
+                        &all_scopes,
+                        &table_aliases,
+                    ) {
                         // This is alias.[column] - resolve to [schema].[table].[column]
                         // First emit the table reference if not seen (DotNet deduplicates tables)
                         if !seen_tables.contains(resolved_table) {
@@ -1008,8 +1035,14 @@ pub(crate) fn extract_body_dependencies(
                         continue;
                     }
 
+                    // Phase 43: Use position-aware alias resolution for scope conflicts
                     // Check if alias is a table alias that should be resolved
-                    if let Some(resolved_table) = table_aliases.get(&alias_lower) {
+                    if let Some(resolved_table) = resolve_alias_for_position(
+                        &alias_lower,
+                        byte_pos,
+                        &all_scopes,
+                        &table_aliases,
+                    ) {
                         // This is [alias].column - resolve to [schema].[table].[column]
                         // First emit the table reference if not seen (DotNet deduplicates tables)
                         if !seen_tables.contains(resolved_table) {
@@ -1054,9 +1087,9 @@ pub(crate) fn extract_body_dependencies(
                     });
 
                     // If not a table/schema, treat as unqualified column -> resolve against scope table
-                    // Phase 34: Use APPLY subquery scope if token is inside one, otherwise use first table
+                    // Phase 34+43: Use subquery scope if token is inside one, otherwise use first table
                     if !is_table_or_schema {
-                        let resolve_table = find_scope_table(byte_pos, &apply_scopes, &table_refs);
+                        let resolve_table = find_scope_table(byte_pos, &all_scopes, &table_refs);
                         if let Some(target_table) = resolve_table {
                             // First emit the table reference if not seen (DotNet deduplicates tables)
                             if !seen_tables.contains(target_table) {
@@ -1088,8 +1121,14 @@ pub(crate) fn extract_body_dependencies(
                         continue;
                     }
 
+                    // Phase 43: Use position-aware alias resolution for scope conflicts
                     // Check if first_part is a table alias that should be resolved
-                    if let Some(resolved_table) = table_aliases.get(&first_lower) {
+                    if let Some(resolved_table) = resolve_alias_for_position(
+                        &first_lower,
+                        byte_pos,
+                        &all_scopes,
+                        &table_aliases,
+                    ) {
                         // This is alias.column - resolve to [schema].[table].[column]
                         // First emit the table reference if not seen (DotNet deduplicates tables)
                         if !seen_tables.contains(resolved_table) {
@@ -1136,9 +1175,9 @@ pub(crate) fn extract_body_dependencies(
                     });
 
                     // If not a table/schema, treat as unqualified column -> resolve against scope table
-                    // Phase 34: Use APPLY subquery scope if token is inside one, otherwise use first table
+                    // Phase 34+43: Use subquery scope if token is inside one, otherwise use first table
                     if !is_table_or_schema {
-                        let resolve_table = find_scope_table(byte_pos, &apply_scopes, &table_refs);
+                        let resolve_table = find_scope_table(byte_pos, &all_scopes, &table_refs);
                         if let Some(target_table) = resolve_table {
                             // First emit the table reference if not seen (DotNet deduplicates tables)
                             if !seen_tables.contains(target_table) {
@@ -1198,6 +1237,17 @@ pub(crate) fn extract_apply_subquery_scopes(body: &str) -> Vec<ApplySubqueryScop
     parser.extract_apply_scopes(body)
 }
 
+/// Phase 43: Extract ALL subquery scopes (APPLY + derived tables) with their aliases.
+/// This is the primary scope extraction function for body dependency analysis.
+/// Each scope contains byte range, tables, and aliases defined within.
+pub(crate) fn extract_all_subquery_scopes(body: &str) -> Vec<ApplySubqueryScope> {
+    let mut parser = match TableAliasTokenParser::new(body) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    parser.extract_all_scopes(body)
+}
+
 /// Find the appropriate table to resolve an unqualified column against.
 /// If the byte position is inside an APPLY subquery scope, use that scope's first table.
 /// Otherwise, fall back to the first table in the overall table refs.
@@ -1217,6 +1267,45 @@ fn find_scope_table<'a>(
     }
     // Not inside any APPLY scope - use the first table from overall refs
     table_refs.first()
+}
+
+/// Phase 43.2: Resolve an alias to its table reference, considering position within scopes.
+/// When multiple scopes define the same alias, uses the innermost scope that contains the position.
+/// Falls back to global table_aliases if no scope-specific alias is found.
+///
+/// For nested scopes, the smallest byte range (innermost) wins.
+fn resolve_alias_for_position<'a>(
+    alias: &str,
+    byte_pos: usize,
+    scopes: &'a [ApplySubqueryScope],
+    global_aliases: &'a HashMap<String, String>,
+) -> Option<&'a String> {
+    let alias_lower = alias.to_lowercase();
+
+    // Find the innermost (smallest) scope that contains this position and has this alias
+    let mut best_scope: Option<&ApplySubqueryScope> = None;
+    let mut best_scope_size = usize::MAX;
+
+    for scope in scopes {
+        if byte_pos >= scope.start_pos && byte_pos <= scope.end_pos {
+            // Position is inside this scope
+            if scope.aliases.contains_key(&alias_lower) {
+                let scope_size = scope.end_pos - scope.start_pos;
+                if scope_size < best_scope_size {
+                    best_scope = Some(scope);
+                    best_scope_size = scope_size;
+                }
+            }
+        }
+    }
+
+    // If found in a scope, use that scope's alias definition
+    if let Some(scope) = best_scope {
+        return scope.aliases.get(&alias_lower);
+    }
+
+    // Fall back to global aliases
+    global_aliases.get(&alias_lower)
 }
 
 /// Token-based parser for extracting table aliases from SQL body text.
@@ -1486,9 +1575,11 @@ impl TableAliasTokenParser {
 
                         if !tables_in_scope.is_empty() {
                             scopes.push(ApplySubqueryScope {
+                                scope_type: ScopeType::Apply,
                                 start_pos: start_byte_pos,
                                 end_pos: end_byte_pos,
                                 tables: tables_in_scope,
+                                aliases: HashMap::new(), // Populated in extract_all_scopes
                             });
                         }
 
@@ -1508,6 +1599,187 @@ impl TableAliasTokenParser {
         }
 
         scopes
+    }
+
+    /// Phase 43: Extract ALL subquery scopes (APPLY + derived tables) with their internal aliases.
+    /// This is the main scope extraction function that handles:
+    /// - CROSS/OUTER APPLY subqueries
+    /// - Derived tables in JOIN (SELECT...) pattern
+    /// Each scope contains the byte range, tables, and aliases defined within.
+    pub fn extract_all_scopes(&mut self, sql: &str) -> Vec<ApplySubqueryScope> {
+        let line_offsets = compute_line_offsets(sql);
+        let mut scopes = Vec::new();
+
+        self.pos = 0;
+
+        while !self.is_at_end() {
+            self.skip_whitespace();
+
+            // Look for CROSS/OUTER APPLY patterns
+            if self.check_word_ci("CROSS") || self.check_word_ci("OUTER") {
+                let saved_pos = self.pos;
+                self.advance();
+                self.skip_whitespace();
+
+                if self.check_keyword(Keyword::APPLY) || self.check_word_ci("APPLY") {
+                    self.advance();
+                    self.skip_whitespace();
+
+                    // Check if followed by opening paren (subquery)
+                    if self.check_token(&Token::LParen) {
+                        if let Some(scope) =
+                            self.extract_subquery_scope(&line_offsets, ScopeType::Apply)
+                        {
+                            scopes.push(scope);
+                        }
+                    }
+                } else {
+                    // Not an APPLY, restore and continue
+                    self.pos = saved_pos;
+                    self.advance();
+                }
+            }
+            // Look for JOIN (SELECT...) derived table patterns
+            else if self.is_join_keyword() {
+                self.skip_join_keywords();
+                self.skip_whitespace();
+
+                // Check if followed by opening paren (derived table)
+                if self.check_token(&Token::LParen) {
+                    if let Some(scope) =
+                        self.extract_subquery_scope(&line_offsets, ScopeType::DerivedTable)
+                    {
+                        scopes.push(scope);
+                    }
+                }
+            } else {
+                self.advance();
+            }
+        }
+
+        scopes
+    }
+
+    /// Extract a subquery scope starting at the current position (which should be at LParen).
+    /// Collects tables and aliases defined within the subquery.
+    fn extract_subquery_scope(
+        &mut self,
+        line_offsets: &[usize],
+        scope_type: ScopeType,
+    ) -> Option<ApplySubqueryScope> {
+        if !self.check_token(&Token::LParen) {
+            return None;
+        }
+
+        // Get byte position of opening paren
+        let start_byte_pos = self.get_current_byte_offset(line_offsets);
+
+        self.advance(); // Move past opening paren
+
+        // Collect tables and aliases inside the subquery
+        let mut tables_in_scope = Vec::new();
+        let mut aliases_in_scope: HashMap<String, String> = HashMap::new();
+        let mut depth = 1;
+
+        while !self.is_at_end() && depth > 0 {
+            if self.check_token(&Token::LParen) {
+                depth += 1;
+                self.advance();
+            } else if self.check_token(&Token::RParen) {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+                self.advance();
+            } else if self.check_keyword(Keyword::FROM) && depth == 1 {
+                // Extract table ref and alias after FROM at top level
+                self.advance();
+                self.skip_whitespace();
+                if let Some((schema, table_name, alias_opt)) = self.parse_table_name_with_alias() {
+                    let table_ref = format!("[{}].[{}]", schema, table_name);
+                    if !tables_in_scope.contains(&table_ref) {
+                        tables_in_scope.push(table_ref.clone());
+                    }
+                    // Add alias if present
+                    if let Some(alias) = alias_opt {
+                        let alias_lower = alias.to_lowercase();
+                        if !Self::is_alias_keyword(&alias_lower) {
+                            aliases_in_scope.insert(alias_lower, table_ref.clone());
+                        }
+                    }
+                    // Also add table name as self-alias
+                    let table_name_lower = table_name.to_lowercase();
+                    if !aliases_in_scope.contains_key(&table_name_lower) {
+                        aliases_in_scope.insert(table_name_lower, table_ref);
+                    }
+                }
+            } else if self.is_join_keyword() && depth == 1 {
+                // Extract table ref and alias after JOIN at top level
+                self.skip_join_keywords();
+                self.skip_whitespace();
+                if !self.check_token(&Token::LParen) {
+                    if let Some((schema, table_name, alias_opt)) =
+                        self.parse_table_name_with_alias()
+                    {
+                        let table_ref = format!("[{}].[{}]", schema, table_name);
+                        if !tables_in_scope.contains(&table_ref) {
+                            tables_in_scope.push(table_ref.clone());
+                        }
+                        // Add alias if present
+                        if let Some(alias) = alias_opt {
+                            let alias_lower = alias.to_lowercase();
+                            if !Self::is_alias_keyword(&alias_lower) {
+                                aliases_in_scope.insert(alias_lower, table_ref.clone());
+                            }
+                        }
+                        // Also add table name as self-alias
+                        let table_name_lower = table_name.to_lowercase();
+                        if !aliases_in_scope.contains_key(&table_name_lower) {
+                            aliases_in_scope.insert(table_name_lower, table_ref);
+                        }
+                    }
+                }
+            } else {
+                self.advance();
+            }
+        }
+
+        // Get byte position of closing paren
+        let end_byte_pos = self.get_current_byte_offset(line_offsets);
+
+        // Continue past the closing paren
+        if !self.is_at_end() && self.check_token(&Token::RParen) {
+            self.advance();
+        }
+
+        // Only return scope if it has tables or aliases
+        if !tables_in_scope.is_empty() || !aliases_in_scope.is_empty() {
+            Some(ApplySubqueryScope {
+                scope_type,
+                start_pos: start_byte_pos,
+                end_pos: end_byte_pos,
+                tables: tables_in_scope,
+                aliases: aliases_in_scope,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Parse table name with optional alias, returning (schema, table, Option<alias>)
+    fn parse_table_name_with_alias(&mut self) -> Option<(String, String, Option<String>)> {
+        let (schema, table_name) = self.parse_table_name()?;
+        self.skip_whitespace();
+
+        // Check for AS keyword (optional)
+        if self.check_keyword(Keyword::AS) {
+            self.advance();
+            self.skip_whitespace();
+        }
+
+        // Try to get alias
+        let alias = self.try_parse_table_alias();
+        Some((schema, table_name, alias))
     }
 
     /// Get the byte offset of the current token position
@@ -5030,6 +5302,244 @@ mod tests {
         assert!(
             has_account_id,
             "Qualified a.Id should resolve to [dbo].[Account].[Id]. Got deps: {:?}",
+            deps
+        );
+    }
+
+    // ============================================================================
+    // Phase 43: Scope-aware alias tracking tests
+    // ============================================================================
+
+    #[test]
+    fn test_extract_all_scopes_derived_table() {
+        // Test that derived tables in JOIN are detected as scopes
+        let sql = r#"
+            SELECT o.Id
+            FROM [dbo].[Order] o
+            LEFT JOIN (
+                SELECT i.OrderId, COUNT(*) AS ItemCount
+                FROM [dbo].[OrderItem] i
+                GROUP BY i.OrderId
+            ) OrderItems ON OrderItems.OrderId = o.Id
+        "#;
+        let scopes = extract_all_subquery_scopes(sql);
+        assert_eq!(scopes.len(), 1, "Should find 1 derived table scope");
+        assert_eq!(scopes[0].scope_type, ScopeType::DerivedTable);
+        assert!(
+            scopes[0].tables.contains(&"[dbo].[OrderItem]".to_string()),
+            "Derived table scope should contain OrderItem"
+        );
+        assert!(
+            scopes[0].aliases.contains_key(&"i".to_string()),
+            "Derived table scope should have alias 'i'"
+        );
+        assert_eq!(
+            scopes[0].aliases.get("i"),
+            Some(&"[dbo].[OrderItem]".to_string()),
+            "Alias 'i' should map to [dbo].[OrderItem]"
+        );
+    }
+
+    #[test]
+    fn test_scope_conflict_same_alias_different_scopes() {
+        // Test the example from the implementation plan: 't' used for both Tag and Task
+        let sql = r#"
+            SELECT
+                OrderTags.TagList,
+                OrderItems.ItemCount
+            FROM [dbo].[Order] o
+            -- First derived table: 't' aliases [dbo].[Tag]
+            LEFT JOIN (
+                SELECT ot.OrderId, t.[Name]
+                FROM [dbo].[OrderTag] ot
+                INNER JOIN [dbo].[Tag] t ON ot.TagId = t.Id
+            ) OrderTags ON OrderTags.OrderId = o.Id
+            -- Second derived table: 't' aliases [dbo].[Task]
+            LEFT JOIN (
+                SELECT i.OrderId, COUNT(*) AS ItemCount
+                FROM [dbo].[OrderItem] i
+                INNER JOIN [dbo].[Task] t ON t.Id = i.TaskId
+                WHERE t.IsActive = 1
+                GROUP BY i.OrderId
+            ) OrderItems ON OrderItems.OrderId = o.Id
+        "#;
+        let scopes = extract_all_subquery_scopes(sql);
+        assert_eq!(scopes.len(), 2, "Should find 2 derived table scopes");
+
+        // First scope should have 't' -> Tag
+        assert_eq!(
+            scopes[0].aliases.get("t"),
+            Some(&"[dbo].[Tag]".to_string()),
+            "First scope alias 't' should map to Tag"
+        );
+
+        // Second scope should have 't' -> Task
+        assert_eq!(
+            scopes[1].aliases.get("t"),
+            Some(&"[dbo].[Task]".to_string()),
+            "Second scope alias 't' should map to Task"
+        );
+    }
+
+    #[test]
+    fn test_resolve_alias_for_position_innermost_scope() {
+        // Test that innermost scope wins for nested scopes
+        let scopes = vec![
+            ApplySubqueryScope {
+                scope_type: ScopeType::DerivedTable,
+                start_pos: 100,
+                end_pos: 500,
+                tables: vec!["[dbo].[Outer]".to_string()],
+                aliases: {
+                    let mut m = HashMap::new();
+                    m.insert("t".to_string(), "[dbo].[Outer]".to_string());
+                    m
+                },
+            },
+            ApplySubqueryScope {
+                scope_type: ScopeType::DerivedTable,
+                start_pos: 200,
+                end_pos: 400,
+                tables: vec!["[dbo].[Inner]".to_string()],
+                aliases: {
+                    let mut m = HashMap::new();
+                    m.insert("t".to_string(), "[dbo].[Inner]".to_string());
+                    m
+                },
+            },
+        ];
+
+        let global_aliases: HashMap<String, String> = HashMap::new();
+
+        // Position 150 is in outer scope only
+        let result = resolve_alias_for_position("t", 150, &scopes, &global_aliases);
+        assert_eq!(
+            result,
+            Some(&"[dbo].[Outer]".to_string()),
+            "Position 150 should resolve to outer scope"
+        );
+
+        // Position 300 is in both scopes - inner (smaller) wins
+        let result = resolve_alias_for_position("t", 300, &scopes, &global_aliases);
+        assert_eq!(
+            result,
+            Some(&"[dbo].[Inner]".to_string()),
+            "Position 300 should resolve to inner (smaller) scope"
+        );
+
+        // Position 450 is in outer scope only
+        let result = resolve_alias_for_position("t", 450, &scopes, &global_aliases);
+        assert_eq!(
+            result,
+            Some(&"[dbo].[Outer]".to_string()),
+            "Position 450 should resolve to outer scope"
+        );
+
+        // Position 600 is outside all scopes - falls back to global
+        let result = resolve_alias_for_position("t", 600, &scopes, &global_aliases);
+        assert_eq!(
+            result, None,
+            "Position 600 should fall back to global (which is empty)"
+        );
+    }
+
+    #[test]
+    fn test_resolve_alias_falls_back_to_global() {
+        // Test that global aliases are used when not inside a scope
+        let scopes = vec![ApplySubqueryScope {
+            scope_type: ScopeType::DerivedTable,
+            start_pos: 100,
+            end_pos: 200,
+            tables: vec!["[dbo].[ScopeTable]".to_string()],
+            aliases: {
+                let mut m = HashMap::new();
+                m.insert("s".to_string(), "[dbo].[ScopeTable]".to_string());
+                m
+            },
+        }];
+
+        let mut global_aliases: HashMap<String, String> = HashMap::new();
+        global_aliases.insert("g".to_string(), "[dbo].[GlobalTable]".to_string());
+
+        // Position 50 is outside scope - should use global
+        let result = resolve_alias_for_position("g", 50, &scopes, &global_aliases);
+        assert_eq!(
+            result,
+            Some(&"[dbo].[GlobalTable]".to_string()),
+            "Should resolve 'g' from global aliases"
+        );
+
+        // Position 150 is inside scope but 'g' not in scope - should still use global
+        let result = resolve_alias_for_position("g", 150, &scopes, &global_aliases);
+        assert_eq!(
+            result,
+            Some(&"[dbo].[GlobalTable]".to_string()),
+            "Should resolve 'g' from global even when inside scope (alias not in scope)"
+        );
+    }
+
+    #[test]
+    fn test_body_deps_scope_conflict_resolution() {
+        // Full integration test: verify that t.Id resolves to correct table in each scope
+        let sql = r#"
+            SELECT
+                OrderTags.TagName,
+                OrderItems.ItemCount
+            FROM [dbo].[Order] o
+            LEFT JOIN (
+                SELECT ot.OrderId, t.Name AS TagName
+                FROM [dbo].[OrderTag] ot
+                INNER JOIN [dbo].[Tag] t ON ot.TagId = t.Id
+            ) OrderTags ON OrderTags.OrderId = o.Id
+            LEFT JOIN (
+                SELECT i.OrderId, COUNT(*) AS ItemCount
+                FROM [dbo].[OrderItem] i
+                INNER JOIN [dbo].[Task] t ON t.Id = i.TaskId
+                WHERE t.IsActive = 1
+                GROUP BY i.OrderId
+            ) OrderItems ON OrderItems.OrderId = o.Id
+        "#;
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+
+        // Should have [dbo].[Tag].[Name] from first derived table
+        let has_tag_name = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Tag].[Name]",
+            _ => false,
+        });
+        assert!(
+            has_tag_name,
+            "First derived table t.Name should resolve to [dbo].[Tag].[Name]. Got deps: {:?}",
+            deps
+        );
+
+        // Should have [dbo].[Task].[IsActive] from second derived table
+        let has_task_isactive = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Task].[IsActive]",
+            _ => false,
+        });
+        assert!(
+            has_task_isactive,
+            "Second derived table t.IsActive should resolve to [dbo].[Task].[IsActive]. Got deps: {:?}",
+            deps
+        );
+
+        // Should have [dbo].[Tag].[Id] and [dbo].[Task].[Id] - both 't.Id' references
+        let has_tag_id = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Tag].[Id]",
+            _ => false,
+        });
+        let has_task_id = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Task].[Id]",
+            _ => false,
+        });
+        assert!(
+            has_tag_id,
+            "Should have [dbo].[Tag].[Id] from first derived table. Got deps: {:?}",
+            deps
+        );
+        assert!(
+            has_task_id,
+            "Should have [dbo].[Task].[Id] from second derived table. Got deps: {:?}",
             deps
         );
     }
