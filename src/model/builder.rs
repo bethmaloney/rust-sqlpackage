@@ -897,7 +897,8 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 
     // Assign disambiguators to inline constraints and link to columns/tables
     // This must happen after sorting because disambiguator values follow element order
-    assign_inline_constraint_disambiguators(&mut model.elements);
+    // Pass package reference count since DotNet reserves disambiguator slots for package references
+    assign_inline_constraint_disambiguators(&mut model.elements, project.package_references.len());
 
     Ok(model)
 }
@@ -999,7 +1000,10 @@ fn resolve_udt_nullability(elements: &mut [ModelElement]) {
 ///   * Single named constraint: table gets Annotation, constraint gets AttachedAnnotation
 ///   * Multiple named constraints: constraints get Annotation (except one which gets AttachedAnnotation)
 ///     and table gets AttachedAnnotation for constraints with Annotation, plus one Annotation
-fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
+fn assign_inline_constraint_disambiguators(
+    elements: &mut [ModelElement],
+    package_reference_count: usize,
+) {
     use std::collections::HashMap;
 
     // DotNet assigns disambiguators in XML output order to elements that will carry <Annotation>.
@@ -1045,7 +1049,8 @@ fn assign_inline_constraint_disambiguators(elements: &mut [ModelElement]) {
 
     // Phase 3: Walk through elements in sorted order and assign disambiguators
     // to elements that will carry Annotation
-    let mut next_disambiguator: u32 = 3; // DotNet starts at 3
+    // DotNet starts at 3, but reserves slots for package references (1 slot per reference)
+    let mut next_disambiguator: u32 = 3 + package_reference_count as u32;
 
     // Map element index -> assigned disambiguator
     let mut element_disambiguators: HashMap<usize, u32> = HashMap::new();

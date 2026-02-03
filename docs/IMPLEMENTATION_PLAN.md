@@ -210,13 +210,40 @@ cargo test --test e2e_tests test_parity_all_fixtures  # Parity tests
 
 ---
 
+## Phase 46: Fix Disambiguator Numbering for Package References (2026-02-03)
+
+**Status:** COMPLETE
+
+**Goal:** Fix annotation disambiguator numbering to account for package references in the sqlproj file.
+
+**Problem:** Fixtures with package references (like `header_section` which references `master.dacpac`) had incorrect disambiguator numbering. DotNet reserves disambiguator slots for package references, but Rust was always starting from 3.
+
+- Without package references: disambiguators start at 3 ✅
+- With 1 package reference: disambiguators should start at 4, but Rust was using 3 ❌
+
+**Solution:** Modified `assign_inline_constraint_disambiguators()` in `builder.rs` to accept the package reference count and adjust the starting disambiguator value:
+```rust
+let mut next_disambiguator: u32 = 3 + package_reference_count as u32;
+```
+
+**Files Changed:**
+- `src/model/builder.rs`: Updated `assign_inline_constraint_disambiguators()` function signature to take `package_reference_count: usize` parameter
+
+**Results:**
+- Layer 7 parity improved from 12/48 (25.0%) to 13/48 (27.1%)
+- `header_section` fixture now passes Layer 7
+- All 500 unit tests pass
+- All 117 e2e tests pass
+
+---
+
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-44 complete. Full parity: 46/48 (95.8%).**
+**Phases 1-46 complete. Full parity: 46/48 (95.8%).**
 
 **Remaining Work:**
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
-- Layer 7 remaining issues: element ordering, formatting differences (12/48 passing)
+- Layer 7 remaining issues: element ordering, formatting differences (13/48 passing)
 - Body dependency ordering/deduplication differences (65 relationship errors in `body_dependencies_aliases` fixture - not affecting functionality)
 
 | Layer | Passing | Rate |
@@ -227,7 +254,7 @@ cargo test --test e2e_tests test_parity_all_fixtures  # Parity tests
 | Relationships | 47/48 | 97.9% |
 | Layer 4 (Ordering) | 48/48 | 100% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 12/48 | 25.0% |
+| Layer 7 (Canonical XML) | 13/48 | 27.1% |
 
 **Note:** Full parity (46/48, 95.8%) represents fixtures passing all layers. Phase 22.4.4 (disambiguator numbering) is now complete.
 
@@ -309,7 +336,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 | Layer | Status | Notes |
 |-------|--------|-------|
-| Layer 7 (Canonical XML) | 12/48 (25.0%) | Functionally correct, byte-level parity achieved for fixtures with constraints |
+| Layer 7 (Canonical XML) | 13/48 (27.1%) | Functionally correct, byte-level parity achieved for fixtures with constraints |
 
 **NOTE:** The annotation pattern is now functionally correct and achieves byte-level parity with DotNet.
 
@@ -636,7 +663,7 @@ Rust was not emitting this annotation for procedures (only views and functions h
 | Issue | Location | Phase | Status |
 |-------|----------|-------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | - | 65 errors (ordering/deduplication differences, not alias resolution) |
-| Layer 7 parity remaining | model_xml | - | 37/48 failing due to element ordering, formatting differences |
+| Layer 7 parity remaining | model_xml | - | 35/48 failing due to element ordering, formatting differences |
 
 **Note on body_dependencies_aliases:** The 65 relationship errors are due to:
 1. **Ordering differences**: Rust emits dependencies in textual order; DotNet uses SQL clause structure order (FROM first, then SELECT)
@@ -688,6 +715,8 @@ These differences do not affect deployment functionality - all dependencies are 
 | Phase 42 | Real-world deployment bug fixes | Complete |
 | Phase 43 | Scope-aware alias tracking | Complete |
 | Phase 44 | XML formatting improvements for Layer 7 parity | Complete |
+| Phase 45 | Fix unit tests for XML format changes | Complete |
+| Phase 46 | Fix disambiguator numbering for package references | Complete |
 
 ## Phase 22.1-22.3: Layer 7 Canonical XML Parity (4/5) ✅
 
