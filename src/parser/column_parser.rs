@@ -59,6 +59,9 @@ pub struct TokenParsedColumn {
     pub computed_expression: Option<String>,
     /// Whether the computed column is PERSISTED (stored physically)
     pub is_persisted: bool,
+    /// Collation name (e.g., "Latin1_General_CS_AS")
+    /// Only populated for string columns with explicit COLLATE clause
+    pub collation: Option<String>,
 }
 
 /// Token-based column definition parser
@@ -97,10 +100,14 @@ impl ColumnTokenParser {
         // Regular column: parse data type
         let data_type = self.parse_data_type()?;
 
+        // Check for COLLATE clause immediately after data type
+        let collation = self.parse_collation();
+
         // Now parse optional column modifiers in any order
         let mut result = TokenParsedColumn {
             name,
             data_type,
+            collation,
             ..Default::default()
         };
 
@@ -369,6 +376,31 @@ impl ColumnTokenParser {
         }
 
         Some(data_type)
+    }
+
+    /// Parse optional COLLATE clause (e.g., COLLATE Latin1_General_CS_AS)
+    /// Returns the collation name if present
+    fn parse_collation(&mut self) -> Option<String> {
+        self.base.skip_whitespace();
+
+        // Check for COLLATE keyword
+        if !self.base.check_word_ci("COLLATE") {
+            return None;
+        }
+
+        self.base.advance(); // consume COLLATE
+        self.base.skip_whitespace();
+
+        // The collation name is a Word token (e.g., Latin1_General_CS_AS)
+        if let Some(token) = self.base.current_token() {
+            if let Token::Word(word) = &token.token {
+                let collation = word.value.clone();
+                self.base.advance();
+                return Some(collation);
+            }
+        }
+
+        None
     }
 
     /// Parse a DEFAULT value (handles various forms: function calls, literals, parenthesized expressions)
@@ -855,5 +887,45 @@ mod tests {
             result.emit_check_constraint_name,
             "emit_check_constraint_name should be true for named CHECK after NOT NULL"
         );
+    }
+
+    #[test]
+    fn test_column_with_collate() {
+        let result = parse_column_definition_tokens(
+            "[Name] NVARCHAR(100) COLLATE Latin1_General_CS_AS NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Name");
+        assert_eq!(result.data_type, "NVARCHAR(100)");
+        assert_eq!(result.collation, Some("Latin1_General_CS_AS".to_string()));
+        assert_eq!(result.nullability, Some(false));
+    }
+
+    #[test]
+    fn test_column_with_collate_various() {
+        // Test different collation names
+        let result = parse_column_definition_tokens(
+            "[Text] VARCHAR(50) COLLATE SQL_Latin1_General_CP1_CI_AS NULL",
+        )
+        .unwrap();
+        assert_eq!(
+            result.collation,
+            Some("SQL_Latin1_General_CP1_CI_AS".to_string())
+        );
+
+        let result =
+            parse_column_definition_tokens("[JapaneseText] NVARCHAR(200) COLLATE Japanese_CI_AS")
+                .unwrap();
+        assert_eq!(result.collation, Some("Japanese_CI_AS".to_string()));
+    }
+
+    #[test]
+    fn test_column_without_collate() {
+        // Regular column without COLLATE should have None
+        let result = parse_column_definition_tokens("[Id] INT NOT NULL").unwrap();
+        assert!(result.collation.is_none());
+
+        let result = parse_column_definition_tokens("[Name] NVARCHAR(100) NOT NULL").unwrap();
+        assert!(result.collation.is_none());
     }
 }

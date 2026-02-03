@@ -184,6 +184,9 @@ pub struct ColumnElement {
     pub computed_expression: Option<String>,
     /// Whether the computed column is PERSISTED (stored physically)
     pub is_persisted: bool,
+    /// Collation name for the column (e.g., "Latin1_General_CI_AS")
+    /// Only populated for string columns with explicit COLLATE clause
+    pub collation: Option<String>,
 }
 
 /// View element

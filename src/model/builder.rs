@@ -1361,6 +1361,9 @@ fn column_from_def(col: &ColumnDef, _schema: &str, _table_name: &str) -> ColumnE
 
     let (max_length, precision, scale) = extract_type_params(&col.data_type);
 
+    // Extract collation if present (sqlparser stores it directly on ColumnDef)
+    let collation = col.collation.as_ref().map(|c| c.to_string());
+
     // Note: attached_annotations are populated during post-processing
     // after disambiguators are assigned to inline constraints
 
@@ -1379,6 +1382,7 @@ fn column_from_def(col: &ColumnDef, _schema: &str, _table_name: &str) -> ColumnE
         attached_annotations: Vec::new(), // Populated during post-processing
         computed_expression,
         is_persisted,
+        collation,
     }
 }
 
@@ -1561,6 +1565,7 @@ fn column_from_fallback_table(
         attached_annotations: Vec::new(), // Populated during post-processing
         computed_expression: col.computed_expression.clone(),
         is_persisted: col.is_persisted,
+        collation: col.collation.clone(),
     }
 }
 

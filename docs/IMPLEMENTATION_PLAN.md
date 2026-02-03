@@ -237,13 +237,51 @@ let mut next_disambiguator: u32 = 3 + package_reference_count as u32;
 
 ---
 
+## Phase 47: Column-Level Collation Property (2026-02-03)
+
+**Status:** COMPLETE
+
+**Goal:** Add support for column-level COLLATE clauses in the model.xml output.
+
+**Problem:** Columns with explicit COLLATE clauses (e.g., `NVARCHAR(100) COLLATE Latin1_General_CS_AS`) were missing the `<Property Name="Collation" Value="..."/>` element in the generated XML. DotNet emits this property for all columns with explicit collation.
+
+**Solution:**
+1. Added `collation: Option<String>` field to `ColumnElement` struct
+2. Added `collation: Option<String>` field to `TokenParsedColumn` struct
+3. Added `collation: Option<String>` field to `ExtractedTableColumn` struct
+4. Added `parse_collation()` method to `ColumnTokenParser` to extract COLLATE clauses
+5. Updated `column_from_def()` to extract collation from sqlparser's `ColumnDef.collation`
+6. Updated `column_from_fallback_table()` to pass collation to `ColumnElement`
+7. Updated `convert_token_parsed_column()` to pass collation
+8. Updated `write_column_with_type()` to emit `Collation` property before `IsNullable` (matching DotNet's property order)
+
+**Files Changed:**
+- `src/model/elements.rs`: Added `collation` field to `ColumnElement`
+- `src/parser/column_parser.rs`: Added `collation` field to `TokenParsedColumn`, added `parse_collation()` method, added unit tests
+- `src/parser/tsql_parser.rs`: Added `collation` field to `ExtractedTableColumn`, updated `convert_token_parsed_column()`
+- `src/model/builder.rs`: Updated `column_from_def()` and `column_from_fallback_table()`
+- `src/dacpac/model_xml/table_writer.rs`: Updated `write_column_with_type()` to emit Collation property
+
+**Tests Added:**
+- `test_column_with_collate` - Basic COLLATE parsing
+- `test_column_with_collate_various` - Various collation names (SQL_Latin1, Japanese, etc.)
+- `test_column_without_collate` - Verify None when no COLLATE clause
+
+**Results:**
+- Layer 7 parity improved from 13/48 (27.1%) to 14/48 (29.2%)
+- `collation` fixture now passes all layers including Layer 7
+- All 975 unit tests pass
+- All e2e tests pass
+
+---
+
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-46 complete. Full parity: 46/48 (95.8%).**
+**Phases 1-47 complete. Full parity: 46/48 (95.8%).**
 
 **Remaining Work:**
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
-- Layer 7 remaining issues: element ordering, formatting differences (13/48 passing)
+- Layer 7 remaining issues: element ordering, formatting differences (14/48 passing)
 - Body dependency ordering/deduplication differences (65 relationship errors in `body_dependencies_aliases` fixture - not affecting functionality)
 
 | Layer | Passing | Rate |
@@ -254,7 +292,7 @@ let mut next_disambiguator: u32 = 3 + package_reference_count as u32;
 | Relationships | 47/48 | 97.9% |
 | Layer 4 (Ordering) | 48/48 | 100% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 13/48 | 27.1% |
+| Layer 7 (Canonical XML) | 14/48 | 29.2% |
 
 **Note:** Full parity (46/48, 95.8%) represents fixtures passing all layers. Phase 22.4.4 (disambiguator numbering) is now complete.
 
@@ -673,7 +711,7 @@ These differences do not affect deployment functionality - all dependencies are 
 ---
 
 <details>
-<summary>Completed Phases Summary (Phases 1-40)</summary>
+<summary>Completed Phases Summary (Phases 1-47)</summary>
 
 ## Phase Overview
 
@@ -717,6 +755,7 @@ These differences do not affect deployment functionality - all dependencies are 
 | Phase 44 | XML formatting improvements for Layer 7 parity | Complete |
 | Phase 45 | Fix unit tests for XML format changes | Complete |
 | Phase 46 | Fix disambiguator numbering for package references | Complete |
+| Phase 47 | Column-level Collation property | Complete |
 
 ## Phase 22.1-22.3: Layer 7 Canonical XML Parity (4/5) ✅
 

@@ -162,6 +162,9 @@ pub struct ExtractedTableColumn {
     pub computed_expression: Option<String>,
     /// Whether the computed column is PERSISTED (stored physically)
     pub is_persisted: bool,
+    /// Collation name (e.g., "Latin1_General_CS_AS")
+    /// Only populated for string columns with explicit COLLATE clause
+    pub collation: Option<String>,
 }
 
 /// A column reference in a constraint with optional sort direction
@@ -1844,6 +1847,7 @@ fn convert_token_parsed_column(parsed: TokenParsedColumn) -> ExtractedTableColum
         emit_check_constraint_name: parsed.emit_check_constraint_name,
         computed_expression: parsed.computed_expression,
         is_persisted: parsed.is_persisted,
+        collation: parsed.collation,
     }
 }
 

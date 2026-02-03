@@ -298,7 +298,13 @@ pub(crate) fn write_column_with_type<W: Write>(
         .with_attributes([("Type", column_type), ("Name", col_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
-    // Properties - only emit IsNullable="False" for NOT NULL columns
+    // Properties - DotNet property order: Collation, IsNullable, IsIdentity, IsFileStream
+    // Collation property for string columns with explicit COLLATE clause (must come first)
+    if let Some(ref collation) = column.collation {
+        write_property(writer, "Collation", collation)?;
+    }
+
+    // IsNullable - only emit IsNullable="False" for NOT NULL columns
     // DotNet never emits IsNullable="True" for nullable columns (explicit or implicit)
     if matches!(column.nullability, Some(false)) {
         write_property(writer, "IsNullable", "False")?;
@@ -592,6 +598,7 @@ mod tests {
             is_filestream: false,
             default_value: None,
             attached_annotations: vec![],
+            collation: None,
         };
         let mut writer = create_test_writer();
         write_column_with_type(&mut writer, &column, "[dbo].[TestTable]", "SqlSimpleColumn")
@@ -619,6 +626,7 @@ mod tests {
             is_filestream: false,
             default_value: None,
             attached_annotations: vec![],
+            collation: None,
         };
         let mut writer = create_test_writer();
         write_column_with_type(&mut writer, &column, "[dbo].[TestTable]", "SqlSimpleColumn")
@@ -647,6 +655,7 @@ mod tests {
                 is_filestream: false,
                 default_value: None,
                 attached_annotations: vec![],
+                collation: None,
             }],
             is_node: false,
             is_edge: false,
