@@ -146,10 +146,12 @@ pub struct TableElement {
     pub is_node: bool,
     /// Whether this is a graph edge table (CREATE TABLE AS EDGE)
     pub is_edge: bool,
-    /// Disambiguator for SqlInlineConstraintAnnotation (if table has inline constraints)
-    /// Tables with inline constraints get their own annotation, and named table-level
-    /// constraints (like CONSTRAINT [PK_Table]) reference this via AttachedAnnotation
-    pub inline_constraint_disambiguator: Option<u32>,
+    /// Disambiguators for SqlInlineConstraintAnnotation elements.
+    /// Tables get Annotation elements for constraints that use AttachedAnnotation.
+    /// For single named constraint: 1 entry (table gets Annotation, constraint gets AttachedAnnotation)
+    /// For exactly 2 named constraints: 2 entries (both constraints get AttachedAnnotation)
+    /// For 3+ named constraints: 1 entry (last constraint gets AttachedAnnotation)
+    pub inline_constraint_disambiguators: Vec<u32>,
     /// AttachedAnnotation disambiguators to output BEFORE the Annotation element.
     /// DotNet outputs AttachedAnnotations for constraints that appear AFTER the annotated
     /// constraint in the sorted element list, in descending order.

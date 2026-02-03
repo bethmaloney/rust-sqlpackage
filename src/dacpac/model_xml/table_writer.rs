@@ -58,9 +58,9 @@ pub(crate) fn write_table<W: Write>(
         writer.write_event(Event::Empty(annotation))?;
     }
 
-    // Write SqlInlineConstraintAnnotation if table has one
-    // (for the constraint that uses AttachedAnnotation, or for inline constraint scenarios)
-    if let Some(disambiguator) = table.inline_constraint_disambiguator {
+    // Write SqlInlineConstraintAnnotation elements
+    // Tables get Annotation for each constraint that uses AttachedAnnotation
+    for disambiguator in &table.inline_constraint_disambiguators {
         let disamb_str = disambiguator.to_string();
         let annotation = BytesStart::new("Annotation").with_attributes([
             ("Type", "SqlInlineConstraintAnnotation"),
@@ -659,7 +659,7 @@ mod tests {
             }],
             is_node: false,
             is_edge: false,
-            inline_constraint_disambiguator: None,
+            inline_constraint_disambiguators: vec![],
             attached_annotations_before_annotation: vec![],
             attached_annotations_after_annotation: vec![],
         };
@@ -680,7 +680,7 @@ mod tests {
             columns: vec![],
             is_node: false,
             is_edge: false,
-            inline_constraint_disambiguator: Some(1),
+            inline_constraint_disambiguators: vec![1],
             attached_annotations_before_annotation: vec![],
             attached_annotations_after_annotation: vec![],
         };

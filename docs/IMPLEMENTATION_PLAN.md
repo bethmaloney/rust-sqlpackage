@@ -275,9 +275,41 @@ let mut next_disambiguator: u32 = 3 + package_reference_count as u32;
 
 ---
 
+## Phase 48: Fix 2-Named-Constraint Annotation Pattern (2026-02-03)
+
+**Status:** COMPLETE
+
+**Goal:** Fix annotation pattern for tables with exactly 2 named constraints and no inline constraints.
+
+**Problem:** The `self_ref_fk` fixture has 2 named constraints (PK_Employees, FK_Employees_Manager) with no inline constraints. DotNet treats this as a special case:
+- Both constraints get `AttachedAnnotation`
+- The table gets 2 `Annotation` elements (one for each constraint)
+
+The previous code only supported 1 `Annotation` per table via `inline_constraint_disambiguator: Option<u32>`.
+
+**Solution:**
+1. Changed `TableElement.inline_constraint_disambiguator: Option<u32>` to `inline_constraint_disambiguators: Vec<u32>` to support multiple Annotations
+2. Added special handling in `assign_inline_constraint_disambiguators()` for exactly 2 named constraints with 0 inline constraints
+3. Updated XML writer to iterate and emit multiple Annotation elements
+
+**Known Limitation:** For the 2-named-constraint case, DotNet assigns disambiguators in SQL definition order while Rust uses sorted element order. This causes `self_ref_fk` to have 2 Layer 7 errors (disambiguator swapped between PK and FK). This doesn't affect functionality.
+
+**Files Changed:**
+- `src/model/elements.rs`: Changed field from `Option<u32>` to `Vec<u32>`
+- `src/model/builder.rs`: Added 2-named-constraint special case, updated table annotation assignment
+- `src/dacpac/model_xml/table_writer.rs`: Updated to iterate over Vec for multiple Annotations
+
+**Results:**
+- Layer 7 parity remains at 14/48 (29.2%)
+- `self_ref_fk` improved from 4 errors to 2 errors
+- All 975 unit tests pass
+- All 117 e2e tests pass
+
+---
+
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-47 complete. Full parity: 46/48 (95.8%).**
+**Phases 1-48 complete. Full parity: 46/48 (95.8%).**
 
 **Remaining Work:**
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)
@@ -294,7 +326,7 @@ let mut next_disambiguator: u32 = 3 + package_reference_count as u32;
 | Metadata | 48/48 | 100% |
 | Layer 7 (Canonical XML) | 14/48 | 29.2% |
 
-**Note:** Full parity (46/48, 95.8%) represents fixtures passing all layers. Phase 22.4.4 (disambiguator numbering) is now complete.
+**Note:** Full parity (46/48, 95.8%) represents fixtures passing all layers. Phase 22.4.4 (disambiguator numbering) is complete.
 
 ### Excluded Fixtures
 

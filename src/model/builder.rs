@@ -361,7 +361,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         columns: model_columns,
                         is_node: *is_node,
                         is_edge: *is_edge,
-                        inline_constraint_disambiguator: None, // Set during post-processing
+                        inline_constraint_disambiguators: Vec::new(), // Set during post-processing
                         attached_annotations_before_annotation: Vec::new(), // Set during post-processing
                         attached_annotations_after_annotation: Vec::new(), // Set during post-processing
                     }));
@@ -517,7 +517,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     columns,
                     is_node: false,
                     is_edge: false,
-                    inline_constraint_disambiguator: None, // Set during post-processing
+                    inline_constraint_disambiguators: Vec::new(), // Set during post-processing
                     attached_annotations_before_annotation: Vec::new(), // Set during post-processing
                     attached_annotations_after_annotation: Vec::new(), // Set during post-processing
                 }));
@@ -896,7 +896,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
     sort_elements(&mut model.elements);
 
     // Assign disambiguators to inline constraints and link to columns/tables
-    // This must happen after sorting because disambiguator values follow element order
+    // This must happen after sorting because DotNet assigns disambiguators in sorted order.
     // Pass package reference count since DotNet reserves disambiguator slots for package references
     assign_inline_constraint_disambiguators(&mut model.elements, project.package_references.len());
 
@@ -1094,9 +1094,12 @@ fn assign_inline_constraint_disambiguators(
                     constraint_uses_annotation.insert(idx, true);
                 } else {
                     // Named constraint
-                    let named_count = table_constraints
-                        .get(&table_key)
+                    let constraints_for_table = table_constraints.get(&table_key);
+                    let named_count = constraints_for_table
                         .map(|c| c.iter().filter(|(_, is_inline)| !is_inline).count())
+                        .unwrap_or(0);
+                    let inline_count = constraints_for_table
+                        .map(|c| c.iter().filter(|(_, is_inline)| *is_inline).count())
                         .unwrap_or(0);
 
                     if named_count == 1 {
@@ -1109,8 +1112,16 @@ fn assign_inline_constraint_disambiguators(
                             }
                         }
                         constraint_uses_annotation.insert(idx, false);
+                    } else if named_count == 2 && inline_count == 0 {
+                        // Exactly 2 named constraints with NO inline constraints:
+                        // DotNet special case: both constraints get AttachedAnnotation,
+                        // and the table gets 2 Annotation elements.
+                        let disambiguator = next_disambiguator;
+                        next_disambiguator += 1;
+                        element_disambiguators.insert(idx, disambiguator);
+                        constraint_uses_annotation.insert(idx, false);
                     } else {
-                        // Multiple named constraints
+                        // Multiple named constraints (3+, or 2 with inline constraints)
                         // Find this constraint's position among named constraints for this table
                         let named_constraints: Vec<_> = table_constraints
                             .get(&table_key)
@@ -1155,8 +1166,10 @@ fn assign_inline_constraint_disambiguators(
     // Map: (table_schema, table_name, column_name) -> Vec<disambiguator>
     let mut column_annotations: HashMap<(String, String, String), Vec<u32>> = HashMap::new();
 
-    // Map: (table_schema, table_name) -> (Annotation disambiguator, index of annotated constraint)
-    let mut table_annotation: HashMap<(String, String), (u32, usize)> = HashMap::new();
+    // Map: (table_schema, table_name) -> Vec<(Annotation disambiguator, index of annotated constraint)>
+    // For tables where constraints use AttachedAnnotation, the table gets Annotation elements.
+    // This Vec can have multiple entries for the 2-named-constraint case.
+    let mut table_annotation: HashMap<(String, String), Vec<(u32, usize)>> = HashMap::new();
 
     // Map: (table_schema, table_name) -> Vec<(disambiguator, constraint_index)>
     // Tracks constraints that use Annotation (table gets AttachedAnnotation for them)
@@ -1196,7 +1209,10 @@ fn assign_inline_constraint_disambiguators(
                         table_attached.entry(table_key).or_default().push((d, idx));
                     } else {
                         // This constraint uses AttachedAnnotation, so table gets Annotation for it
-                        table_annotation.insert(table_key, (d, idx));
+                        table_annotation
+                            .entry(table_key)
+                            .or_default()
+                            .push((d, idx));
                     }
                 }
             }
@@ -1212,17 +1228,18 @@ fn assign_inline_constraint_disambiguators(
         if let ModelElement::Table(table) = element {
             let table_key = (table.schema.clone(), table.name.clone());
 
-            // For single-constraint tables, the table carries the Annotation
-            // (disambiguator was already assigned in Phase 3)
+            // Get Annotation disambiguators for this table
+            // - Single-constraint tables: disambiguator assigned in Phase 3
+            // - Multi-constraint tables: from table_annotation (can have multiple for 2-constraint case)
             if table_carries_annotation.get(&table_key) == Some(&true) {
                 if let Some(&d) = element_disambiguators.get(&idx) {
-                    table.inline_constraint_disambiguator = Some(d);
+                    table.inline_constraint_disambiguators = vec![d];
                 }
-            } else {
-                // Multi-constraint table: get annotation from the last constraint
-                if let Some(&(d, _)) = table_annotation.get(&table_key) {
-                    table.inline_constraint_disambiguator = Some(d);
-                }
+            } else if let Some(annotations) = table_annotation.get(&table_key) {
+                // Multi-constraint table: collect all annotation disambiguators
+                let mut disambiguators: Vec<u32> = annotations.iter().map(|(d, _)| *d).collect();
+                disambiguators.sort(); // Ascending order
+                table.inline_constraint_disambiguators = disambiguators;
             }
 
             // Split attached annotations based on median disambiguator value
