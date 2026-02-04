@@ -307,9 +307,128 @@ The previous code only supported 1 `Annotation` per table via `inline_constraint
 
 ---
 
+## Phase 49: Schema-Aware Unqualified Column Resolution
+
+**Status:** NOT STARTED
+
+**Goal:** Fix unqualified column resolution by checking which tables in scope actually have the column, eliminating false positive dependencies like `[dbo].[EntityTypeDefaults].[Name]`.
+
+### Problem Statement
+
+Current behavior: `find_scope_table()` returns the first table in scope for unqualified columns, regardless of whether that table has the column. This creates invalid references that cause deployment failures.
+
+Example: If `FROM EntityTypeDefaults e, Users u` and code references `Name`, the current logic always resolves to `[dbo].[EntityTypeDefaults].[Name]` even if only `Users` has a `Name` column.
+
+See `docs/UNQUALIFIED_COLUMN_RESOLUTION_ISSUE.md` for full analysis of the problem and rejected approaches.
+
+### Solution: Build Column Registry from Model
+
+The `DatabaseModel` is fully built before XML generation. We can extract a `ColumnRegistry` mapping tables to their columns, then use it during body dependency extraction to resolve columns only when exactly one table in scope has them.
+
+### Phase 49.1: Create ColumnRegistry Data Structure (3 tasks)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 49.1.1 | Create `src/dacpac/model_xml/column_registry.rs` module | ⬜ | New file with module declaration |
+| 49.1.2 | Define `ColumnRegistry` struct | ⬜ | `table_columns: HashMap<String, HashSet<String>>` (lowercase keys) |
+| 49.1.3 | Add `table_has_column()` and `find_tables_with_column()` methods | ⬜ | Case-insensitive lookup |
+
+### Phase 49.2: Build ColumnRegistry from DatabaseModel (4 tasks)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 49.2.1 | Add `build_column_registry(model: &DatabaseModel)` function | ⬜ | Returns populated ColumnRegistry |
+| 49.2.2 | Extract columns from `TableElement` objects | ⬜ | Map `[schema].[table]` → column names (lowercase) |
+| 49.2.3 | Add unit tests for registry building | ⬜ | Test table lookup, case-insensitivity |
+| 49.2.4 | Extract columns from `ViewElement` objects | ⬜ | Views also need column tracking for correct resolution |
+
+### Phase 49.3: Thread ColumnRegistry Through Call Chain (5 tasks)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 49.3.1 | Update `generate_model_xml()` to build registry | ⬜ | Build once before processing elements |
+| 49.3.2 | Add `column_registry` parameter to `write_element()` | ⬜ | Pass registry through |
+| 49.3.3 | Thread through `write_procedure()`, `write_function()`, `write_view()`, `write_raw()` | ⬜ | Update signatures in programmability_writer.rs, view_writer.rs |
+| 49.3.4 | Update `extract_body_dependencies()` signature | ⬜ | Add `registry: Option<&ColumnRegistry>` parameter |
+| 49.3.5 | Update all `extract_body_dependencies()` call sites | ⬜ | Pass registry from callers |
+
+### Phase 49.4: Update Column Resolution Logic (4 tasks)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 49.4.1 | Create `find_table_with_column()` function | ⬜ | Returns table only if exactly 1 match in scope |
+| 49.4.2 | Update unqualified column handling in `extract_body_dependencies()` | ⬜ | Replace `find_scope_table()` with schema-aware resolution |
+| 49.4.3 | Handle 0 or >1 matches by skipping resolution | ⬜ | No dependency emitted for ambiguous/unknown columns |
+| 49.4.4 | Integrate with existing local column tracking | ⬜ | Skip registry lookup if column matches table variable/CTE column (already tracked in body_deps.rs) |
+
+### Phase 49.5: Testing and Validation (7 tasks)
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 49.5.1 | Add unit tests for `find_table_with_column()` | ⬜ | Test: unique match, no match, ambiguous match |
+| 49.5.2 | Run full parity test suite | ⬜ | Verify no regressions |
+| 49.5.3 | Test against WideWorldImporters sample database | ⬜ | Build [microsoft/sql-server-samples WideWorldImporters](https://github.com/microsoft/sql-server-samples/tree/master/samples/databases/wide-world-importers/wwi-ssdt) and verify deployment succeeds |
+| 49.5.4 | Add test for view column resolution | ⬜ | `FROM MyView v WHERE v.Col` should resolve to view's column |
+| 49.5.5 | Add test for table variable column NOT resolving to global table | ⬜ | `DECLARE @t TABLE(Name..); SELECT Name FROM @t` should NOT emit `[dbo].[SomeTable].[Name]` |
+| 49.5.6 | Add test for CTE column NOT resolving to global table | ⬜ | `WITH cte AS (...) SELECT Name FROM cte` should NOT emit global table reference |
+| 49.5.7 | Add test for multi-scope query with same alias in inner/outer | ⬜ | Inner scope alias should resolve to inner table, not outer |
+
+### Implementation Notes
+
+**Key Data Structures:**
+```rust
+pub struct ColumnRegistry {
+    // Maps lowercase [schema].[table] to lowercase column names
+    table_columns: HashMap<String, HashSet<String>>,
+}
+
+impl ColumnRegistry {
+    pub fn table_has_column(&self, table: &str, column: &str) -> bool;
+    pub fn find_tables_with_column(&self, column: &str, tables_in_scope: &[String]) -> Vec<String>;
+}
+```
+
+**Resolution Logic:**
+```rust
+fn find_table_with_column(
+    column: &str,
+    tables_in_scope: &[String],
+    registry: &ColumnRegistry,
+) -> Option<&String> {
+    let matches: Vec<_> = tables_in_scope
+        .iter()
+        .filter(|t| registry.table_has_column(t, column))
+        .collect();
+
+    match matches.len() {
+        1 => Some(matches[0]),  // Unique match - resolve
+        _ => None,              // 0 or ambiguous - skip
+    }
+}
+```
+
+**Files to Modify:**
+- `src/dacpac/model_xml/column_registry.rs` (new)
+- `src/dacpac/model_xml/mod.rs` (add module, build registry, thread through)
+- `src/dacpac/model_xml/body_deps.rs` (update resolution logic)
+- `src/dacpac/model_xml/programmability_writer.rs` (thread registry)
+- `src/dacpac/model_xml/view_writer.rs` (thread registry)
+
+**Verification commands:**
+```bash
+just test                                              # All tests
+cargo test --lib column_registry                       # Registry tests
+cargo test --test e2e_tests test_parity_all_fixtures   # Parity tests
+```
+
+---
+
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
 **Phases 1-48 complete. Full parity: 46/48 (95.8%).**
+
+**Current Work:**
+- **Phase 49:** Schema-aware unqualified column resolution (fixes deployment failures from false positive column references)
 
 **Remaining Work:**
 - Phase 25.2.2: Additional inline constraint edge case tests (lower priority)

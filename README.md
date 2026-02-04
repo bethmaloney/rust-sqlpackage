@@ -122,7 +122,7 @@ These are intentional differences from .NET DacFx output that don't affect deplo
 | Limitation | Impact | Notes |
 |------------|--------|-------|
 | Internal procedure objects | None | DacFx tracks temp tables, CTEs, and table variables inside procedures as `SqlDynamicColumnSource` elements. These are for code analysis only and not required for deployment. |
-| Comma-less constraint syntax | Constraints ignored | SQL like `[Col] INT NOT NULL PRIMARY KEY` (no comma before PRIMARY KEY) may not parse the constraint. Use explicit commas between column definitions and constraints. |
+| External dacpac column resolution | Minimal | Column references to tables defined in `<PackageReference>` dacpacs are not schema-aware. Unqualified columns may not resolve correctly if a local table has the same column name. Use explicit table aliases or qualified column names when referencing external package tables. |
 
 ### CLI Limitations vs SqlPackage
 

@@ -830,6 +830,138 @@ pub(crate) fn extract_table_refs_tokenized(
 }
 
 // =============================================================================
+// Function Call Detection
+// =============================================================================
+
+/// Extract function call references from SQL body.
+/// Detects patterns like `dbo.f_split(` or `[schema].[func](` after FROM/JOIN/APPLY keywords.
+/// Returns a set of lowercase `[schema].[function]` references.
+fn extract_function_call_refs(body: &str) -> HashSet<String> {
+    let mut function_refs = HashSet::new();
+
+    let dialect = MsSqlDialect {};
+    let tokens = match Tokenizer::new(&dialect, body).tokenize_with_location() {
+        Ok(t) => t,
+        Err(_) => return function_refs,
+    };
+
+    let mut pos = 0;
+    while pos < tokens.len() {
+        // Look for FROM, JOIN, or APPLY keywords
+        if let Token::Word(w) = &tokens[pos].token {
+            let keyword_upper = w.value.to_uppercase();
+            if matches!(
+                keyword_upper.as_str(),
+                "FROM" | "JOIN" | "APPLY" | "INNER" | "LEFT" | "RIGHT" | "OUTER" | "CROSS" | "FULL"
+            ) {
+                pos += 1;
+                // Skip whitespace
+                while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+                    pos += 1;
+                }
+                // Skip additional join keywords (INNER JOIN, LEFT OUTER JOIN, etc.)
+                while pos < tokens.len() {
+                    if let Token::Word(w2) = &tokens[pos].token {
+                        let w2_upper = w2.value.to_uppercase();
+                        if matches!(
+                            w2_upper.as_str(),
+                            "JOIN" | "APPLY" | "OUTER" | "INNER" | "LEFT" | "RIGHT" | "FULL"
+                        ) {
+                            pos += 1;
+                            while pos < tokens.len()
+                                && matches!(tokens[pos].token, Token::Whitespace(_))
+                            {
+                                pos += 1;
+                            }
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                // Skip subqueries starting with (
+                if pos < tokens.len() && matches!(tokens[pos].token, Token::LParen) {
+                    pos += 1;
+                    continue;
+                }
+                // Try to parse a qualified name followed by (
+                if let Some((schema, name, next_pos)) =
+                    try_parse_qualified_name_for_function(&tokens, pos)
+                {
+                    // Check if followed by ( after optional whitespace
+                    let mut check_pos = next_pos;
+                    while check_pos < tokens.len()
+                        && matches!(tokens[check_pos].token, Token::Whitespace(_))
+                    {
+                        check_pos += 1;
+                    }
+                    if check_pos < tokens.len() && matches!(tokens[check_pos].token, Token::LParen)
+                    {
+                        // This is a function call - add to set
+                        let func_ref = format!("[{}].[{}]", schema, name).to_lowercase();
+                        function_refs.insert(func_ref);
+                    }
+                    pos = check_pos;
+                } else {
+                    pos += 1;
+                }
+                continue;
+            }
+        }
+        pos += 1;
+    }
+
+    function_refs
+}
+
+/// Try to parse a qualified name (schema.name or [schema].[name]) from tokens.
+/// Returns (schema, name, next_position) if successful.
+fn try_parse_qualified_name_for_function(
+    tokens: &[sqlparser::tokenizer::TokenWithSpan],
+    start_pos: usize,
+) -> Option<(String, String, usize)> {
+    let mut pos = start_pos;
+
+    // Parse first identifier
+    let first = match tokens.get(pos) {
+        Some(t) => match &t.token {
+            Token::Word(w) => w.value.clone(),
+            _ => return None,
+        },
+        None => return None,
+    };
+    pos += 1;
+
+    // Skip whitespace
+    while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+        pos += 1;
+    }
+
+    // Check for dot
+    if pos >= tokens.len() || !matches!(tokens[pos].token, Token::Period) {
+        // Unqualified name - use default schema
+        return Some(("dbo".to_string(), first, pos));
+    }
+    pos += 1; // Skip dot
+
+    // Skip whitespace
+    while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
+        pos += 1;
+    }
+
+    // Parse second identifier
+    let second = match tokens.get(pos) {
+        Some(t) => match &t.token {
+            Token::Word(w) => w.value.clone(),
+            _ => return None,
+        },
+        None => return None,
+    };
+    pos += 1;
+
+    Some((first, second, pos))
+}
+
+// =============================================================================
 // Body Dependency Extraction
 // =============================================================================
 
@@ -877,6 +1009,8 @@ pub(crate) fn extract_body_dependencies(
     let mut subquery_aliases: HashSet<String> = HashSet::new();
     // Track column aliases (AS identifier) - these should not be treated as column references
     let mut column_aliases: HashSet<String> = HashSet::new();
+    // Track table variable column names - these should not be resolved against other tables
+    let mut table_var_columns: HashSet<String> = HashSet::new();
 
     // Extract aliases from FROM/JOIN clauses with proper alias tracking
     extract_table_aliases_for_body_deps(body, &mut table_aliases, &mut subquery_aliases);
@@ -884,10 +1018,32 @@ pub(crate) fn extract_body_dependencies(
     // Extract column aliases (SELECT expr AS alias patterns)
     extract_column_aliases_for_body_deps(body, &mut column_aliases);
 
+    // Extract table variable column names to exclude from resolution
+    // Pattern: DECLARE @name TABLE ([col1] type, [col2] type, ...)
+    for table_var in extract_table_variable_definitions(body) {
+        for col in &table_var.columns {
+            table_var_columns.insert(col.name.to_lowercase());
+        }
+    }
+
+    // Extract function call names to exclude from column resolution targets
+    // Pattern: FROM dbo.f_split(...) or CROSS APPLY dbo.func(...)
+    // These shouldn't be used as default tables for unqualified column resolution
+    let function_refs: HashSet<String> = extract_function_call_refs(body);
+
     // First pass: collect all table references using token-based extraction
     // Phase 20.4.3: Replaced BRACKETED_TABLE_RE and UNBRACKETED_TABLE_RE with tokenization
     // This handles whitespace (tabs, multiple spaces, newlines) correctly and is more robust
-    let table_refs = extract_table_refs_tokenized(body, &table_aliases, &subquery_aliases);
+    let all_table_refs = extract_table_refs_tokenized(body, &table_aliases, &subquery_aliases);
+
+    // Filter out function calls from table refs used for column resolution
+    // Function refs are still valid as table refs (for dependency tracking), but shouldn't
+    // be used as default tables for unqualified column resolution
+    let table_refs: Vec<String> = all_table_refs
+        .iter()
+        .filter(|r| !function_refs.contains(&r.to_lowercase()))
+        .cloned()
+        .collect();
 
     // Phase 34+43: Extract ALL subquery scopes for scope-aware column and alias resolution
     // Phase 43: Extended to include derived tables and per-scope alias tracking
@@ -1061,10 +1217,11 @@ pub(crate) fn extract_body_dependencies(
                         continue;
                     }
 
-                    // Skip if this is a known table alias, subquery alias, or column alias
+                    // Skip if this is a known table alias, subquery alias, column alias, or table variable column
                     if table_aliases.contains_key(&ident_lower)
                         || subquery_aliases.contains(&ident_lower)
                         || column_aliases.contains(&ident_lower)
+                        || table_var_columns.contains(&ident_lower)
                     {
                         continue;
                     }
@@ -1147,10 +1304,11 @@ pub(crate) fn extract_body_dependencies(
                         continue;
                     }
 
-                    // Skip if this is a known table alias, subquery alias, or column alias
+                    // Skip if this is a known table alias, subquery alias, column alias, or table variable column
                     if table_aliases.contains_key(&ident_lower)
                         || subquery_aliases.contains(&ident_lower)
                         || column_aliases.contains(&ident_lower)
+                        || table_var_columns.contains(&ident_lower)
                     {
                         continue;
                     }
@@ -1919,6 +2077,13 @@ impl TableAliasTokenParser {
 
         self.skip_whitespace();
 
+        // Handle table-valued function calls: dbo.f_split(@args, ',') [Alias]
+        // Skip over the function arguments in parentheses to find the alias
+        if self.check_token(&Token::LParen) {
+            self.skip_balanced_parens();
+            self.skip_whitespace();
+        }
+
         // Check for AS keyword (optional)
         if self.check_keyword(Keyword::AS) {
             self.advance();
@@ -1927,6 +2092,8 @@ impl TableAliasTokenParser {
 
         // Check for alias - must be an identifier that's not a keyword like ON, WHERE, etc.
         let table_ref = format!("[{}].[{}]", schema, table_name);
+        let table_name_lower = table_name.to_lowercase();
+
         if let Some(alias) = self.try_parse_table_alias() {
             let alias_lower = alias.to_lowercase();
 
@@ -1938,22 +2105,20 @@ impl TableAliasTokenParser {
             // Don't overwrite if already captured by a more specific pattern
             // Note: This can cause issues with same-named aliases in different scopes,
             // but scope-tracking is complex. The first definition usually wins.
-            if table_aliases.contains_key(&alias_lower) {
-                return;
+            if !table_aliases.contains_key(&alias_lower) {
+                table_aliases.insert(alias_lower, table_ref.clone());
             }
+        }
 
-            table_aliases.insert(alias_lower, table_ref);
-        } else {
-            // No explicit alias - use the table name itself as a "self-alias"
-            // This handles patterns like "FROM InstrumentEvent" where the table name
-            // might be referenced later as "[InstrumentEvent].column" or just "[InstrumentEvent]"
-            // Only add if not already present (don't overwrite explicit aliases)
-            let table_name_lower = table_name.to_lowercase();
-            if !Self::is_alias_keyword(&table_name_lower)
-                && !table_aliases.contains_key(&table_name_lower)
-            {
-                table_aliases.insert(table_name_lower, table_ref);
-            }
+        // Always add the table name itself as a "self-alias", even when there's an explicit alias.
+        // This handles patterns like "FROM FundsTransfer ft" where the scanner later encounters
+        // "FundsTransfer" as a single identifier (e.g., after FROM keyword) and needs to recognize
+        // it as a table name rather than an unqualified column reference.
+        // Only add if not already present (don't overwrite explicit aliases that might shadow it).
+        if !Self::is_alias_keyword(&table_name_lower)
+            && !table_aliases.contains_key(&table_name_lower)
+        {
+            table_aliases.insert(table_name_lower, table_ref);
         }
     }
 
@@ -2880,6 +3045,52 @@ pub(crate) fn is_sql_keyword_not_column(word: &str) -> bool {
             | "SECOND"
             | "APPLY"
             | "WITH"
+            // SQL Server scalar functions that might appear unqualified
+            | "IIF"
+            | "NULLIF"
+            | "CHOOSE"
+            | "ABS"
+            | "CEILING"
+            | "FLOOR"
+            | "ROUND"
+            | "POWER"
+            | "SQRT"
+            | "SIGN"
+            | "RAND"
+            | "NEWID"
+            | "ROW_NUMBER"
+            | "RANK"
+            | "DENSE_RANK"
+            | "NTILE"
+            | "LAG"
+            | "LEAD"
+            | "FIRST_VALUE"
+            | "LAST_VALUE"
+            | "OVER"
+            | "PARTITION"
+            | "WITHIN"
+            | "PERCENT"
+            | "PERCENTILE_CONT"
+            | "PERCENTILE_DISC"
+            | "CUME_DIST"
+            | "PERCENT_RANK"
+            | "STRING_SPLIT"
+            | "OPENJSON"
+            | "JSON_VALUE"
+            | "JSON_QUERY"
+            | "JSON_MODIFY"
+            | "FORMATMESSAGE"
+            | "FORMAT"
+            | "TRY_CAST"
+            | "TRY_CONVERT"
+            | "TRY_PARSE"
+            | "PARSE"
+            | "EOMONTH"
+            | "DATEFROMPARTS"
+            | "TIMEFROMPARTS"
+            | "SYSDATETIME"
+            | "SYSUTCDATETIME"
+            | "SYSDATETIMEOFFSET"
     )
     // Intentionally excludes: TIMESTAMP, ACTION, ID, TEXT, IMAGE, DATE, TIME, etc.
     // as these are commonly used as column names
