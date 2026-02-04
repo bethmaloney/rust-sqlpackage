@@ -37,22 +37,19 @@ impl ColumnRegistry {
         let mut registry = Self::new();
 
         for element in &model.elements {
-            match element {
-                ModelElement::Table(table) => {
-                    let table_key = format!("[{}].[{}]", table.schema, table.name).to_lowercase();
+            // Views don't have explicit column definitions in ViewElement,
+            // so we can't extract columns from them directly.
+            // Future enhancement: parse view SELECT to extract projected columns.
+            if let ModelElement::Table(table) = element {
+                let table_key = format!("[{}].[{}]", table.schema, table.name).to_lowercase();
 
-                    let columns: HashSet<String> = table
-                        .columns
-                        .iter()
-                        .map(|c| c.name.to_lowercase())
-                        .collect();
+                let columns: HashSet<String> = table
+                    .columns
+                    .iter()
+                    .map(|c| c.name.to_lowercase())
+                    .collect();
 
-                    registry.table_columns.insert(table_key, columns);
-                }
-                // Views don't have explicit column definitions in ViewElement,
-                // so we can't extract columns from them directly.
-                // Future enhancement: parse view SELECT to extract projected columns.
-                _ => {}
+                registry.table_columns.insert(table_key, columns);
             }
         }
 
@@ -63,6 +60,7 @@ impl ColumnRegistry {
     ///
     /// Both `table_ref` and `column` are compared case-insensitively.
     /// `table_ref` should be in format `[schema].[table]` (brackets required).
+    #[cfg(test)]
     pub fn table_has_column(&self, table_ref: &str, column: &str) -> bool {
         let key = table_ref.to_lowercase();
         let col = column.to_lowercase();
@@ -98,13 +96,6 @@ impl ColumnRegistry {
     #[cfg(test)]
     pub fn table_count(&self) -> usize {
         self.table_columns.len()
-    }
-
-    /// Get the columns for a specific table (for testing)
-    #[cfg(test)]
-    pub fn get_columns(&self, table_ref: &str) -> Option<&HashSet<String>> {
-        let key = table_ref.to_lowercase();
-        self.table_columns.get(&key)
     }
 }
 

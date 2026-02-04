@@ -2155,9 +2155,9 @@ impl TableAliasTokenParser {
             // Don't overwrite if already captured by a more specific pattern
             // Note: This can cause issues with same-named aliases in different scopes,
             // but scope-tracking is complex. The first definition usually wins.
-            if !table_aliases.contains_key(&alias_lower) {
-                table_aliases.insert(alias_lower, table_ref.clone());
-            }
+            table_aliases
+                .entry(alias_lower)
+                .or_insert_with(|| table_ref.clone());
         }
 
         // Always add the table name itself as a "self-alias", even when there's an explicit alias.
