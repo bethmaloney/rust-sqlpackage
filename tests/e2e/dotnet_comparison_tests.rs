@@ -4843,6 +4843,7 @@ fn test_canonical_comparison_all_fixtures() {
     let mut exact_match = 0;
     let mut partial_match = 0;
     let mut errors_count = 0;
+    let mut skipped = 0;
 
     for fixture in &fixtures {
         let fixture_path = Path::new("tests/fixtures").join(fixture);
@@ -4862,12 +4863,22 @@ fn test_canonical_comparison_all_fixtures() {
 
         let sqlproj_path = sqlproj_files[0].path();
         let project_name = sqlproj_path.file_stem().unwrap().to_str().unwrap();
-        let dotnet_dacpac = fixture_path.join(format!("bin/Debug/{}.dacpac", project_name));
 
-        if !dotnet_dacpac.exists() {
-            println!("{:40} SKIP (no DotNet dacpac)", fixture);
-            continue;
-        }
+        // Use the prebuilt dotnet dacpac cache (builds on-demand if dotnet available)
+        let dotnet_dacpac = match get_or_build_dotnet_dacpac(fixture) {
+            Ok(path) => path,
+            Err(e) => {
+                // Fall back to checking fixture's bin/Debug directory
+                let fallback_path = fixture_path.join(format!("bin/Debug/{}.dacpac", project_name));
+                if fallback_path.exists() {
+                    fallback_path
+                } else {
+                    println!("{:40} SKIP ({})", fixture, e);
+                    skipped += 1;
+                    continue;
+                }
+            }
+        };
 
         // Build Rust dacpac
         let temp_dir = match tempfile::tempdir() {
@@ -4952,6 +4963,9 @@ fn test_canonical_comparison_all_fixtures() {
         }
     );
     println!("Errors: {}", errors_count);
+    if skipped > 0 {
+        println!("Skipped: {} (no DotNet dacpac available)", skipped);
+    }
 }
 
 // =============================================================================

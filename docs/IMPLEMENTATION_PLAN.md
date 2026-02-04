@@ -16,10 +16,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Relationships | 47/48 | 97.9% |
 | Layer 4 (Ordering) | 47/48 | 97.9% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 20/48 | 41.7% |
+| Layer 7 (Canonical XML) | 19/48 | 39.6% |
 
 **Remaining Work:**
-- Layer 7: element ordering, formatting differences (28/48 failing)
+- Layer 7: element ordering differences between Rust and DotNet (29/48 failing)
 - `body_dependencies_aliases`: 65 relationship ordering errors (not affecting functionality)
 
 **Excluded Fixtures:** `external_reference`, `unresolved_reference` (DotNet fails to build with SQL71501)
@@ -95,12 +95,38 @@ if let Some(d) = disambiguator {
 
 ---
 
+## Phase 51: Layer 7 Canonical Comparison Test Fix (1 task) - COMPLETE
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 51.1 | Update test_canonical_comparison_all_fixtures to use prebuilt DotNet dacpac cache | ✅ | Now tests all 48 fixtures instead of only 8 |
+
+**Problem Statement:**
+
+The `test_canonical_comparison_all_fixtures` test was only testing 8 fixtures because it looked for DotNet dacpacs in `tests/fixtures/*/bin/Debug/` instead of using the prebuilt cache in `target/dotnet-fixtures/`.
+
+**Solution:**
+
+Updated the test to use `get_or_build_dotnet_dacpac()` function which leverages the prebuilt cache, with fallback to fixture's bin/Debug directory.
+
+**Result:**
+- Before: 4/8 exact match (50%) - only fixtures with pre-committed dacpacs
+- After: 19/48 exact match (39.6%) - all fixtures with DotNet builds
+
+**Files Modified:** `tests/e2e/dotnet_comparison_tests.rs`
+
+**Remaining Layer 7 Work:**
+
+The 29 failing fixtures all show element ordering differences. Root cause: DotNet processes SQL files in a different order than Rust, resulting in different element sequences in model.xml. The elements themselves are correct (verified by Layer 1-4 parity), but their order differs.
+
+---
+
 ## Known Issues
 
 | Issue | Location | Status |
 |-------|----------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | 65 errors (ordering differences, not affecting functionality) |
-| Layer 7 parity remaining | model_xml | 28/48 failing due to element ordering, formatting differences |
+| Layer 7 parity remaining | model_xml | 29/48 failing due to element ordering differences |
 
 ---
 
@@ -162,6 +188,6 @@ Created `ColumnRegistry` to map tables to columns. Resolution: 1 match → resol
 - **Parity Achievement (Phase 14):** L1-L3 100%, Relationships 97.9%
 - **Performance (Phase 16):** 116x/42x faster than DotNet cold/warm
 - **Parser Modernization (Phases 15, 20):** All regex replaced with token-based parsing
-- **XML Parity (Phases 22-48):** Layer 7 improved from 0% to 41.7%
+- **XML Parity (Phases 22-48):** Layer 7 improved from 0% to 39.6%
 
 </details>
