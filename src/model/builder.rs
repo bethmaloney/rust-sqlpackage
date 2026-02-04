@@ -35,8 +35,8 @@ use super::{
 /// Static schema name for "dbo" - avoids allocation for the most common schema
 const DBO_SCHEMA: &str = "dbo";
 
-/// Type alias for constraint tracking: maps (table_schema, table_name) to Vec<(element_index, is_inline, source_order)>
-type TableConstraintMap = HashMap<(String, String), Vec<(usize, bool, u32)>>;
+/// Type alias for constraint tracking: maps (table_schema, table_name) to Vec<(element_index, is_inline, emit_name, source_order)>
+type TableConstraintMap = HashMap<(String, String), Vec<(usize, bool, bool, u32)>>;
 
 /// Builder for creating `ConstraintElement` instances with common defaults.
 ///
@@ -1098,7 +1098,7 @@ fn assign_inline_constraint_disambiguators(
     // - Multiple named constraints per table: constraints get Annotation (except last), last gets AttachedAnnotation
 
     // Phase 1: Collect constraint info per table (before assigning any disambiguators)
-    // Map: (table_schema, table_name) -> Vec<(element_index, is_inline, source_order)>
+    // Map: (table_schema, table_name) -> Vec<(element_index, is_inline, emit_name, source_order)>
     // DotNet assigns disambiguators in source order (order constraints appear in CREATE TABLE),
     // so we track source_order to sort constraints before assigning disambiguators.
     let mut table_constraints: TableConstraintMap = HashMap::new();
@@ -1112,6 +1112,7 @@ fn assign_inline_constraint_disambiguators(
             table_constraints.entry(table_key).or_default().push((
                 idx,
                 constraint.is_inline,
+                constraint.emit_name,
                 constraint.source_order,
             ));
         }
@@ -1120,23 +1121,46 @@ fn assign_inline_constraint_disambiguators(
     // Sort constraints per table by element index (sorted/alphabetical order) for consistent
     // processing. Source order is used specifically for the 2-named-constraint case later.
     for constraints in table_constraints.values_mut() {
-        constraints.sort_by_key(|(idx, _, _)| *idx);
+        constraints.sort_by_key(|(idx, _, _, _)| *idx);
     }
 
     // Phase 2: Determine which elements will carry Annotation vs AttachedAnnotation
-    // For single named constraint tables, track that table carries the Annotation
+    // For single named constraint tables, track who carries the Annotation:
+    // - Single named TABLE-LEVEL constraint: table carries Annotation
+    // - Single named INLINE constraint: column carries Annotation
     let mut table_carries_annotation: HashMap<(String, String), bool> = HashMap::new();
+    // Track single named inline constraint info: (constraint_index, constraint_columns)
+    // Column needs this info to write Annotation element
+    let mut single_named_inline_info: HashMap<(String, String), (usize, Vec<String>)> =
+        HashMap::new();
 
     for (table_key, constraints) in &table_constraints {
-        // Count named (non-inline) constraints
+        // Count named constraints (emit_name = true).
+        // This includes table-level constraints AND inline constraints with CONSTRAINT [name].
         let named_count = constraints
             .iter()
-            .filter(|(_, is_inline, _)| !is_inline)
+            .filter(|(_, _, emit_name, _)| *emit_name)
             .count();
 
         if named_count == 1 {
-            // Single named constraint: table gets Annotation
-            table_carries_annotation.insert(table_key.clone(), true);
+            // Find the single named constraint
+            let (idx, is_inline, _, _) = constraints
+                .iter()
+                .find(|(_, _, emit_name, _)| *emit_name)
+                .unwrap();
+
+            if *is_inline {
+                // Single named INLINE constraint: column carries Annotation
+                // Get the constraint's column info from the elements
+                if let Some(ModelElement::Constraint(c)) = elements.get(*idx) {
+                    let col_names: Vec<String> =
+                        c.columns.iter().map(|col| col.name.clone()).collect();
+                    single_named_inline_info.insert(table_key.clone(), (*idx, col_names));
+                }
+            } else {
+                // Single named TABLE-LEVEL constraint: table carries Annotation
+                table_carries_annotation.insert(table_key.clone(), true);
+            }
         }
         // For 0 or multiple named constraints, table doesn't carry primary Annotation
     }
@@ -1170,26 +1194,28 @@ fn assign_inline_constraint_disambiguators(
         HashMap::new();
 
     for (table_key, constraints) in &table_constraints {
+        // Count named constraints (emit_name = true)
         let named_count = constraints
             .iter()
-            .filter(|(_, is_inline, _)| !is_inline)
+            .filter(|(_, _, emit_name, _)| *emit_name)
             .count();
-        let inline_count = constraints
+        // Count unnamed inline constraints (emit_name = false)
+        let unnamed_inline_count = constraints
             .iter()
-            .filter(|(_, is_inline, _)| *is_inline)
+            .filter(|(_, _, emit_name, _)| !*emit_name)
             .count();
 
-        if named_count == 2 && inline_count == 0 {
+        if named_count == 2 && unnamed_inline_count == 0 {
             // Pre-assign disambiguators for 2-named-constraint tables in SOURCE ORDER
             let mut named: Vec<_> = constraints
                 .iter()
-                .filter(|(_, is_inline, _)| !is_inline)
+                .filter(|(_, _, emit_name, _)| *emit_name)
                 .cloned()
                 .collect();
-            named.sort_by_key(|(_, _, source_order)| *source_order);
+            named.sort_by_key(|(_, _, _, source_order)| *source_order);
 
             let mut assignments = Vec::new();
-            for (idx, _, _) in named {
+            for (idx, _, _, _) in named {
                 let disambiguator = next_disambiguator;
                 next_disambiguator += 1;
                 assignments.push((idx, disambiguator));
@@ -1198,7 +1224,20 @@ fn assign_inline_constraint_disambiguators(
         }
     }
 
-    // First, iterate in sorted order and assign disambiguators to elements carrying Annotations
+    // Pass A: Assign disambiguators to FullTextIndex elements FIRST.
+    // DotNet assigns FullTextIndex disambiguators before inline constraints,
+    // regardless of alphabetical sort order. This is needed because FullTextIndex
+    // elements have names like "[dbo].[Documents]" which sort AFTER inline
+    // constraints with empty names, but DotNet gives them lower disambiguator values.
+    for (idx, element) in elements.iter().enumerate() {
+        if let ModelElement::FullTextIndex(_) = element {
+            let disambiguator = next_disambiguator;
+            next_disambiguator += 1;
+            element_disambiguators.insert(idx, disambiguator);
+        }
+    }
+
+    // Pass B: Iterate in sorted order and assign disambiguators to tables and constraints
     for (idx, element) in elements.iter().enumerate() {
         match element {
             ModelElement::Table(table) => {
@@ -1216,34 +1255,52 @@ fn assign_inline_constraint_disambiguators(
                     constraint.table_name.clone(),
                 );
 
-                if constraint.is_inline {
-                    // Inline constraints always get Annotation
+                // Unnamed inline constraints (no CONSTRAINT name in SQL) always get Annotation.
+                // Named constraints (both table-level and inline with CONSTRAINT name) follow
+                // the single/multiple named constraint rules.
+                let is_unnamed_inline = constraint.is_inline && !constraint.emit_name;
+
+                if is_unnamed_inline {
+                    // Unnamed inline constraints always get Annotation
                     let disambiguator = next_disambiguator;
                     next_disambiguator += 1;
                     element_disambiguators.insert(idx, disambiguator);
                     constraint_uses_annotation.insert(idx, true);
                 } else {
-                    // Named constraint
+                    // Named constraint (table-level or inline with explicit CONSTRAINT name)
                     let constraints_for_table = table_constraints.get(&table_key);
+                    // Count named constraints (emit_name = true)
                     let named_count = constraints_for_table
-                        .map(|c| c.iter().filter(|(_, is_inline, _)| !is_inline).count())
+                        .map(|c| c.iter().filter(|(_, _, emit_name, _)| *emit_name).count())
                         .unwrap_or(0);
-                    let inline_count = constraints_for_table
-                        .map(|c| c.iter().filter(|(_, is_inline, _)| *is_inline).count())
+                    // Count unnamed inline constraints (emit_name = false)
+                    let unnamed_inline_count = constraints_for_table
+                        .map(|c| c.iter().filter(|(_, _, emit_name, _)| !*emit_name).count())
                         .unwrap_or(0);
 
                     if named_count == 1 {
                         // Single named constraint: constraint gets AttachedAnnotation
-                        // (the table got the disambiguator already)
-                        // Use the same disambiguator as the table
-                        if let Some(&table_idx) = table_indices.get(&table_key) {
-                            if let Some(&disambiguator) = element_disambiguators.get(&table_idx) {
-                                element_disambiguators.insert(idx, disambiguator);
+                        // The annotation owner depends on whether this is inline or table-level:
+                        // - Table-level: table got the disambiguator already, use same
+                        // - Inline: we assign a new disambiguator, column will use it for Annotation
+                        if constraint.is_inline {
+                            // Single named INLINE constraint: assign new disambiguator
+                            // The column will carry the Annotation with this disambiguator
+                            let disambiguator = next_disambiguator;
+                            next_disambiguator += 1;
+                            element_disambiguators.insert(idx, disambiguator);
+                        } else {
+                            // Single named TABLE-LEVEL constraint: use table's disambiguator
+                            if let Some(&table_idx) = table_indices.get(&table_key) {
+                                if let Some(&disambiguator) = element_disambiguators.get(&table_idx)
+                                {
+                                    element_disambiguators.insert(idx, disambiguator);
+                                }
                             }
                         }
                         constraint_uses_annotation.insert(idx, false);
-                    } else if named_count == 2 && inline_count == 0 {
-                        // Exactly 2 named constraints with NO inline constraints:
+                    } else if named_count == 2 && unnamed_inline_count == 0 {
+                        // Exactly 2 named constraints with NO unnamed inline constraints:
                         // DotNet special case: both constraints get AttachedAnnotation,
                         // and the table gets 2 Annotation elements.
                         // Use pre-assigned disambiguator (assigned in source order)
@@ -1256,18 +1313,18 @@ fn assign_inline_constraint_disambiguators(
                         }
                         constraint_uses_annotation.insert(idx, false);
                     } else {
-                        // Multiple named constraints (3+, or 2 with inline constraints)
+                        // Multiple named constraints (3+, or 2 with unnamed inline constraints)
                         // Find this constraint's position among named constraints for this table
                         let named_constraints: Vec<_> = table_constraints
                             .get(&table_key)
                             .unwrap()
                             .iter()
-                            .filter(|(_, is_inline, _)| !is_inline)
+                            .filter(|(_, _, emit_name, _)| *emit_name)
                             .collect();
 
                         let position = named_constraints
                             .iter()
-                            .position(|(c_idx, _, _)| *c_idx == idx)
+                            .position(|(c_idx, _, _, _)| *c_idx == idx)
                             .unwrap();
 
                         if position < named_constraints.len() - 1 {
@@ -1288,10 +1345,7 @@ fn assign_inline_constraint_disambiguators(
                 }
             }
             ModelElement::FullTextIndex(_) => {
-                // Fulltext indexes get their own disambiguators
-                let disambiguator = next_disambiguator;
-                next_disambiguator += 1;
-                element_disambiguators.insert(idx, disambiguator);
+                // Already handled in Pass A above
             }
             _ => {}
         }
@@ -1325,17 +1379,26 @@ fn assign_inline_constraint_disambiguators(
             );
 
             if constraint.is_inline {
-                // Inline constraints: link to column(s) for AttachedAnnotation
-                if let Some(d) = disambiguator {
-                    for col in &constraint.columns {
-                        let key = (
-                            constraint.table_schema.clone(),
-                            constraint.table_name.clone(),
-                            col.name.clone(),
-                        );
-                        column_annotations.entry(key).or_default().push(d);
+                // For inline constraints, only add column AttachedAnnotation for UNNAMED inline constraints.
+                // Named inline constraints (single named constraint case) have the column carry Annotation
+                // instead of AttachedAnnotation, which is handled separately via inline_constraint_annotation.
+                let is_single_named_inline =
+                    single_named_inline_info.contains_key(&table_key) && constraint.emit_name;
+
+                if !is_single_named_inline {
+                    // Unnamed inline constraints: link to column(s) for AttachedAnnotation
+                    if let Some(d) = disambiguator {
+                        for col in &constraint.columns {
+                            let key = (
+                                constraint.table_schema.clone(),
+                                constraint.table_name.clone(),
+                                col.name.clone(),
+                            );
+                            column_annotations.entry(key).or_default().push(d);
+                        }
                     }
                 }
+                // For single named inline constraint, the column gets Annotation (handled in Phase 5)
             } else {
                 // Named constraints: set up table annotations
                 if let Some(d) = disambiguator {
@@ -1427,6 +1490,22 @@ fn assign_inline_constraint_disambiguators(
                 );
                 if let Some(annotations) = column_annotations.get(&key) {
                     column.attached_annotations = annotations.clone();
+                }
+            }
+
+            // For single named INLINE constraint, assign Annotation to the first column
+            // DotNet puts Annotation on the column, not the table, for inline constraints
+            if let Some((constraint_idx, col_names)) = single_named_inline_info.get(&table_key) {
+                if let Some(&disambiguator) = element_disambiguators.get(constraint_idx) {
+                    // Find the first column mentioned in the constraint
+                    if let Some(col_name) = col_names.first() {
+                        for column in &mut table.columns {
+                            if column.name == *col_name {
+                                column.inline_constraint_annotation = Some(disambiguator);
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1532,6 +1611,7 @@ fn column_from_def(col: &ColumnDef, _schema: &str, _table_name: &str) -> ColumnE
         precision,
         scale,
         attached_annotations: Vec::new(), // Populated during post-processing
+        inline_constraint_annotation: None, // Populated during post-processing
         computed_expression,
         is_persisted,
         collation,
@@ -1715,6 +1795,7 @@ fn column_from_fallback_table(
         precision,
         scale,
         attached_annotations: Vec::new(), // Populated during post-processing
+        inline_constraint_annotation: None, // Populated during post-processing
         computed_expression: col.computed_expression.clone(),
         is_persisted: col.is_persisted,
         collation: col.collation.clone(),

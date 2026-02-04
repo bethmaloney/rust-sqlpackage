@@ -336,6 +336,18 @@ pub(crate) fn write_column_with_type<W: Write>(
         writer.write_event(Event::Empty(annotation))?;
     }
 
+    // Write Annotation element for single named inline constraint
+    // DotNet pattern: when a table has exactly one named inline constraint,
+    // the column (not the table) carries the Annotation element
+    if let Some(disambiguator) = column.inline_constraint_annotation {
+        let disamb_str = disambiguator.to_string();
+        let annotation = BytesStart::new("Annotation").with_attributes([
+            ("Type", "SqlInlineConstraintAnnotation"),
+            ("Disambiguator", disamb_str.as_str()),
+        ]);
+        writer.write_event(Event::Empty(annotation))?;
+    }
+
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     Ok(())
@@ -598,6 +610,7 @@ mod tests {
             is_filestream: false,
             default_value: None,
             attached_annotations: vec![],
+            inline_constraint_annotation: None,
             collation: None,
         };
         let mut writer = create_test_writer();
@@ -626,6 +639,7 @@ mod tests {
             is_filestream: false,
             default_value: None,
             attached_annotations: vec![],
+            inline_constraint_annotation: None,
             collation: None,
         };
         let mut writer = create_test_writer();
@@ -655,6 +669,7 @@ mod tests {
                 is_filestream: false,
                 default_value: None,
                 attached_annotations: vec![],
+                inline_constraint_annotation: None,
                 collation: None,
             }],
             is_node: false,

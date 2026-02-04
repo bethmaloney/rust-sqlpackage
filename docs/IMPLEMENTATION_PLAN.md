@@ -9,11 +9,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phases 1-50 complete. Full parity: 46/48 (95.8%).**
 
 **Current Work:**
-- Phase 50.6 complete: Source-order disambiguator assignment for 2-named-constraint tables
+- Phase 50.7 complete: Fix FullTextIndex and single named inline constraint annotation
 - WideWorldImporters builds successfully
 
 **Remaining Work:**
-- Layer 7 remaining issues: element ordering, formatting differences (18/48 passing)
+- Layer 7 remaining issues: element ordering, formatting differences (19/48 passing)
 - Body dependency ordering/deduplication differences (65 relationship errors in `body_dependencies_aliases` fixture - not affecting functionality)
 - `stress_test` fixture: Layer 4 ordering errors (large fixture with 40+ tables exposes element ordering differences)
 
@@ -25,7 +25,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Relationships | 47/48 | 97.9% |
 | Layer 4 (Ordering) | 47/48 | 97.9% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 18/48 | 37.5% |
+| Layer 7 (Canonical XML) | 19/48 | 39.6% |
 
 ### Excluded Fixtures
 
@@ -203,6 +203,35 @@ For tables with exactly 2 named constraints (like a PRIMARY KEY and FOREIGN KEY)
 - `src/model/builder.rs`: Track source order in constraint creation, pre-assign disambiguators
 
 **Result:** Layer 7 parity improved from 17/48 (35.4%) to 18/48 (37.5%)
+
+### Phase 50.7: Fix FullTextIndex and Single Named Inline Constraint Annotation (3 tasks) - COMPLETE 2026-02-04
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 50.7.1 | Process FullTextIndex disambiguators before inline constraints | ✅ | DotNet assigns FTI disambiguators first |
+| 50.7.2 | Fix single named inline constraint annotation | ✅ | Column gets Annotation, not table |
+| 50.7.3 | Update constraint tracking to use emit_name instead of is_inline | ✅ | Uses emit_name for "named" classification |
+
+**Problem Statement:**
+
+Two issues caused `fulltext_index` fixture to fail L7:
+
+1. FullTextIndex elements were getting higher disambiguator values than inline constraints, but DotNet assigns them first
+2. For single named inline constraints (like `CONSTRAINT [PK_Foo] PRIMARY KEY` in column definition), DotNet puts Annotation on the column, not the table
+
+**Solution:**
+
+1. Added Pass A to assign FullTextIndex disambiguators before constraints
+2. Distinguished between single named inline vs table-level constraints for annotation placement
+3. Added `inline_constraint_annotation` field to `ColumnElement`
+
+**Files Modified:**
+- `src/model/builder.rs`: Pass A for FullTextIndex disambiguators, constraint tracking changes
+- `src/model/elements.rs`: Added `inline_constraint_annotation` field to `ColumnElement`
+- `src/dacpac/model_xml/table_writer.rs`: Handle column-level annotation for inline constraints
+- Plus test helper files
+
+**Result:** Layer 7 improved from 18/48 (37.5%) to 19/48 (39.6%)
 
 ---
 

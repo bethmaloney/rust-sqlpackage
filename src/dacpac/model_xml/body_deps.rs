@@ -4523,6 +4523,7 @@ mod tests {
                     precision: None,
                     scale: None,
                     attached_annotations: vec![],
+                    inline_constraint_annotation: None,
                     computed_expression: None,
                     is_persisted: false,
                     collation: None,

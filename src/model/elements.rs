@@ -194,6 +194,11 @@ pub struct ColumnElement {
     /// Each u32 is a disambiguator linking this column to its inline constraint(s)
     /// A column can have multiple (e.g., both a CHECK and DEFAULT constraint)
     pub attached_annotations: Vec<u32>,
+    /// Annotation (not AttachedAnnotation) for single named inline constraint.
+    /// DotNet pattern: when a table has exactly one named inline constraint,
+    /// the column (not the table) carries the Annotation element.
+    /// The constraint then carries AttachedAnnotation with the same disambiguator.
+    pub inline_constraint_annotation: Option<u32>,
     /// Computed column expression (e.g., "[Qty] * [Price]")
     /// If Some, this is a computed column (SqlComputedColumn) instead of SqlSimpleColumn
     pub computed_expression: Option<String>,
