@@ -67,7 +67,7 @@ Do NOT commit directly - the rebase will create the commit." | claude -p \
                 --output-format=stream-json \
                 --model sonnet \
                 --verbose \
-                2>&1 | tee >(claude-stream-format > /dev/stderr)
+                2>&1 | tee >(claude-stream-format > /dev/stderr) > /dev/null
 
             # Check if rebase completed
             if git status | grep -q "rebase in progress"; then
@@ -160,7 +160,7 @@ Run \`cargo clippy --all-targets -- -D warnings\` to verify fixes. Commit any ch
                 --output-format=stream-json \
                 --model sonnet \
                 --verbose \
-                2>&1 | tee >(claude-stream-format > /dev/stderr)
+                2>&1 | tee >(claude-stream-format > /dev/stderr) > /dev/null
 
             echo -e "\nRetrying clippy..."
             if cargo clippy --all-targets -- -D warnings 2>&1; then
