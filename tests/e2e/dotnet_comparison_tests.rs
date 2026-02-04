@@ -4862,7 +4862,7 @@ fn test_canonical_comparison_all_fixtures() {
 
         let sqlproj_path = sqlproj_files[0].path();
         let project_name = sqlproj_path.file_stem().unwrap().to_str().unwrap();
-        let dotnet_dacpac = fixture_path.join(format!("obj/Debug/{}.dacpac", project_name));
+        let dotnet_dacpac = fixture_path.join(format!("bin/Debug/{}.dacpac", project_name));
 
         if !dotnet_dacpac.exists() {
             println!("{:40} SKIP (no DotNet dacpac)", fixture);

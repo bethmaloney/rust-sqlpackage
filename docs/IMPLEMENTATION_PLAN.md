@@ -298,7 +298,17 @@ Created `ColumnRegistry` to map tables to their columns, threaded it through the
 | Issue | Location | Status |
 |-------|----------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | 65 errors (ordering/deduplication differences, not affecting functionality) |
-| Layer 7 parity remaining | model_xml | 34/48 failing due to element ordering, formatting differences |
+| Layer 7 parity remaining | model_xml | 28/48 failing due to element ordering, formatting differences |
+
+## Bug Fixes
+
+### Fix test_canonical_comparison_all_fixtures dacpac path (2026-02-04)
+
+**Problem:** The `test_canonical_comparison_all_fixtures` test was looking for DotNet dacpacs in `tests/fixtures/*/obj/Debug/` instead of the correct `tests/fixtures/*/bin/Debug/` directory, causing all fixtures to be skipped.
+
+**Fix:** Changed line 4865 in `tests/e2e/dotnet_comparison_tests.rs` from `obj/Debug/` to `bin/Debug/`.
+
+**Note:** This test is different from `test_parity_all_fixtures` which uses the `target/dotnet-fixtures/` cache and was already working correctly.
 
 ---
 
