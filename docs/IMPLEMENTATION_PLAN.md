@@ -9,10 +9,11 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phases 1-49 complete. Full parity: 46/48 (95.8%).**
 
 **Current Work:**
-- Phase 50: Fix schema-aware resolution gaps (remove fallback, add view support, complete testing)
+- Phase 50 complete through 50.4 (storage elements)
+- Phase 50.5: Security statement support for WideWorldImporters (pending)
 
 **Remaining Work:**
-- Phase 50: Remove unsafe fallback behavior, add view columns to registry, WideWorldImporters testing
+- Phase 50.5: Handle security statements and GO-spanning comments for WideWorldImporters
 - Layer 7 remaining issues: element ordering, formatting differences (17/48 passing)
 - Body dependency ordering/deduplication differences (65 relationship errors in `body_dependencies_aliases` fixture - not affecting functionality)
 
@@ -37,7 +38,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ## Phase 50: Fix Schema-Aware Resolution Gaps
 
-**Status:** PHASE 50.2 COMPLETE
+**Status:** PHASE 50.4 COMPLETE
 
 **Goal:** Address gaps identified in Phase 49 review - remove unsafe fallback behavior, add view support, and complete deferred testing.
 
@@ -85,14 +86,34 @@ When 0 tables in the registry have the column, the code now returns `None` inste
 - Added 6 new unit tests for view column extraction, aliases, SELECT *, and resolution
 - All 992 library tests + 500 unit tests pass with no regressions
 
-### Phase 50.3: Complete Deferred Testing (4 tasks)
+### Phase 50.3: Complete Deferred Testing (4 tasks) - PARTIALLY COMPLETE
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 50.3.1 | Clone and build WideWorldImporters with rust-sqlpackage | ⬜ | Verify build succeeds |
-| 50.3.2 | Deploy WideWorldImporters dacpac and verify no false positive errors | ⬜ | Use sqlpackage to deploy to local SQL Server |
+| 50.3.1 | Clone and build WideWorldImporters with rust-sqlpackage | 🔄 | Blocked by Security/Permissions.sql - see Phase 50.5 |
+| 50.3.2 | Deploy WideWorldImporters dacpac and verify no false positive errors | ⬜ | Pending 50.3.1 |
 | 50.3.3 | Add explicit test for table variable column NOT resolving to global table | ✅ | Added `test_table_variable_column_does_not_resolve_to_global_table` in body_deps.rs |
 | 50.3.4 | Add explicit test for CTE column NOT resolving to global table | ✅ | Added `test_cte_column_does_not_resolve_to_global_table` in body_deps.rs |
+
+### Phase 50.4: Add Storage Element Support (7 tasks) - COMPLETE 2026-02-04
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 50.4.1 | Add ModelElement variants for Filegroup, PartitionFunction, PartitionScheme | ✅ | Added to elements.rs |
+| 50.4.2 | Add FallbackStatementType variants for storage elements | ✅ | Added to tsql_parser.rs |
+| 50.4.3 | Create storage_parser.rs with token-based parsers | ✅ | parse_filegroup/partition_function/partition_scheme_tokens |
+| 50.4.4 | Update model builder to handle storage elements | ✅ | Added handling in builder.rs |
+| 50.4.5 | Implement XML writers for storage elements | ✅ | write_filegroup/partition_function/partition_scheme in other_writers.rs |
+| 50.4.6 | Add unit tests for storage parsers | ✅ | 12 tests covering all variants |
+| 50.4.7 | Verify all tests pass | ✅ | 1506 tests passing |
+
+**Implementation Notes:**
+- Created `src/parser/storage_parser.rs` with token-based parsers for:
+  - `ALTER DATABASE ... ADD FILEGROUP [name] [CONTAINS MEMORY_OPTIMIZED_DATA]`
+  - `CREATE PARTITION FUNCTION [name](type) AS RANGE RIGHT/LEFT FOR VALUES (...)`
+  - `CREATE PARTITION SCHEME [name] AS PARTITION [function] [ALL] TO (...)`
+- Storage elements are NOT schema-qualified (use `[name]` not `[schema].[name]`)
+- WideWorldImporters storage files now parse successfully
 
 ### Implementation Notes
 
@@ -115,11 +136,40 @@ When 0 tables in the registry have the column, the code now returns `None` inste
 just test                                              # All tests
 cargo test --lib column_registry                       # Registry tests
 cargo test --test e2e_tests test_parity_all_fixtures   # Parity tests
+cargo test --lib storage                               # Storage parser tests
 
 # WideWorldImporters testing
 git clone https://github.com/microsoft/sql-server-samples.git /tmp/sql-samples
 rust-sqlpackage build --project /tmp/sql-samples/samples/databases/wide-world-importers/wwi-ssdt/wwi-ssdt/WideWorldImporters.sqlproj
 ```
+
+### Phase 50.5: Security Statement Support (Future Work)
+
+**Status:** PENDING
+
+**Problem:** WideWorldImporters build fails on `Security/Permissions.sql` with:
+```
+Error: SQL parse error in Security/Permissions.sql at line 2: Unexpected EOF while in a multi-line comment
+```
+
+**Root Cause:** The file has a block comment that spans a GO batch separator:
+```sql
+/*
+GRANT VIEW ANY COLUMN ENCRYPTION KEY DEFINITION TO PUBLIC;
+...
+GO   <-- GO inside comment creates unterminated comment in first batch
+...
+*/
+```
+
+**Additional Issues:**
+- File contains `CREATE LOGIN`, `CREATE USER`, `GRANT` statements not currently supported
+- These are security/deployment statements, not schema elements typically in dacpac
+
+**Potential Solutions:**
+1. Handle multi-line comments spanning GO separators (pre-strip comments before batch splitting)
+2. Add fallback parsing for security statements (CREATE LOGIN, CREATE USER, GRANT)
+3. Skip security statements entirely as they're deployment-time, not schema definitions
 
 ---
 

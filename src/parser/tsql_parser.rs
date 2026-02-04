@@ -32,6 +32,9 @@ use super::statement_parser::{
     try_parse_cte_dml_tokens, try_parse_drop_tokens, try_parse_generic_create_tokens,
     try_parse_merge_output_tokens, try_parse_xml_update_tokens,
 };
+use super::storage_parser::{
+    parse_filegroup_tokens, parse_partition_function_tokens, parse_partition_scheme_tokens,
+};
 use super::table_type_parser::parse_create_table_type_tokens;
 use super::trigger_parser::parse_create_trigger_tokens;
 use super::tsql_dialect::ExtendedTsqlDialect;
@@ -360,6 +363,30 @@ pub enum FallbackStatementType {
         table_name: String,
         constraint: ExtractedTableConstraint,
     },
+    /// Filegroup (ALTER DATABASE ... ADD FILEGROUP)
+    Filegroup {
+        name: String,
+        /// Whether this filegroup contains memory-optimized data
+        contains_memory_optimized_data: bool,
+    },
+    /// Partition function (CREATE PARTITION FUNCTION)
+    PartitionFunction {
+        name: String,
+        /// Data type of the partition column (e.g., "INT", "DATETIME", "DATE")
+        data_type: String,
+        /// Boundary values that define partitions
+        boundary_values: Vec<String>,
+        /// Whether boundary is RIGHT (true for RANGE RIGHT, false for RANGE LEFT)
+        is_range_right: bool,
+    },
+    /// Partition scheme (CREATE PARTITION SCHEME)
+    PartitionScheme {
+        name: String,
+        /// Name of the partition function this scheme references
+        partition_function: String,
+        /// List of filegroups to map partitions to
+        filegroups: Vec<String>,
+    },
 }
 
 /// Function type detected from SQL
@@ -617,6 +644,40 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
             return Some(FallbackStatementType::FullTextCatalog {
                 name: parsed.name,
                 is_default: parsed.is_default,
+            });
+        }
+    }
+
+    // Check for ALTER DATABASE ... ADD FILEGROUP
+    // Must check before generic ALTER DATABASE handling
+    if sql_upper.contains("ALTER DATABASE") && sql_upper.contains("ADD FILEGROUP") {
+        if let Some(parsed) = parse_filegroup_tokens(sql) {
+            return Some(FallbackStatementType::Filegroup {
+                name: parsed.name,
+                contains_memory_optimized_data: parsed.contains_memory_optimized_data,
+            });
+        }
+    }
+
+    // Check for CREATE PARTITION FUNCTION
+    if sql_upper.contains("CREATE PARTITION FUNCTION") {
+        if let Some(parsed) = parse_partition_function_tokens(sql) {
+            return Some(FallbackStatementType::PartitionFunction {
+                name: parsed.name,
+                data_type: parsed.data_type,
+                boundary_values: parsed.boundary_values,
+                is_range_right: parsed.is_range_right,
+            });
+        }
+    }
+
+    // Check for CREATE PARTITION SCHEME
+    if sql_upper.contains("CREATE PARTITION SCHEME") {
+        if let Some(parsed) = parse_partition_scheme_tokens(sql) {
+            return Some(FallbackStatementType::PartitionScheme {
+                name: parsed.name,
+                partition_function: parsed.partition_function,
+                filegroups: parsed.filegroups,
             });
         }
     }

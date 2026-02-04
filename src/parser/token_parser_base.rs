@@ -464,6 +464,159 @@ impl TokenParser {
 
         None
     }
+
+    // ========================================================================
+    // High-level skip/expect methods for convenience
+    // ========================================================================
+
+    /// Skip a keyword (with whitespace handling). Returns Some(()) if successful.
+    pub fn skip_keyword(&mut self, keyword: &str) -> Option<()> {
+        self.skip_whitespace();
+        if self.check_word_ci(keyword) {
+            self.advance();
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    /// Try to skip a keyword (non-failing). Returns true if skipped.
+    pub fn try_skip_keyword(&mut self, keyword: &str) -> bool {
+        self.skip_whitespace();
+        if self.check_word_ci(keyword) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Skip a symbol (with whitespace handling). Returns Some(()) if successful.
+    pub fn skip_symbol(&mut self, symbol: char) -> Option<()> {
+        self.skip_whitespace();
+        let expected = match symbol {
+            '(' => Token::LParen,
+            ')' => Token::RParen,
+            ',' => Token::Comma,
+            '.' => Token::Period,
+            ';' => Token::SemiColon,
+            _ => return None,
+        };
+        if self.check_token(&expected) {
+            self.advance();
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    /// Skip an identifier and discard the value (for skipping database names etc.)
+    pub fn skip_identifier(&mut self) -> Option<()> {
+        self.skip_whitespace();
+        self.parse_identifier().map(|_| ())
+    }
+
+    /// Expect and return an identifier (with whitespace handling).
+    pub fn expect_identifier(&mut self) -> Option<String> {
+        self.skip_whitespace();
+        self.parse_identifier()
+    }
+
+    /// Expect a data type, which can be simple or include size/precision.
+    ///
+    /// Examples: INT, VARCHAR, DATETIME, DATE, VARCHAR(50), DECIMAL(10,2)
+    pub fn expect_data_type(&mut self) -> Option<String> {
+        self.skip_whitespace();
+
+        // Get the base type name
+        let type_name = self.parse_data_type_simple()?;
+        self.skip_whitespace();
+
+        // Check for type parameters (precision/scale)
+        if self.check_token(&Token::LParen) {
+            let params = self.consume_parenthesized()?;
+            Some(format!("{}{}", type_name, params))
+        } else {
+            Some(type_name)
+        }
+    }
+
+    /// Parse a comma-separated list of string literals within parentheses.
+    ///
+    /// Position should be AFTER the opening paren.
+    /// Stops at closing paren (which it does NOT consume).
+    pub fn parse_string_list(&mut self) -> Option<Vec<String>> {
+        let mut values = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+
+            // Check for closing paren
+            if self.check_token(&Token::RParen) {
+                self.advance();
+                break;
+            }
+
+            // Parse a value (can be string literal or number)
+            if let Some(token) = self.current_token() {
+                match &token.token {
+                    Token::SingleQuotedString(s) => {
+                        values.push(s.clone());
+                        self.advance();
+                    }
+                    Token::Number(n, _) => {
+                        values.push(n.clone());
+                        self.advance();
+                    }
+                    Token::Comma => {
+                        self.advance();
+                        continue;
+                    }
+                    _ => {
+                        // Skip unknown tokens
+                        self.advance();
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        Some(values)
+    }
+
+    /// Parse a comma-separated list of identifiers within parentheses.
+    ///
+    /// Position should be AFTER the opening paren.
+    /// Stops at closing paren (which it does NOT consume).
+    pub fn parse_identifier_list(&mut self) -> Option<Vec<String>> {
+        let mut values = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+
+            // Check for closing paren
+            if self.check_token(&Token::RParen) {
+                self.advance();
+                break;
+            }
+
+            // Check for comma
+            if self.check_token(&Token::Comma) {
+                self.advance();
+                continue;
+            }
+
+            // Parse an identifier
+            if let Some(ident) = self.parse_identifier() {
+                values.push(ident);
+            } else {
+                break;
+            }
+        }
+
+        Some(values)
+    }
 }
 
 #[cfg(test)]

@@ -24,11 +24,12 @@ use crate::project::SqlProject;
 
 use super::{
     ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType,
-    DatabaseModel, ExtendedPropertyElement, FullTextCatalogElement, FullTextColumnElement,
-    FullTextIndexElement, FunctionElement, FunctionType, IndexColumn, IndexElement, ModelElement,
-    ParameterElement, ProcedureElement, RawElement, ScalarTypeElement, SchemaElement,
-    SequenceElement, TableElement, TableTypeColumnElement, TableTypeConstraint, TriggerElement,
-    UserDefinedTypeElement, ViewElement,
+    DatabaseModel, ExtendedPropertyElement, FilegroupElement, FullTextCatalogElement,
+    FullTextColumnElement, FullTextIndexElement, FunctionElement, FunctionType, IndexColumn,
+    IndexElement, ModelElement, ParameterElement, PartitionFunctionElement, PartitionSchemeElement,
+    ProcedureElement, RawElement, ScalarTypeElement, SchemaElement, SequenceElement, TableElement,
+    TableTypeColumnElement, TableTypeConstraint, TriggerElement, UserDefinedTypeElement,
+    ViewElement,
 };
 
 /// Static schema name for "dbo" - avoids allocation for the most common schema
@@ -491,6 +492,42 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         is_update_trigger: *is_update,
                         is_delete_trigger: *is_delete,
                         trigger_type: *trigger_type,
+                    }));
+                }
+                FallbackStatementType::Filegroup {
+                    name,
+                    contains_memory_optimized_data,
+                } => {
+                    // Filegroups are NOT schema-qualified
+                    model.add_element(ModelElement::Filegroup(FilegroupElement {
+                        name: name.clone(),
+                        contains_memory_optimized_data: *contains_memory_optimized_data,
+                    }));
+                }
+                FallbackStatementType::PartitionFunction {
+                    name,
+                    data_type,
+                    boundary_values,
+                    is_range_right,
+                } => {
+                    // Partition functions are NOT schema-qualified
+                    model.add_element(ModelElement::PartitionFunction(PartitionFunctionElement {
+                        name: name.clone(),
+                        data_type: data_type.clone(),
+                        boundary_values: boundary_values.clone(),
+                        is_range_right: *is_range_right,
+                    }));
+                }
+                FallbackStatementType::PartitionScheme {
+                    name,
+                    partition_function,
+                    filegroups,
+                } => {
+                    // Partition schemes are NOT schema-qualified
+                    model.add_element(ModelElement::PartitionScheme(PartitionSchemeElement {
+                        name: name.clone(),
+                        partition_function: partition_function.clone(),
+                        filegroups: filegroups.clone(),
                     }));
                 }
             }

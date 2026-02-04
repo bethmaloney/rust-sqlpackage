@@ -8,8 +8,9 @@ use quick_xml::Writer;
 use std::io::Write;
 
 use crate::model::{
-    DataCompressionType, ExtendedPropertyElement, FullTextCatalogElement, FullTextIndexElement,
-    IndexElement, SequenceElement,
+    DataCompressionType, ExtendedPropertyElement, FilegroupElement, FullTextCatalogElement,
+    FullTextIndexElement, IndexElement, PartitionFunctionElement, PartitionSchemeElement,
+    SequenceElement,
 };
 
 use super::body_deps::BodyDependency;
@@ -375,6 +376,144 @@ pub(crate) fn write_extended_property<W: Write>(
     // Write Host relationship pointing to the target object (table or column)
     let extends_ref = ext_prop.extends_object_ref();
     write_relationship(writer, "Host", &[&extends_ref])?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write a filegroup element to model.xml
+///
+/// Format:
+/// ```xml
+/// <Element Type="SqlFilegroup" Name="[USERDATA]">
+///   <Property Name="IsMemoryOptimized" Value="True" />
+/// </Element>
+/// ```
+pub(crate) fn write_filegroup<W: Write>(
+    writer: &mut Writer<W>,
+    filegroup: &FilegroupElement,
+) -> anyhow::Result<()> {
+    let full_name = format!("[{}]", filegroup.name);
+
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlFilegroup"), ("Name", full_name.as_str())]);
+    writer.write_event(Event::Start(elem))?;
+
+    // Write IsMemoryOptimized property if this filegroup contains memory-optimized data
+    if filegroup.contains_memory_optimized_data {
+        write_property(writer, "IsMemoryOptimized", "True")?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write a partition function element to model.xml
+///
+/// Format:
+/// ```xml
+/// <Element Type="SqlPartitionFunction" Name="[PF_TransactionDate]">
+///   <Property Name="BoundaryIsRight" Value="True" />
+///   <Relationship Name="BoundaryValues">
+///     <Entry><Element Type="SqlPartitionValue"><Property Name="Expression"><Value><![CDATA['01/01/2014']]></Value></Property></Element></Entry>
+///     ...
+///   </Relationship>
+///   <Relationship Name="ParameterType">
+///     <Entry><References ExternalSource="BuiltIns" Name="[date]" /></Entry>
+///   </Relationship>
+/// </Element>
+/// ```
+pub(crate) fn write_partition_function<W: Write>(
+    writer: &mut Writer<W>,
+    partition_func: &PartitionFunctionElement,
+) -> anyhow::Result<()> {
+    let full_name = format!("[{}]", partition_func.name);
+
+    let elem = BytesStart::new("Element").with_attributes([
+        ("Type", "SqlPartitionFunction"),
+        ("Name", full_name.as_str()),
+    ]);
+    writer.write_event(Event::Start(elem))?;
+
+    // Write BoundaryIsRight property (RANGE RIGHT = true)
+    if partition_func.is_range_right {
+        write_property(writer, "BoundaryIsRight", "True")?;
+    }
+
+    // Write BoundaryValues relationship with partition value elements
+    if !partition_func.boundary_values.is_empty() {
+        writer.write_event(Event::Start(
+            BytesStart::new("Relationship").with_attributes([("Name", "BoundaryValues")]),
+        ))?;
+
+        for value in &partition_func.boundary_values {
+            writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+            let elem = BytesStart::new("Element").with_attributes([("Type", "SqlPartitionValue")]);
+            writer.write_event(Event::Start(elem))?;
+
+            // Write Expression property with the boundary value
+            // For string values, wrap in quotes; for numbers, use as-is
+            let expr_value = if value.parse::<i64>().is_ok() || value.parse::<f64>().is_ok() {
+                value.clone()
+            } else {
+                format!("'{}'", value)
+            };
+            write_script_property(writer, "Expression", &expr_value)?;
+
+            writer.write_event(Event::End(BytesEnd::new("Element")))?;
+            writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // Write ParameterType relationship for the data type
+    let type_name = format!("[{}]", partition_func.data_type.to_lowercase());
+    write_type_specifier_builtin(writer, &type_name)?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write a partition scheme element to model.xml
+///
+/// Format:
+/// ```xml
+/// <Element Type="SqlPartitionScheme" Name="[PS_TransactionDate]">
+///   <Relationship Name="FileGroups">
+///     <Entry><References Name="[USERDATA]" /></Entry>
+///     ...
+///   </Relationship>
+///   <Relationship Name="PartitionFunction">
+///     <Entry><References Name="[PF_TransactionDate]" /></Entry>
+///   </Relationship>
+/// </Element>
+/// ```
+pub(crate) fn write_partition_scheme<W: Write>(
+    writer: &mut Writer<W>,
+    partition_scheme: &PartitionSchemeElement,
+) -> anyhow::Result<()> {
+    let full_name = format!("[{}]", partition_scheme.name);
+
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlPartitionScheme"), ("Name", full_name.as_str())]);
+    writer.write_event(Event::Start(elem))?;
+
+    // Write FileGroups relationship
+    if !partition_scheme.filegroups.is_empty() {
+        let fg_refs: Vec<String> = partition_scheme
+            .filegroups
+            .iter()
+            .map(|fg| format!("[{}]", fg))
+            .collect();
+        let fg_refs: Vec<&str> = fg_refs.iter().map(|s| s.as_str()).collect();
+        write_relationship(writer, "FileGroups", &fg_refs)?;
+    }
+
+    // Write PartitionFunction relationship
+    let pf_ref = format!("[{}]", partition_scheme.partition_function);
+    write_relationship(writer, "PartitionFunction", &[&pf_ref])?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())

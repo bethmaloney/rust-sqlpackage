@@ -18,6 +18,12 @@ pub enum ModelElement {
     ScalarType(ScalarTypeElement),
     ExtendedProperty(ExtendedPropertyElement),
     Trigger(TriggerElement),
+    /// Filegroup element (ALTER DATABASE ... ADD FILEGROUP)
+    Filegroup(FilegroupElement),
+    /// Partition function element (CREATE PARTITION FUNCTION)
+    PartitionFunction(PartitionFunctionElement),
+    /// Partition scheme element (CREATE PARTITION SCHEME)
+    PartitionScheme(PartitionSchemeElement),
     /// Generic raw element for statements that couldn't be fully parsed
     Raw(RawElement),
 }
@@ -50,6 +56,9 @@ impl ModelElement {
             ModelElement::ScalarType(_) => "SqlUserDefinedDataType",
             ModelElement::ExtendedProperty(_) => "SqlExtendedProperty",
             ModelElement::Trigger(_) => "SqlDmlTrigger",
+            ModelElement::Filegroup(_) => "SqlFilegroup",
+            ModelElement::PartitionFunction(_) => "SqlPartitionFunction",
+            ModelElement::PartitionScheme(_) => "SqlPartitionScheme",
             ModelElement::Raw(r) => match r.sql_type.as_str() {
                 "SqlTable" => "SqlTable",
                 "SqlView" => "SqlView",
@@ -87,6 +96,10 @@ impl ModelElement {
             ModelElement::ScalarType(s) => format!("[{}].[{}]", s.schema, s.name),
             ModelElement::ExtendedProperty(e) => e.full_name(),
             ModelElement::Trigger(t) => format!("[{}].[{}]", t.schema, t.name),
+            // Filegroups, partition functions, and partition schemes are NOT schema-qualified
+            ModelElement::Filegroup(f) => format!("[{}]", f.name),
+            ModelElement::PartitionFunction(pf) => format!("[{}]", pf.name),
+            ModelElement::PartitionScheme(ps) => format!("[{}]", ps.name),
             ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),
         }
     }
@@ -684,4 +697,37 @@ impl ExtendedPropertyElement {
             format!("[{}].[{}]", self.target_schema, self.target_object)
         }
     }
+}
+
+/// Filegroup element (ALTER DATABASE ... ADD FILEGROUP)
+/// Filegroups are NOT schema-qualified in SQL Server
+#[derive(Debug, Clone)]
+pub struct FilegroupElement {
+    pub name: String,
+    /// Whether this filegroup contains memory-optimized data
+    pub contains_memory_optimized_data: bool,
+}
+
+/// Partition function element (CREATE PARTITION FUNCTION)
+/// Partition functions are NOT schema-qualified in SQL Server
+#[derive(Debug, Clone)]
+pub struct PartitionFunctionElement {
+    pub name: String,
+    /// Data type of the partition column (e.g., "INT", "DATETIME", "DATE")
+    pub data_type: String,
+    /// Boundary values that define partitions
+    pub boundary_values: Vec<String>,
+    /// Whether boundary is RIGHT or LEFT (default is RIGHT for RANGE RIGHT)
+    pub is_range_right: bool,
+}
+
+/// Partition scheme element (CREATE PARTITION SCHEME)
+/// Partition schemes are NOT schema-qualified in SQL Server
+#[derive(Debug, Clone)]
+pub struct PartitionSchemeElement {
+    pub name: String,
+    /// Name of the partition function this scheme references
+    pub partition_function: String,
+    /// List of filegroups to map partitions to
+    pub filegroups: Vec<String>,
 }
