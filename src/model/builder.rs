@@ -5,7 +5,7 @@
 //! converted to owned Strings at the end when creating SchemaElements.
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use anyhow::Result;
 use sqlparser::ast::{
@@ -34,6 +34,9 @@ use super::{
 
 /// Static schema name for "dbo" - avoids allocation for the most common schema
 const DBO_SCHEMA: &str = "dbo";
+
+/// Type alias for constraint tracking: maps (table_schema, table_name) to Vec<(element_index, is_inline, source_order)>
+type TableConstraintMap = HashMap<(String, String), Vec<(usize, bool, u32)>>;
 
 /// Builder for creating `ConstraintElement` instances with common defaults.
 ///
@@ -1098,7 +1101,7 @@ fn assign_inline_constraint_disambiguators(
     // Map: (table_schema, table_name) -> Vec<(element_index, is_inline, source_order)>
     // DotNet assigns disambiguators in source order (order constraints appear in CREATE TABLE),
     // so we track source_order to sort constraints before assigning disambiguators.
-    let mut table_constraints: HashMap<(String, String), Vec<(usize, bool, u32)>> = HashMap::new();
+    let mut table_constraints: TableConstraintMap = HashMap::new();
 
     for (idx, element) in elements.iter().enumerate() {
         if let ModelElement::Constraint(constraint) = element {
