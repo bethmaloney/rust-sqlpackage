@@ -192,3 +192,70 @@ CREATE TABLE [dbo].[T] (
         "Name column should not have inline constraint annotations"
     );
 }
+
+/// Tests that tables with mixed inline + table-level constraints correctly
+/// assign annotations. This was a bug where inline constraints with
+/// `uses_annotation=false` didn't add to `table_annotation`, causing
+/// "AttachedAnnotation referencing nonexistent annotation" deployment errors.
+///
+/// Scenario: Table with PK (table-level) + DEFAULT (inline named) forms a
+/// 2-named-constraint case where both constraints get AttachedAnnotation and
+/// the table needs Annotation elements for both.
+#[test]
+fn test_mixed_inline_and_table_level_named_constraints() {
+    let sql = r#"
+CREATE TABLE [dbo].[Products] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [Version] INT CONSTRAINT [DF_Products_Version] DEFAULT ((0)) NOT NULL,
+    CONSTRAINT [PK_Products] PRIMARY KEY CLUSTERED ([Id])
+);
+"#;
+    let model = parse_and_build_model(sql);
+
+    let table = model.elements.iter().find_map(|e| {
+        if let rust_sqlpackage::model::ModelElement::Table(t) = e {
+            if t.name == "Products" {
+                return Some(t);
+            }
+        }
+        None
+    });
+    assert!(table.is_some(), "Should find table Products");
+    let table = table.unwrap();
+
+    // For 2-named-constraint tables, the table should have 2 Annotation elements
+    // (one for each constraint's disambiguator).
+    // This was the bug: inline DEFAULT constraint wasn't adding its disambiguator
+    // to table_annotation, so the table only had 1 Annotation when it needed 2.
+    assert_eq!(
+        table.inline_constraint_disambiguators.len(),
+        2,
+        "Table should have 2 inline_constraint_disambiguators for 2-named-constraint case. \
+         Bug: inline constraint wasn't adding to table_annotation."
+    );
+
+    // Verify both constraints exist
+    let constraints: Vec<_> = model
+        .elements
+        .iter()
+        .filter_map(|e| {
+            if let rust_sqlpackage::model::ModelElement::Constraint(c) = e {
+                if c.table_name == "Products" {
+                    return Some(c.name.clone());
+                }
+            }
+            None
+        })
+        .collect();
+
+    assert!(
+        constraints.iter().any(|n| n.contains("PK_Products")),
+        "Should have PK_Products constraint"
+    );
+    assert!(
+        constraints
+            .iter()
+            .any(|n| n.contains("DF_Products_Version")),
+        "Should have DF_Products_Version constraint"
+    );
+}

@@ -6,7 +6,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY COMPLETE
 
-**Phases 1-50.8 complete. Full parity: 47/48 (97.9%).**
+**Phases 1-50.9 complete. Full parity: 47/48 (97.9%).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -19,7 +19,6 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Layer 7 (Canonical XML) | 20/48 | 41.7% |
 
 **Remaining Work:**
-- Phase 50.9: Fix inline constraint annotation bug (deployment failure for tables with mixed inline/table-level constraints)
 - Layer 7: element ordering, formatting differences (28/48 failing)
 - `body_dependencies_aliases`: 65 relationship ordering errors (not affecting functionality)
 
@@ -27,14 +26,14 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ---
 
-## Phase 50.9: Decouple Column and Table Annotation Logic (4 tasks) - TODO
+## Phase 50.9: Decouple Column and Table Annotation Logic (4 tasks) - COMPLETE
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 50.9.1 | Refactor Phase 4 to separate column and table annotation concerns | ⬜ | Remove `if is_inline { } else { }` structure |
-| 50.9.2 | Ensure inline constraints with `uses_annotation=false` add to `table_annotation` | ⬜ | Fixes missing annotation errors |
-| 50.9.3 | Add integration test for 2-constraint table with inline + table-level constraints | ⬜ | Cover mixed constraint pattern |
-| 50.9.4 | Verify real-world database deploys successfully | ⬜ | Real-world validation |
+| 50.9.1 | Refactor Phase 4 to separate column and table annotation concerns | ✅ | Remove `if is_inline { } else { }` structure |
+| 50.9.2 | Ensure inline constraints with `uses_annotation=false` add to `table_annotation` | ✅ | Fixes missing annotation errors |
+| 50.9.3 | Add integration test for 2-constraint table with inline + table-level constraints | ✅ | Cover mixed constraint pattern |
+| 50.9.4 | Verify real-world database deploys successfully | ✅ | Real-world validation |
 
 **Problem Statement:**
 

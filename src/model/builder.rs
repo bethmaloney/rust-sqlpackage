@@ -1378,10 +1378,10 @@ fn assign_inline_constraint_disambiguators(
                 constraint.table_name.clone(),
             );
 
+            // Concern 1: Column AttachedAnnotations (only for unnamed inline constraints)
+            // Named inline constraints (single named constraint case) have the column carry Annotation
+            // instead of AttachedAnnotation, which is handled separately via inline_constraint_annotation.
             if constraint.is_inline {
-                // For inline constraints, only add column AttachedAnnotation for UNNAMED inline constraints.
-                // Named inline constraints (single named constraint case) have the column carry Annotation
-                // instead of AttachedAnnotation, which is handled separately via inline_constraint_annotation.
                 let is_single_named_inline =
                     single_named_inline_info.contains_key(&table_key) && constraint.emit_name;
 
@@ -1398,17 +1398,28 @@ fn assign_inline_constraint_disambiguators(
                         }
                     }
                 }
-                // For single named inline constraint, the column gets Annotation (handled in Phase 5)
-            } else {
-                // Named constraints: set up table annotations
+            }
+
+            // Concern 2: Table annotations (for ANY constraint using AttachedAnnotation)
+            // This is INDEPENDENT of is_inline - inline constraints with uses_annotation=false
+            // must also add to table_annotation so the table gets the Annotation element.
+            // This fixes deployment failures for tables with mixed inline + table-level constraints.
+            if !constraint.is_inline
+                || (constraint.emit_name && !single_named_inline_info.contains_key(&table_key))
+            {
+                // For table-level constraints OR named inline constraints that aren't
+                // the single-named-inline case (i.e., 2+ named constraint tables)
                 if let Some(d) = disambiguator {
                     if constraint.uses_annotation {
                         // This constraint uses Annotation, so table gets AttachedAnnotation for it
-                        table_attached.entry(table_key).or_default().push((d, idx));
+                        table_attached
+                            .entry(table_key.clone())
+                            .or_default()
+                            .push((d, idx));
                     } else {
                         // This constraint uses AttachedAnnotation, so table gets Annotation for it
                         table_annotation
-                            .entry(table_key)
+                            .entry(table_key.clone())
                             .or_default()
                             .push((d, idx));
                     }
