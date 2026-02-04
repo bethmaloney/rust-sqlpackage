@@ -33,6 +33,8 @@ pub(crate) struct ViewColumn {
     pub from_select_star: bool,
 }
 
+use super::column_registry::ColumnRegistry;
+
 /// Write a view element to XML.
 ///
 /// Generates the SqlView Element with properties, Columns relationship,
@@ -42,6 +44,7 @@ pub(crate) fn write_view<W: Write>(
     view: &ViewElement,
     model: &DatabaseModel,
     default_schema: &str,
+    _column_registry: &ColumnRegistry,
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", view.schema, view.name);
 
@@ -114,6 +117,7 @@ pub(crate) fn write_raw_view<W: Write>(
     raw: &RawElement,
     model: &DatabaseModel,
     default_schema: &str,
+    _column_registry: &ColumnRegistry,
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
 

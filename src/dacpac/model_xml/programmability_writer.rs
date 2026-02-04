@@ -17,6 +17,7 @@ use crate::model::{
 };
 use crate::parser::{extract_function_parameters_tokens, extract_procedure_parameters_tokens};
 
+use super::column_registry::ColumnRegistry;
 use super::table_writer::{write_column_type_specifier, write_table_type_relationship};
 use super::view_writer::{extract_view_columns_and_deps, write_view_columns, ViewColumn};
 use super::xml_helpers::{
@@ -42,6 +43,7 @@ pub(crate) fn write_procedure<W: Write>(
     proc: &ProcedureElement,
     model: &DatabaseModel,
     default_schema: &str,
+    column_registry: &ColumnRegistry,
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", proc.schema, proc.name);
 
@@ -91,10 +93,18 @@ pub(crate) fn write_procedure<W: Write>(
     let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
     let body_deps = if tvp_params.is_empty() {
         // No TVPs - use regular body dependency extraction
-        extract_body_dependencies(&body, &full_name, &param_names)
+        // Phase 49: Pass column_registry for schema-aware unqualified column resolution
+        extract_body_dependencies(&body, &full_name, &param_names, column_registry)
     } else {
         // Has TVPs - extract TVP-specific dependencies
-        extract_body_dependencies_with_tvp(&body, &full_name, &param_names, &tvp_params)
+        // Phase 49: Pass column_registry for schema-aware unqualified column resolution
+        extract_body_dependencies_with_tvp(
+            &body,
+            &full_name,
+            &param_names,
+            &tvp_params,
+            column_registry,
+        )
     };
     write_body_dependencies(writer, &body_deps)?;
 
@@ -244,6 +254,7 @@ pub(crate) fn write_function<W: Write>(
     func: &FunctionElement,
     model: &DatabaseModel,
     default_schema: &str,
+    column_registry: &ColumnRegistry,
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", func.schema, func.name);
     let type_name = match func.function_type {
@@ -274,7 +285,8 @@ pub(crate) fn write_function<W: Write>(
     let param_names: Vec<String> = func_params.iter().map(|p| p.name.clone()).collect();
 
     // Extract and write BodyDependencies
-    let body_deps = extract_body_dependencies(&body, &full_name, &param_names);
+    // Phase 49: Pass column_registry for schema-aware unqualified column resolution
+    let body_deps = extract_body_dependencies(&body, &full_name, &param_names, column_registry);
     write_body_dependencies(writer, &body_deps)?;
 
     // Write DynamicObjects relationship for CTEs, temp tables, and table variables
@@ -864,6 +876,7 @@ fn extract_body_dependencies_with_tvp(
     full_name: &str,
     _params: &[String],
     tvp_params: &[(&ProcedureParameter, Option<&UserDefinedTypeElement>)],
+    _column_registry: &ColumnRegistry,
 ) -> Vec<BodyDependency> {
     use std::collections::HashSet;
     let mut deps = Vec::new();

@@ -965,14 +965,21 @@ fn try_parse_qualified_name_for_function(
 // Body Dependency Extraction
 // =============================================================================
 
+use super::column_registry::ColumnRegistry;
+
 /// Extract body dependencies from a procedure/function body
 /// This extracts dependencies in order of appearance:
 /// 1. Built-in types from DECLARE statements
 /// 2. Table references, columns, and parameters in the order they appear
+///
+/// Phase 49: Accepts a ColumnRegistry for schema-aware unqualified column resolution.
+/// When multiple tables are in scope, the registry is used to determine which table
+/// actually has the column, eliminating false positive dependencies.
 pub(crate) fn extract_body_dependencies(
     body: &str,
     full_name: &str,
     params: &[String],
+    column_registry: &ColumnRegistry,
 ) -> Vec<BodyDependency> {
     // Estimate ~10 dependencies typical for a procedure/function body
     let mut deps = Vec::with_capacity(10);
@@ -1233,9 +1240,15 @@ pub(crate) fn extract_body_dependencies(
                     });
 
                     // If not a table/schema, treat as unqualified column -> resolve against scope table
-                    // Phase 34+43: Use subquery scope if token is inside one, otherwise use first table
+                    // Phase 49: Use schema-aware resolution to find unique table with this column
                     if !is_table_or_schema {
-                        let resolve_table = find_scope_table(byte_pos, &all_scopes, &table_refs);
+                        let resolve_table = find_scope_table_for_column(
+                            &ident,
+                            byte_pos,
+                            &all_scopes,
+                            &table_refs,
+                            column_registry,
+                        );
                         if let Some(target_table) = resolve_table {
                             // First emit the table reference if not seen (DotNet deduplicates tables)
                             if !seen_tables.contains(target_table) {
@@ -1322,9 +1335,15 @@ pub(crate) fn extract_body_dependencies(
                     });
 
                     // If not a table/schema, treat as unqualified column -> resolve against scope table
-                    // Phase 34+43: Use subquery scope if token is inside one, otherwise use first table
+                    // Phase 49: Use schema-aware resolution to find unique table with this column
                     if !is_table_or_schema {
-                        let resolve_table = find_scope_table(byte_pos, &all_scopes, &table_refs);
+                        let resolve_table = find_scope_table_for_column(
+                            &ident,
+                            byte_pos,
+                            &all_scopes,
+                            &table_refs,
+                            column_registry,
+                        );
                         if let Some(target_table) = resolve_table {
                             // First emit the table reference if not seen (DotNet deduplicates tables)
                             if !seen_tables.contains(target_table) {
@@ -1385,24 +1404,55 @@ pub(crate) fn extract_all_subquery_scopes(body: &str) -> Vec<ApplySubqueryScope>
 }
 
 /// Find the appropriate table to resolve an unqualified column against.
-/// If the byte position is inside an APPLY subquery scope, use that scope's first table.
-/// Otherwise, fall back to the first table in the overall table refs.
-fn find_scope_table<'a>(
+/// Phase 49: Schema-aware table resolution for unqualified columns.
+///
+/// Given an unqualified column name, find the table that has this column.
+/// - First, determine the tables in scope (APPLY subquery tables if inside one, otherwise all table_refs)
+/// - Then, use the ColumnRegistry to find which table(s) have this column
+/// - If exactly one table has the column, return it
+/// - If 0 tables have the column (none known in registry), fall back to first table (backward compat)
+/// - If >1 tables have the column, return None (ambiguous - skip dependency emission)
+///
+/// This eliminates false positive dependencies like `[dbo].[EntityTypeDefaults].[Name]`
+/// when `Name` actually belongs to a different table in scope.
+fn find_scope_table_for_column<'a>(
+    column_name: &str,
     byte_pos: usize,
     apply_scopes: &'a [ApplySubqueryScope],
     table_refs: &'a [String],
+    column_registry: &ColumnRegistry,
 ) -> Option<&'a String> {
-    // Check if position falls within any APPLY subquery scope
-    for scope in apply_scopes {
-        if byte_pos >= scope.start_pos && byte_pos <= scope.end_pos {
-            // Position is inside this APPLY subquery - use its first table
-            if let Some(first_scope_table) = scope.tables.first() {
-                return Some(first_scope_table);
+    // First, determine which tables are in scope based on position
+    let tables_in_scope: &[String] = {
+        // Check if position falls within any APPLY subquery scope
+        let mut scope_tables: Option<&[String]> = None;
+        for scope in apply_scopes {
+            if byte_pos >= scope.start_pos && byte_pos <= scope.end_pos {
+                // Position is inside this APPLY subquery - use its tables
+                if !scope.tables.is_empty() {
+                    scope_tables = Some(&scope.tables);
+                    break;
+                }
             }
         }
+        scope_tables.unwrap_or(table_refs)
+    };
+
+    // Phase 49: Use schema-aware resolution to find the unique table with this column
+    let matches = column_registry.find_tables_with_column(column_name, tables_in_scope);
+
+    match matches.len() {
+        // Exactly one table has this column - use it
+        1 => Some(matches[0]),
+        // No table has this column in the registry.
+        // This could mean:
+        // a) The registry has no info about any tables in scope (empty registry or tables not tracked)
+        // b) The column doesn't exist in any known table
+        // Fall back to first table for backward compatibility with existing behavior.
+        0 => tables_in_scope.first(),
+        // Multiple tables have this column - ambiguous, skip resolution
+        _ => None,
     }
-    // Not inside any APPLY scope - use the first table from overall refs
-    table_refs.first()
 }
 
 /// Phase 43.2: Resolve an alias to its table reference, considering position within scopes.
@@ -4443,6 +4493,11 @@ fn extract_table_variable_columns(
 mod tests {
     use super::*;
 
+    // Helper to create an empty ColumnRegistry for tests that don't need schema-aware resolution
+    fn empty_registry() -> ColumnRegistry {
+        ColumnRegistry::new()
+    }
+
     // ============================================================================
     // BodyDependencyTokenScanner tests
     // ============================================================================
@@ -5335,7 +5390,7 @@ mod tests {
                 WHERE AccountId = a.Id
             ) d
         "#;
-        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &empty_registry());
 
         // Should have [dbo].[AccountTag].[AccountId] (AccountId resolves to inner table)
         let has_accounttag_accountid = deps.iter().any(|d| match d {
@@ -5372,7 +5427,7 @@ mod tests {
                 WHERE AccountId = a.Id
             ) d
         "#;
-        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &empty_registry());
 
         // Should have [dbo].[Account].[Id] (qualified ref a.Id resolves to outer alias)
         let has_account_id = deps.iter().any(|d| match d {
@@ -5575,7 +5630,7 @@ mod tests {
                 GROUP BY i.OrderId
             ) OrderItems ON OrderItems.OrderId = o.Id
         "#;
-        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &empty_registry());
 
         // Should have [dbo].[Tag].[Name] from first derived table
         let has_tag_name = deps.iter().any(|d| match d {

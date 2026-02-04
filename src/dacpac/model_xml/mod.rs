@@ -1,6 +1,7 @@
 //! Generate model.xml for dacpac
 
 mod body_deps;
+mod column_registry;
 mod header;
 mod other_writers;
 mod programmability_writer;
@@ -55,6 +56,9 @@ use body_deps::{
     BodyDependency, BodyDependencyTokenScanner, CteColumn, TableAliasTokenParser,
     TableVariableColumn, TempTableColumn,
 };
+
+// Re-export column registry for schema-aware column resolution (Phase 49)
+use column_registry::ColumnRegistry;
 
 #[cfg(test)]
 use body_deps::{
@@ -175,6 +179,11 @@ pub fn generate_model_xml<W: Write>(
     // Model element
     xml_writer.write_event(Event::Start(BytesStart::new("Model")))?;
 
+    // Phase 49: Build column registry for schema-aware unqualified column resolution.
+    // This maps tables to their columns, enabling accurate resolution of unqualified
+    // column references when multiple tables are in scope.
+    let column_registry = ColumnRegistry::from_model(model);
+
     // Write elements in DotNet sort order: (Name, Type) where empty Name sorts first.
     // SqlDatabaseOptions has sort key ("", "sqldatabaseoptions") and must be interleaved
     // at the correct position among the other elements.
@@ -196,7 +205,13 @@ pub fn generate_model_xml<W: Write>(
                 db_options_written = true;
             }
         }
-        write_element(&mut xml_writer, element, model, &project.default_schema)?;
+        write_element(
+            &mut xml_writer,
+            element,
+            model,
+            &project.default_schema,
+            &column_registry,
+        )?;
     }
 
     // Write SqlDatabaseOptions at the end if not yet written (happens when all elements
@@ -219,13 +234,18 @@ fn write_element<W: Write>(
     element: &ModelElement,
     model: &DatabaseModel,
     default_schema: &str,
+    column_registry: &ColumnRegistry,
 ) -> anyhow::Result<()> {
     match element {
         ModelElement::Schema(s) => write_schema(writer, s),
         ModelElement::Table(t) => write_table(writer, t),
-        ModelElement::View(v) => write_view(writer, v, model, default_schema),
-        ModelElement::Procedure(p) => write_procedure(writer, p, model, default_schema),
-        ModelElement::Function(f) => write_function(writer, f, model, default_schema),
+        ModelElement::View(v) => write_view(writer, v, model, default_schema, column_registry),
+        ModelElement::Procedure(p) => {
+            write_procedure(writer, p, model, default_schema, column_registry)
+        }
+        ModelElement::Function(f) => {
+            write_function(writer, f, model, default_schema, column_registry)
+        }
         ModelElement::Index(i) => write_index(writer, i),
         ModelElement::FullTextIndex(f) => write_fulltext_index(writer, f),
         ModelElement::FullTextCatalog(c) => write_fulltext_catalog(writer, c),
@@ -235,7 +255,7 @@ fn write_element<W: Write>(
         ModelElement::ScalarType(s) => write_scalar_type(writer, s),
         ModelElement::ExtendedProperty(e) => write_extended_property(writer, e),
         ModelElement::Trigger(t) => write_trigger(writer, t),
-        ModelElement::Raw(r) => write_raw(writer, r, model, default_schema),
+        ModelElement::Raw(r) => write_raw(writer, r, model, default_schema, column_registry),
     }
 }
 
@@ -3476,10 +3496,11 @@ fn write_raw<W: Write>(
     raw: &RawElement,
     model: &DatabaseModel,
     default_schema: &str,
+    column_registry: &ColumnRegistry,
 ) -> anyhow::Result<()> {
     // Handle SqlView specially to get full property/relationship support
     if raw.sql_type == "SqlView" {
-        return write_raw_view(writer, raw, model, default_schema);
+        return write_raw_view(writer, raw, model, default_schema, column_registry);
     }
 
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
@@ -3506,6 +3527,11 @@ fn write_raw<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Helper to create an empty ColumnRegistry for tests that don't need schema-aware resolution
+    fn empty_registry() -> ColumnRegistry {
+        ColumnRegistry::new()
+    }
 
     // Helper for testing parse_column_expression
     fn parse_expr(expr: &str) -> (String, Option<String>) {
@@ -3789,7 +3815,7 @@ OUTER APPLY (
     WHERE at.AccountId = a.Id
 ) t
 "#;
-        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &empty_registry());
 
         // Should contain [dbo].[Tag].[Name] (resolved from tag.[Name])
         let has_tag_name = deps.iter().any(|d| match d {
@@ -3832,7 +3858,7 @@ CROSS APPLY (
 WHERE a.Status = 1
 "#;
 
-        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &empty_registry());
 
         // Should NOT contain [d].[TagCount] - d is a subquery alias
         let has_d_tagcount = deps.iter().any(|d| match d {
@@ -3948,7 +3974,7 @@ WITH AccountCte AS (
 SELECT AccountCte.Id, AccountCte.AccountNumber
 FROM AccountCte;
 "#;
-        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &empty_registry());
 
         // Should contain [dbo].[Account] (the actual table)
         let has_account = deps.iter().any(|d| match d {
@@ -4067,7 +4093,7 @@ LEFT JOIN (
     INNER JOIN [dbo].[Tag] [TAG] ON AccountTags.TagId = [TAG].Id
 ) AS TagDetails ON TagDetails.AccountId = A.Id
 "#;
-        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &empty_registry());
 
         println!("Body dependencies:");
         for d in &deps {
@@ -4253,7 +4279,7 @@ INNER JOIN AccountTag AT ON AT.AccountId = A.Id
 INNER JOIN Tag T ON T.Id = AT.TagId
 WHERE A.Id = @AccountId
 "#;
-        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &empty_registry());
 
         println!("Body dependencies:");
         for d in &deps {
@@ -7561,7 +7587,7 @@ WHEN MATCHED THEN
     UPDATE SET [TARGET].AccountId = [SOURCE].AccountId;
 "#;
         let params = vec!["AccountId".to_string(), "TagId".to_string()];
-        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &params);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &params, &empty_registry());
 
         println!("Body dependencies:");
         for d in &deps {
