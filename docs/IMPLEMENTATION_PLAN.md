@@ -83,7 +83,7 @@ When 0 tables in the registry have the column, the code now returns `None` inste
 - ViewElement columns extracted by parsing SELECT clause via sqlparser tokenization
 - Views with SELECT * tracked via `views_with_wildcard` HashSet for future conservative resolution
 - Added 6 new unit tests for view column extraction, aliases, SELECT *, and resolution
-- All 990 library tests + 500 unit tests pass with no regressions
+- All 992 library tests + 500 unit tests pass with no regressions
 
 ### Phase 50.3: Complete Deferred Testing (4 tasks)
 
@@ -91,8 +91,8 @@ When 0 tables in the registry have the column, the code now returns `None` inste
 |----|------|--------|-------|
 | 50.3.1 | Clone and build WideWorldImporters with rust-sqlpackage | ⬜ | Verify build succeeds |
 | 50.3.2 | Deploy WideWorldImporters dacpac and verify no false positive errors | ⬜ | Use sqlpackage to deploy to local SQL Server |
-| 50.3.3 | Add explicit test for table variable column NOT resolving to global table | ⬜ | `DECLARE @t TABLE(Name..); SELECT Name FROM @t` |
-| 50.3.4 | Add explicit test for CTE column NOT resolving to global table | ⬜ | `WITH cte AS (...) SELECT Name FROM cte` |
+| 50.3.3 | Add explicit test for table variable column NOT resolving to global table | ✅ | Added `test_table_variable_column_does_not_resolve_to_global_table` in body_deps.rs |
+| 50.3.4 | Add explicit test for CTE column NOT resolving to global table | ✅ | Added `test_cte_column_does_not_resolve_to_global_table` in body_deps.rs |
 
 ### Implementation Notes
 

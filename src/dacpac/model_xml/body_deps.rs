@@ -5729,4 +5729,137 @@ mod tests {
             deps
         );
     }
+
+    // ============================================================================
+    // Phase 50.3: Table variable and CTE column isolation tests
+    // ============================================================================
+
+    #[test]
+    fn test_table_variable_column_does_not_resolve_to_global_table() {
+        // Test that unqualified columns from table variables do NOT incorrectly resolve
+        // to global tables with the same column name.
+        //
+        // Scenario: DECLARE @t TABLE(Name NVARCHAR(100)); SELECT Name FROM @t
+        // The 'Name' column should NOT create a dependency on [dbo].[Users].[Name]
+        // even though Users has a Name column, because we're selecting from @t.
+        let sql = r#"
+            CREATE PROCEDURE [dbo].[TestProc]
+            AS
+            BEGIN
+                DECLARE @t TABLE (
+                    Id INT,
+                    Name NVARCHAR(100)
+                );
+
+                INSERT INTO @t (Id, Name)
+                SELECT u.UserId, u.UserName FROM [dbo].[Users] u;
+
+                -- This SELECT should NOT resolve 'Name' to [dbo].[Users].[Name]
+                -- because we're selecting from the table variable @t
+                SELECT Id, Name FROM @t;
+            END
+        "#;
+
+        // Registry has Users table with UserId, UserName, and Name columns
+        // Name column exists in Users to test false positive scenario
+        let registry = registry_with_columns(&[("dbo", "Users", &["UserId", "UserName", "Name"])]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &registry);
+
+        // Should have reference to [dbo].[Users].[UserId] from the INSERT (qualified as u.UserId)
+        let has_users_userid = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Users].[UserId]",
+            _ => false,
+        });
+        assert!(
+            has_users_userid,
+            "Should have [dbo].[Users].[UserId] from the INSERT statement. Got deps: {:?}",
+            deps
+        );
+
+        // Should have reference to [dbo].[Users].[UserName] from the INSERT (qualified as u.UserName)
+        let has_users_username = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Users].[UserName]",
+            _ => false,
+        });
+        assert!(
+            has_users_username,
+            "Should have [dbo].[Users].[UserName] from the INSERT statement. Got deps: {:?}",
+            deps
+        );
+
+        // Should NOT have [dbo].[Users].[Name] from the final SELECT
+        // because 'Name' in "SELECT Id, Name FROM @t" refers to the table variable column
+        let has_users_name_false_positive = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Users].[Name]",
+            _ => false,
+        });
+        assert!(
+            !has_users_name_false_positive,
+            "Should NOT have [dbo].[Users].[Name] - 'Name' in SELECT FROM @t refers to table variable, not Users table. Got deps: {:?}",
+            deps
+        );
+    }
+
+    #[test]
+    fn test_cte_column_does_not_resolve_to_global_table() {
+        // Test that unqualified columns from CTEs do NOT incorrectly resolve
+        // to global tables with the same column name.
+        //
+        // Scenario: WITH cte AS (SELECT Id, Name FROM Users) SELECT Name FROM cte
+        // The 'Name' column in the outer SELECT should NOT create a duplicate dependency
+        // on [dbo].[Users].[Name] because we're selecting from the CTE.
+        let sql = r#"
+            CREATE PROCEDURE [dbo].[TestProc]
+            AS
+            BEGIN
+                WITH UserCte AS (
+                    SELECT Id, UserName AS DisplayName
+                    FROM [dbo].[Users]
+                )
+                -- This SELECT should NOT resolve 'DisplayName' to any global table
+                -- because we're selecting from the CTE
+                SELECT Id, DisplayName FROM UserCte;
+            END
+        "#;
+
+        // Registry has Users table with Id, UserName, and DisplayName columns
+        // (DisplayName exists in Users to test false positive)
+        let registry =
+            registry_with_columns(&[("dbo", "Users", &["Id", "UserName", "DisplayName"])]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &registry);
+
+        // Should have reference to [dbo].[Users].[Id] from the CTE definition
+        let has_users_id = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Users].[Id]",
+            _ => false,
+        });
+        assert!(
+            has_users_id,
+            "Should have [dbo].[Users].[Id] from the CTE definition. Got deps: {:?}",
+            deps
+        );
+
+        // Should have reference to [dbo].[Users].[UserName] from the CTE definition
+        let has_users_username = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Users].[UserName]",
+            _ => false,
+        });
+        assert!(
+            has_users_username,
+            "Should have [dbo].[Users].[UserName] from the CTE definition. Got deps: {:?}",
+            deps
+        );
+
+        // Should NOT have [dbo].[Users].[DisplayName] - the 'DisplayName' in the outer
+        // SELECT refers to the CTE alias, not the Users.DisplayName column
+        let has_users_displayname_false_positive = deps.iter().any(|d| match d {
+            BodyDependency::ObjectRef(r) => r == "[dbo].[Users].[DisplayName]",
+            _ => false,
+        });
+        assert!(
+            !has_users_displayname_false_positive,
+            "Should NOT have [dbo].[Users].[DisplayName] - 'DisplayName' in SELECT FROM UserCte refers to CTE alias, not Users table. Got deps: {:?}",
+            deps
+        );
+    }
 }
