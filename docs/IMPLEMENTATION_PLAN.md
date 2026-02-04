@@ -37,7 +37,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ## Phase 50: Fix Schema-Aware Resolution Gaps
 
-**Status:** PHASE 50.1 COMPLETE
+**Status:** PHASE 50.2 COMPLETE
 
 **Goal:** Address gaps identified in Phase 49 review - remove unsafe fallback behavior, add view support, and complete deferred testing.
 
@@ -69,14 +69,21 @@ When 0 tables in the registry have the column, the code now returns `None` inste
 - Added `registry_with_columns()` test helper for creating registries with specific column data
 - Updated `test_apply_subquery_unqualified_column_resolution` to use schema-aware registry
 
-### Phase 50.2: Add View Columns to Registry (4 tasks)
+### Phase 50.2: Add View Columns to Registry (4 tasks) - COMPLETE 2026-02-04
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 50.2.1 | Parse view SELECT clause to extract column names/aliases | ⬜ | Use existing SELECT parsing infrastructure |
-| 50.2.2 | Add `ViewElement` columns to `ColumnRegistry::from_model()` | ⬜ | Views need column tracking like tables |
-| 50.2.3 | Handle `SELECT *` in views by marking as "unknown columns" | ⬜ | Skip resolution when view with SELECT * is in scope |
-| 50.2.4 | Add unit tests for view column extraction | ⬜ | Test explicit columns, aliases, SELECT * |
+| 50.2.1 | Parse view SELECT clause to extract column names/aliases | ✅ | Reused extract_view_columns_and_deps() |
+| 50.2.2 | Add `ViewElement` columns to `ColumnRegistry::from_model()` | ✅ | Views tracked like tables |
+| 50.2.3 | Handle `SELECT *` in views by marking as "unknown columns" | ✅ | views_with_wildcard HashSet for conservative resolution |
+| 50.2.4 | Add unit tests for view column extraction | ✅ | 6 new tests for extraction, aliases, SELECT *, resolution |
+
+**Implementation Notes:**
+- Reused existing `extract_view_columns_and_deps()` from `view_writer.rs`
+- ViewElement columns extracted by parsing SELECT clause via sqlparser tokenization
+- Views with SELECT * tracked via `views_with_wildcard` HashSet for future conservative resolution
+- Added 6 new unit tests for view column extraction, aliases, SELECT *, and resolution
+- All 990 library tests + 500 unit tests pass with no regressions
 
 ### Phase 50.3: Complete Deferred Testing (4 tasks)
 

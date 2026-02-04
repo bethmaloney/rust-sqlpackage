@@ -4539,7 +4539,8 @@ mod tests {
                 attached_annotations_after_annotation: vec![],
             }));
         }
-        ColumnRegistry::from_model(&model)
+        // Use "dbo" as default schema for test registry
+        ColumnRegistry::from_model(&model, "dbo")
     }
 
     // ============================================================================

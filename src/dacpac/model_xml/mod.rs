@@ -182,7 +182,8 @@ pub fn generate_model_xml<W: Write>(
     // Phase 49: Build column registry for schema-aware unqualified column resolution.
     // This maps tables to their columns, enabling accurate resolution of unqualified
     // column references when multiple tables are in scope.
-    let column_registry = ColumnRegistry::from_model(model);
+    // Phase 50.2: Now also includes view columns extracted from SELECT clauses.
+    let column_registry = ColumnRegistry::from_model(model, &project.default_schema);
 
     // Write elements in DotNet sort order: (Name, Type) where empty Name sorts first.
     // SqlDatabaseOptions has sort key ("", "sqldatabaseoptions") and must be interleaved
