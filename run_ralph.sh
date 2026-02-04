@@ -45,24 +45,22 @@ push_with_rebase() {
             CONFLICT_FILES=$(git diff --name-only --diff-filter=U)
             CONFLICT_STATUS=$(git status)
 
-            echo "Resolve all merge conflicts in the following files. The rebase is in progress.
+            echo "Resolve merge conflicts. We are rebasing our local commits onto the updated remote.
 
-Git status:
-\`\`\`
-$CONFLICT_STATUS
-\`\`\`
+IMPORTANT: In rebase conflicts, HEAD/ours = remote changes, incoming/theirs = our local work.
+We want to KEEP OUR LOCAL WORK while incorporating any non-conflicting remote updates.
 
 Conflicting files:
 $CONFLICT_FILES
 
 For each file:
-1. Carefully review the conflicts.
-2. Resolve the conflicts making sure to preserve all intended changes.
-3. Remove all conflict markers (e.g., \`<<<<<<<\`, \`=======\`, \`>>>>>>>\`).
-4. Stage the resolved file with \`git add <file>\`
+1. Read the file to see the conflict markers
+2. Keep our local changes (the 'theirs' section after =======)
+3. Only keep remote changes if they don't overlap with our work
+4. Remove all conflict markers
+5. Run \`git add <file>\`
 
-After resolving ALL conflicts, run \`git rebase --continue\` to complete the rebase.
-Do NOT commit directly - the rebase will create the commit." | claude -p \
+After all conflicts resolved: \`git rebase --continue\`" | claude -p \
                 --dangerously-skip-permissions \
                 --output-format=stream-json \
                 --model sonnet \
