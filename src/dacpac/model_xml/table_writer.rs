@@ -388,9 +388,16 @@ pub(crate) fn write_type_specifier<W: Write>(
         }
     }
 
-    // Write type reference based on data type (with ExternalSource for built-ins)
-    let type_ref = sql_type_to_reference(data_type);
-    write_builtin_type_relationship(writer, "Type", &type_ref)?;
+    // Check if this is a User-Defined Type (qualified name with schema)
+    // UDTs look like: "[dbo].[PhoneNumber]" or "dbo.PhoneNumber"
+    if is_user_defined_type(data_type) {
+        // For UDTs, reference the type without ExternalSource
+        write_udt_type_relationship(writer, data_type)?;
+    } else {
+        // Write type reference based on data type (with ExternalSource for built-ins)
+        let type_ref = sql_type_to_reference(data_type);
+        write_builtin_type_relationship(writer, "Type", &type_ref)?;
+    }
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     writer.write_event(Event::End(BytesEnd::new("Entry")))?;
@@ -439,6 +446,63 @@ pub(crate) fn sql_type_to_reference(data_type: &str) -> String {
         _ => "[sql_variant]",
     }
     .to_string()
+}
+
+/// Check if a data type is a User-Defined Type (qualified name with schema).
+/// UDTs look like: "[dbo].[PhoneNumber]" or "dbo.PhoneNumber"
+/// Built-in types are single identifiers like "int", "varchar(50)", etc.
+fn is_user_defined_type(data_type: &str) -> bool {
+    let trimmed = data_type.trim();
+    // Extract base type (before any parenthesis for parameters)
+    let base_type = trimmed.split('(').next().unwrap_or(trimmed).trim();
+
+    // Check for qualified name patterns:
+    // 1. [schema].[name] format
+    // 2. schema.name format (with or without brackets)
+    if base_type.contains("].[") {
+        return true;
+    }
+
+    // Check for unbracketed qualified name (contains a dot but not just "[type]")
+    if base_type.contains('.') {
+        // Filter out single-part types that don't contain a schema separator
+        let parts: Vec<&str> = base_type.split('.').collect();
+        if parts.len() >= 2 {
+            // Has at least schema.name
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Write Type relationship for a User-Defined Type (no ExternalSource attribute).
+/// UDTs are referenced by their qualified name like [dbo].[PhoneNumber].
+fn write_udt_type_relationship<W: Write>(
+    writer: &mut Writer<W>,
+    data_type: &str,
+) -> anyhow::Result<()> {
+    use super::normalize_type_name;
+
+    // Use with_attributes for batched attribute setting
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "Type")]);
+    writer.write_event(Event::Start(rel))?;
+
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    // Normalize the UDT name to [schema].[name] format
+    // Extract base type (before any parenthesis)
+    let base_type = data_type.split('(').next().unwrap_or(data_type).trim();
+    let type_ref = normalize_type_name(base_type);
+
+    // No ExternalSource for user-defined types
+    let refs = BytesStart::new("References").with_attributes([("Name", type_ref.as_str())]);
+    writer.write_event(Event::Empty(refs))?;
+
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    Ok(())
 }
 
 /// Write TypeSpecifier relationship for table type columns and procedure parameters.
@@ -704,5 +768,43 @@ mod tests {
         let output = get_output(writer);
         assert!(output
             .contains(r#"<Annotation Type="SqlInlineConstraintAnnotation" Disambiguator="1"/>"#));
+    }
+
+    #[test]
+    fn test_is_user_defined_type() {
+        // UDTs (qualified names with schema)
+        assert!(is_user_defined_type("[dbo].[PhoneNumber]"));
+        assert!(is_user_defined_type("[dbo].[EmailAddress]"));
+        assert!(is_user_defined_type("dbo.PhoneNumber"));
+        assert!(is_user_defined_type("[Sales].[CustomType]"));
+
+        // Built-in types (no schema qualifier)
+        assert!(!is_user_defined_type("int"));
+        assert!(!is_user_defined_type("varchar"));
+        assert!(!is_user_defined_type("varchar(50)"));
+        assert!(!is_user_defined_type("decimal(18,4)"));
+        assert!(!is_user_defined_type("[int]"));
+        assert!(!is_user_defined_type("nvarchar(max)"));
+    }
+
+    #[test]
+    fn test_write_type_specifier_with_udt() {
+        let mut writer = create_test_writer();
+        write_type_specifier(&mut writer, "[dbo].[PhoneNumber]", None, None, None).unwrap();
+        let output = get_output(writer);
+        // Should NOT contain ExternalSource="BuiltIns" for UDTs
+        assert!(!output.contains("ExternalSource"));
+        // Should reference the UDT name
+        assert!(output.contains(r#"Name="[dbo].[PhoneNumber]""#));
+    }
+
+    #[test]
+    fn test_write_type_specifier_builtin_still_works() {
+        let mut writer = create_test_writer();
+        write_type_specifier(&mut writer, "int", None, None, None).unwrap();
+        let output = get_output(writer);
+        // Should contain ExternalSource="BuiltIns" for built-in types
+        assert!(output.contains(r#"ExternalSource="BuiltIns""#));
+        assert!(output.contains(r#"Name="[int]""#));
     }
 }

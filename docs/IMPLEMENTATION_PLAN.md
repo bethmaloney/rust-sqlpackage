@@ -6,14 +6,14 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY COMPLETE
 
-**Phases 1-50 complete. Full parity: 46/48 (95.8%).**
+**Phases 1-50 complete. Full parity: 47/48 (97.9%).**
 
 **Current Work:**
-- Phase 50.7 complete: Fix FullTextIndex and single named inline constraint annotation
+- Phase 50.8 complete: Fix User-Defined Type (UDT) column resolution
 - WideWorldImporters builds successfully
 
 **Remaining Work:**
-- Layer 7 remaining issues: element ordering, formatting differences (19/48 passing)
+- Layer 7 remaining issues: element ordering, formatting differences (20/48 passing)
 - Body dependency ordering/deduplication differences (65 relationship errors in `body_dependencies_aliases` fixture - not affecting functionality)
 - `stress_test` fixture: Layer 4 ordering errors (large fixture with 40+ tables exposes element ordering differences)
 
@@ -25,7 +25,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Relationships | 47/48 | 97.9% |
 | Layer 4 (Ordering) | 47/48 | 97.9% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 19/48 | 39.6% |
+| Layer 7 (Canonical XML) | 20/48 | 41.7% |
 
 ### Excluded Fixtures
 
@@ -232,6 +232,43 @@ Two issues caused `fulltext_index` fixture to fail L7:
 - Plus test helper files
 
 **Result:** Layer 7 improved from 18/48 (37.5%) to 19/48 (39.6%)
+
+### Phase 50.8: Fix User-Defined Type (UDT) Column Resolution (3 tasks) - COMPLETE 2026-02-04
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 50.8.1 | Add `is_user_defined_type()` detection function | ✅ | Detects qualified type names like `[dbo].[PhoneNumber]` |
+| 50.8.2 | Add `write_udt_type_relationship()` writer function | ✅ | Writes UDT reference without ExternalSource |
+| 50.8.3 | Update `write_type_specifier()` to handle UDTs correctly | ✅ | Routes UDTs to new writer, built-ins to existing path |
+
+**Problem Statement:**
+
+Columns using User-Defined Types (alias types) like `[dbo].[PhoneNumber]` were incorrectly resolved to `[sql_variant]` with `ExternalSource="BuiltIns"` instead of referencing the actual UDT.
+
+Example SQL:
+```sql
+CREATE TYPE [dbo].[PhoneNumber] FROM VARCHAR(20) NOT NULL;
+CREATE TABLE [dbo].[Customers] (
+    [Phone] [dbo].[PhoneNumber]  -- Was resolving to sql_variant!
+);
+```
+
+**Root Cause:**
+
+The `sql_type_to_reference()` function only recognized built-in types and fell back to `[sql_variant]` for anything else. UDTs with qualified names (containing a schema like `dbo.PhoneNumber`) were not handled specially.
+
+**Solution:**
+
+1. Added `is_user_defined_type()` to detect qualified type names (types with schema prefix)
+2. Added `write_udt_type_relationship()` to write UDT references without `ExternalSource="BuiltIns"`
+3. Modified `write_type_specifier()` to check if type is UDT and route appropriately
+
+**Files Modified:**
+- `src/dacpac/model_xml/table_writer.rs`: Added UDT detection and writer functions, updated `write_type_specifier()`
+
+**Result:**
+- `scalar_types` fixture now passes all layers (was failing Layer 7)
+- Layer 7 improved from 19/48 (39.6%) to 20/48 (41.7%)
 
 ---
 
