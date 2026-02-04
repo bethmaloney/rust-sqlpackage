@@ -1410,11 +1410,13 @@ pub(crate) fn extract_all_subquery_scopes(body: &str) -> Vec<ApplySubqueryScope>
 /// - First, determine the tables in scope (APPLY subquery tables if inside one, otherwise all table_refs)
 /// - Then, use the ColumnRegistry to find which table(s) have this column
 /// - If exactly one table has the column, return it
-/// - If 0 tables have the column (none known in registry), fall back to first table (backward compat)
+/// - If 0 tables have the column (none known in registry), return None (skip dependency emission)
 /// - If >1 tables have the column, return None (ambiguous - skip dependency emission)
 ///
-/// This eliminates false positive dependencies like `[dbo].[EntityTypeDefaults].[Name]`
-/// when `Name` actually belongs to a different table in scope.
+/// This eliminates false positive dependencies when:
+/// - The column comes from a view (views not yet in registry)
+/// - The column comes from an external dacpac reference
+/// - The column doesn't exist in any table (misspelled or from table variable/CTE)
 fn find_scope_table_for_column<'a>(
     column_name: &str,
     byte_pos: usize,
@@ -1445,11 +1447,13 @@ fn find_scope_table_for_column<'a>(
         // Exactly one table has this column - use it
         1 => Some(matches[0]),
         // No table has this column in the registry.
-        // This could mean:
-        // a) The registry has no info about any tables in scope (empty registry or tables not tracked)
-        // b) The column doesn't exist in any known table
-        // Fall back to first table for backward compatibility with existing behavior.
-        0 => tables_in_scope.first(),
+        // Phase 50: Return None instead of falling back to first table.
+        // This prevents false positives for:
+        // - Columns from views (not yet tracked in registry)
+        // - Columns from external dacpac references
+        // - Misspelled column names
+        // - Columns from table variables or CTEs (local scopes)
+        0 => None,
         // Multiple tables have this column - ambiguous, skip resolution
         _ => None,
     }
@@ -4498,6 +4502,46 @@ mod tests {
         ColumnRegistry::new()
     }
 
+    // Helper to create a ColumnRegistry with specific table columns for testing schema-aware resolution
+    fn registry_with_columns(tables: &[(&str, &str, &[&str])]) -> ColumnRegistry {
+        use crate::model::{ColumnElement, DatabaseModel, ModelElement, TableElement};
+
+        let mut model = DatabaseModel::default();
+        for &(schema, name, columns) in tables {
+            let cols = columns
+                .iter()
+                .map(|&c| ColumnElement {
+                    name: c.to_string(),
+                    data_type: "int".to_string(),
+                    nullability: None,
+                    is_identity: false,
+                    is_rowguidcol: false,
+                    is_sparse: false,
+                    is_filestream: false,
+                    default_value: None,
+                    max_length: None,
+                    precision: None,
+                    scale: None,
+                    attached_annotations: vec![],
+                    computed_expression: None,
+                    is_persisted: false,
+                    collation: None,
+                })
+                .collect();
+            model.elements.push(ModelElement::Table(TableElement {
+                schema: schema.to_string(),
+                name: name.to_string(),
+                columns: cols,
+                is_node: false,
+                is_edge: false,
+                inline_constraint_disambiguators: vec![],
+                attached_annotations_before_annotation: vec![],
+                attached_annotations_after_annotation: vec![],
+            }));
+        }
+        ColumnRegistry::from_model(&model)
+    }
+
     // ============================================================================
     // BodyDependencyTokenScanner tests
     // ============================================================================
@@ -5381,6 +5425,7 @@ mod tests {
     #[test]
     fn test_apply_subquery_unqualified_column_resolution() {
         // Test that unqualified columns inside APPLY subqueries resolve to inner table
+        // when the column registry knows which tables have which columns
         let sql = r#"
             SELECT a.Id
             FROM [dbo].[Account] a
@@ -5390,7 +5435,16 @@ mod tests {
                 WHERE AccountId = a.Id
             ) d
         "#;
-        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &empty_registry());
+
+        // Provide a registry that knows:
+        // - Account has columns: Id
+        // - AccountTag has columns: Id, AccountId
+        // This allows schema-aware resolution to correctly resolve AccountId to AccountTag
+        let registry = registry_with_columns(&[
+            ("dbo", "Account", &["Id"]),
+            ("dbo", "AccountTag", &["Id", "AccountId"]),
+        ]);
+        let deps = extract_body_dependencies(sql, "[dbo].[TestProc]", &[], &registry);
 
         // Should have [dbo].[AccountTag].[AccountId] (AccountId resolves to inner table)
         let has_accounttag_accountid = deps.iter().any(|d| match d {

@@ -37,7 +37,7 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 
 ## Phase 50: Fix Schema-Aware Resolution Gaps
 
-**Status:** NOT STARTED
+**Status:** PHASE 50.1 COMPLETE
 
 **Goal:** Address gaps identified in Phase 49 review - remove unsafe fallback behavior, add view support, and complete deferred testing.
 
@@ -46,23 +46,28 @@ Two fixtures are excluded from parity testing because DotNet fails to build them
 Phase 49 implemented schema-aware column resolution but included a "backward compatibility" fallback that defeats the purpose:
 
 ```rust
-// Current behavior (problematic)
+// Old behavior (problematic) - FIXED in Phase 50.1
 match candidates.len() {
     1 => Some(table),      // Unique match - resolve ✓
-    0 => fallback_table,   // PROBLEM: Still causes false positives
+    0 => fallback_table,   // WAS: Still causes false positives - NOW RETURNS None
     _ => None,             // Ambiguous - skip ✓
 }
 ```
 
-When 0 tables in the registry have the column, the code falls back to the first table in scope - **preserving the exact bug we were trying to fix**.
+When 0 tables in the registry have the column, the code now returns `None` instead of falling back to the first table - correctly skipping dependency emission when we don't know which table has the column.
 
-### Phase 50.1: Remove Fallback Behavior (3 tasks)
+### Phase 50.1: Remove Fallback Behavior (3 tasks) - COMPLETE 2026-02-04
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 50.1.1 | Change `find_scope_table_for_column()` to return `None` when 0 matches | ⬜ | Remove fallback to first table |
-| 50.1.2 | Update callers to handle `None` by skipping dependency emission | ⬜ | Don't emit ref when column can't be resolved |
-| 50.1.3 | Run parity tests and document any new failures | ⬜ | Failures indicate DotNet behavior differences to investigate |
+| 50.1.1 | Change `find_scope_table_for_column()` to return `None` when 0 matches | ✅ | Fallback removed, returns None |
+| 50.1.2 | Update callers to handle `None` by skipping dependency emission | ✅ | Callers already used `if let Some()` pattern |
+| 50.1.3 | Run parity tests and document any new failures | ✅ | All 57 parity tests pass, no regressions |
+
+**Implementation Notes:**
+- Changed line 1452 in `body_deps.rs`: `0 => tables_in_scope.first()` → `0 => None`
+- Added `registry_with_columns()` test helper for creating registries with specific column data
+- Updated `test_apply_subquery_unqualified_column_resolution` to use schema-aware registry
 
 ### Phase 50.2: Add View Columns to Registry (4 tasks)
 
@@ -123,14 +128,12 @@ See `docs/UNQUALIFIED_COLUMN_RESOLUTION_ISSUE.md` for full analysis of the probl
 
 Created `ColumnRegistry` to map tables to their columns, threaded it through the call chain, and updated resolution logic:
 - If exactly 1 table in scope has the column → resolve to that table
-- If 0 tables have the column → fall back to first table (backward compatibility - **to be fixed in Phase 50**)
+- If 0 tables have the column → return None (skip dependency emission) - **FIXED in Phase 50.1**
 - If >1 tables have the column → skip resolution (ambiguous)
 
 **Files Created/Modified:**
 - `src/dacpac/model_xml/column_registry.rs` (new - 380 lines)
 - `src/dacpac/model_xml/mod.rs`, `body_deps.rs`, `programmability_writer.rs`, `view_writer.rs`
-
-**Known Issue:** The "0 matches = fallback" behavior preserves false positives. Phase 50 addresses this.
 
 ---
 
@@ -140,7 +143,6 @@ Created `ColumnRegistry` to map tables to their columns, threaded it through the
 |-------|----------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | 65 errors (ordering/deduplication differences, not affecting functionality) |
 | Layer 7 parity remaining | model_xml | 34/48 failing due to element ordering, formatting differences |
-| Phase 49 fallback behavior | body_deps.rs | Creates false positives when 0 tables match - Phase 50 will fix |
 
 ---
 
