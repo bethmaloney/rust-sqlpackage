@@ -20,6 +20,31 @@ use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 
 use super::token_parser_base::TokenParser;
 
+/// A column in a parsed index with sort direction
+#[derive(Debug, Clone, Default)]
+pub struct ParsedIndexColumn {
+    /// Column name
+    pub name: String,
+    /// Whether the column is sorted descending (true = DESC, false = ASC/default)
+    pub is_descending: bool,
+}
+
+impl ParsedIndexColumn {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            is_descending: false,
+        }
+    }
+
+    pub fn with_direction(name: String, is_descending: bool) -> Self {
+        Self {
+            name,
+            is_descending,
+        }
+    }
+}
+
 /// Result of parsing an index definition using tokens
 #[derive(Debug, Clone, Default)]
 pub struct TokenParsedIndex {
@@ -29,8 +54,8 @@ pub struct TokenParsedIndex {
     pub table_schema: String,
     /// Table name the index is on
     pub table_name: String,
-    /// Key columns in the index (column names only, stripped of ASC/DESC)
-    pub columns: Vec<String>,
+    /// Key columns in the index with sort direction
+    pub columns: Vec<ParsedIndexColumn>,
     /// Columns included in the index leaf level (INCLUDE clause)
     pub include_columns: Vec<String>,
     /// Whether the index is UNIQUE
@@ -158,7 +183,7 @@ impl IndexTokenParser {
             if self.base.check_keyword(Keyword::INCLUDE) {
                 self.base.advance();
                 self.base.skip_whitespace();
-                if let Some(cols) = self.parse_column_list() {
+                if let Some(cols) = self.parse_simple_column_list() {
                     result.include_columns = cols;
                 }
                 continue;
@@ -332,9 +357,9 @@ impl IndexTokenParser {
         result
     }
 
-    /// Parse a parenthesized column list: ([Col1], [Col2] DESC, [Col3] ASC)
-    /// Returns just the column names, stripping ASC/DESC
-    fn parse_column_list(&mut self) -> Option<Vec<String>> {
+    /// Parse a parenthesized simple column list: ([Col1], [Col2], [Col3])
+    /// Returns just column names (for INCLUDE clause which doesn't support sort direction)
+    fn parse_simple_column_list(&mut self) -> Option<Vec<String>> {
         // Expect opening parenthesis
         if !self.base.check_token(&Token::LParen) {
             return None;
@@ -351,16 +376,70 @@ impl IndexTokenParser {
             if let Some(col_name) = self.base.parse_identifier() {
                 columns.push(col_name);
             } else {
-                // No valid identifier, break
                 break;
             }
 
             self.base.skip_whitespace();
 
-            // Skip optional ASC/DESC
-            if self.base.check_keyword(Keyword::ASC) || self.base.check_keyword(Keyword::DESC) {
+            // Check for comma (more columns) or right paren (end)
+            if self.base.check_token(&Token::Comma) {
                 self.base.advance();
                 self.base.skip_whitespace();
+            } else if self.base.check_token(&Token::RParen) {
+                break;
+            } else {
+                self.base.advance();
+            }
+        }
+
+        // Consume closing parenthesis
+        if self.base.check_token(&Token::RParen) {
+            self.base.advance();
+        }
+
+        if columns.is_empty() {
+            None
+        } else {
+            Some(columns)
+        }
+    }
+
+    /// Parse a parenthesized column list: ([Col1], [Col2] DESC, [Col3] ASC)
+    /// Returns columns with their sort direction preserved
+    fn parse_column_list(&mut self) -> Option<Vec<ParsedIndexColumn>> {
+        // Expect opening parenthesis
+        if !self.base.check_token(&Token::LParen) {
+            return None;
+        }
+        self.base.advance();
+        self.base.skip_whitespace();
+
+        let mut columns = Vec::new();
+
+        while !self.base.is_at_end() && !self.base.check_token(&Token::RParen) {
+            self.base.skip_whitespace();
+
+            // Parse column name
+            if let Some(col_name) = self.base.parse_identifier() {
+                self.base.skip_whitespace();
+
+                // Check for optional ASC/DESC - default is ASC (is_descending = false)
+                let is_descending = if self.base.check_keyword(Keyword::DESC) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    true
+                } else if self.base.check_keyword(Keyword::ASC) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    false
+                } else {
+                    false // Default is ascending
+                };
+
+                columns.push(ParsedIndexColumn::with_direction(col_name, is_descending));
+            } else {
+                // No valid identifier, break
+                break;
             }
 
             // Check for comma (more columns) or right paren (end)
@@ -554,6 +633,11 @@ fn tokens_to_predicate_string(tokens: &[TokenWithSpan]) -> String {
 mod tests {
     use super::*;
 
+    /// Helper function to extract just column names from ParsedIndexColumn vec
+    fn column_names(columns: &[ParsedIndexColumn]) -> Vec<&str> {
+        columns.iter().map(|c| c.name.as_str()).collect()
+    }
+
     // ========================================================================
     // Basic CREATE INDEX tests
     // ========================================================================
@@ -565,7 +649,8 @@ mod tests {
         assert_eq!(result.name, "IX_Table_Col");
         assert_eq!(result.table_schema, "dbo");
         assert_eq!(result.table_name, "MyTable");
-        assert_eq!(result.columns, vec!["Col1"]);
+        assert_eq!(column_names(&result.columns), vec!["Col1"]);
+        assert!(!result.columns[0].is_descending);
         assert!(!result.is_unique);
         assert!(result.is_clustered);
     }
@@ -613,28 +698,40 @@ mod tests {
     fn test_index_multiple_columns() {
         let sql = "CREATE NONCLUSTERED INDEX [IX_Multi] ON [dbo].[Orders] ([CustomerId], [OrderDate], [Status])";
         let result = parse_create_index_tokens(sql).unwrap();
-        assert_eq!(result.columns, vec!["CustomerId", "OrderDate", "Status"]);
+        assert_eq!(
+            column_names(&result.columns),
+            vec!["CustomerId", "OrderDate", "Status"]
+        );
+        // All should be ascending (default)
+        assert!(result.columns.iter().all(|c| !c.is_descending));
     }
 
     #[test]
     fn test_index_columns_with_asc() {
         let sql = "CREATE NONCLUSTERED INDEX [IX_Asc] ON [dbo].[Table] ([Col1] ASC, [Col2] ASC)";
         let result = parse_create_index_tokens(sql).unwrap();
-        assert_eq!(result.columns, vec!["Col1", "Col2"]);
+        assert_eq!(column_names(&result.columns), vec!["Col1", "Col2"]);
+        assert!(!result.columns[0].is_descending);
+        assert!(!result.columns[1].is_descending);
     }
 
     #[test]
     fn test_index_columns_with_desc() {
         let sql = "CREATE NONCLUSTERED INDEX [IX_Desc] ON [dbo].[Table] ([Col1] DESC, [Col2] DESC)";
         let result = parse_create_index_tokens(sql).unwrap();
-        assert_eq!(result.columns, vec!["Col1", "Col2"]);
+        assert_eq!(column_names(&result.columns), vec!["Col1", "Col2"]);
+        assert!(result.columns[0].is_descending);
+        assert!(result.columns[1].is_descending);
     }
 
     #[test]
     fn test_index_columns_mixed_order() {
         let sql = "CREATE NONCLUSTERED INDEX [IX_Mixed] ON [dbo].[Table] ([Col1] ASC, [Col2] DESC, [Col3])";
         let result = parse_create_index_tokens(sql).unwrap();
-        assert_eq!(result.columns, vec!["Col1", "Col2", "Col3"]);
+        assert_eq!(column_names(&result.columns), vec!["Col1", "Col2", "Col3"]);
+        assert!(!result.columns[0].is_descending); // ASC
+        assert!(result.columns[1].is_descending); // DESC
+        assert!(!result.columns[2].is_descending); // default (ASC)
     }
 
     // ========================================================================
@@ -646,7 +743,7 @@ mod tests {
         let sql =
             "CREATE NONCLUSTERED INDEX [IX_Inc] ON [dbo].[Table] ([KeyCol]) INCLUDE ([IncCol])";
         let result = parse_create_index_tokens(sql).unwrap();
-        assert_eq!(result.columns, vec!["KeyCol"]);
+        assert_eq!(column_names(&result.columns), vec!["KeyCol"]);
         assert_eq!(result.include_columns, vec!["IncCol"]);
     }
 
@@ -654,7 +751,7 @@ mod tests {
     fn test_index_with_include_multiple() {
         let sql = "CREATE NONCLUSTERED INDEX [IX_Inc] ON [dbo].[Orders] ([OrderId]) INCLUDE ([CustomerName], [OrderDate], [Total])";
         let result = parse_create_index_tokens(sql).unwrap();
-        assert_eq!(result.columns, vec!["OrderId"]);
+        assert_eq!(column_names(&result.columns), vec!["OrderId"]);
         assert_eq!(
             result.include_columns,
             vec!["CustomerName", "OrderDate", "Total"]
@@ -789,7 +886,7 @@ mod tests {
         assert_eq!(result.name, "IX_Test");
         assert_eq!(result.table_schema, "dbo");
         assert_eq!(result.table_name, "MyTable");
-        assert_eq!(result.columns, vec!["Col1", "Col2"]);
+        assert_eq!(column_names(&result.columns), vec!["Col1", "Col2"]);
     }
 
     #[test]
@@ -842,7 +939,9 @@ WITH (FILLFACTOR = 80)
 "#;
         let result = parse_create_index_tokens(sql).unwrap();
         assert_eq!(result.name, "IX_Test");
-        assert_eq!(result.columns, vec!["Col1", "Col2"]);
+        assert_eq!(column_names(&result.columns), vec!["Col1", "Col2"]);
+        assert!(!result.columns[0].is_descending); // Default (ASC)
+        assert!(result.columns[1].is_descending); // DESC
         assert_eq!(result.include_columns, vec!["Col3", "Col4"]);
         assert!(result.filter_predicate.is_some());
         assert_eq!(result.fill_factor, Some(80));
@@ -912,7 +1011,12 @@ WITH (FILLFACTOR = 90, DATA_COMPRESSION = PAGE)
         assert_eq!(result.table_name, "Orders");
         assert!(result.is_unique);
         assert!(!result.is_clustered);
-        assert_eq!(result.columns, vec!["CustomerId", "OrderNumber"]);
+        assert_eq!(
+            column_names(&result.columns),
+            vec!["CustomerId", "OrderNumber"]
+        );
+        assert!(!result.columns[0].is_descending); // ASC
+        assert!(!result.columns[1].is_descending); // ASC
         assert_eq!(result.include_columns.len(), 4);
         assert!(result.filter_predicate.is_some());
         assert_eq!(result.fill_factor, Some(90));

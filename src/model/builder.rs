@@ -25,7 +25,7 @@ use crate::project::SqlProject;
 use super::{
     ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType,
     DatabaseModel, ExtendedPropertyElement, FullTextCatalogElement, FullTextColumnElement,
-    FullTextIndexElement, FunctionElement, FunctionType, IndexElement, ModelElement,
+    FullTextIndexElement, FunctionElement, FunctionType, IndexColumn, IndexElement, ModelElement,
     ParameterElement, ProcedureElement, RawElement, ScalarTypeElement, SchemaElement,
     SequenceElement, TableElement, TableTypeColumnElement, TableTypeConstraint, TriggerElement,
     UserDefinedTypeElement, ViewElement,
@@ -227,11 +227,16 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 }
                                 _ => None,
                             });
+                    // Convert ParsedIndexColumn to IndexColumn
+                    let index_columns: Vec<IndexColumn> = columns
+                        .iter()
+                        .map(|c| IndexColumn::with_direction(c.name.clone(), c.is_descending))
+                        .collect();
                     model.add_element(ModelElement::Index(IndexElement {
                         name: name.clone(),
                         table_schema: table_schema.clone(),
                         table_name: table_name.clone(),
-                        columns: columns.clone(),
+                        columns: index_columns,
                         include_columns: include_columns.clone(),
                         is_unique: *is_unique,
                         is_clustered: *is_clustered,
@@ -713,10 +718,17 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 let (table_schema, table_name) =
                     extract_schema_and_name(&create_index.table_name, &project.default_schema);
 
-                let columns: Vec<String> = create_index
+                // Extract columns with sort direction from OrderByExpr
+                // asc is Some(true) for ASC, Some(false) for DESC, None for unspecified (default ASC)
+                let columns: Vec<IndexColumn> = create_index
                     .columns
                     .iter()
-                    .map(|c| c.expr.to_string())
+                    .map(|c| {
+                        let name = c.expr.to_string();
+                        // asc: Some(true) = ASC, Some(false) = DESC, None = default (ASC)
+                        let is_descending = c.asc == Some(false);
+                        IndexColumn::with_direction(name, is_descending)
+                    })
                     .collect();
 
                 // Extract INCLUDE columns if available from sqlparser

@@ -326,7 +326,8 @@ pub struct IndexElement {
     pub name: String,
     pub table_schema: String,
     pub table_name: String,
-    pub columns: Vec<String>,
+    /// Key columns in the index with sort direction
+    pub columns: Vec<IndexColumn>,
     /// Columns included in the index leaf level (INCLUDE clause)
     pub include_columns: Vec<String>,
     pub is_unique: bool,
@@ -379,6 +380,29 @@ pub enum SortDirection {
     #[default]
     Ascending,
     Descending,
+}
+
+/// A column in an index with sort direction
+#[derive(Debug, Clone)]
+pub struct IndexColumn {
+    pub name: String,
+    pub is_descending: bool,
+}
+
+impl IndexColumn {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            is_descending: false,
+        }
+    }
+
+    pub fn with_direction(name: String, is_descending: bool) -> Self {
+        Self {
+            name,
+            is_descending,
+        }
+    }
 }
 
 /// A column in a constraint with optional sort direction

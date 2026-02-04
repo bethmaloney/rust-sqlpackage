@@ -106,23 +106,22 @@ fn write_index_column_specifications<W: Write>(
     let rel = BytesStart::new("Relationship").with_attributes([("Name", "ColumnSpecifications")]);
     writer.write_event(Event::Start(rel))?;
 
-    for (i, col) in index.columns.iter().enumerate() {
+    for col in index.columns.iter() {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-        let spec_name = format!(
-            "[{}].[{}].[{}].[{}]",
-            index.table_schema, index.table_name, index.name, i
-        );
-
-        // Use with_attributes for batched attribute setting (Phase 16.3.3 optimization)
-        let elem = BytesStart::new("Element").with_attributes([
-            ("Type", "SqlIndexedColumnSpecification"),
-            ("Name", spec_name.as_str()),
-        ]);
+        // DotNet does NOT include Name attribute on SqlIndexedColumnSpecification elements
+        let elem =
+            BytesStart::new("Element").with_attributes([("Type", "SqlIndexedColumnSpecification")]);
         writer.write_event(Event::Start(elem))?;
 
+        // Write IsAscending="False" property for descending columns
+        // DotNet only emits this property when the column is descending (omit for ascending/default)
+        if col.is_descending {
+            write_property(writer, "IsAscending", "False")?;
+        }
+
         // Reference to the column
-        let col_ref = format!("{}.[{}]", table_ref, col);
+        let col_ref = format!("{}.[{}]", table_ref, col.name);
         write_relationship(writer, "Column", &[&col_ref])?;
 
         writer.write_event(Event::End(BytesEnd::new("Element")))?;
@@ -384,7 +383,7 @@ pub(crate) fn write_extended_property<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{FullTextColumnElement, IndexElement};
+    use crate::model::{FullTextColumnElement, IndexColumn, IndexElement};
 
     #[test]
     fn test_write_index_basic() {
@@ -392,7 +391,10 @@ mod tests {
             name: "IX_Test".to_string(),
             table_schema: "dbo".to_string(),
             table_name: "TestTable".to_string(),
-            columns: vec!["Col1".to_string(), "Col2".to_string()],
+            columns: vec![
+                IndexColumn::new("Col1".to_string()),
+                IndexColumn::new("Col2".to_string()),
+            ],
             is_unique: false,
             is_clustered: false,
             include_columns: vec![],
@@ -410,6 +412,8 @@ mod tests {
         assert!(xml.contains(r#"Name="[dbo].[TestTable].[IX_Test]""#));
         assert!(xml.contains(r#"Name="ColumnSpecifications""#));
         assert!(xml.contains(r#"Name="IndexedObject""#));
+        // SqlIndexedColumnSpecification elements should NOT have Name attribute
+        assert!(!xml.contains(r#"Type="SqlIndexedColumnSpecification" Name="#));
     }
 
     #[test]
@@ -418,7 +422,7 @@ mod tests {
             name: "IX_Unique".to_string(),
             table_schema: "dbo".to_string(),
             table_name: "TestTable".to_string(),
-            columns: vec!["Col1".to_string()],
+            columns: vec![IndexColumn::new("Col1".to_string())],
             is_unique: true,
             is_clustered: true,
             include_columns: vec![],
@@ -443,7 +447,7 @@ mod tests {
             name: "IX_Include".to_string(),
             table_schema: "dbo".to_string(),
             table_name: "TestTable".to_string(),
-            columns: vec!["Col1".to_string()],
+            columns: vec![IndexColumn::new("Col1".to_string())],
             is_unique: false,
             is_clustered: false,
             include_columns: vec!["Col2".to_string(), "Col3".to_string()],
@@ -460,6 +464,36 @@ mod tests {
         assert!(xml.contains(r#"Name="IncludedColumns""#));
         assert!(xml.contains(r#"[dbo].[TestTable].[Col2]"#));
         assert!(xml.contains(r#"[dbo].[TestTable].[Col3]"#));
+    }
+
+    #[test]
+    fn test_write_index_with_descending_column() {
+        let index = IndexElement {
+            name: "IX_Desc".to_string(),
+            table_schema: "dbo".to_string(),
+            table_name: "TestTable".to_string(),
+            columns: vec![
+                IndexColumn::new("Col1".to_string()), // ASC (default)
+                IndexColumn::with_direction("Col2".to_string(), true), // DESC
+            ],
+            is_unique: false,
+            is_clustered: false,
+            include_columns: vec![],
+            filter_predicate: None,
+            fill_factor: None,
+            data_compression: None,
+        };
+
+        let mut buffer = Vec::new();
+        let mut writer = Writer::new(&mut buffer);
+        write_index(&mut writer, &index).unwrap();
+
+        let xml = String::from_utf8(buffer).unwrap();
+        // Should have IsAscending="False" for the descending column
+        assert!(xml.contains(r#"Name="IsAscending" Value="False""#));
+        // The ascending column should NOT have IsAscending property (omitted for default)
+        // Count occurrences of IsAscending - should be exactly 1
+        assert_eq!(xml.matches("IsAscending").count(), 1);
     }
 
     #[test]

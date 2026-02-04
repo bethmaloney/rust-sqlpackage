@@ -22,7 +22,9 @@ use super::function_parser::{
     parse_create_function_tokens, TokenParsedFunctionType,
 };
 use super::identifier_utils::format_token_sql;
-use super::index_parser::{extract_index_filter_predicate_tokenized, parse_create_index_tokens};
+use super::index_parser::{
+    extract_index_filter_predicate_tokenized, parse_create_index_tokens, ParsedIndexColumn,
+};
 use super::preprocess_parser::preprocess_tsql_tokens;
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
 use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
@@ -241,7 +243,8 @@ pub enum FallbackStatementType {
         name: String,
         table_schema: String,
         table_name: String,
-        columns: Vec<String>,
+        /// Key columns in the index with sort direction
+        columns: Vec<ParsedIndexColumn>,
         /// Columns included in the index leaf level (INCLUDE clause)
         include_columns: Vec<String>,
         is_unique: bool,
@@ -1391,9 +1394,9 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
         .unwrap_or_else(|| "dbo".to_string());
     let table_name = caps.get(5)?.as_str().to_string();
 
-    // Parse column list, handling sort direction (ASC/DESC)
+    // Parse column list with sort direction (ASC/DESC)
     let columns_str = caps.get(6)?.as_str();
-    let columns: Vec<String> = parse_column_list(columns_str);
+    let columns: Vec<ParsedIndexColumn> = parse_column_list(columns_str);
 
     // Extract INCLUDE columns if present
     let include_columns = extract_include_columns(sql);
@@ -1421,19 +1424,27 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     })
 }
 
-/// Parse a comma-separated column list, stripping brackets and sort direction
-fn parse_column_list(columns_str: &str) -> Vec<String> {
+/// Parse a comma-separated column list, extracting column names and sort direction
+fn parse_column_list(columns_str: &str) -> Vec<ParsedIndexColumn> {
     columns_str
         .split(',')
         .map(|col| {
-            // Extract column name, stripping brackets and sort direction
+            // Extract column name and sort direction
             let col = col.trim();
-            let re_col = regex::Regex::new(r"(?i)\[?(\w+)\]?(?:\s+(?:ASC|DESC))?").ok();
-            re_col
-                .and_then(|r| r.captures(col))
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_else(|| col.to_string())
+            let re_col = regex::Regex::new(r"(?i)\[?(\w+)\]?(?:\s+(ASC|DESC))?").ok();
+            if let Some(caps) = re_col.and_then(|r| r.captures(col)) {
+                let name = caps
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| col.to_string());
+                let is_descending = caps
+                    .get(2)
+                    .map(|m| m.as_str().to_uppercase() == "DESC")
+                    .unwrap_or(false);
+                ParsedIndexColumn::with_direction(name, is_descending)
+            } else {
+                ParsedIndexColumn::new(col.to_string())
+            }
         })
         .collect()
 }
@@ -1445,8 +1456,23 @@ fn extract_include_columns(sql: &str) -> Vec<String> {
 
     re.and_then(|r| r.captures(sql))
         .and_then(|caps| caps.get(1))
-        .map(|m| parse_column_list(m.as_str()))
+        .map(|m| parse_simple_column_list(m.as_str()))
         .unwrap_or_default()
+}
+
+/// Parse a comma-separated column list, extracting just column names (for INCLUDE clause)
+fn parse_simple_column_list(columns_str: &str) -> Vec<String> {
+    columns_str
+        .split(',')
+        .filter_map(|col| {
+            let col = col.trim();
+            let re_col = regex::Regex::new(r"(?i)\[?(\w+)\]?").ok()?;
+            re_col
+                .captures(col)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string())
+        })
+        .collect()
 }
 
 /// Extract FILLFACTOR value from index WITH clause

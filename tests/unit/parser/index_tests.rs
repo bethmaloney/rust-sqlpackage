@@ -218,7 +218,8 @@ fn test_parse_index_missing_whitespace_before_on() {
             assert_eq!(name, "IX_Test");
             assert_eq!(table_name, "Table");
             assert_eq!(columns.len(), 1);
-            assert_eq!(columns[0], "Col1");
+            assert_eq!(columns[0].name, "Col1");
+            assert!(!columns[0].is_descending); // Default is ascending
             assert_eq!(include_columns.len(), 1);
             assert_eq!(include_columns[0], "Col2");
         }
