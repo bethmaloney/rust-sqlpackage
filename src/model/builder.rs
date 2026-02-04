@@ -530,6 +530,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         filegroups: filegroups.clone(),
                     }));
                 }
+                FallbackStatementType::SkippedSecurityStatement { statement_type: _ } => {
+                    // Security/deployment statements are silently skipped
+                    // They are valid T-SQL but not schema elements that belong in a dacpac
+                    // Examples: GRANT, DENY, REVOKE, CREATE LOGIN, CREATE USER, etc.
+                }
             }
             continue;
         }

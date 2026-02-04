@@ -387,6 +387,12 @@ pub enum FallbackStatementType {
         /// List of filegroups to map partitions to
         filegroups: Vec<String>,
     },
+    /// Security/deployment statements that should be silently skipped
+    /// These are valid T-SQL but not schema elements (CREATE LOGIN, CREATE USER, GRANT, DENY, REVOKE, etc.)
+    SkippedSecurityStatement {
+        /// Type of statement (for logging/debugging)
+        statement_type: String,
+    },
 }
 
 /// Function type detected from SQL
@@ -780,6 +786,14 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         }
     }
 
+    // Check for security/deployment statements that should be silently skipped
+    // These are valid T-SQL but not schema elements - they're typically deployment-time only
+    if let Some(security_type) = try_security_statement_fallback(&sql_upper) {
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: security_type,
+        });
+    }
+
     // Generic fallback for any other CREATE statements
     if let Some(fallback) = try_generic_create_fallback(sql) {
         return Some(fallback);
@@ -872,6 +886,117 @@ fn try_xml_method_fallback(sql: &str) -> Option<FallbackStatementType> {
         schema: parsed.schema,
         name: parsed.name,
     })
+}
+
+/// Check for security/deployment statements that should be silently skipped.
+/// These are valid T-SQL but not schema elements that belong in a dacpac.
+/// Returns Some(statement_type) if the SQL matches a security statement pattern.
+///
+/// Skipped statements:
+/// - GRANT/DENY/REVOKE - permission statements
+/// - CREATE/ALTER/DROP LOGIN - server-level authentication
+/// - CREATE/ALTER/DROP USER - database-level authentication
+/// - CREATE/ALTER/DROP ROLE - database roles
+/// - CREATE/ALTER/DROP APPLICATION ROLE - application roles
+/// - CREATE/ALTER/DROP CERTIFICATE - security certificates
+/// - CREATE/ALTER/DROP ASYMMETRIC KEY - asymmetric key management
+/// - CREATE/ALTER/DROP SYMMETRIC KEY - symmetric key management
+/// - CREATE/ALTER/DROP CREDENTIAL - server credentials
+/// - ADD/DROP MEMBER - role membership
+/// - CREATE/ALTER/DROP SERVER ROLE - server roles
+fn try_security_statement_fallback(sql_upper: &str) -> Option<String> {
+    // Permission statements (most common)
+    if sql_upper.starts_with("GRANT ") {
+        return Some("GRANT".to_string());
+    }
+    if sql_upper.starts_with("DENY ") {
+        return Some("DENY".to_string());
+    }
+    if sql_upper.starts_with("REVOKE ") {
+        return Some("REVOKE".to_string());
+    }
+
+    // Login management (server-level)
+    if sql_upper.contains("CREATE LOGIN")
+        || sql_upper.contains("ALTER LOGIN")
+        || sql_upper.contains("DROP LOGIN")
+    {
+        return Some("LOGIN".to_string());
+    }
+
+    // User management (database-level)
+    if sql_upper.contains("CREATE USER")
+        || sql_upper.contains("ALTER USER")
+        || sql_upper.contains("DROP USER")
+    {
+        return Some("USER".to_string());
+    }
+
+    // Role management
+    if sql_upper.contains("CREATE ROLE")
+        || sql_upper.contains("ALTER ROLE")
+        || sql_upper.contains("DROP ROLE")
+    {
+        return Some("ROLE".to_string());
+    }
+
+    // Application role management
+    if sql_upper.contains("CREATE APPLICATION ROLE")
+        || sql_upper.contains("ALTER APPLICATION ROLE")
+        || sql_upper.contains("DROP APPLICATION ROLE")
+    {
+        return Some("APPLICATION_ROLE".to_string());
+    }
+
+    // Server role management
+    if sql_upper.contains("CREATE SERVER ROLE")
+        || sql_upper.contains("ALTER SERVER ROLE")
+        || sql_upper.contains("DROP SERVER ROLE")
+    {
+        return Some("SERVER_ROLE".to_string());
+    }
+
+    // Certificate management
+    if sql_upper.contains("CREATE CERTIFICATE")
+        || sql_upper.contains("ALTER CERTIFICATE")
+        || sql_upper.contains("DROP CERTIFICATE")
+    {
+        return Some("CERTIFICATE".to_string());
+    }
+
+    // Asymmetric key management
+    if sql_upper.contains("CREATE ASYMMETRIC KEY")
+        || sql_upper.contains("ALTER ASYMMETRIC KEY")
+        || sql_upper.contains("DROP ASYMMETRIC KEY")
+    {
+        return Some("ASYMMETRIC_KEY".to_string());
+    }
+
+    // Symmetric key management
+    if sql_upper.contains("CREATE SYMMETRIC KEY")
+        || sql_upper.contains("ALTER SYMMETRIC KEY")
+        || sql_upper.contains("DROP SYMMETRIC KEY")
+    {
+        return Some("SYMMETRIC_KEY".to_string());
+    }
+
+    // Credential management
+    if sql_upper.contains("CREATE CREDENTIAL")
+        || sql_upper.contains("ALTER CREDENTIAL")
+        || sql_upper.contains("DROP CREDENTIAL")
+    {
+        return Some("CREDENTIAL".to_string());
+    }
+
+    // Role membership - sp_addrolemember, sp_droprolemember, ALTER ROLE ... ADD MEMBER
+    if sql_upper.contains("SP_ADDROLEMEMBER")
+        || sql_upper.contains("SP_DROPROLEMEMBER")
+        || (sql_upper.contains("ALTER ROLE") && sql_upper.contains("MEMBER"))
+    {
+        return Some("ROLE_MEMBERSHIP".to_string());
+    }
+
+    None
 }
 
 /// Extract schema and name from ALTER TABLE statement
@@ -1973,7 +2098,8 @@ fn preprocess_tsql(sql: &str) -> PreprocessResult {
     }
 }
 
-/// Split SQL content into batches by GO statement, tracking line numbers
+/// Split SQL content into batches by GO statement, tracking line numbers.
+/// This function is comment-aware and ignores GO statements inside block comments.
 fn split_batches(content: &str) -> Vec<Batch<'_>> {
     // Estimate ~1 batch per 20 lines (GO separators are relatively sparse)
     let line_count = content.lines().count();
@@ -1983,6 +2109,7 @@ fn split_batches(content: &str) -> Vec<Batch<'_>> {
     let mut batch_start = 0;
     let mut current_line = 1; // 1-based line numbers
     let mut batch_start_line = 1;
+    let mut in_block_comment = false;
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -1996,9 +2123,44 @@ fn split_batches(content: &str) -> Vec<Batch<'_>> {
             line_end // End of file, no newline
         };
 
+        // Track block comment state by scanning this line for /* and */ markers.
+        // We need to track comment state character by character to handle:
+        // - Multiple /* or */ on same line
+        // - Comment markers after code on the same line
+        // Note: We don't need to handle string literals here since GO must be
+        // on its own line - a line with GO and a string would never match anyway.
+        let mut i = 0;
+        let line_bytes = line.as_bytes();
+        while i < line_bytes.len() {
+            if !in_block_comment {
+                // Check for /* to enter block comment
+                if i + 1 < line_bytes.len() && line_bytes[i] == b'/' && line_bytes[i + 1] == b'*' {
+                    in_block_comment = true;
+                    i += 2;
+                    continue;
+                }
+                // Check for -- to skip rest of line (line comment)
+                if i + 1 < line_bytes.len() && line_bytes[i] == b'-' && line_bytes[i + 1] == b'-' {
+                    // Rest of line is a comment, no need to scan further
+                    break;
+                }
+            } else {
+                // Inside block comment, look for */ to exit
+                if i + 1 < line_bytes.len() && line_bytes[i] == b'*' && line_bytes[i + 1] == b'/' {
+                    in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+
         // GO must be on its own line (optionally with whitespace)
         // Also handle GO; with trailing semicolon (common in some SQL scripts)
-        if trimmed.eq_ignore_ascii_case("go") || trimmed.eq_ignore_ascii_case("go;") {
+        // Only treat GO as a batch separator if we're NOT inside a block comment
+        if !in_block_comment
+            && (trimmed.eq_ignore_ascii_case("go") || trimmed.eq_ignore_ascii_case("go;"))
+        {
             if current_pos > batch_start {
                 batches.push(Batch {
                     content: &content[batch_start..current_pos],

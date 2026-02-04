@@ -147,7 +147,7 @@ CREATE TABLE t2 (id INT)
 #[test]
 fn test_split_batches_go_in_block_comment() {
     // GO inside a block comment should NOT cause a split
-    // This tests whether the batch splitter is comment-aware
+    // The batch splitter is comment-aware and ignores GO inside /* */ blocks
     let sql = r#"
 CREATE TABLE t1 (id INT)
 /*
@@ -160,21 +160,69 @@ CREATE TABLE t2 (id INT)
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    // This documents current behavior - if the batch splitter is not comment-aware,
-    // it will fail. If it is comment-aware, it should produce 2 statements.
-    match result {
-        Ok(statements) => {
-            assert_eq!(
-                statements.len(),
-                2,
-                "GO in block comment should not cause split"
-            );
-        }
-        Err(e) => {
-            // Document that GO in block comments is not currently handled
-            println!("Note: GO in block comments not handled: {:?}", e);
-        }
-    }
+    let statements = result.expect("GO in block comment should not cause parse error");
+    assert_eq!(
+        statements.len(),
+        2,
+        "GO in block comment should not cause split"
+    );
+}
+
+#[test]
+fn test_split_batches_multiple_go_in_block_comment() {
+    // Multiple GO statements inside a single block comment should all be ignored
+    let sql = r#"
+CREATE TABLE t1 (id INT)
+/*
+GO
+GO
+GO
+*/
+GO
+CREATE TABLE t2 (id INT)
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    let statements = result.expect("Multiple GO in block comment should not cause parse error");
+    assert_eq!(
+        statements.len(),
+        2,
+        "Multiple GO in block comment should not cause split"
+    );
+}
+
+#[test]
+fn test_split_batches_block_comment_open_close_same_line() {
+    // Block comment that opens and closes on the same line should not affect GO on next line
+    let sql = r#"
+CREATE TABLE t1 (id INT) /* inline comment */
+GO
+CREATE TABLE t2 (id INT)
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    let statements = result.expect("Inline block comment should not affect following GO statement");
+    assert_eq!(statements.len(), 2);
+}
+
+#[test]
+fn test_split_batches_nested_style_comments() {
+    // SQL Server doesn't support nested block comments, but we should handle
+    // the case where /* appears inside a comment (it's just text)
+    let sql = r#"
+CREATE TABLE t1 (id INT)
+/* outer comment /* this is just text */ still in comment */
+GO
+CREATE TABLE t2 (id INT)
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    // After first */, we're outside comment, so GO should split
+    let statements = result.expect("Should parse successfully");
+    assert_eq!(statements.len(), 2);
 }
 
 // ============================================================================
@@ -509,5 +557,99 @@ CREATE TABLE [dbo].[Test] (
         result.is_ok(),
         "Special characters in strings should parse: {:?}",
         result.err()
+    );
+}
+
+// ============================================================================
+// Security Statement Tests (Phase 50.5)
+// ============================================================================
+
+#[test]
+fn test_security_statements_are_skipped() {
+    // Security statements like GRANT, CREATE LOGIN, CREATE USER should be
+    // silently skipped - they parse successfully but don't produce model elements
+    let sql = r#"
+CREATE TABLE [dbo].[Users] (
+    [Id] INT PRIMARY KEY
+);
+GO
+GRANT SELECT ON [dbo].[Users] TO PUBLIC;
+GO
+CREATE LOGIN WebApi WITH PASSWORD = 'Test123!';
+GO
+CREATE USER WebApi FOR LOGIN WebApi;
+GO
+GRANT INSERT ON [dbo].[Users] TO WebApi;
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    let statements = result.expect("Security statements should parse without errors");
+    // We should have parsed 5 batches, but only one produces a model element (the CREATE TABLE)
+    assert_eq!(statements.len(), 5, "Should have 5 parsed statements");
+}
+
+#[test]
+fn test_security_statement_types_recognized() {
+    // Test various security statement types that should be recognized
+    let test_cases = vec![
+        ("GRANT SELECT ON dbo.Table1 TO User1;", "GRANT"),
+        ("DENY INSERT ON dbo.Table1 TO User1;", "DENY"),
+        ("REVOKE DELETE ON dbo.Table1 FROM User1;", "REVOKE"),
+        (
+            "CREATE LOGIN TestLogin WITH PASSWORD = 'Test123!';",
+            "CREATE LOGIN",
+        ),
+        (
+            "ALTER LOGIN TestLogin WITH PASSWORD = 'NewPass!';",
+            "ALTER LOGIN",
+        ),
+        ("DROP LOGIN TestLogin;", "DROP LOGIN"),
+        ("CREATE USER TestUser FOR LOGIN TestLogin;", "CREATE USER"),
+        (
+            "ALTER USER TestUser WITH DEFAULT_SCHEMA = dbo;",
+            "ALTER USER",
+        ),
+        ("DROP USER TestUser;", "DROP USER"),
+        ("CREATE ROLE TestRole;", "CREATE ROLE"),
+        ("ALTER ROLE TestRole ADD MEMBER TestUser;", "ALTER ROLE"),
+        ("DROP ROLE TestRole;", "DROP ROLE"),
+    ];
+
+    for (sql, expected_type) in test_cases {
+        let file = create_sql_file(sql);
+        let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+        assert!(
+            result.is_ok(),
+            "{} statement should parse without error: {:?}",
+            expected_type,
+            result.err()
+        );
+    }
+}
+
+#[test]
+fn test_go_spanning_block_comment_with_security() {
+    // This simulates the WideWorldImporters Permissions.sql pattern:
+    // A block comment that spans a GO separator, followed by security statements
+    let sql = r#"
+/*
+GRANT VIEW ANY COLUMN ENCRYPTION KEY DEFINITION TO PUBLIC;
+GO
+GRANT VIEW ANY COLUMN MASTER KEY DEFINITION TO PUBLIC;
+*/
+GO
+CREATE LOGIN WebApi WITH PASSWORD = 'Sp1d3rman!';
+GO
+CREATE USER WebApi FOR LOGIN WebApi;
+"#;
+    let file = create_sql_file(sql);
+
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path());
+    let statements = result.expect("GO-spanning comment with security statements should parse");
+    // The comment block counts as one batch (empty/ignored), then we have 2 security statements
+    assert!(
+        statements.len() >= 2,
+        "Should have at least 2 statements (security statements)"
     );
 }
