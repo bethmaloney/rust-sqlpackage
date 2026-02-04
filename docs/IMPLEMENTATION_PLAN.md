@@ -9,13 +9,13 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Phases 1-50 complete. Full parity: 46/48 (95.8%).**
 
 **Current Work:**
-- Phase 50 complete through 50.5 (security statements + GO-spanning comments)
+- Phase 50.6 complete: Source-order disambiguator assignment for 2-named-constraint tables
 - WideWorldImporters builds successfully
 
 **Remaining Work:**
-- Layer 7 remaining issues: element ordering, formatting differences (17/48 passing)
+- Layer 7 remaining issues: element ordering, formatting differences (18/48 passing)
 - Body dependency ordering/deduplication differences (65 relationship errors in `body_dependencies_aliases` fixture - not affecting functionality)
-- `stress_test` fixture: 359 Layer 4 ordering errors (large fixture with 40+ tables exposes element ordering differences)
+- `stress_test` fixture: Layer 4 ordering errors (large fixture with 40+ tables exposes element ordering differences)
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -25,7 +25,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Relationships | 47/48 | 97.9% |
 | Layer 4 (Ordering) | 47/48 | 97.9% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 17/48 | 35.4% |
+| Layer 7 (Canonical XML) | 18/48 | 37.5% |
 
 ### Excluded Fixtures
 
@@ -174,6 +174,35 @@ cargo run --release -- build --project .../WideWorldImporters.sqlproj
 # - postdeploy.sql (3.9 MB)
 # - DacMetadata.xml, Origin.xml, [Content_Types].xml
 ```
+
+### Phase 50.6: Source-Order Disambiguator Assignment (3 tasks) - COMPLETE 2026-02-04
+
+| ID | Task | Status | Notes |
+|----|------|--------|-------|
+| 50.6.1 | Add `source_order` field to `ConstraintElement` | ✅ | Tracks constraint position in CREATE TABLE |
+| 50.6.2 | Track source order when creating constraints | ✅ | Updated all constraint creation paths |
+| 50.6.3 | Pre-assign disambiguators in source order for 2-constraint tables | ✅ | Fixes `self_ref_fk` fixture parity |
+
+**Problem Statement:**
+
+For tables with exactly 2 named constraints (like a PRIMARY KEY and FOREIGN KEY), DotNet assigns `Disambiguator` values based on the order constraints appear in the SQL source, not the alphabetical order they appear in the XML output. This caused `self_ref_fk` fixture to fail L7 parity:
+
+- SQL Source Order: PK_Employees (first), FK_Employees_Manager (second)
+- XML Output Order: FK_Employees_Manager (alphabetical), PK_Employees
+- DotNet: PK gets Disambiguator=3, FK gets Disambiguator=4 (source order)
+- Rust (before fix): FK gets Disambiguator=3, PK gets Disambiguator=4 (alphabetical order)
+
+**Solution:**
+
+1. Added `source_order: u32` field to `ConstraintElement` to track the order each constraint appears in the CREATE TABLE statement
+2. Updated all constraint creation paths in `builder.rs` to set `source_order` incrementally
+3. In `assign_inline_constraint_disambiguators()`, pre-assign disambiguators for 2-named-constraint tables in source order before the main iteration loop
+
+**Files Modified:**
+- `src/model/elements.rs`: Added `source_order` field to `ConstraintElement`
+- `src/model/builder.rs`: Track source order in constraint creation, pre-assign disambiguators
+
+**Result:** Layer 7 parity improved from 17/48 (35.4%) to 18/48 (37.5%)
 
 ---
 

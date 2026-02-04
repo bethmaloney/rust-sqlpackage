@@ -52,6 +52,7 @@ struct ConstraintBuilder {
     is_clustered: Option<bool>,
     is_inline: bool,
     emit_name: bool,
+    source_order: u32,
 }
 
 impl ConstraintBuilder {
@@ -75,7 +76,14 @@ impl ConstraintBuilder {
             is_clustered: None,
             is_inline: false,
             emit_name: true, // Default for table-level constraints
+            source_order: 0, // Set by caller
         }
+    }
+
+    /// Set the source order (order constraint appears in CREATE TABLE statement).
+    fn source_order(mut self, order: u32) -> Self {
+        self.source_order = order;
+        self
     }
 
     /// Create an inline (column-level) constraint.
@@ -126,6 +134,7 @@ impl ConstraintBuilder {
             inline_constraint_disambiguator: None, // Set by assign_inline_constraint_disambiguators
             uses_annotation: false,                // Set by assign_inline_constraint_disambiguators
             emit_name: self.emit_name,
+            source_order: self.source_order,
         }
     }
 }
@@ -372,11 +381,14 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         attached_annotations_after_annotation: Vec::new(), // Set during post-processing
                     }));
 
-                    // Add constraints as separate elements
+                    // Add constraints as separate elements, tracking source order
+                    let mut constraint_order: u32 = 0;
                     for constraint in constraints {
-                        if let Some(constraint_element) =
+                        if let Some(mut constraint_element) =
                             constraint_from_extracted(constraint, &schema_owned, name)
                         {
+                            constraint_element.source_order = constraint_order;
+                            constraint_order += 1;
                             model.add_element(ModelElement::Constraint(constraint_element));
                         }
                     }
@@ -400,8 +412,10 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 )
                                 .inline(col.emit_default_constraint_name)
                                 .definition(default_value.clone())
+                                .source_order(constraint_order)
                                 .build(),
                             ));
+                            constraint_order += 1;
                         }
                     }
 
@@ -423,8 +437,10 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 )
                                 .inline(col.emit_check_constraint_name)
                                 .definition(check_expr.clone())
+                                .source_order(constraint_order)
                                 .build(),
                             ));
+                            constraint_order += 1;
                         }
                     }
                 }
@@ -570,13 +586,17 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }));
 
                 // Extract constraints from table definition (table-level constraints)
+                // Track source order for disambiguator assignment
+                let mut constraint_order: u32 = 0;
                 for constraint in &create_table.constraints {
-                    if let Some(constraint_element) = constraint_from_table_constraint(
+                    if let Some(mut constraint_element) = constraint_from_table_constraint(
                         constraint,
                         &create_table.name,
                         &project.default_schema,
                         &parsed.sql_text,
                     ) {
+                        constraint_element.source_order = constraint_order;
+                        constraint_order += 1;
                         model.add_element(ModelElement::Constraint(constraint_element));
                     }
                 }
@@ -611,8 +631,10 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                     vec![ConstraintColumn::new(col.name.value.clone())],
                                 )
                                 .inline(has_explicit_name)
+                                .source_order(constraint_order)
                                 .build(),
                             ));
+                            constraint_order += 1;
                         }
                     }
                 }
@@ -684,8 +706,10 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 )
                                 .inline(has_explicit_name)
                                 .definition(expr.to_string())
+                                .source_order(constraint_order)
                                 .build(),
                             ));
+                            constraint_order += 1;
                         }
                     }
                 }
@@ -709,8 +733,10 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                                 )
                                 .inline(has_explicit_name)
                                 .definition(expr.to_string())
+                                .source_order(constraint_order)
                                 .build(),
                             ));
+                            constraint_order += 1;
                         }
                     }
                 }
@@ -727,8 +753,10 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                             vec![ConstraintColumn::new(default_constraint.column.clone())],
                         )
                         .definition(default_constraint.expression.clone())
+                        .source_order(constraint_order)
                         .build(),
                     ));
+                    constraint_order += 1;
                 }
             }
 
@@ -1067,8 +1095,10 @@ fn assign_inline_constraint_disambiguators(
     // - Multiple named constraints per table: constraints get Annotation (except last), last gets AttachedAnnotation
 
     // Phase 1: Collect constraint info per table (before assigning any disambiguators)
-    // Map: (table_schema, table_name) -> Vec<(element_index, is_inline)>
-    let mut table_constraints: HashMap<(String, String), Vec<(usize, bool)>> = HashMap::new();
+    // Map: (table_schema, table_name) -> Vec<(element_index, is_inline, source_order)>
+    // DotNet assigns disambiguators in source order (order constraints appear in CREATE TABLE),
+    // so we track source_order to sort constraints before assigning disambiguators.
+    let mut table_constraints: HashMap<(String, String), Vec<(usize, bool, u32)>> = HashMap::new();
 
     for (idx, element) in elements.iter().enumerate() {
         if let ModelElement::Constraint(constraint) = element {
@@ -1076,11 +1106,18 @@ fn assign_inline_constraint_disambiguators(
                 constraint.table_schema.clone(),
                 constraint.table_name.clone(),
             );
-            table_constraints
-                .entry(table_key)
-                .or_default()
-                .push((idx, constraint.is_inline));
+            table_constraints.entry(table_key).or_default().push((
+                idx,
+                constraint.is_inline,
+                constraint.source_order,
+            ));
         }
+    }
+
+    // Sort constraints per table by element index (sorted/alphabetical order) for consistent
+    // processing. Source order is used specifically for the 2-named-constraint case later.
+    for constraints in table_constraints.values_mut() {
+        constraints.sort_by_key(|(idx, _, _)| *idx);
     }
 
     // Phase 2: Determine which elements will carry Annotation vs AttachedAnnotation
@@ -1091,7 +1128,7 @@ fn assign_inline_constraint_disambiguators(
         // Count named (non-inline) constraints
         let named_count = constraints
             .iter()
-            .filter(|(_, is_inline)| !is_inline)
+            .filter(|(_, is_inline, _)| !is_inline)
             .count();
 
         if named_count == 1 {
@@ -1119,6 +1156,42 @@ fn assign_inline_constraint_disambiguators(
         if let ModelElement::Table(table) = element {
             let table_key = (table.schema.clone(), table.name.clone());
             table_indices.insert(table_key, idx);
+        }
+    }
+
+    // For the 2-named-constraint case, we need to pre-assign disambiguators in SOURCE ORDER
+    // before iterating through sorted elements. This ensures the first constraint in source
+    // order gets the lower disambiguator, matching DotNet behavior.
+    // Map: (table_schema, table_name) -> Vec<(element_index, disambiguator)> sorted by source_order
+    let mut preassigned_disambiguators: HashMap<(String, String), Vec<(usize, u32)>> =
+        HashMap::new();
+
+    for (table_key, constraints) in &table_constraints {
+        let named_count = constraints
+            .iter()
+            .filter(|(_, is_inline, _)| !is_inline)
+            .count();
+        let inline_count = constraints
+            .iter()
+            .filter(|(_, is_inline, _)| *is_inline)
+            .count();
+
+        if named_count == 2 && inline_count == 0 {
+            // Pre-assign disambiguators for 2-named-constraint tables in SOURCE ORDER
+            let mut named: Vec<_> = constraints
+                .iter()
+                .filter(|(_, is_inline, _)| !is_inline)
+                .cloned()
+                .collect();
+            named.sort_by_key(|(_, _, source_order)| *source_order);
+
+            let mut assignments = Vec::new();
+            for (idx, _, _) in named {
+                let disambiguator = next_disambiguator;
+                next_disambiguator += 1;
+                assignments.push((idx, disambiguator));
+            }
+            preassigned_disambiguators.insert(table_key.clone(), assignments);
         }
     }
 
@@ -1150,10 +1223,10 @@ fn assign_inline_constraint_disambiguators(
                     // Named constraint
                     let constraints_for_table = table_constraints.get(&table_key);
                     let named_count = constraints_for_table
-                        .map(|c| c.iter().filter(|(_, is_inline)| !is_inline).count())
+                        .map(|c| c.iter().filter(|(_, is_inline, _)| !is_inline).count())
                         .unwrap_or(0);
                     let inline_count = constraints_for_table
-                        .map(|c| c.iter().filter(|(_, is_inline)| *is_inline).count())
+                        .map(|c| c.iter().filter(|(_, is_inline, _)| *is_inline).count())
                         .unwrap_or(0);
 
                     if named_count == 1 {
@@ -1170,9 +1243,14 @@ fn assign_inline_constraint_disambiguators(
                         // Exactly 2 named constraints with NO inline constraints:
                         // DotNet special case: both constraints get AttachedAnnotation,
                         // and the table gets 2 Annotation elements.
-                        let disambiguator = next_disambiguator;
-                        next_disambiguator += 1;
-                        element_disambiguators.insert(idx, disambiguator);
+                        // Use pre-assigned disambiguator (assigned in source order)
+                        if let Some(assignments) = preassigned_disambiguators.get(&table_key) {
+                            if let Some((_, disambiguator)) =
+                                assignments.iter().find(|(i, _)| *i == idx)
+                            {
+                                element_disambiguators.insert(idx, *disambiguator);
+                            }
+                        }
                         constraint_uses_annotation.insert(idx, false);
                     } else {
                         // Multiple named constraints (3+, or 2 with inline constraints)
@@ -1181,12 +1259,12 @@ fn assign_inline_constraint_disambiguators(
                             .get(&table_key)
                             .unwrap()
                             .iter()
-                            .filter(|(_, is_inline)| !is_inline)
+                            .filter(|(_, is_inline, _)| !is_inline)
                             .collect();
 
                         let position = named_constraints
                             .iter()
-                            .position(|(c_idx, _)| *c_idx == idx)
+                            .position(|(c_idx, _, _)| *c_idx == idx)
                             .unwrap();
 
                         if position < named_constraints.len() - 1 {

@@ -490,6 +490,10 @@ pub struct ConstraintElement {
     /// - True for inline constraints with explicit CONSTRAINT [name] in SQL
     /// - False for inline constraints without explicit CONSTRAINT name
     pub emit_name: bool,
+    /// Source order within the table's CREATE TABLE statement.
+    /// Used to assign disambiguators in the same order as DotNet (source order, not alphabetical).
+    /// Set during model building based on the order constraints appear in SQL.
+    pub source_order: u32,
 }
 
 /// Sequence element
