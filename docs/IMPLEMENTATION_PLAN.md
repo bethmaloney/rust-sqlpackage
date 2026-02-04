@@ -15,6 +15,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Remaining Work:**
 - Layer 7 remaining issues: element ordering, formatting differences (17/48 passing)
 - Body dependency ordering/deduplication differences (65 relationship errors in `body_dependencies_aliases` fixture - not affecting functionality)
+- `stress_test` fixture: 359 Layer 4 ordering errors (large fixture with 40+ tables exposes element ordering differences)
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -22,7 +23,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Layer 2 (Properties) | 48/48 | 100% |
 | Layer 3 (SqlPackage) | 48/48 | 100% |
 | Relationships | 47/48 | 97.9% |
-| Layer 4 (Ordering) | 48/48 | 100% |
+| Layer 4 (Ordering) | 47/48 | 97.9% |
 | Metadata | 48/48 | 100% |
 | Layer 7 (Canonical XML) | 17/48 | 35.4% |
 
