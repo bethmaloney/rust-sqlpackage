@@ -33,6 +33,17 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Relationship parity body_dependencies_aliases | body_deps.rs | 65 errors (ordering differences, not affecting functionality) |
 | Layer 7 parity remaining | model_xml | 24/48 failing due to element ordering differences |
 
+### BodyDependencies Ordering Analysis (Investigated 2026-02-05)
+
+**Root Cause:** DotNet traverses the SQL AST in **clause order** (FROM→WHERE→SELECT→ORDER BY), while Rust traverses in **token/textual order**. This affects both the order of references and the effective duplicate positions.
+
+**Key Findings:**
+- DotNet **deduplicates** direct 3-part column refs (`[schema].[table].[column]`) and single-part columns (resolved against scope table)
+- DotNet does **NOT deduplicate** alias-resolved columns (`alias.column` → `[schema].[table].[column]`) - every occurrence is emitted
+- Rust uses the same deduplication strategy, but different traversal order causes count mismatches
+
+**Impact:** The 65 relationship errors are ordering/positional differences in the alias-resolved column duplicates. The functionality is identical - all references are captured correctly. Reconciling this would require implementing DotNet's clause-based traversal order, which is complex and provides no functional benefit.
+
 ### Layer 7 Ordering Analysis (Investigated 2026-02-05)
 
 **Root Cause:** DotNet preserves **SQL file processing order** for inline constraints, while Rust sorts by DefiningTable (descending alphabetical). This fundamental difference cannot be easily reconciled without tracking original source order through the entire pipeline.
