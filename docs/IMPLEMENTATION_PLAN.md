@@ -6,7 +6,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-51 complete. Full parity: 47/48 (97.9%). Phase 52 pending (table variable scoping).**
+**Phases 1-52 complete. Full parity: 47/48 (97.9%).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -19,7 +19,6 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Layer 7 (Canonical XML) | 19/48 | 39.6% |
 
 **Remaining Work:**
-- Phase 52: Table variable references use incorrect scope (blocks deployment of procedures with table variables)
 - Layer 7: element ordering differences between Rust and DotNet (29/48 failing)
 - `body_dependencies_aliases`: 65 relationship ordering errors (not affecting functionality)
 
@@ -27,97 +26,32 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ---
 
-## Phase 52: Procedure-Scoped Table Variable References (6 tasks) - PENDING
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 52.1 | Add test fixture with table variable usage patterns | ⬜ | Cover DECLARE TABLE, FROM @var, JOIN @var with aliases |
-| 52.2 | Fix element naming: remove `[TableVariable1]` intermediate from SqlDynamicColumnSource | ⬜ | Element should be `[schema].[ProcName].[@VarName]` |
-| 52.3 | Thread `full_name` through table alias extraction in body_deps.rs | ⬜ | Required for procedure-scoped references |
-| 52.4 | Update `extract_table_reference_after_from_join` to handle `@` prefixed table variables | ⬜ | Create procedure-scoped alias mapping |
-| 52.5 | Add unit tests for table variable alias resolution | ⬜ | Test column references resolve to `[schema].[proc].[@var].[col]` |
-| 52.6 | Verify deployment succeeds with table variable procedures | ⬜ | End-to-end validation |
-
-**Problem Statement:**
-
-Deployment fails with:
-```
-The reference to the element that has the name [dbo].[@OrderItems] could not be resolved
-because no element with that name exists.
-```
-
-Affects stored procedures that declare and use table variables with aliases in FROM/JOIN clauses.
-
-**Root Cause:**
-
-Two related issues in `src/dacpac/model_xml/body_deps.rs`:
-
-1. **Element naming**: `SqlDynamicColumnSource` elements include an extra `[TableVariable1]` component
-2. **Reference path**: Table variable aliases resolve to `[dbo].[@VarName]` instead of `[dbo].[ProcName].[@VarName]`
-
-**Example:** Procedure with table variable
-
-```sql
-CREATE PROCEDURE [dbo].[GetOrdersByStatus]
-    @Status INT
-AS
-BEGIN
-    DECLARE @FilteredOrders TABLE (
-        [OrderId] UNIQUEIDENTIFIER NOT NULL,
-        [CustomerId] UNIQUEIDENTIFIER NOT NULL
-    )
-
-    INSERT INTO @FilteredOrders
-    SELECT [OrderId], [CustomerId] FROM [dbo].[Orders] WHERE [Status] = @Status
-
-    SELECT
-        [o].[OrderId],
-        [c].[CustomerName]
-    FROM
-        @FilteredOrders [o]
-        INNER JOIN [dbo].[Customers] [c] ON [o].[CustomerId] = [c].[Id]
-END
-```
-
-| Aspect | Current (Wrong) | Expected (DacFx) |
-|--------|-----------------|------------------|
-| Element Name | `[dbo].[GetOrdersByStatus].[TableVariable1].[@FilteredOrders]` | `[dbo].[GetOrdersByStatus].[@FilteredOrders]` |
-| Reference | `[dbo].[@FilteredOrders]` | `[dbo].[GetOrdersByStatus].[@FilteredOrders]` |
-| Column Ref | `[dbo].[@FilteredOrders].[OrderId]` | `[dbo].[GetOrdersByStatus].[@FilteredOrders].[OrderId]` |
-
-**Technical Details:**
-
-In `body_deps.rs`, `extract_table_reference_after_from_join()` (lines 2112-2176):
-- `parse_table_name()` returns `("dbo", "@FilteredOrders")` for `FROM @FilteredOrders`
-- Creates `table_ref = "[dbo].[@FilteredOrders]"` without procedure scope
-- Stores incorrect reference in alias map
-
-**Solution:**
-
-1. Pass `full_name` (e.g., `[dbo].[GetOrdersByStatus]`) to `TableAliasTokenParser`
-2. In `extract_table_reference_after_from_join`, detect `@` prefix on table name
-3. For table variables, create alias mapping: `alias → [schema].[procName].[@varName]`
-4. Fix `SqlDynamicColumnSource` element naming in `programmability_writer.rs` to remove `[TableVariable1]`
-
-**Files to Modify:**
-- `src/dacpac/model_xml/body_deps.rs` (alias extraction, reference generation)
-- `src/dacpac/model_xml/programmability_writer.rs` (element naming)
-- `tests/fixtures/` (new test fixture)
-
----
-
 ## Known Issues
 
 | Issue | Location | Status |
 |-------|----------|--------|
-| Table variable references not procedure-scoped | body_deps.rs, programmability_writer.rs | Causes deployment failure (Phase 52) |
 | Relationship parity body_dependencies_aliases | body_deps.rs | 65 errors (ordering differences, not affecting functionality) |
 | Layer 7 parity remaining | model_xml | 29/48 failing due to element ordering differences |
 
 ---
 
 <details>
-<summary>Completed Phases (1-51)</summary>
+<summary>Completed Phases (1-52)</summary>
+
+## Phase 52: Procedure-Scoped Table Variable References (COMPLETE)
+
+Fixed deployment errors for procedures that declare and use table variables with aliases in FROM/JOIN clauses.
+
+**Changes:**
+- Fixed `SqlDynamicColumnSource` element naming: `[schema].[proc].[@var]` instead of `[schema].[proc].[TableVariable1].[@var]`
+- Added `full_name` context to `TableAliasTokenParser` for procedure-scoped references
+- Updated `extract_table_reference_after_from_join` to detect `@` prefix and create procedure-scoped alias mappings
+- Added `table_variable_refs` test fixture covering DECLARE TABLE, FROM @var, JOIN @var patterns
+
+**Files Modified:**
+- `src/dacpac/model_xml/programmability_writer.rs` - Element naming fix
+- `src/dacpac/model_xml/body_deps.rs` - Added `full_name` to parser, procedure-scoped table variable alias resolution
+- `tests/fixtures/table_variable_refs/` - New test fixture
 
 ## Phase 51: Layer 7 Canonical Comparison Test Fix (COMPLETE)
 

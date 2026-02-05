@@ -1020,7 +1020,8 @@ pub(crate) fn extract_body_dependencies(
     let mut table_var_columns: HashSet<String> = HashSet::new();
 
     // Extract aliases from FROM/JOIN clauses with proper alias tracking
-    extract_table_aliases_for_body_deps(body, &mut table_aliases, &mut subquery_aliases);
+    // Phase 52: Pass full_name for procedure-scoped table variable references
+    extract_table_aliases_for_body_deps(body, full_name, &mut table_aliases, &mut subquery_aliases);
 
     // Extract column aliases (SELECT expr AS alias patterns)
     extract_column_aliases_for_body_deps(body, &mut column_aliases);
@@ -1378,14 +1379,16 @@ pub(crate) fn extract_body_dependencies(
 /// - JOIN [schema].[table] alias ON ...
 /// - LEFT JOIN (...) AS SubqueryAlias ON ...
 /// - CROSS APPLY (...) AS ApplyAlias
+/// - FROM @TableVariable alias (Phase 52: procedure-scoped table variable references)
 ///
 /// This implementation uses sqlparser-rs tokenizer instead of regex for more robust parsing.
 pub(crate) fn extract_table_aliases_for_body_deps(
     body: &str,
+    full_name: &str,
     table_aliases: &mut HashMap<String, String>,
     subquery_aliases: &mut HashSet<String>,
 ) {
-    let mut parser = match TableAliasTokenParser::new(body) {
+    let mut parser = match TableAliasTokenParser::with_context(body, "dbo", full_name) {
         Some(p) => p,
         None => return,
     };
@@ -1504,16 +1507,23 @@ pub(crate) struct TableAliasTokenParser {
     tokens: Vec<sqlparser::tokenizer::TokenWithSpan>,
     pos: usize,
     default_schema: String,
+    /// Full name of the parent procedure/function (e.g., "[dbo].[GetOrdersByStatus]")
+    /// Used for creating procedure-scoped references to table variables.
+    full_name: String,
 }
 
 impl TableAliasTokenParser {
     /// Create a new parser for SQL body text
     pub fn new(sql: &str) -> Option<Self> {
-        Self::with_default_schema(sql, "dbo")
+        Self::with_context(sql, "dbo", "")
     }
 
-    /// Create a new parser with a custom default schema
-    pub fn with_default_schema(sql: &str, default_schema: &str) -> Option<Self> {
+    /// Create a new parser with full procedure/function context
+    /// - `sql`: The SQL body text to parse
+    /// - `default_schema`: Default schema for unqualified table names (typically "dbo")
+    /// - `full_name`: Full name of the parent procedure/function (e.g., "[dbo].[ProcName]")
+    ///                Used for creating procedure-scoped table variable references.
+    pub fn with_context(sql: &str, default_schema: &str, full_name: &str) -> Option<Self> {
         let dialect = MsSqlDialect {};
         let tokens = Tokenizer::new(&dialect, sql)
             .tokenize_with_location()
@@ -1522,7 +1532,13 @@ impl TableAliasTokenParser {
             tokens,
             pos: 0,
             default_schema: default_schema.to_string(),
+            full_name: full_name.to_string(),
         })
+    }
+
+    /// Create a new parser with a custom default schema (backwards compatible)
+    pub fn with_default_schema(sql: &str, default_schema: &str) -> Option<Self> {
+        Self::with_context(sql, default_schema, "")
     }
 
     /// Extract all aliases from the SQL body
@@ -2144,8 +2160,16 @@ impl TableAliasTokenParser {
             self.skip_whitespace();
         }
 
-        // Check for alias - must be an identifier that's not a keyword like ON, WHERE, etc.
-        let table_ref = format!("[{}].[{}]", schema, table_name);
+        // Phase 52: Handle table variables with procedure-scoped references
+        // Table variables start with @ and should reference the parent procedure scope
+        let table_ref = if table_name.starts_with('@') && !self.full_name.is_empty() {
+            // Table variable: use procedure-scoped reference
+            // e.g., FROM @FilteredOrders -> [dbo].[GetOrdersByStatus].[@FilteredOrders]
+            format!("{}.[{}]", self.full_name, table_name)
+        } else {
+            // Regular table: use schema.table reference
+            format!("[{}].[{}]", schema, table_name)
+        };
         let table_name_lower = table_name.to_lowercase();
 
         if let Some(alias) = self.try_parse_table_alias() {

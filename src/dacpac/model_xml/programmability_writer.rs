@@ -842,15 +842,12 @@ pub(crate) fn write_all_dynamic_objects<W: Write>(
         writer.write_event(Event::End(BytesEnd::new("Entry")))?;
     }
 
-    // Write table variable entries (Phase 24.3)
+    // Write table variable entries (Phase 24.3, Phase 52 element naming fix)
     for table_var in &table_var_defs {
         writer.write_event(Event::Start(BytesStart::new("Entry")))?;
 
-        // Format: [schema].[proc].[TableVariable1].[@VarName]
-        let table_var_source_name = format!(
-            "{}.[TableVariable{}].[{}]",
-            full_name, table_var.table_variable_number, table_var.name
-        );
+        // Format: [schema].[proc].[@VarName] - matches DacFx (no [TableVariable#] intermediate)
+        let table_var_source_name = format!("{}.[{}]", full_name, table_var.name);
 
         let elem = BytesStart::new("Element").with_attributes([
             ("Type", "SqlDynamicColumnSource"),

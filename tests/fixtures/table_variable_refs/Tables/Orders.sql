@@ -1,0 +1,8 @@
+CREATE TABLE [dbo].[Orders]
+(
+    [OrderId] UNIQUEIDENTIFIER NOT NULL,
+    [CustomerId] UNIQUEIDENTIFIER NOT NULL,
+    [Status] INT NOT NULL,
+    CONSTRAINT [PK_Orders] PRIMARY KEY CLUSTERED ([OrderId])
+)
+GO

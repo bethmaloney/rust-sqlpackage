@@ -3751,7 +3751,7 @@ CROSS APPLY (
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         // 'a' should be a table alias for [dbo].[Account]
         assert_eq!(table_aliases.get("a"), Some(&"[dbo].[Account]".to_string()));
@@ -3781,7 +3781,7 @@ OUTER APPLY (
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         println!("Table aliases: {:?}", table_aliases);
         println!("Subquery aliases: {:?}", subquery_aliases);
@@ -3905,7 +3905,7 @@ FROM AccountCte;
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         // 'A' should be a table alias for [dbo].[Account]
         assert_eq!(table_aliases.get("a"), Some(&"[dbo].[Account]".to_string()));
@@ -3940,7 +3940,7 @@ INNER JOIN AccountTagCte ON AccountTagCte.TagId = TagCte.Id
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         // 'T' should be a table alias for [dbo].[Tag]
         assert_eq!(table_aliases.get("t"), Some(&"[dbo].[Tag]".to_string()));
@@ -4028,7 +4028,7 @@ LEFT JOIN (
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         println!("Table aliases: {:?}", table_aliases);
         println!("Subquery aliases: {:?}", subquery_aliases);
@@ -4195,7 +4195,7 @@ WHERE A.Id = @AccountId
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         println!("Table aliases: {:?}", table_aliases);
 
@@ -4221,7 +4221,7 @@ INNER JOIN Tag T ON T.Id = AT.TagId
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         println!("Table aliases: {:?}", table_aliases);
 
@@ -4260,7 +4260,7 @@ WHERE A.Id = @AccountId
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         println!("Table aliases: {:?}", table_aliases);
 
@@ -4359,7 +4359,7 @@ FROM [dbo].[Account] A
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         // Should use the qualified version from [dbo].[Account]
         assert_eq!(
@@ -7254,7 +7254,7 @@ LEFT JOIN (
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         // 'I' should be a table alias for [dbo].[Instrument]
         assert_eq!(
@@ -7423,7 +7423,7 @@ WHEN NOT MATCHED BY TARGET THEN
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         println!("Table aliases: {:?}", table_aliases);
         println!("Subquery aliases: {:?}", subquery_aliases);
@@ -7460,7 +7460,7 @@ WHEN NOT MATCHED THEN
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         println!("Table aliases: {:?}", table_aliases);
         println!("Subquery aliases: {:?}", subquery_aliases);
@@ -7495,7 +7495,7 @@ WHEN MATCHED THEN
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         println!("Table aliases: {:?}", table_aliases);
         println!("Subquery aliases: {:?}", subquery_aliases);
@@ -7535,7 +7535,7 @@ WHEN MATCHED THEN
         let mut table_aliases: HashMap<String, String> = HashMap::new();
         let mut subquery_aliases: HashSet<String> = HashSet::new();
 
-        extract_table_aliases_for_body_deps(sql, &mut table_aliases, &mut subquery_aliases);
+        extract_table_aliases_for_body_deps(sql, "", &mut table_aliases, &mut subquery_aliases);
 
         println!("Table aliases: {:?}", table_aliases);
         println!("Subquery aliases: {:?}", subquery_aliases);
