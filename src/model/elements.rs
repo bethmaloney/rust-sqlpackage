@@ -356,6 +356,8 @@ pub struct IndexElement {
     pub filter_predicate: Option<String>,
     /// Data compression type (NONE, ROW, PAGE, COLUMNSTORE, COLUMNSTORE_ARCHIVE)
     pub data_compression: Option<DataCompressionType>,
+    /// Whether PAD_INDEX is ON (applies fill factor to intermediate pages)
+    pub is_padded: bool,
 }
 
 /// A column in a full-text index with optional language specification

@@ -68,6 +68,8 @@ pub struct TokenParsedIndex {
     pub filter_predicate: Option<String>,
     /// Data compression type (NONE, ROW, PAGE, etc.)
     pub data_compression: Option<String>,
+    /// Whether PAD_INDEX is ON (applies fill factor to intermediate pages)
+    pub is_padded: bool,
 }
 
 /// Token-based index definition parser
@@ -162,6 +164,7 @@ impl IndexTokenParser {
             fill_factor: None,
             filter_predicate: None,
             data_compression: None,
+            is_padded: false,
         };
 
         // Parse optional clauses: INCLUDE, WHERE, WITH
@@ -262,7 +265,26 @@ impl IndexTokenParser {
                 continue;
             }
 
-            // Skip other options we don't care about (PAD_INDEX, SORT_IN_TEMPDB, etc.)
+            // Check for PAD_INDEX
+            if self.base.check_word_ci("PAD_INDEX") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_token(&Token::Eq) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    if self.base.check_word_ci("ON") {
+                        result.is_padded = true;
+                        self.base.advance();
+                    } else if self.base.check_word_ci("OFF") {
+                        result.is_padded = false;
+                        self.base.advance();
+                    }
+                }
+                self.skip_to_comma_or_paren();
+                continue;
+            }
+
+            // Skip other options we don't care about (SORT_IN_TEMPDB, etc.)
             self.skip_to_comma_or_paren();
         }
 
@@ -627,6 +649,35 @@ fn tokens_to_predicate_string(tokens: &[TokenWithSpan]) -> String {
     }
 
     result
+}
+
+/// Extract PAD_INDEX setting from CREATE INDEX SQL statement.
+///
+/// Returns true if PAD_INDEX = ON is found in the WITH clause.
+///
+/// # Examples
+/// ```
+/// use rust_sqlpackage::parser::index_parser::extract_index_is_padded;
+///
+/// let sql = "CREATE INDEX IX ON dbo.T (C) WITH (PAD_INDEX = ON, FILLFACTOR = 70)";
+/// assert!(extract_index_is_padded(sql));
+///
+/// let sql = "CREATE INDEX IX ON dbo.T (C) WITH (PAD_INDEX = OFF)";
+/// assert!(!extract_index_is_padded(sql));
+///
+/// let sql = "CREATE INDEX IX ON dbo.T (C) WITH (FILLFACTOR = 90)";
+/// assert!(!extract_index_is_padded(sql));
+/// ```
+pub fn extract_index_is_padded(sql: &str) -> bool {
+    let sql_upper = sql.to_uppercase();
+    // Look for PAD_INDEX = ON in the SQL
+    if let Some(with_pos) = sql_upper.find("WITH") {
+        let after_with = &sql_upper[with_pos..];
+        // Match PAD_INDEX followed by = and ON (with optional whitespace)
+        let re = regex::Regex::new(r"PAD_INDEX\s*=\s*ON\b").unwrap();
+        return re.is_match(after_with);
+    }
+    false
 }
 
 #[cfg(test)]

@@ -372,8 +372,11 @@ pub(crate) fn write_type_specifier<W: Write>(
 
     // DotNet order: Properties first, then Type relationship
     // Properties order: Scale, Precision, Length/IsMax
+    // Note: Scale=0 is omitted (DotNet behavior)
     if let Some(s) = scale {
-        write_property(writer, "Scale", &s.to_string())?;
+        if s > 0 {
+            write_property(writer, "Scale", &s.to_string())?;
+        }
     }
 
     if let Some(p) = precision {
@@ -421,7 +424,8 @@ pub(crate) fn sql_type_to_reference(data_type: &str) -> String {
         "smallint" => "[smallint]",
         "tinyint" => "[tinyint]",
         "bit" => "[bit]",
-        "decimal" | "numeric" => "[decimal]",
+        "decimal" => "[decimal]",
+        "numeric" => "[numeric]",
         "money" => "[money]",
         "smallmoney" => "[smallmoney]",
         "float" => "[float]",
@@ -524,8 +528,11 @@ pub(crate) fn write_column_type_specifier<W: Write>(
     writer.write_event(Event::Start(type_spec))?;
 
     // Write Scale before Precision (DotNet order)
+    // Note: Scale=0 is omitted (DotNet behavior)
     if let Some(sc) = scale {
-        write_property(writer, "Scale", &sc.to_string())?;
+        if sc > 0 {
+            write_property(writer, "Scale", &sc.to_string())?;
+        }
     }
     if let Some(prec) = precision {
         write_property(writer, "Precision", &prec.to_string())?;
@@ -624,7 +631,7 @@ mod tests {
         assert_eq!(sql_type_to_reference("INT"), "[int]");
         assert_eq!(sql_type_to_reference("varchar(50)"), "[varchar]");
         assert_eq!(sql_type_to_reference("DECIMAL(10,2)"), "[decimal]");
-        assert_eq!(sql_type_to_reference("numeric(18,4)"), "[decimal]");
+        assert_eq!(sql_type_to_reference("numeric(18,4)"), "[numeric]");
         assert_eq!(sql_type_to_reference("unknown_type"), "[sql_variant]");
     }
 

@@ -2683,8 +2683,11 @@ fn write_scalar_type<W: Write>(
     }
 
     // Scale (appears before Precision in DotNet output for decimal types)
+    // Note: Scale=0 is omitted (DotNet behavior)
     if let Some(scale) = scalar.scale {
-        write_property(writer, "Scale", &scale.to_string())?;
+        if scale > 0 {
+            write_property(writer, "Scale", &scale.to_string())?;
+        }
     }
 
     // Precision for decimal types

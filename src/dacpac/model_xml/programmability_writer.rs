@@ -656,7 +656,10 @@ fn write_temp_table_column_type_specifier<W: Write>(
         if let Some(sc) = scale {
             // Decimal/numeric type with precision and scale
             write_property(writer, "Precision", &prec.to_string())?;
-            write_property(writer, "Scale", &sc.to_string())?;
+            // Note: Scale=0 is omitted (DotNet behavior)
+            if sc > 0 {
+                write_property(writer, "Scale", &sc.to_string())?;
+            }
         } else if prec == -1 {
             // MAX type
             write_property(writer, "IsMax", "True")?;
@@ -1689,8 +1692,11 @@ fn write_tvf_columns<W: Write>(
         if let Some(precision) = col.precision {
             write_property(writer, "Precision", &precision.to_string())?;
         }
+        // Note: Scale=0 is omitted (DotNet behavior)
         if let Some(scale) = col.scale {
-            write_property(writer, "Scale", &scale.to_string())?;
+            if scale > 0 {
+                write_property(writer, "Scale", &scale.to_string())?;
+            }
         }
 
         // Write Type reference to built-in type
@@ -1753,8 +1759,11 @@ fn write_data_type_relationship<W: Write>(
     if let Some(prec) = precision {
         write_property(writer, "Precision", &prec.to_string())?;
     }
+    // Note: Scale=0 is omitted (DotNet behavior)
     if let Some(sc) = scale {
-        write_property(writer, "Scale", &sc.to_string())?;
+        if sc > 0 {
+            write_property(writer, "Scale", &sc.to_string())?;
+        }
     }
 
     // Write the base type as a reference

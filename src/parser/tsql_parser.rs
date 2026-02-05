@@ -258,6 +258,8 @@ pub enum FallbackStatementType {
         filter_predicate: Option<String>,
         /// Data compression type (NONE, ROW, PAGE, etc.)
         data_compression: Option<String>,
+        /// Whether PAD_INDEX is ON (applies fill factor to intermediate pages)
+        is_padded: bool,
     },
     /// Full-text index (CREATE FULLTEXT INDEX ON table ...)
     FullTextIndex {
@@ -1553,6 +1555,7 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
             fill_factor: parsed.fill_factor,
             filter_predicate: parsed.filter_predicate,
             data_compression: parsed.data_compression,
+            is_padded: parsed.is_padded,
         });
     }
 
@@ -1596,6 +1599,9 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     // Extract filter predicate from WHERE clause if present (token-based, Phase 20.6.1)
     let filter_predicate = extract_index_filter_predicate_tokenized(sql);
 
+    // Extract PAD_INDEX from WITH clause if present
+    let is_padded = extract_index_pad_index(sql);
+
     Some(FallbackStatementType::Index {
         name,
         table_schema,
@@ -1607,7 +1613,24 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
         fill_factor,
         filter_predicate,
         data_compression,
+        is_padded,
     })
+}
+
+/// Extract PAD_INDEX option from CREATE INDEX WITH clause
+fn extract_index_pad_index(sql: &str) -> bool {
+    // Match PAD_INDEX = ON in WITH clause (case-insensitive)
+    let sql_upper = sql.to_uppercase();
+    if let Some(with_pos) = sql_upper.find("WITH") {
+        let after_with = &sql_upper[with_pos..];
+        // Look for PAD_INDEX = ON
+        if after_with.contains("PAD_INDEX") {
+            // Check if followed by = ON
+            let re = regex::Regex::new(r"PAD_INDEX\s*=\s*ON\b").unwrap();
+            return re.is_match(&sql_upper[with_pos..]);
+        }
+    }
+    false
 }
 
 /// Parse a comma-separated column list, extracting column names and sort direction

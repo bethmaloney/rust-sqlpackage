@@ -14,7 +14,8 @@ use sqlparser::ast::{
 };
 
 use crate::parser::{
-    identifier_utils::normalize_identifier, index_parser::extract_index_filter_predicate_tokenized,
+    identifier_utils::normalize_identifier,
+    index_parser::{extract_index_filter_predicate_tokenized, extract_index_is_padded},
     ExtractedExtendedProperty, ExtractedFullTextColumn, ExtractedFunctionParameter,
     ExtractedTableColumn, ExtractedTableConstraint, ExtractedTableTypeColumn,
     ExtractedTableTypeConstraint, FallbackFunctionType, FallbackStatementType, ParsedStatement,
@@ -225,6 +226,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     fill_factor,
                     filter_predicate,
                     data_compression,
+                    is_padded,
                 } => {
                     // Convert string data_compression to DataCompressionType
                     let compression_type =
@@ -256,6 +258,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         fill_factor: *fill_factor,
                         filter_predicate: filter_predicate.clone(),
                         data_compression: compression_type,
+                        is_padded: *is_padded,
                     }));
                 }
                 FallbackStatementType::FullTextIndex {
@@ -819,6 +822,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 // sqlparser doesn't expose filter predicates directly
                 let filter_predicate = extract_index_filter_predicate_tokenized(&parsed.sql_text);
 
+                // Extract PAD_INDEX from raw SQL (sqlparser doesn't expose this)
+                let is_padded = extract_index_is_padded(&parsed.sql_text);
+
                 model.add_element(ModelElement::Index(IndexElement {
                     name: index_name,
                     table_schema,
@@ -830,6 +836,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     fill_factor,
                     filter_predicate,
                     data_compression,
+                    is_padded,
                 }));
             }
 

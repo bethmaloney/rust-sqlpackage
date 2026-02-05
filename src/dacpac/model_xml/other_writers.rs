@@ -47,6 +47,11 @@ pub(crate) fn write_index<W: Write>(
         write_property(writer, "FillFactor", &fill_factor.to_string())?;
     }
 
+    // Write IsPadded property when PAD_INDEX = ON
+    if index.is_padded {
+        write_property(writer, "IsPadded", "True")?;
+    }
+
     // Write FilterPredicate property for filtered indexes (before relationships)
     // DotNet emits this as a CDATA script property
     if let Some(ref filter_predicate) = index.filter_predicate {
@@ -540,6 +545,7 @@ mod tests {
             filter_predicate: None,
             fill_factor: None,
             data_compression: None,
+            is_padded: false,
         };
 
         let mut buffer = Vec::new();
@@ -568,6 +574,7 @@ mod tests {
             filter_predicate: None,
             fill_factor: None,
             data_compression: None,
+            is_padded: false,
         };
 
         let mut buffer = Vec::new();
@@ -593,6 +600,7 @@ mod tests {
             filter_predicate: None,
             fill_factor: None,
             data_compression: None,
+            is_padded: false,
         };
 
         let mut buffer = Vec::new();
@@ -621,6 +629,7 @@ mod tests {
             filter_predicate: None,
             fill_factor: None,
             data_compression: None,
+            is_padded: false,
         };
 
         let mut buffer = Vec::new();
