@@ -1010,14 +1010,31 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
 /// avoiding repeated `xml_name_attr()`, `type_name()`, and `to_lowercase()` calls
 /// during comparisons.
 fn sort_elements(elements: &mut [ModelElement]) {
-    // Pre-compute sort key: (lowercase_name, lowercase_type, lowercase_secondary)
+    use std::cmp::Reverse;
+
+    // Pre-compute sort key: (lowercase_name, lowercase_type, secondary_key)
     // This avoids O(n log n) calls to xml_name_attr() and to_lowercase() during sorting
+    //
+    // DotNet sorting behavior:
+    // - Sort by (Name, Type) ascending
+    // - For inline constraints (empty Name), sort by secondary key (DefiningTable) in DESCENDING order
+    //   This matches observed DotNet behavior where inline constraints are ordered Z→A by table name
     elements.sort_by_cached_key(|elem| {
-        (
-            elem.xml_name_attr().to_lowercase(),
-            elem.type_name().to_lowercase(),
-            elem.secondary_sort_key().to_lowercase(),
-        )
+        let name = elem.xml_name_attr().to_lowercase();
+        let type_name = elem.type_name().to_lowercase();
+        let secondary = elem.secondary_sort_key().to_lowercase();
+
+        // For inline constraints (empty name, non-empty secondary key), use Reverse for descending order
+        // We use Option<Reverse<String>> to handle the two cases:
+        // - Some(Reverse(key)) for inline constraints (descending)
+        // - None for named elements (no secondary sort needed)
+        let secondary_desc = if name.is_empty() && !secondary.is_empty() {
+            Some(Reverse(secondary))
+        } else {
+            None
+        };
+
+        (name, type_name, secondary_desc)
     });
 }
 

@@ -6,7 +6,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-53 complete. Full parity: 47/48 (97.9%).**
+**Phases 1-54 complete. Full parity: 47/48 (97.9%).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -16,10 +16,10 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Relationships | 47/48 | 97.9% |
 | Layer 4 (Ordering) | 47/48 | 97.9% |
 | Metadata | 48/48 | 100% |
-| Layer 7 (Canonical XML) | 21/48 | 43.8% |
+| Layer 7 (Canonical XML) | 24/48 | 50.0% |
 
 **Remaining Work:**
-- Layer 7: element ordering differences between Rust and DotNet (27/48 failing)
+- Layer 7: element ordering differences between Rust and DotNet (24/48 failing)
 - `body_dependencies_aliases`: 65 relationship ordering errors (not affecting functionality)
 
 **Excluded Fixtures:** `external_reference`, `unresolved_reference` (DotNet fails to build with SQL71501)
@@ -31,12 +31,31 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Issue | Location | Status |
 |-------|----------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | 65 errors (ordering differences, not affecting functionality) |
-| Layer 7 parity remaining | model_xml | 27/48 failing due to element ordering differences |
+| Layer 7 parity remaining | model_xml | 24/48 failing due to element ordering differences |
 
 ---
 
 <details>
-<summary>Completed Phases (1-53)</summary>
+<summary>Completed Phases (1-54)</summary>
+
+## Phase 54: Layer 7 Inline Constraint Ordering Fix (COMPLETE)
+
+Improved Layer 7 canonical XML matching from 21/48 (43.8%) to 24/48 (50.0%).
+
+**Root Cause:**
+DotNet sorts inline constraints (unnamed, no Name attribute) by their DefiningTable reference in **descending** alphabetical order, while Rust was using ascending order.
+
+**Changes:**
+1. Modified `sort_elements()` in `builder.rs` to use `Reverse<String>` for secondary sort key of inline constraints
+2. This ensures inline constraints sort by DefiningTable in descending order (Z→A) matching DotNet behavior
+
+**Files Modified:**
+- `src/model/builder.rs` - Updated sort_elements() to use descending order for inline constraint secondary keys
+
+**Fixtures Now Passing Layer 7:**
+- `constraints` (inline PK ordering fix)
+- `index_naming` (element ordering fix)
+- `reserved_keywords` (element ordering fix)
 
 ## Phase 53: Layer 7 XML Parity Improvements (COMPLETE)
 
@@ -132,6 +151,6 @@ Created `ColumnRegistry` to map tables to columns. Resolution: 1 match → resol
 - **Parity Achievement (Phase 14):** L1-L3 100%, Relationships 97.9%
 - **Performance (Phase 16):** 116x/42x faster than DotNet cold/warm
 - **Parser Modernization (Phases 15, 20):** All regex replaced with token-based parsing
-- **XML Parity (Phases 22-53):** Layer 7 improved from 0% to 43.8%
+- **XML Parity (Phases 22-54):** Layer 7 improved from 0% to 50.0%
 
 </details>
