@@ -4,9 +4,9 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ---
 
-## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY COMPLETE
+## Status: PARITY COMPLETE | REAL-WORLD COMPATIBILITY IN PROGRESS
 
-**Phases 1-50.9 complete. Full parity: 47/48 (97.9%).**
+**Phases 1-51 complete. Full parity: 47/48 (97.9%). Phase 52 pending (table variable scoping).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -19,6 +19,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Layer 7 (Canonical XML) | 19/48 | 39.6% |
 
 **Remaining Work:**
+- Phase 52: Table variable references use incorrect scope (blocks deployment of procedures with table variables)
 - Layer 7: element ordering differences between Rust and DotNet (29/48 failing)
 - `body_dependencies_aliases`: 65 relationship ordering errors (not affecting functionality)
 
@@ -26,98 +27,82 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 
 ---
 
-## Phase 50.9: Decouple Column and Table Annotation Logic (4 tasks) - COMPLETE
+## Phase 52: Procedure-Scoped Table Variable References (6 tasks) - PENDING
 
 | ID | Task | Status | Notes |
 |----|------|--------|-------|
-| 50.9.1 | Refactor Phase 4 to separate column and table annotation concerns | ✅ | Remove `if is_inline { } else { }` structure |
-| 50.9.2 | Ensure inline constraints with `uses_annotation=false` add to `table_annotation` | ✅ | Fixes missing annotation errors |
-| 50.9.3 | Add integration test for 2-constraint table with inline + table-level constraints | ✅ | Cover mixed constraint pattern |
-| 50.9.4 | Verify real-world database deploys successfully | ✅ | Real-world validation |
+| 52.1 | Add test fixture with table variable usage patterns | ⬜ | Cover DECLARE TABLE, FROM @var, JOIN @var with aliases |
+| 52.2 | Fix element naming: remove `[TableVariable1]` intermediate from SqlDynamicColumnSource | ⬜ | Element should be `[schema].[ProcName].[@VarName]` |
+| 52.3 | Thread `full_name` through table alias extraction in body_deps.rs | ⬜ | Required for procedure-scoped references |
+| 52.4 | Update `extract_table_reference_after_from_join` to handle `@` prefixed table variables | ⬜ | Create procedure-scoped alias mapping |
+| 52.5 | Add unit tests for table variable alias resolution | ⬜ | Test column references resolve to `[schema].[proc].[@var].[col]` |
+| 52.6 | Verify deployment succeeds with table variable procedures | ⬜ | End-to-end validation |
 
 **Problem Statement:**
 
 Deployment fails with:
 ```
-The AttachedAnnotation node is referencing an annotation that has the disambiguator N,
-but no annotation exists with that disambiguator.
+The reference to the element that has the name [dbo].[@OrderItems] could not be resolved
+because no element with that name exists.
 ```
 
-Affects tables with exactly 2 named constraints where one is inline (e.g., DEFAULT) and one is table-level (e.g., PRIMARY KEY).
+Affects stored procedures that declare and use table variables with aliases in FROM/JOIN clauses.
 
 **Root Cause:**
 
-In `src/model/builder.rs` lines 1381-1416, the `if constraint.is_inline { } else { }` structure treats column and table annotations as mutually exclusive. Inline constraints never add to `table_annotation`, even when they have `uses_annotation=false`.
+Two related issues in `src/dacpac/model_xml/body_deps.rs`:
 
-**Example:** Table with PK + inline DEFAULT constraint
+1. **Element naming**: `SqlDynamicColumnSource` elements include an extra `[TableVariable1]` component
+2. **Reference path**: Table variable aliases resolve to `[dbo].[@VarName]` instead of `[dbo].[ProcName].[@VarName]`
+
+**Example:** Procedure with table variable
 
 ```sql
-CREATE TABLE [dbo].[Products] (
-    [Id] UNIQUEIDENTIFIER NOT NULL,
-    [Version] INT CONSTRAINT [DF_Products_Version] DEFAULT ((0)) NOT NULL,
-    CONSTRAINT [PK_Products] PRIMARY KEY CLUSTERED ([Id])
-);
+CREATE PROCEDURE [dbo].[GetOrdersByStatus]
+    @Status INT
+AS
+BEGIN
+    DECLARE @FilteredOrders TABLE (
+        [OrderId] UNIQUEIDENTIFIER NOT NULL,
+        [CustomerId] UNIQUEIDENTIFIER NOT NULL
+    )
+
+    INSERT INTO @FilteredOrders
+    SELECT [OrderId], [CustomerId] FROM [dbo].[Orders] WHERE [Status] = @Status
+
+    SELECT
+        [o].[OrderId],
+        [c].[CustomerName]
+    FROM
+        @FilteredOrders [o]
+        INNER JOIN [dbo].[Customers] [c] ON [o].[CustomerId] = [c].[Id]
+END
 ```
 
-| Constraint | is_inline | Disambiguator | Adds to table_annotation? |
-|------------|-----------|---------------|---------------------------|
-| `PK_Products` | false | 12 | ✅ Yes |
-| `DF_Products_Version` | true | 13 | ❌ No (bug) |
+| Aspect | Current (Wrong) | Expected (DacFx) |
+|--------|-----------------|------------------|
+| Element Name | `[dbo].[GetOrdersByStatus].[TableVariable1].[@FilteredOrders]` | `[dbo].[GetOrdersByStatus].[@FilteredOrders]` |
+| Reference | `[dbo].[@FilteredOrders]` | `[dbo].[GetOrdersByStatus].[@FilteredOrders]` |
+| Column Ref | `[dbo].[@FilteredOrders].[OrderId]` | `[dbo].[GetOrdersByStatus].[@FilteredOrders].[OrderId]` |
 
-Result: Table only has `<Annotation Disambiguator="12">`, missing annotation 13.
+**Technical Details:**
 
-**Solution:** Decouple the two independent concerns:
-
-```rust
-// Concern 1: Column AttachedAnnotations (only for inline constraints)
-if constraint.is_inline {
-    if !is_single_named_inline {
-        for col in &constraint.columns {
-            column_annotations.entry(key).or_default().push(d);
-        }
-    }
-}
-
-// Concern 2: Table annotations (for ANY constraint using AttachedAnnotation)
-// INDEPENDENT of is_inline - do NOT put in else branch
-if let Some(d) = disambiguator {
-    if constraint.uses_annotation {
-        table_attached.entry(table_key).or_default().push((d, idx));
-    } else {
-        table_annotation.entry(table_key).or_default().push((d, idx));
-    }
-}
-```
-
-**Invariant:** Every constraint with `uses_annotation = false` must have its Annotation defined somewhere (table or column). The refactored code makes this invariant explicit.
-
-**Files to Modify:** `src/model/builder.rs` (lines ~1381-1416)
-
----
-
-## Phase 51: Layer 7 Canonical Comparison Test Fix (1 task) - COMPLETE
-
-| ID | Task | Status | Notes |
-|----|------|--------|-------|
-| 51.1 | Update test_canonical_comparison_all_fixtures to use prebuilt DotNet dacpac cache | ✅ | Now tests all 48 fixtures instead of only 8 |
-
-**Problem Statement:**
-
-The `test_canonical_comparison_all_fixtures` test was only testing 8 fixtures because it looked for DotNet dacpacs in `tests/fixtures/*/bin/Debug/` instead of using the prebuilt cache in `target/dotnet-fixtures/`.
+In `body_deps.rs`, `extract_table_reference_after_from_join()` (lines 2112-2176):
+- `parse_table_name()` returns `("dbo", "@FilteredOrders")` for `FROM @FilteredOrders`
+- Creates `table_ref = "[dbo].[@FilteredOrders]"` without procedure scope
+- Stores incorrect reference in alias map
 
 **Solution:**
 
-Updated the test to use `get_or_build_dotnet_dacpac()` function which leverages the prebuilt cache, with fallback to fixture's bin/Debug directory.
+1. Pass `full_name` (e.g., `[dbo].[GetOrdersByStatus]`) to `TableAliasTokenParser`
+2. In `extract_table_reference_after_from_join`, detect `@` prefix on table name
+3. For table variables, create alias mapping: `alias → [schema].[procName].[@varName]`
+4. Fix `SqlDynamicColumnSource` element naming in `programmability_writer.rs` to remove `[TableVariable1]`
 
-**Result:**
-- Before: 4/8 exact match (50%) - only fixtures with pre-committed dacpacs
-- After: 19/48 exact match (39.6%) - all fixtures with DotNet builds
-
-**Files Modified:** `tests/e2e/dotnet_comparison_tests.rs`
-
-**Remaining Layer 7 Work:**
-
-The 29 failing fixtures all show element ordering differences. Root cause: DotNet processes SQL files in a different order than Rust, resulting in different element sequences in model.xml. The elements themselves are correct (verified by Layer 1-4 parity), but their order differs.
+**Files to Modify:**
+- `src/dacpac/model_xml/body_deps.rs` (alias extraction, reference generation)
+- `src/dacpac/model_xml/programmability_writer.rs` (element naming)
+- `tests/fixtures/` (new test fixture)
 
 ---
 
@@ -125,26 +110,28 @@ The 29 failing fixtures all show element ordering differences. Root cause: DotNe
 
 | Issue | Location | Status |
 |-------|----------|--------|
+| Table variable references not procedure-scoped | body_deps.rs, programmability_writer.rs | Causes deployment failure (Phase 52) |
 | Relationship parity body_dependencies_aliases | body_deps.rs | 65 errors (ordering differences, not affecting functionality) |
 | Layer 7 parity remaining | model_xml | 29/48 failing due to element ordering differences |
 
 ---
 
 <details>
-<summary>Completed Phases (1-50.8)</summary>
+<summary>Completed Phases (1-51)</summary>
 
-## Phase 50: Fix Schema-Aware Resolution Gaps (COMPLETE 2026-02-04)
+## Phase 51: Layer 7 Canonical Comparison Test Fix (COMPLETE)
+
+Updated `test_canonical_comparison_all_fixtures` to use prebuilt DotNet dacpac cache. Result: 19/48 exact match (39.6%) - all fixtures now tested.
+
+## Phase 50.9: Decouple Column and Table Annotation Logic (COMPLETE)
+
+Fixed deployment error for tables with mixed inline + table-level constraints. Decoupled column and table annotation concerns in `builder.rs`.
+
+## Phase 50: Fix Schema-Aware Resolution Gaps (COMPLETE)
 
 | Sub-Phase | Description | Tasks |
 |-----------|-------------|-------|
-| 50.1 | Remove fallback behavior in column resolution | 3 |
-| 50.2 | Add view columns to registry | 4 |
-| 50.3 | Complete deferred testing (WideWorldImporters) | 4 |
-| 50.4 | Add storage element support (Filegroup, PartitionFunction, PartitionScheme) | 7 |
-| 50.5 | Security statement support (GRANT/DENY/REVOKE skipped) | 7 |
-| 50.6 | Source-order disambiguator assignment for 2-constraint tables | 3 |
-| 50.7 | Fix FullTextIndex and single named inline constraint annotation | 3 |
-| 50.8 | Fix User-Defined Type (UDT) column resolution | 3 |
+| 50.1-50.8 | Column resolution, view registry, storage elements, security statements, UDT columns | 34 |
 
 **Key Changes:**
 - `ColumnRegistry` returns `None` when 0 tables match (no fallback)
