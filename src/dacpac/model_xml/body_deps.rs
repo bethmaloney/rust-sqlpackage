@@ -99,6 +99,7 @@ pub(crate) struct TableVariableDefinition {
     /// Table variable name (including the @ prefix, e.g., "@OrderItems")
     pub name: String,
     /// Table variable sequence number within the procedure (TableVariable1, TableVariable2, etc.)
+    #[allow(dead_code)]
     pub table_variable_number: u32,
     /// Columns in this table variable
     pub columns: Vec<TableVariableColumn>,
@@ -1522,7 +1523,7 @@ impl TableAliasTokenParser {
     /// - `sql`: The SQL body text to parse
     /// - `default_schema`: Default schema for unqualified table names (typically "dbo")
     /// - `full_name`: Full name of the parent procedure/function (e.g., "[dbo].[ProcName]")
-    ///                Used for creating procedure-scoped table variable references.
+    ///   Used for creating procedure-scoped table variable references.
     pub fn with_context(sql: &str, default_schema: &str, full_name: &str) -> Option<Self> {
         let dialect = MsSqlDialect {};
         let tokens = Tokenizer::new(&dialect, sql)
