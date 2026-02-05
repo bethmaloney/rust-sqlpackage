@@ -33,6 +33,19 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Relationship parity body_dependencies_aliases | body_deps.rs | 65 errors (ordering differences, not affecting functionality) |
 | Layer 7 parity remaining | model_xml | 24/48 failing due to element ordering differences |
 
+### Layer 7 Ordering Analysis (Investigated 2026-02-05)
+
+**Root Cause:** DotNet preserves **SQL file processing order** for inline constraints, while Rust sorts by DefiningTable (descending alphabetical). This fundamental difference cannot be easily reconciled without tracking original source order through the entire pipeline.
+
+**Observed DotNet Behavior (Inconsistent):**
+- `constraints` fixture: Inline PKs sorted Z→A (UniqueConstraintTable → ForeignKeyTable → CheckConstraintTable)
+- `e2e_simple` fixture: Inline PKs sorted A→Z by schema then table (Categories → Products → Customers → Orders)
+- `default_constraints_named` fixture: Inline defaults in **SQL definition order**, not sorted
+
+**Conclusion:** DotNet's element ordering depends on internal processing order which varies between fixtures. The current Rust implementation uses deterministic descending alphabetical sort, which matches some fixtures but not others.
+
+**Impact:** Layer 7 differences are cosmetic - they don't affect dacpac functionality or deployment. All Layers 1-4 pass (inventory, properties, relationships, ordering of named elements).
+
 ---
 
 <details>
