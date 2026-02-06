@@ -53,6 +53,23 @@ rust-sqlpackage build \
 | `-t, --target-platform` | SQL Server version: Sql130, Sql140, Sql150, Sql160 (default: Sql160) |
 | `-v, --verbose` | Enable verbose output |
 
+### Comparing Dacpacs
+
+The `compare` command lets you verify that rust-sqlpackage produces identical output to .NET DacFx for your project. Build your `.sqlproj` with both tools, then compare the resulting dacpacs:
+
+```bash
+rust-sqlpackage compare rust-output.dacpac dotnet-output.dacpac
+```
+
+This performs a semantic comparison of the two dacpac files, checking:
+
+- **model.xml** - Element-by-element schema comparison (order-independent)
+- **DacMetadata.xml / [Content_Types].xml** - XML structure comparison
+- **predeploy.sql / postdeploy.sql** - Text comparison
+- **Unexpected files** - Detects files present in one dacpac but not the other
+
+The command exits with code 0 if the dacpacs are equivalent, or code 1 if differences are found.
+
 ## Supported Features
 
 ### SQL Objects
@@ -126,7 +143,7 @@ These are intentional differences from .NET DacFx output that don't affect deplo
 
 ### CLI Limitations vs SqlPackage
 
-This tool only supports the `build` action. The following SqlPackage actions are not implemented:
+This tool supports the `build` and `compare` actions. The following SqlPackage actions are not implemented:
 
 - `deploy` - Deploy dacpac to database
 - `extract` - Extract schema from database to dacpac
