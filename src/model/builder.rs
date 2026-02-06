@@ -789,7 +789,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 let index_name = create_index
                     .name
                     .as_ref()
-                    .map(|n| ident_extract::from_object_name(n))
+                    .map(ident_extract::from_object_name)
                     .unwrap_or_else(|| "unnamed_index".to_string());
 
                 let (table_schema, table_name) =
