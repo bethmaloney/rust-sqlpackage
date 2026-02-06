@@ -3,6 +3,7 @@
 //! This library compiles .sqlproj files into .dacpac packages,
 //! providing a faster alternative to the .NET DacFx toolchain.
 
+pub mod compare;
 pub mod dacpac;
 pub mod error;
 pub mod model;

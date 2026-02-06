@@ -13,3 +13,6 @@ mod dacpac;
 
 #[path = "integration/dacpac_compatibility_tests.rs"]
 mod dacpac_compatibility_tests;
+
+#[path = "integration/compare_tests.rs"]
+mod compare_tests;

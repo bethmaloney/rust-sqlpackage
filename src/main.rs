@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::process;
 
 use rust_sqlpackage::{build_dacpac, BuildOptions};
 
@@ -36,6 +37,15 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+
+    /// Compare two dacpac files and report differences
+    Compare {
+        /// Path to the rust-generated dacpac
+        rust_dacpac: PathBuf,
+
+        /// Path to the dotnet-generated dacpac
+        dotnet_dacpac: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -56,6 +66,31 @@ fn main() -> Result<()> {
             };
 
             build_dacpac(options)?;
+        }
+
+        Commands::Compare {
+            rust_dacpac,
+            dotnet_dacpac,
+        } => {
+            let result = rust_sqlpackage::compare::compare_dacpacs(&rust_dacpac, &dotnet_dacpac)?;
+
+            // Print duplicate warnings to stderr
+            for (source, keys) in &result.duplicate_warnings {
+                eprintln!(
+                    "WARNING: {} duplicate keys in {} model.xml",
+                    keys.len(),
+                    source
+                );
+                for key in keys.iter().take(5) {
+                    eprintln!("  {}", key);
+                }
+            }
+
+            rust_sqlpackage::compare::report::print_report(&result);
+
+            if result.has_differences() {
+                process::exit(1);
+            }
         }
     }
 

@@ -53,6 +53,13 @@ pub enum SqlPackageError {
     #[error("XML generation error: {message}")]
     XmlGenerationError { message: String },
 
+    #[error("Failed to read dacpac: {path}")]
+    DacpacReadError {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("ZIP creation error: {message}")]
     ZipError { message: String },
 
