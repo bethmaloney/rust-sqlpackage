@@ -76,11 +76,11 @@ The command exits with code 0 if the dacpacs are equivalent, or code 1 if differ
 
 | Object | Support Level | Notes |
 |--------|---------------|-------|
-| Tables | Full | Columns, data types, nullable, defaults, identity, ROWGUIDCOL, SPARSE, FILESTREAM, computed columns |
+| Tables | Full | Columns, data types, nullable, defaults, identity, ROWGUIDCOL, SPARSE, FILESTREAM, computed columns, column COLLATE |
 | Views | Full | Definition preserved, SCHEMABINDING, CHECK OPTION, VIEW_METADATA |
-| Stored Procedures | Full | Schema/name/definition extracted; parameters stored as-is |
-| Functions | Full | Scalar, table-valued (inline and multi-statement); parameters stored as-is |
-| Indexes | Full | Clustered/nonclustered, unique, INCLUDE, filtered, fill factor, compression (ROW, PAGE, COLUMNSTORE) |
+| Stored Procedures | Full | Schema/name/definition extracted; parameters stored as-is; NATIVE_COMPILATION detected |
+| Functions | Full | Scalar, table-valued (inline and multi-statement); parameters stored as-is; NATIVE_COMPILATION detected |
+| Indexes | Full | Clustered/nonclustered, unique, INCLUDE, filtered, fill factor, PAD_INDEX, compression (ROW, PAGE, COLUMNSTORE, COLUMNSTORE_ARCHIVE) |
 | Schemas | Full | Auto-created for all objects, AUTHORIZATION clause |
 | Sequences | Full | All options (START, INCREMENT, MIN/MAX, CYCLE, CACHE) |
 | User-Defined Types | Full | Table types with columns/constraints, scalar/alias types |
@@ -88,6 +88,10 @@ The command exits with code 0 if the dacpacs are equivalent, or code 1 if differ
 | Full-Text Catalogs | Full | CREATE FULLTEXT CATALOG with all options |
 | Full-Text Indexes | Full | Language specifications, change tracking, stoplist |
 | Extended Properties | Full | sp_addextendedproperty at table, column, and object levels |
+| Filegroups | Full | ALTER DATABASE ADD FILEGROUP, MEMORY_OPTIMIZED_DATA |
+| Partition Functions | Full | RANGE LEFT/RIGHT, boundary values, all data types |
+| Partition Schemes | Full | Partition function reference, filegroup mappings |
+| Graph Tables | Full | CREATE TABLE AS NODE / AS EDGE |
 
 ### Constraints
 
@@ -123,14 +127,23 @@ These features are supported by .NET DacFx but not yet implemented:
 | Feature | Notes |
 |---------|-------|
 | Synonyms | CREATE SYNONYM statements |
-| Assembly/CLR Objects | CLR-based functions and procedures |
+| Assembly/CLR Objects | CLR-based functions, procedures, and triggers |
 | External Tables | External data sources and tables |
-| Temporal Tables | System-versioned tables |
-| Graph Tables | NODE and EDGE tables (syntax recognized but limited support) |
-| Security Objects | Users, roles, permissions, certificates |
+| Temporal Tables | System-versioned tables (SYSTEM_VERSIONING, PERIOD FOR SYSTEM_TIME) |
+| Memory-Optimized Tables | WITH (MEMORY_OPTIMIZED = ON) table option (filegroups are supported) |
+| XML Indexes | CREATE XML INDEX (primary and secondary) |
+| Spatial Indexes | CREATE SPATIAL INDEX |
+| Columnstore Indexes | CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX (compression on regular indexes is supported) |
 | Service Broker | Queues, services, contracts, message types |
-| Database-level Triggers | DDL triggers |
-| Partition Functions/Schemes | Table partitioning |
+| Database-level Triggers | DDL triggers (DML triggers are supported) |
+| Dynamic Data Masking | MASKED WITH (FUNCTION = ...) on columns |
+| Row-Level Security | CREATE SECURITY POLICY |
+| Always Encrypted | ENCRYPTED WITH on columns |
+| Ledger Tables | WITH (LEDGER = ON) |
+| Database Scoped Configurations | ALTER DATABASE SCOPED CONFIGURATION |
+| Security Objects | Users, roles, permissions, certificates (see note below) |
+
+**Note on security objects:** SQL files containing security statements (GRANT, DENY, REVOKE, CREATE LOGIN, CREATE USER, CREATE ROLE, certificates, keys, credentials) will **not cause build errors**. These statements are silently skipped during compilation and omitted from the dacpac. If your project includes security objects alongside schema objects, the build will succeed but the dacpac will only contain the schema objects.
 
 ### Known Limitations
 
