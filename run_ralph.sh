@@ -48,17 +48,18 @@ push_with_rebase() {
             echo "Resolve merge conflicts. We are rebasing our local commits onto the updated remote.
 
 IMPORTANT: In rebase conflicts, HEAD/ours = remote changes, incoming/theirs = our local work.
-We want to KEEP OUR LOCAL WORK while incorporating any non-conflicting remote updates.
 
 Conflicting files:
 $CONFLICT_FILES
 
 For each file:
 1. Read the file to see the conflict markers
-2. Keep our local changes (the 'theirs' section after =======)
-3. Only keep remote changes if they don't overlap with our work
-4. Remove all conflict markers
-5. Run \`git add <file>\`
+2. Understand what BOTH sides are trying to do
+3. Merge intelligently - combine both changes so nothing is lost
+4. For documentation: keep all unique content from both sides
+5. For code: ensure both changes work together
+6. Remove all conflict markers
+7. Run \`git add <file>\`
 
 After all conflicts resolved: \`git rebase --continue\`" | claude -p \
                 --dangerously-skip-permissions \

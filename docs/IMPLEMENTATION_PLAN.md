@@ -19,6 +19,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 | Layer 7 (Canonical XML) | 24/48 | 50.0% |
 
 **Remaining Work:**
+- Phase 55: Double-bracket index names causing deployment failures (standard CREATE INDEX)
 - Layer 7: element ordering differences between Rust and DotNet (24/48 failing)
 - `body_dependencies_aliases`: 65 relationship ordering errors (not affecting functionality)
 
@@ -32,6 +33,7 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 |-------|----------|--------|
 | Relationship parity body_dependencies_aliases | body_deps.rs | 65 errors (ordering differences, not affecting functionality) |
 | Layer 7 parity remaining | model_xml | 24/48 failing due to element ordering differences |
+| Double-bracket index names | builder.rs | Deployment failures for standard CREATE INDEX statements |
 
 ### BodyDependencies Ordering Analysis (Investigated 2026-02-05)
 
@@ -56,6 +58,208 @@ This document tracks progress toward achieving exact 1-1 matching between rust-s
 **Conclusion:** DotNet's element ordering depends on internal processing order which varies between fixtures. The current Rust implementation uses deterministic descending alphabetical sort, which matches some fixtures but not others.
 
 **Impact:** Layer 7 differences are cosmetic - they don't affect dacpac functionality or deployment. All Layers 1-4 pass (inventory, properties, relationships, ordering of named elements).
+
+---
+
+## Phase 55: Identifier Extraction Layer (PLANNED)
+
+Fix deployment failures caused by double-bracketed element names in model.xml. Standard `CREATE INDEX` statements produce malformed references like `[dbo].[Orders].[[IX_Orders_CustomerId]]` instead of `[dbo].[Orders].[IX_Orders_CustomerId]`.
+
+### Problem
+
+When sqlparser handles `CREATE INDEX` statements, the code uses `.to_string()` on identifiers which includes SQL brackets:
+
+```rust
+// Current (BROKEN):
+let index_name = create_index.name.as_ref().map(|n| n.to_string());
+// Returns: "[IX_Orders_CustomerId]" (with brackets)
+
+let col_name = c.expr.to_string();
+// Returns: "[CustomerId]" (with brackets)
+```
+
+Then XML generation wraps these again:
+```rust
+let full_name = format!("[{}].[{}].[{}]", schema, table, index.name);
+// Result: [dbo].[Orders].[[IX_Orders_CustomerId]] ← DOUBLE BRACKETS
+```
+
+**Affected:** All standard `CREATE INDEX` statements (without `CLUSTERED`/`NONCLUSTERED` keywords)
+
+### Audit Results
+
+Codebase audit found only **2 locations** need fixing (both in `Statement::CreateIndex`):
+
+| Line | Code | Issue |
+|------|------|-------|
+| 788 | `n.to_string()` | Index name includes brackets |
+| 800 | `c.expr.to_string()` | Column expression includes brackets |
+
+**Already correct** (no changes needed):
+- `extract_schema_and_name()` - uses `.value.clone()` internally
+- INCLUDE columns (line 811) - uses `c.value.clone()`
+- All other Statement handlers - use `extract_schema_and_name()`
+- Constraint/default expressions - intentionally preserve full SQL syntax
+
+### Solution
+
+Create `src/parser/ident_extract.rs` with functions for extracting unbracketed identifiers from sqlparser `Expr` types (the only gap).
+
+### Sub-Phases
+
+| Sub-Phase | Description | Files |
+|-----------|-------------|-------|
+| 55.1 | Create `ident_extract` module | `src/parser/ident_extract.rs`, `src/parser/mod.rs` |
+| 55.2 | Add test fixture for standard CREATE INDEX | `tests/fixtures/standard_index/` |
+| 55.3 | Fix `Statement::CreateIndex` in builder.rs | `src/model/builder.rs` |
+| 55.4 | Add parity + deployment verification test | `tests/` |
+
+### Phase 55.1: Create ident_extract Module
+
+**New file:** `src/parser/ident_extract.rs`
+
+```rust
+//! Identifier extraction utilities for sqlparser Expr types.
+//!
+//! Note: For ObjectName types, use `extract_schema_and_name()` in builder.rs
+//! which already correctly extracts unbracketed values via `.value.clone()`.
+
+use sqlparser::ast::{Expr, ObjectName};
+
+/// Extract the last identifier value from an ObjectName.
+///
+/// ObjectName is a Vec<Ident> representing qualified names like [dbo].[Table].
+/// Returns the final component without brackets.
+pub fn from_object_name(name: &ObjectName) -> String {
+    name.0.last().map(|i| i.value.clone()).unwrap_or_default()
+}
+
+/// Extract column name from an Expr (for index column references).
+///
+/// Handles Identifier and CompoundIdentifier expressions.
+/// Returns unbracketed column name, or None for complex expressions.
+pub fn column_from_expr(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Identifier(ident) => Some(ident.value.clone()),
+        Expr::CompoundIdentifier(parts) => {
+            parts.last().map(|i| i.value.clone())
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlparser::ast::Ident;
+
+    #[test]
+    fn test_from_object_name() {
+        let name = ObjectName(vec![
+            Ident::with_quote('[', "dbo"),
+            Ident::with_quote('[', "IX_Test"),
+        ]);
+        assert_eq!(from_object_name(&name), "IX_Test");
+    }
+
+    #[test]
+    fn test_column_from_expr_simple() {
+        let expr = Expr::Identifier(Ident::with_quote('[', "CustomerId"));
+        assert_eq!(column_from_expr(&expr), Some("CustomerId".to_string()));
+    }
+}
+```
+
+### Phase 55.2: Add Test Fixture
+
+**New fixture:** `tests/fixtures/standard_index/`
+
+```sql
+-- dbo/Tables/Orders.sql
+CREATE TABLE [dbo].[Orders] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [CustomerId] INT NOT NULL,
+    [OrderDate] DATETIME NOT NULL,
+    [Status] NVARCHAR(50) NOT NULL,
+    [IsArchived] BIT NOT NULL DEFAULT 0
+);
+GO
+
+-- Standard CREATE INDEX (no CLUSTERED/NONCLUSTERED keyword)
+CREATE INDEX [IX_Orders_CustomerId] ON [dbo].[Orders] ([CustomerId]);
+GO
+
+CREATE INDEX [IX_Orders_Status_Date] ON [dbo].[Orders] ([Status], [OrderDate] DESC);
+GO
+
+-- Filtered index
+CREATE INDEX [IX_Orders_Active] ON [dbo].[Orders] ([Status])
+WHERE [IsArchived] = 0;
+GO
+
+-- Index with INCLUDE
+CREATE INDEX [IX_Orders_Customer_Include] ON [dbo].[Orders] ([CustomerId])
+INCLUDE ([OrderDate], [Status]);
+GO
+```
+
+### Phase 55.3: Fix builder.rs
+
+Update `Statement::CreateIndex` handling (2 lines):
+
+```rust
+use crate::parser::ident_extract;
+
+Statement::CreateIndex(create_index) => {
+    // FIX: Use ident_extract instead of .to_string()
+    let index_name = create_index
+        .name
+        .as_ref()
+        .map(|n| ident_extract::from_object_name(n))
+        .unwrap_or_else(|| "unnamed_index".to_string());
+
+    let (table_schema, table_name) =
+        extract_schema_and_name(&create_index.table_name, &project.default_schema);
+
+    let columns: Vec<IndexColumn> = create_index
+        .columns
+        .iter()
+        .map(|c| {
+            // FIX: Use ident_extract instead of .to_string()
+            let name = ident_extract::column_from_expr(&c.expr)
+                .unwrap_or_else(|| c.expr.to_string());
+            let is_descending = c.asc == Some(false);
+            IndexColumn::with_direction(name, is_descending)
+        })
+        .collect();
+
+    // ... rest unchanged
+}
+```
+
+### Phase 55.4: Verification Tests
+
+```rust
+#[test]
+fn test_standard_index_no_double_brackets() {
+    // Build standard_index fixture
+    // Extract model.xml from dacpac
+    // Assert no "[[" patterns in element names
+    // Assert index names match: [dbo].[Orders].[IX_Orders_CustomerId]
+}
+
+#[test]
+fn test_standard_index_parity() {
+    // Run L1-L3 parity tests against standard_index fixture
+}
+```
+
+### Acceptance Criteria
+
+- [ ] All standard `CREATE INDEX` statements produce single-bracketed element names
+- [ ] `standard_index` fixture passes L1-L3 parity tests
+- [ ] No `[[` double-bracket patterns in generated model.xml
+- [ ] Existing tests continue to pass
 
 ---
 
