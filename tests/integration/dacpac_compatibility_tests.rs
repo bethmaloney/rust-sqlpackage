@@ -141,6 +141,55 @@ fn test_build_with_index_naming() {
     );
 }
 
+/// Test standard CREATE INDEX statements (without CLUSTERED/NONCLUSTERED keywords)
+/// Phase 55: These were causing double-bracket issues like [[IX_Orders_CustomerId]]
+#[test]
+fn test_standard_create_index_no_double_brackets() {
+    let ctx = TestContext::with_fixture("standard_index");
+    let dacpac_path = ctx.build_successfully();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    // Check for double-bracket bug in element names
+    // Correct: Name="[dbo].[Orders].[IX_Orders_CustomerId]"
+    // Bug: Name="[dbo].[Orders].[[IX_Orders_CustomerId]]"
+    let has_double_brackets = model_xml.contains("[[IX_") || model_xml.contains(".[[");
+
+    assert!(
+        !has_double_brackets,
+        "BUG: Standard CREATE INDEX produces double brackets [[IX_...]] instead of [IX_...]"
+    );
+
+    // Verify all index elements are present with correct format
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Orders].[IX_Orders_CustomerId]""#),
+        "Should contain IX_Orders_CustomerId with correct format"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Orders].[IX_Orders_Status_Date]""#),
+        "Should contain IX_Orders_Status_Date with correct format"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Orders].[IX_Orders_Active]""#),
+        "Should contain IX_Orders_Active (filtered index) with correct format"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Orders].[IX_Orders_Customer_Include]""#),
+        "Should contain IX_Orders_Customer_Include with correct format"
+    );
+
+    // Verify column references are also correct (not [[CustomerId]])
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Orders].[CustomerId]""#),
+        "Column references should have single brackets"
+    );
+    assert!(
+        !model_xml.contains("[[CustomerId]]"),
+        "Column names should not have double brackets"
+    );
+}
+
 // ============================================================================
 // Named Default Constraint Tests
 // ============================================================================

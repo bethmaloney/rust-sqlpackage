@@ -5,6 +5,7 @@ mod constraint_parser;
 mod extended_property_parser;
 mod fulltext_parser;
 mod function_parser;
+pub mod ident_extract;
 pub mod identifier_utils;
 pub mod index_parser;
 mod preprocess_parser;

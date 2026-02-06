@@ -14,6 +14,7 @@ use sqlparser::ast::{
 };
 
 use crate::parser::{
+    ident_extract,
     identifier_utils::normalize_identifier,
     index_parser::{extract_index_filter_predicate_tokenized, extract_index_is_padded},
     ExtractedExtendedProperty, ExtractedFullTextColumn, ExtractedFunctionParameter,
@@ -788,7 +789,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 let index_name = create_index
                     .name
                     .as_ref()
-                    .map(|n| n.to_string())
+                    .map(|n| ident_extract::from_object_name(n))
                     .unwrap_or_else(|| "unnamed_index".to_string());
 
                 let (table_schema, table_name) =
@@ -800,7 +801,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     .columns
                     .iter()
                     .map(|c| {
-                        let name = c.expr.to_string();
+                        // Use ident_extract to get unbracketed column name
+                        let name = ident_extract::column_from_expr(&c.expr)
+                            .unwrap_or_else(|| c.expr.to_string());
                         // asc: Some(true) = ASC, Some(false) = DESC, None = default (ASC)
                         let is_descending = c.asc == Some(false);
                         IndexColumn::with_direction(name, is_descending)
