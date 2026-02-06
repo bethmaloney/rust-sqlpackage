@@ -25,5 +25,8 @@ Cargo.lock
 .env
 .env.*
 
+# Python
+__pycache__/
+
 # Claude
 .claude/settings.local.json
