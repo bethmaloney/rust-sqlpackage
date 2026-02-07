@@ -24,6 +24,8 @@ pub enum ModelElement {
     PartitionFunction(PartitionFunctionElement),
     /// Partition scheme element (CREATE PARTITION SCHEME)
     PartitionScheme(PartitionSchemeElement),
+    /// Synonym element (CREATE SYNONYM ... FOR ...)
+    Synonym(SynonymElement),
     /// Generic raw element for statements that couldn't be fully parsed
     Raw(RawElement),
 }
@@ -59,6 +61,7 @@ impl ModelElement {
             ModelElement::Filegroup(_) => "SqlFilegroup",
             ModelElement::PartitionFunction(_) => "SqlPartitionFunction",
             ModelElement::PartitionScheme(_) => "SqlPartitionScheme",
+            ModelElement::Synonym(_) => "SqlSynonym",
             ModelElement::Raw(r) => match r.sql_type.as_str() {
                 "SqlTable" => "SqlTable",
                 "SqlView" => "SqlView",
@@ -100,6 +103,7 @@ impl ModelElement {
             ModelElement::Filegroup(f) => format!("[{}]", f.name),
             ModelElement::PartitionFunction(pf) => format!("[{}]", pf.name),
             ModelElement::PartitionScheme(ps) => format!("[{}]", ps.name),
+            ModelElement::Synonym(s) => format!("[{}].[{}]", s.schema, s.name),
             ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),
         }
     }
@@ -741,4 +745,19 @@ pub struct PartitionSchemeElement {
     pub partition_function: String,
     /// List of filegroups to map partitions to
     pub filegroups: Vec<String>,
+}
+
+/// Synonym element (CREATE SYNONYM ... FOR ...)
+#[derive(Debug, Clone)]
+pub struct SynonymElement {
+    pub schema: String,
+    pub name: String,
+    /// Target schema (the schema of the referenced object)
+    pub target_schema: String,
+    /// Target name (the name of the referenced object)
+    pub target_name: String,
+    /// Target database (for cross-database synonyms)
+    pub target_database: Option<String>,
+    /// Target server (for cross-server synonyms)
+    pub target_server: Option<String>,
 }

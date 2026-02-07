@@ -35,6 +35,7 @@ use super::statement_parser::{
 use super::storage_parser::{
     parse_filegroup_tokens, parse_partition_function_tokens, parse_partition_scheme_tokens,
 };
+use super::synonym_parser::parse_create_synonym_tokens;
 use super::table_type_parser::parse_create_table_type_tokens;
 use super::trigger_parser::parse_create_trigger_tokens;
 use super::tsql_dialect::ExtendedTsqlDialect;
@@ -388,6 +389,19 @@ pub enum FallbackStatementType {
         partition_function: String,
         /// List of filegroups to map partitions to
         filegroups: Vec<String>,
+    },
+    /// Synonym (CREATE SYNONYM ... FOR ...)
+    Synonym {
+        schema: String,
+        name: String,
+        /// Target schema (the schema of the referenced object)
+        target_schema: String,
+        /// Target name (the name of the referenced object)
+        target_name: String,
+        /// Target database (for cross-database synonyms)
+        target_database: Option<String>,
+        /// Target server (for cross-server synonyms)
+        target_server: Option<String>,
     },
     /// Security/deployment statements that should be silently skipped
     /// These are valid T-SQL but not schema elements (CREATE LOGIN, CREATE USER, GRANT, DENY, REVOKE, etc.)
@@ -794,6 +808,21 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: security_type,
         });
+    }
+
+    // Check for CREATE SYNONYM (must be before generic CREATE fallback to avoid being
+    // captured as RawStatement with object_type "SYNONYM" which would be silently dropped)
+    if sql_upper.contains("CREATE SYNONYM") {
+        if let Some(parsed) = parse_create_synonym_tokens(sql) {
+            return Some(FallbackStatementType::Synonym {
+                schema: parsed.schema,
+                name: parsed.name,
+                target_schema: parsed.target_schema,
+                target_name: parsed.target_name,
+                target_database: parsed.target_database,
+                target_server: parsed.target_server,
+            });
+        }
     }
 
     // Generic fallback for any other CREATE statements

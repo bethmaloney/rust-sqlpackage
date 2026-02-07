@@ -497,3 +497,60 @@ fn test_table_has_ansi_nulls_property() {
         "SqlTable elements should have IsAnsiNullsOn property"
     );
 }
+
+// ============================================================================
+// Synonym Tests (Phase 56)
+// ============================================================================
+
+#[test]
+fn test_build_with_synonyms() {
+    let ctx = TestContext::with_fixture("synonyms");
+    let dacpac_path = ctx.build_successfully();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    // Verify SqlSynonym elements are present
+    assert!(
+        model_xml.contains("SqlSynonym"),
+        "Model should contain SqlSynonym elements"
+    );
+
+    // Verify local synonym references
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Staff]""#),
+        "Should contain synonym [dbo].[Staff]"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Depts]""#),
+        "Should contain synonym [dbo].[Depts]"
+    );
+
+    // Verify cross-database synonym
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[ExternalOrders]""#),
+        "Should contain cross-database synonym [dbo].[ExternalOrders]"
+    );
+
+    // Verify ForObject relationship exists
+    assert!(
+        model_xml.contains(r#"Name="ForObject""#),
+        "SqlSynonym elements should have ForObject relationship"
+    );
+
+    // Verify cross-database reference uses UnresolvedEntity
+    assert!(
+        model_xml.contains(r#"ExternalSource="UnresolvedEntity""#),
+        "Cross-database synonym should use UnresolvedEntity external source"
+    );
+
+    // Verify local synonyms reference local objects
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Employees]""#),
+        "Staff synonym should reference [dbo].[Employees]"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Departments]""#),
+        "Depts synonym should reference [dbo].[Departments]"
+    );
+}

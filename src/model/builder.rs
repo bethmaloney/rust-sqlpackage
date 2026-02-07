@@ -29,9 +29,9 @@ use super::{
     DatabaseModel, ExtendedPropertyElement, FilegroupElement, FullTextCatalogElement,
     FullTextColumnElement, FullTextIndexElement, FunctionElement, FunctionType, IndexColumn,
     IndexElement, ModelElement, ParameterElement, PartitionFunctionElement, PartitionSchemeElement,
-    ProcedureElement, RawElement, ScalarTypeElement, SchemaElement, SequenceElement, TableElement,
-    TableTypeColumnElement, TableTypeConstraint, TriggerElement, UserDefinedTypeElement,
-    ViewElement,
+    ProcedureElement, RawElement, ScalarTypeElement, SchemaElement, SequenceElement,
+    SynonymElement, TableElement, TableTypeColumnElement, TableTypeConstraint, TriggerElement,
+    UserDefinedTypeElement, ViewElement,
 };
 
 /// Static schema name for "dbo" - avoids allocation for the most common schema
@@ -551,6 +551,24 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         name: name.clone(),
                         partition_function: partition_function.clone(),
                         filegroups: filegroups.clone(),
+                    }));
+                }
+                FallbackStatementType::Synonym {
+                    schema,
+                    name,
+                    target_schema,
+                    target_name,
+                    target_database,
+                    target_server,
+                } => {
+                    let schema_owned = track_schema(&mut schemas, schema);
+                    model.add_element(ModelElement::Synonym(SynonymElement {
+                        schema: schema_owned,
+                        name: name.clone(),
+                        target_schema: target_schema.clone(),
+                        target_name: target_name.clone(),
+                        target_database: target_database.clone(),
+                        target_server: target_server.clone(),
                     }));
                 }
                 FallbackStatementType::SkippedSecurityStatement { statement_type: _ } => {

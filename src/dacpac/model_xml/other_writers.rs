@@ -10,7 +10,7 @@ use std::io::Write;
 use crate::model::{
     DataCompressionType, ExtendedPropertyElement, FilegroupElement, FullTextCatalogElement,
     FullTextIndexElement, IndexElement, PartitionFunctionElement, PartitionSchemeElement,
-    SequenceElement,
+    SequenceElement, SynonymElement,
 };
 
 use super::body_deps::BodyDependency;
@@ -522,6 +522,91 @@ pub(crate) fn write_partition_scheme<W: Write>(
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())
+}
+
+/// Write a synonym element to model.xml
+///
+/// Format for local (same-database) synonyms:
+/// ```xml
+/// <Element Type="SqlSynonym" Name="[schema].[name]">
+///   <Relationship Name="ForObject">
+///     <Entry>
+///       <References Name="[target_schema].[target_name]" />
+///     </Entry>
+///   </Relationship>
+///   <Relationship Name="Schema">
+///     <Entry>
+///       <References ExternalSource="BuiltIns" Name="[schema]" />
+///     </Entry>
+///   </Relationship>
+/// </Element>
+/// ```
+///
+/// For cross-database/server synonyms, the ForObject references use ExternalSource="UnresolvedEntity".
+pub(crate) fn write_synonym<W: Write>(
+    writer: &mut Writer<W>,
+    synonym: &SynonymElement,
+) -> anyhow::Result<()> {
+    let full_name = format!("[{}].[{}]", synonym.schema, synonym.name);
+
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlSynonym"), ("Name", full_name.as_str())]);
+    writer.write_event(Event::Start(elem))?;
+
+    // Write ForObject relationship pointing to the target object
+    let is_cross_database = synonym.target_database.is_some() || synonym.target_server.is_some();
+
+    let rel = BytesStart::new("Relationship").with_attributes([("Name", "ForObject")]);
+    writer.write_event(Event::Start(rel))?;
+    writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+    if is_cross_database {
+        // Cross-database/server reference: use ExternalSource="UnresolvedEntity"
+        // Build the full multi-part target name
+        let target_ref = build_synonym_target_ref(synonym);
+        let refs = BytesStart::new("References").with_attributes([
+            ("ExternalSource", "UnresolvedEntity"),
+            ("Name", target_ref.as_str()),
+        ]);
+        writer.write_event(Event::Empty(refs))?;
+    } else {
+        // Local reference: just [target_schema].[target_name]
+        let target_ref = format!("[{}].[{}]", synonym.target_schema, synonym.target_name);
+        let refs = BytesStart::new("References").with_attributes([("Name", target_ref.as_str())]);
+        writer.write_event(Event::Empty(refs))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+    writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+
+    // Write Schema relationship
+    write_schema_relationship(writer, &synonym.schema)?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Build the full multi-part target reference for a synonym.
+/// For cross-database: [database].[schema].[name]
+/// For cross-server: [server].[database].[schema].[name]
+fn build_synonym_target_ref(synonym: &SynonymElement) -> String {
+    match (&synonym.target_server, &synonym.target_database) {
+        (Some(server), Some(database)) => {
+            format!(
+                "[{}].[{}].[{}].[{}]",
+                server, database, synonym.target_schema, synonym.target_name
+            )
+        }
+        (None, Some(database)) => {
+            format!(
+                "[{}].[{}].[{}]",
+                database, synonym.target_schema, synonym.target_name
+            )
+        }
+        _ => {
+            format!("[{}].[{}]", synonym.target_schema, synonym.target_name)
+        }
+    }
 }
 
 #[cfg(test)]

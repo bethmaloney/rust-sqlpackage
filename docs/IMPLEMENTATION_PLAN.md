@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | OLTP FEATURE SUPPORT IN PROGRESS
 
-**Phases 1-55 complete. Full parity: 47/48 (97.9%).**
+**Phases 1-56 complete. Full parity: 47/48 (97.9%).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -33,71 +33,20 @@
 
 Priority features for standard OLTP application databases, ordered by impact.
 
-### Phase 56: Synonyms
+### ~~Phase 56: Synonyms~~ ✅ COMPLETE
 
-Simple `CREATE SYNONYM` support. High real-world usage for cross-database references and abstraction layers.
+Implemented `CREATE SYNONYM` support with full pipeline: parser → model → XML writer.
 
-**DacFx Element Type:** `SqlSynonym`
+**What was implemented:**
+- Token-based synonym parser (`src/parser/synonym_parser.rs`) supporting 1-part through 4-part target names
+- `FallbackStatementType::Synonym` variant with schema, name, target fields
+- `SynonymElement` struct and `ModelElement::Synonym` variant
+- `write_synonym()` XML writer with `ForObject` relationship (local references use direct `References`, cross-database uses `ExternalSource="UnresolvedEntity"`)
+- Schema relationship via `write_schema_relationship()`
+- 16 parser unit tests + 1 integration test covering local, cross-schema, and cross-database synonyms
+- Test fixture: `tests/fixtures/synonyms/`
 
-#### Phase 56.1: Synonym Parser
-
-Parse `CREATE SYNONYM [schema].[name] FOR [target_schema].[target_name]` (and 3/4-part target names for cross-database/server references).
-
-**Note:** `CREATE SYNONYM` is currently caught by `try_generic_create_fallback()` and parsed into `FallbackStatementType::RawStatement` with `object_type: "SYNONYM"`, then silently dropped in `builder.rs` because `"SYNONYM"` is not in the approved type list. The new dedicated parser must intercept `CREATE SYNONYM` **before** the generic fallback to avoid conflicts.
-
-**Tasks:**
-- [ ] Create `src/parser/synonym_parser.rs` with token-based parser
-- [ ] Add `FallbackStatementType::Synonym { schema, name, target }` variant to `tsql_parser.rs`
-- [ ] Add `CREATE SYNONYM` detection in `try_fallback_parse()` **above** the `try_generic_create_fallback()` call, routing to the new parser
-- [ ] Unit tests for 1-part, 2-part, 3-part, and 4-part target names
-
-**Files:**
-- `src/parser/synonym_parser.rs` (new)
-- `src/parser/tsql_parser.rs`
-- `src/parser/mod.rs`
-
-#### Phase 56.2: Synonym Model Element
-
-Add `SynonymElement` struct and `ModelElement::Synonym` variant.
-
-**Tasks:**
-- [ ] Add `SynonymElement` to `src/model/elements.rs` with fields: `schema`, `name`, `target_schema`, `target_name`, `target_database`, `target_server`
-- [ ] Implement `type_name()` → `"SqlSynonym"`, `full_name()` → `[schema].[name]`
-- [ ] Add `ModelElement::Synonym(SynonymElement)` variant
-- [ ] Add match arm in `builder.rs` to construct `SynonymElement` from `FallbackStatementType::Synonym`
-- [ ] Track schema via `track_schema()`
-
-**Files:**
-- `src/model/elements.rs`
-- `src/model/builder.rs`
-
-#### Phase 56.3: Synonym XML Writer
-
-Write `SqlSynonym` elements to model.xml.
-
-**Tasks:**
-- [ ] Add `write_synonym()` function in `src/dacpac/model_xml/other_writers.rs`
-- [ ] Write `<Element Type="SqlSynonym" Name="[schema].[name]">`
-- [ ] Write `ForObject` relationship pointing to the target object (local references)
-- [ ] For cross-database/server targets: write an `UnresolvedEntity` reference in the `ForObject` relationship (defer full `ExternalSource` element infrastructure to a future phase — cross-database synonyms are uncommon and DacFx itself often leaves these unresolved)
-- [ ] Wire into element dispatch in `model_xml/mod.rs`
-
-**Files:**
-- `src/dacpac/model_xml/other_writers.rs`
-- `src/dacpac/model_xml/mod.rs`
-
-#### Phase 56.4: Synonym Tests
-
-**Tasks:**
-- [ ] Create `tests/fixtures/synonyms/` with `project.sqlproj` and SQL files
-- [ ] Cover: basic synonym, cross-schema target, cross-database target, synonym for procedure/function/view
-- [ ] Integration test: fixture builds successfully
-- [ ] Unit tests: verify element count, names, and target references in model
-- [ ] Build reference dacpac with DotNet DacFx and run `rust-sqlpackage compare` to verify parity
-
-**Files:**
-- `tests/fixtures/synonyms/` (new)
-- `tests/integration_tests.rs` (integration test entry point)
+**Note:** DotNet DacFx parity comparison deferred — requires DotNet toolchain to build reference dacpac. The XML structure follows the DacFx schema (`ForObject` relationship, `Schema` relationship).
 
 ---
 
@@ -370,7 +319,7 @@ Parse `ALTER DATABASE SCOPED CONFIGURATION` statements.
 
 ---
 
-## Completed Phases (1-55)
+## Completed Phases (1-56)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -402,6 +351,7 @@ Parse `ALTER DATABASE SCOPED CONFIGURATION` statements.
 | 53 | Layer 7 XML parity (NUMERIC, Scale=0, IsPadded) | All |
 | 54 | Layer 7 inline constraint ordering (descending sort) | All |
 | 55 | Identifier extraction layer (double-bracket fix) | All |
+| 56 | Synonym support (CREATE SYNONYM, SqlSynonym element, XML writer) | All |
 
 ### Key Milestones
 
