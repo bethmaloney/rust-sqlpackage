@@ -459,14 +459,14 @@ pub fn compare_model_xml(
 
     let mut missing_in_rust: Vec<ElementKey> =
         keys_b.difference(&keys_a).map(|k| (*k).clone()).collect();
-    missing_in_rust.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+    missing_in_rust.sort_by_key(|a| a.to_string());
 
     let mut extra_in_rust: Vec<ElementKey> =
         keys_a.difference(&keys_b).map(|k| (*k).clone()).collect();
-    extra_in_rust.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+    extra_in_rust.sort_by_key(|a| a.to_string());
 
     let mut common: Vec<&ElementKey> = keys_a.intersection(&keys_b).copied().collect();
-    common.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+    common.sort_by_key(|a| a.to_string());
 
     let mut differences = Vec::new();
     for key in common {

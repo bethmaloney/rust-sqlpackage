@@ -38,7 +38,7 @@ fn flatten(node: &roxmltree::Node, path: &str) -> Vec<(String, String)> {
 
     // Collect children, sort by their canonical strings for order-independence
     let mut children: Vec<roxmltree::Node> = node.children().filter(|c| c.is_element()).collect();
-    children.sort_by(|a, b| xml_to_canonical(a).cmp(&xml_to_canonical(b)));
+    children.sort_by_key(|a| xml_to_canonical(a));
 
     for child in &children {
         result.extend(flatten(child, &current));
