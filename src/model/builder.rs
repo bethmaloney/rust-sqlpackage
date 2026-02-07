@@ -25,14 +25,14 @@ use crate::parser::{
 use crate::project::SqlProject;
 
 use super::{
-    ColumnElement, ConstraintColumn, ConstraintElement, ConstraintType, DataCompressionType,
-    DatabaseModel, ExtendedPropertyElement, FilegroupElement, FullTextCatalogElement,
-    FullTextColumnElement, FullTextIndexElement, FunctionElement, FunctionType, IndexColumn,
-    IndexElement, ModelElement, ParameterElement, PartitionFunctionElement, PartitionSchemeElement,
-    PermissionElement, ProcedureElement, RawElement, RoleElement, RoleMembershipElement,
-    ScalarTypeElement, SchemaElement, SequenceElement, SynonymElement, TableElement,
-    TableTypeColumnElement, TableTypeConstraint, TriggerElement, UserDefinedTypeElement,
-    UserElement, ViewElement,
+    ColumnElement, ColumnstoreIndexElement, ConstraintColumn, ConstraintElement, ConstraintType,
+    DataCompressionType, DatabaseModel, ExtendedPropertyElement, FilegroupElement,
+    FullTextCatalogElement, FullTextColumnElement, FullTextIndexElement, FunctionElement,
+    FunctionType, IndexColumn, IndexElement, ModelElement, ParameterElement,
+    PartitionFunctionElement, PartitionSchemeElement, PermissionElement, ProcedureElement,
+    RawElement, RoleElement, RoleMembershipElement, ScalarTypeElement, SchemaElement,
+    SequenceElement, SynonymElement, TableElement, TableTypeColumnElement, TableTypeConstraint,
+    TriggerElement, UserDefinedTypeElement, UserElement, ViewElement,
 };
 
 /// Static schema name for "dbo" - avoids allocation for the most common schema
@@ -261,6 +261,35 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         filter_predicate: filter_predicate.clone(),
                         data_compression: compression_type,
                         is_padded: *is_padded,
+                    }));
+                }
+                FallbackStatementType::ColumnstoreIndex {
+                    name,
+                    table_schema,
+                    table_name,
+                    is_clustered,
+                    columns,
+                    data_compression,
+                    filter_predicate,
+                } => {
+                    let compression_type =
+                        data_compression
+                            .as_ref()
+                            .and_then(|s| match s.to_uppercase().as_str() {
+                                "COLUMNSTORE" => Some(DataCompressionType::Columnstore),
+                                "COLUMNSTORE_ARCHIVE" => {
+                                    Some(DataCompressionType::ColumnstoreArchive)
+                                }
+                                _ => None,
+                            });
+                    model.add_element(ModelElement::ColumnstoreIndex(ColumnstoreIndexElement {
+                        name: name.clone(),
+                        table_schema: table_schema.clone(),
+                        table_name: table_name.clone(),
+                        is_clustered: *is_clustered,
+                        columns: columns.clone(),
+                        data_compression: compression_type,
+                        filter_predicate: filter_predicate.clone(),
                     }));
                 }
                 FallbackStatementType::FullTextIndex {

@@ -23,7 +23,8 @@ use super::function_parser::{
 };
 use super::identifier_utils::format_token_sql;
 use super::index_parser::{
-    extract_index_filter_predicate_tokenized, parse_create_index_tokens, ParsedIndexColumn,
+    extract_index_filter_predicate_tokenized, parse_create_columnstore_index_tokens,
+    parse_create_index_tokens, ParsedIndexColumn,
 };
 use super::preprocess_parser::preprocess_tsql_tokens;
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
@@ -271,6 +272,20 @@ pub enum FallbackStatementType {
         data_compression: Option<String>,
         /// Whether PAD_INDEX is ON (applies fill factor to intermediate pages)
         is_padded: bool,
+    },
+    /// Columnstore index (CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX)
+    ColumnstoreIndex {
+        name: String,
+        table_schema: String,
+        table_name: String,
+        /// Whether this is a CLUSTERED columnstore index
+        is_clustered: bool,
+        /// Column names (only for NONCLUSTERED; empty for CLUSTERED)
+        columns: Vec<String>,
+        /// Data compression type (COLUMNSTORE or COLUMNSTORE_ARCHIVE)
+        data_compression: Option<String>,
+        /// Filter predicate for filtered NONCLUSTERED columnstore indexes
+        filter_predicate: Option<String>,
     },
     /// Full-text index (CREATE FULLTEXT INDEX ON table ...)
     FullTextIndex {
@@ -670,6 +685,21 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
                 function_type,
                 parameters,
                 return_type,
+            });
+        }
+    }
+
+    // Check for CREATE COLUMNSTORE INDEX (must be before regular index check)
+    if sql_upper.contains("COLUMNSTORE INDEX") {
+        if let Some(parsed) = parse_create_columnstore_index_tokens(sql) {
+            return Some(FallbackStatementType::ColumnstoreIndex {
+                name: parsed.name,
+                table_schema: parsed.table_schema,
+                table_name: parsed.table_name,
+                is_clustered: parsed.is_clustered,
+                columns: parsed.columns,
+                data_compression: parsed.data_compression,
+                filter_predicate: parsed.filter_predicate,
             });
         }
     }

@@ -1,0 +1,1 @@
+CREATE CLUSTERED COLUMNSTORE INDEX [CCI_Archive] ON [dbo].[Archive];

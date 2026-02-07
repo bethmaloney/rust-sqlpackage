@@ -379,6 +379,140 @@ impl IndexTokenParser {
         result
     }
 
+    /// Parse CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX and return columnstore index info
+    pub fn parse_create_columnstore_index(&mut self) -> Option<TokenParsedColumnstoreIndex> {
+        self.base.skip_whitespace();
+
+        // Expect CREATE keyword
+        if !self.base.check_keyword(Keyword::CREATE) {
+            return None;
+        }
+        self.base.advance();
+        self.base.skip_whitespace();
+
+        // Parse CLUSTERED or NONCLUSTERED
+        let is_clustered;
+        if self.base.check_word_ci("CLUSTERED") {
+            is_clustered = true;
+            self.base.advance();
+            self.base.skip_whitespace();
+        } else if self.base.check_word_ci("NONCLUSTERED") {
+            is_clustered = false;
+            self.base.advance();
+            self.base.skip_whitespace();
+        } else {
+            return None;
+        }
+
+        // Expect COLUMNSTORE keyword
+        if !self.base.check_word_ci("COLUMNSTORE") {
+            return None;
+        }
+        self.base.advance();
+        self.base.skip_whitespace();
+
+        // Expect INDEX keyword
+        if !self.base.check_keyword(Keyword::INDEX) {
+            return None;
+        }
+        self.base.advance();
+        self.base.skip_whitespace();
+
+        // Parse index name
+        let name = self.base.parse_identifier()?;
+        self.base.skip_whitespace();
+
+        // Expect ON keyword
+        if !self.base.check_keyword(Keyword::ON) {
+            return None;
+        }
+        self.base.advance();
+        self.base.skip_whitespace();
+
+        // Parse table name (schema-qualified)
+        let (table_schema, table_name) = self.base.parse_schema_qualified_name()?;
+        self.base.skip_whitespace();
+
+        // For NONCLUSTERED columnstore, parse column list
+        let columns = if !is_clustered && self.base.check_token(&Token::LParen) {
+            self.parse_simple_column_list().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        self.base.skip_whitespace();
+
+        // Parse optional WHERE and WITH clauses
+        let mut filter_predicate = None;
+        let mut data_compression = None;
+
+        while !self.base.is_at_end() {
+            self.base.skip_whitespace();
+            if self.base.is_at_end() {
+                break;
+            }
+
+            // Check for WHERE clause (filtered columnstore index)
+            if self.base.check_keyword(Keyword::WHERE) {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if let Some(predicate) = self.parse_filter_predicate() {
+                    filter_predicate = Some(predicate);
+                }
+                continue;
+            }
+
+            // Check for WITH clause
+            if self.base.check_keyword(Keyword::WITH) {
+                self.base.advance();
+                self.base.skip_whitespace();
+                // Parse WITH options for compression
+                if self.base.check_token(&Token::LParen) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    while !self.base.is_at_end() && !self.base.check_token(&Token::RParen) {
+                        self.base.skip_whitespace();
+                        if self.base.check_word_ci("DATA_COMPRESSION") {
+                            self.base.advance();
+                            self.base.skip_whitespace();
+                            if self.base.check_token(&Token::Eq) {
+                                self.base.advance();
+                                self.base.skip_whitespace();
+                                if let Some(compression) = self.base.parse_identifier() {
+                                    data_compression = Some(compression.to_uppercase());
+                                }
+                            }
+                            self.skip_to_comma_or_paren();
+                            continue;
+                        }
+                        self.skip_to_comma_or_paren();
+                    }
+                    if self.base.check_token(&Token::RParen) {
+                        self.base.advance();
+                    }
+                }
+                continue;
+            }
+
+            // Check for semicolon
+            if self.base.check_token(&Token::SemiColon) {
+                break;
+            }
+
+            self.base.advance();
+        }
+
+        Some(TokenParsedColumnstoreIndex {
+            name,
+            table_schema,
+            table_name,
+            is_clustered,
+            columns,
+            data_compression,
+            filter_predicate,
+        })
+    }
+
     /// Parse a parenthesized simple column list: ([Col1], [Col2], [Col3])
     /// Returns just column names (for INCLUDE clause which doesn't support sort direction)
     fn parse_simple_column_list(&mut self) -> Option<Vec<String>> {
@@ -497,6 +631,37 @@ impl IndexTokenParser {
 pub fn parse_create_index_tokens(sql: &str) -> Option<TokenParsedIndex> {
     let mut parser = IndexTokenParser::new(sql)?;
     parser.parse_create_index()
+}
+
+/// Result of parsing a columnstore index definition
+#[derive(Debug, Clone)]
+pub struct TokenParsedColumnstoreIndex {
+    /// Index name
+    pub name: String,
+    /// Schema of the table
+    pub table_schema: String,
+    /// Table name the index is on
+    pub table_name: String,
+    /// Whether this is a CLUSTERED columnstore index (false = NONCLUSTERED)
+    pub is_clustered: bool,
+    /// Column names (only for NONCLUSTERED columnstore indexes)
+    pub columns: Vec<String>,
+    /// Data compression type (COLUMNSTORE or COLUMNSTORE_ARCHIVE)
+    pub data_compression: Option<String>,
+    /// Filter predicate for filtered NONCLUSTERED columnstore indexes
+    pub filter_predicate: Option<String>,
+}
+
+/// Parse CREATE COLUMNSTORE INDEX using tokens and return columnstore index info.
+///
+/// Handles:
+/// - `CREATE CLUSTERED COLUMNSTORE INDEX [name] ON [schema].[table]`
+/// - `CREATE NONCLUSTERED COLUMNSTORE INDEX [name] ON [schema].[table] (col1, col2)`
+/// - WITH (DATA_COMPRESSION = COLUMNSTORE_ARCHIVE) option
+/// - WHERE clause for filtered NONCLUSTERED columnstore indexes
+pub fn parse_create_columnstore_index_tokens(sql: &str) -> Option<TokenParsedColumnstoreIndex> {
+    let mut parser = IndexTokenParser::new(sql)?;
+    parser.parse_create_columnstore_index()
 }
 
 /// Extract the filter predicate from a CREATE INDEX WHERE clause using token-based parsing.
@@ -1238,5 +1403,129 @@ WITH (FILLFACTOR = 90);
         let result = extract_index_filter_predicate_tokenized(sql).unwrap();
         assert!(result.contains("Status"));
         assert!(result.contains("Active"));
+    }
+
+    // ========================================================================
+    // Columnstore index tests
+    // ========================================================================
+
+    #[test]
+    fn test_clustered_columnstore_index_basic() {
+        let sql = "CREATE CLUSTERED COLUMNSTORE INDEX [CCI_Orders] ON [dbo].[Orders]";
+        let result = parse_create_columnstore_index_tokens(sql).unwrap();
+        assert_eq!(result.name, "CCI_Orders");
+        assert_eq!(result.table_schema, "dbo");
+        assert_eq!(result.table_name, "Orders");
+        assert!(result.is_clustered);
+        assert!(result.columns.is_empty());
+        assert!(result.data_compression.is_none());
+        assert!(result.filter_predicate.is_none());
+    }
+
+    #[test]
+    fn test_nonclustered_columnstore_index_basic() {
+        let sql = "CREATE NONCLUSTERED COLUMNSTORE INDEX [NCCI_Orders] ON [dbo].[Orders] ([OrderDate], [CustomerId], [TotalAmount])";
+        let result = parse_create_columnstore_index_tokens(sql).unwrap();
+        assert_eq!(result.name, "NCCI_Orders");
+        assert_eq!(result.table_schema, "dbo");
+        assert_eq!(result.table_name, "Orders");
+        assert!(!result.is_clustered);
+        assert_eq!(
+            result.columns,
+            vec!["OrderDate", "CustomerId", "TotalAmount"]
+        );
+    }
+
+    #[test]
+    fn test_clustered_columnstore_with_compression() {
+        let sql = "CREATE CLUSTERED COLUMNSTORE INDEX [CCI_Archive] ON [dbo].[Archive] WITH (DATA_COMPRESSION = COLUMNSTORE_ARCHIVE)";
+        let result = parse_create_columnstore_index_tokens(sql).unwrap();
+        assert_eq!(result.name, "CCI_Archive");
+        assert!(result.is_clustered);
+        assert_eq!(
+            result.data_compression,
+            Some("COLUMNSTORE_ARCHIVE".to_string())
+        );
+    }
+
+    #[test]
+    fn test_nonclustered_columnstore_with_filter() {
+        let sql = "CREATE NONCLUSTERED COLUMNSTORE INDEX [NCCI_Active] ON [dbo].[Orders] ([OrderDate], [Total]) WHERE [Status] = 'Active'";
+        let result = parse_create_columnstore_index_tokens(sql).unwrap();
+        assert_eq!(result.name, "NCCI_Active");
+        assert!(!result.is_clustered);
+        assert_eq!(result.columns, vec!["OrderDate", "Total"]);
+        assert!(result.filter_predicate.is_some());
+        let pred = result.filter_predicate.unwrap();
+        assert!(pred.contains("Status"));
+        assert!(pred.contains("Active"));
+    }
+
+    #[test]
+    fn test_columnstore_index_custom_schema() {
+        let sql = "CREATE CLUSTERED COLUMNSTORE INDEX [CCI_Sales] ON [sales].[OrderHistory]";
+        let result = parse_create_columnstore_index_tokens(sql).unwrap();
+        assert_eq!(result.table_schema, "sales");
+        assert_eq!(result.table_name, "OrderHistory");
+    }
+
+    #[test]
+    fn test_columnstore_index_lowercase() {
+        let sql = "create clustered columnstore index [CCI_Test] on [dbo].[Table1]";
+        let result = parse_create_columnstore_index_tokens(sql).unwrap();
+        assert_eq!(result.name, "CCI_Test");
+        assert!(result.is_clustered);
+    }
+
+    #[test]
+    fn test_columnstore_index_mixed_case() {
+        let sql = "Create Nonclustered Columnstore Index [NCCI_Test] On [dbo].[Table1] ([Col1])";
+        let result = parse_create_columnstore_index_tokens(sql).unwrap();
+        assert_eq!(result.name, "NCCI_Test");
+        assert!(!result.is_clustered);
+        assert_eq!(result.columns, vec!["Col1"]);
+    }
+
+    #[test]
+    fn test_columnstore_index_with_semicolon() {
+        let sql = "CREATE CLUSTERED COLUMNSTORE INDEX [CCI_Test] ON [dbo].[Table1];";
+        let result = parse_create_columnstore_index_tokens(sql).unwrap();
+        assert_eq!(result.name, "CCI_Test");
+    }
+
+    #[test]
+    fn test_columnstore_index_unbracketed_names() {
+        let sql = "CREATE NONCLUSTERED COLUMNSTORE INDEX NCCI_Test ON dbo.Table1 (Col1, Col2)";
+        let result = parse_create_columnstore_index_tokens(sql).unwrap();
+        assert_eq!(result.name, "NCCI_Test");
+        assert_eq!(result.table_schema, "dbo");
+        assert_eq!(result.table_name, "Table1");
+        assert_eq!(result.columns, vec!["Col1", "Col2"]);
+    }
+
+    #[test]
+    fn test_regular_index_not_parsed_as_columnstore() {
+        let sql = "CREATE NONCLUSTERED INDEX [IX_Test] ON [dbo].[Table1] ([Col1])";
+        let result = parse_create_columnstore_index_tokens(sql);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_nonclustered_columnstore_with_filter_and_compression() {
+        let sql = r#"
+CREATE NONCLUSTERED COLUMNSTORE INDEX [NCCI_Report]
+ON [dbo].[Transactions] ([Amount], [TransDate])
+WHERE [IsArchived] = 0
+WITH (DATA_COMPRESSION = COLUMNSTORE_ARCHIVE)
+"#;
+        let result = parse_create_columnstore_index_tokens(sql).unwrap();
+        assert_eq!(result.name, "NCCI_Report");
+        assert!(!result.is_clustered);
+        assert_eq!(result.columns, vec!["Amount", "TransDate"]);
+        assert!(result.filter_predicate.is_some());
+        assert_eq!(
+            result.data_compression,
+            Some("COLUMNSTORE_ARCHIVE".to_string())
+        );
     }
 }

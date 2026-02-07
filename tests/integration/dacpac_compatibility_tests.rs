@@ -856,3 +856,60 @@ fn test_build_with_alter_view() {
         "Model should contain Orders table"
     );
 }
+
+// ============================================================================
+// Columnstore Index Tests (Phase 61)
+// ============================================================================
+
+#[test]
+fn test_build_with_columnstore_indexes() {
+    let ctx = TestContext::with_fixture("columnstore_indexes");
+    let dacpac_path = ctx.build_successfully();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    // Clustered columnstore index should produce SqlColumnStoreIndex element
+    assert!(
+        model_xml.contains(r#"Type="SqlColumnStoreIndex""#),
+        "Model should contain SqlColumnStoreIndex elements"
+    );
+
+    // CCI_Archive should be present with IsClustered=True
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Archive].[CCI_Archive]""#),
+        "Model should contain CCI_Archive columnstore index"
+    );
+    assert!(
+        model_xml.contains(r#"<Property Name="IsClustered" Value="True" />"#),
+        "Clustered columnstore should have IsClustered=True"
+    );
+
+    // NCCI_Orders (nonclustered columnstore) should be present
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Orders].[NCCI_Orders]""#),
+        "Model should contain NCCI_Orders columnstore index"
+    );
+
+    // Nonclustered columnstore should have ColumnSpecifications
+    assert!(
+        model_xml.contains(r#"Name="ColumnSpecifications""#),
+        "Nonclustered columnstore should have ColumnSpecifications"
+    );
+
+    // Should have IndexedObject relationship
+    assert!(
+        model_xml.contains(r#"Name="IndexedObject""#),
+        "Columnstore indexes should have IndexedObject relationship"
+    );
+
+    // Tables should be in the model
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Orders]""#),
+        "Model should contain Orders table"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Archive]""#),
+        "Model should contain Archive table"
+    );
+}

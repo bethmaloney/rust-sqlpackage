@@ -34,6 +34,8 @@ pub enum ModelElement {
     Permission(PermissionElement),
     /// Role membership (ALTER ROLE ... ADD MEMBER)
     RoleMembership(RoleMembershipElement),
+    /// Columnstore index (CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX)
+    ColumnstoreIndex(ColumnstoreIndexElement),
     /// Generic raw element for statements that couldn't be fully parsed
     Raw(RawElement),
 }
@@ -74,6 +76,7 @@ impl ModelElement {
             ModelElement::Role(_) => "SqlRole",
             ModelElement::Permission(_) => "SqlPermissionStatement",
             ModelElement::RoleMembership(_) => "SqlRoleMembership",
+            ModelElement::ColumnstoreIndex(_) => "SqlColumnStoreIndex",
             ModelElement::Raw(r) => match r.sql_type.as_str() {
                 "SqlTable" => "SqlTable",
                 "SqlView" => "SqlView",
@@ -120,6 +123,9 @@ impl ModelElement {
             ModelElement::Role(r) => format!("[{}]", r.name),
             ModelElement::Permission(p) => p.full_name(),
             ModelElement::RoleMembership(rm) => rm.full_name(),
+            ModelElement::ColumnstoreIndex(ci) => {
+                format!("[{}].[{}].[{}]", ci.table_schema, ci.table_name, ci.name)
+            }
             ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),
         }
     }
@@ -882,4 +888,20 @@ impl RoleMembershipElement {
     pub fn full_name(&self) -> String {
         format!("[{}].[{}]", self.role, self.member)
     }
+}
+
+/// Columnstore index element (CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX)
+#[derive(Debug, Clone)]
+pub struct ColumnstoreIndexElement {
+    pub name: String,
+    pub table_schema: String,
+    pub table_name: String,
+    /// Whether this is a CLUSTERED columnstore index (false = NONCLUSTERED)
+    pub is_clustered: bool,
+    /// Column names (only for NONCLUSTERED columnstore indexes; empty for CLUSTERED)
+    pub columns: Vec<String>,
+    /// Data compression type (COLUMNSTORE or COLUMNSTORE_ARCHIVE)
+    pub data_compression: Option<DataCompressionType>,
+    /// Filter predicate for filtered NONCLUSTERED columnstore indexes
+    pub filter_predicate: Option<String>,
 }

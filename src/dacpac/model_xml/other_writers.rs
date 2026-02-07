@@ -8,10 +8,10 @@ use quick_xml::Writer;
 use std::io::Write;
 
 use crate::model::{
-    DataCompressionType, ExtendedPropertyElement, FilegroupElement, FullTextCatalogElement,
-    FullTextIndexElement, IndexElement, PartitionFunctionElement, PartitionSchemeElement,
-    PermissionElement, RoleElement, RoleMembershipElement, SequenceElement, SynonymElement,
-    UserElement,
+    ColumnstoreIndexElement, DataCompressionType, ExtendedPropertyElement, FilegroupElement,
+    FullTextCatalogElement, FullTextIndexElement, IndexElement, PartitionFunctionElement,
+    PartitionSchemeElement, PermissionElement, RoleElement, RoleMembershipElement, SequenceElement,
+    SynonymElement, UserElement,
 };
 
 use super::body_deps::BodyDependency;
@@ -738,6 +738,70 @@ pub(crate) fn write_role_membership<W: Write>(
     // Member relationship
     let member_ref = format!("[{}]", rm.member);
     write_relationship(writer, "Member", &[member_ref.as_str()])?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write a columnstore index element to model.xml
+pub(crate) fn write_columnstore_index<W: Write>(
+    writer: &mut Writer<W>,
+    index: &ColumnstoreIndexElement,
+) -> anyhow::Result<()> {
+    let full_name = format!(
+        "[{}].[{}].[{}]",
+        index.table_schema, index.table_name, index.name
+    );
+
+    let elem = BytesStart::new("Element").with_attributes([
+        ("Type", "SqlColumnStoreIndex"),
+        ("Name", full_name.as_str()),
+    ]);
+    writer.write_event(Event::Start(elem))?;
+
+    // IsClustered property (only emitted when true — clustered columnstore)
+    if index.is_clustered {
+        write_property(writer, "IsClustered", "True")?;
+    }
+
+    // Write FilterPredicate for filtered nonclustered columnstore indexes
+    if let Some(ref filter_predicate) = index.filter_predicate {
+        write_script_property(writer, "FilterPredicate", filter_predicate)?;
+    }
+
+    // Write ColumnSpecifications for nonclustered columnstore index columns
+    if !index.columns.is_empty() {
+        let table_ref = format!("[{}].[{}]", index.table_schema, index.table_name);
+
+        let rel =
+            BytesStart::new("Relationship").with_attributes([("Name", "ColumnSpecifications")]);
+        writer.write_event(Event::Start(rel))?;
+
+        for col in &index.columns {
+            writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+
+            let elem = BytesStart::new("Element")
+                .with_attributes([("Type", "SqlIndexedColumnSpecification")]);
+            writer.write_event(Event::Start(elem))?;
+
+            let col_ref = format!("{}.[{}]", table_ref, col);
+            write_relationship(writer, "Column", &[&col_ref])?;
+
+            writer.write_event(Event::End(BytesEnd::new("Element")))?;
+            writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        }
+
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // Write DataCompressionOptions if compression is specified
+    if let Some(ref compression) = index.data_compression {
+        write_data_compression_options(writer, compression)?;
+    }
+
+    // IndexedObject relationship
+    let table_ref = format!("[{}].[{}]", index.table_schema, index.table_name);
+    write_relationship(writer, "IndexedObject", &[&table_ref])?;
 
     writer.write_event(Event::End(BytesEnd::new("Element")))?;
     Ok(())

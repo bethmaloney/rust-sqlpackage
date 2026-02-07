@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | OLTP FEATURE SUPPORT IN PROGRESS
 
-**Phases 1-60 complete. Full parity: 47/48 (97.9%).**
+**Phases 1-61 complete. Full parity: 47/48 (97.9%).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -290,7 +290,42 @@ Implemented ALTER VIEW support with both fallback and AST paths.
 
 ---
 
-## Completed Phases (1-60)
+### Phase 61: Columnstore Indexes ✅ COMPLETED
+
+Support for `CREATE CLUSTERED COLUMNSTORE INDEX` and `CREATE NONCLUSTERED COLUMNSTORE INDEX`. These are dedicated columnstore indexes (distinct from regular indexes with COLUMNSTORE compression, which was already supported).
+
+**What was implemented:**
+- Token-based columnstore index parser (`parse_create_columnstore_index_tokens()` in `index_parser.rs`) supporting both clustered (no column list) and nonclustered (with column list) variants
+- `FallbackStatementType::ColumnstoreIndex` variant with name, table_schema, table_name, is_clustered, columns, data_compression, filter_predicate fields
+- Detection in `try_fallback_parse()` — checked before regular index detection (since `COLUMNSTORE INDEX` contains `INDEX`)
+- `ColumnstoreIndexElement` struct and `ModelElement::ColumnstoreIndex` variant with DacFx type name `SqlColumnStoreIndex`
+- `write_columnstore_index()` XML writer: IsClustered property, ColumnSpecifications (for nonclustered), DataCompressionOptions, IndexedObject relationship, FilterPredicate script property
+- 12 parser unit tests + 1 integration test with `tests/fixtures/columnstore_indexes/` fixture
+
+**DacFx Element Type:** `SqlColumnStoreIndex` (confirmed in dacpac.xsd as `ColumnStoreIndex` element type)
+
+**Supported SQL syntax:**
+| Statement | Result |
+|-----------|--------|
+| `CREATE CLUSTERED COLUMNSTORE INDEX [name] ON [table]` | SqlColumnStoreIndex with IsClustered=True |
+| `CREATE NONCLUSTERED COLUMNSTORE INDEX [name] ON [table] (cols)` | SqlColumnStoreIndex with ColumnSpecifications |
+| `... WITH (DATA_COMPRESSION = COLUMNSTORE_ARCHIVE)` | DataCompressionOptions with CompressionLevel=4 |
+| `... WHERE [predicate]` | FilterPredicate script property (nonclustered only) |
+
+**Files modified:**
+- `src/parser/index_parser.rs` (new `TokenParsedColumnstoreIndex` struct + `parse_create_columnstore_index_tokens()` + `parse_create_columnstore_index()` method + 12 unit tests)
+- `src/parser/tsql_parser.rs` (`ColumnstoreIndex` variant + detection in `try_fallback_parse()` + import)
+- `src/model/elements.rs` (`ColumnstoreIndexElement` struct + `ModelElement::ColumnstoreIndex` variant + type_name/full_name)
+- `src/model/builder.rs` (match arm for `FallbackStatementType::ColumnstoreIndex` + import)
+- `src/dacpac/model_xml/other_writers.rs` (`write_columnstore_index()` function + import)
+- `src/dacpac/model_xml/mod.rs` (dispatch + import)
+- `tests/fixtures/columnstore_indexes/` (new fixture: project.sqlproj, Tables/Orders.sql, Tables/Archive.sql, Indexes/CCI_Archive.sql, Indexes/NCCI_Orders.sql)
+- `tests/integration/dacpac_compatibility_tests.rs` (integration test)
+- `README.md` (moved columnstore indexes from "Not Yet Supported" to supported features)
+
+---
+
+## Completed Phases (1-61)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -327,6 +362,7 @@ Implemented ALTER VIEW support with both fallback and AST paths.
 | 58 | Security objects (CREATE USER, CREATE ROLE, ALTER ROLE ADD MEMBER, GRANT/DENY/REVOKE) | All |
 | 59 | Database scoped configurations (silently skip — DacFx does not support) | All |
 | 60 | ALTER VIEW WITH SCHEMABINDING (fallback + AST dual-path support) | All |
+| 61 | Columnstore indexes (CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX) | All |
 
 ### Key Milestones
 

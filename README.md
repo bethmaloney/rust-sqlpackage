@@ -81,6 +81,7 @@ The command exits with code 0 if the dacpacs are equivalent, or code 1 if differ
 | Stored Procedures | Full | Schema/name/definition extracted; parameters stored as-is; NATIVE_COMPILATION detected |
 | Functions | Full | Scalar, table-valued (inline and multi-statement); parameters stored as-is; NATIVE_COMPILATION detected |
 | Indexes | Full | Clustered/nonclustered, unique, INCLUDE, filtered, fill factor, PAD_INDEX, compression (ROW, PAGE, COLUMNSTORE, COLUMNSTORE_ARCHIVE) |
+| Columnstore Indexes | Full | CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX, DATA_COMPRESSION, filtered |
 | Schemas | Full | Auto-created for all objects, AUTHORIZATION clause |
 | Sequences | Full | All options (START, INCREMENT, MIN/MAX, CYCLE, CACHE) |
 | User-Defined Types | Full | Table types with columns/constraints, scalar/alias types |
@@ -134,7 +135,6 @@ These features are supported by .NET DacFx but not yet implemented:
 | Memory-Optimized Tables | WITH (MEMORY_OPTIMIZED = ON) table option (filegroups are supported) |
 | XML Indexes | CREATE XML INDEX (primary and secondary) |
 | Spatial Indexes | CREATE SPATIAL INDEX |
-| Columnstore Indexes | CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX (compression on regular indexes is supported) |
 | Service Broker | Queues, services, contracts, message types |
 | Database-level Triggers | DDL triggers (DML triggers are supported) |
 | Dynamic Data Masking | MASKED WITH (FUNCTION = ...) on columns |
