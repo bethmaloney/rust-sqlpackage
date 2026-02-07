@@ -764,3 +764,34 @@ fn test_build_with_security_objects() {
         "Should have VIEW DEFINITION permission"
     );
 }
+
+#[test]
+fn test_build_with_db_scoped_config() {
+    // ALTER DATABASE SCOPED CONFIGURATION statements should be silently skipped.
+    // DacFx does not model these (they produce SQL70001 errors in DacFx builds).
+    let ctx = TestContext::with_fixture("db_scoped_config");
+    let dacpac_path = ctx.build_successfully();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    // The regular table should be present
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Settings]""#),
+        "Model should contain Settings table"
+    );
+
+    // No database scoped configuration elements should be in the model
+    assert!(
+        !model_xml.contains("DatabaseScopedConfiguration"),
+        "Model should NOT contain any DatabaseScopedConfiguration elements"
+    );
+    assert!(
+        !model_xml.contains("MAXDOP"),
+        "Model should NOT contain MAXDOP references"
+    );
+    assert!(
+        !model_xml.contains("SCOPED CONFIGURATION"),
+        "Model should NOT contain SCOPED CONFIGURATION text"
+    );
+}

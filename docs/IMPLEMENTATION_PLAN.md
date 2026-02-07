@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | OLTP FEATURE SUPPORT IN PROGRESS
 
-**Phases 1-58 complete. Full parity: 47/48 (97.9%).**
+**Phases 1-59 complete. Full parity: 47/48 (97.9%).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -236,73 +236,30 @@ Write security elements to model.xml.
 
 ---
 
-### Phase 59: Database Scoped Configurations
+### Phase 59: Database Scoped Configurations ✅ COMPLETED
 
-Support for `ALTER DATABASE SCOPED CONFIGURATION` statements. Common in modern SQL Server for MAXDOP, parameter sniffing, query optimizer settings.
+**DacFx Behavior:** DotNet DacFx does **NOT** support `ALTER DATABASE SCOPED CONFIGURATION` statements in SQL project builds. These produce **SQL70001** errors ("This statement is not recognized in this context") when included in `.sql` files referenced by `.sqlproj`. In real SSDT projects, database scoped configurations belong in **post-deployment scripts**, not in the model.
 
-**DacFx Element Type:** `SqlDatabaseScopedConfigurationOptions` (or property on database model)
+Since DacFx does not model these statements, rust-sqlpackage follows the same approach used for server-level security objects (LOGIN, CERTIFICATE, etc.) — **silently skip** them during parsing. No parser, model element, or XML writer is needed.
 
-#### Phase 59.1: Database Scoped Configuration Parser
+**What was implemented:**
+- Detection of `ALTER DATABASE SCOPED CONFIGURATION` in `try_fallback_parse()` returns `FallbackStatementType::SkippedSecurityStatement` (reusing the existing skip mechanism)
+- 5 unit tests in `src/parser/tsql_parser.rs` covering SET (numeric/ON/OFF), FOR SECONDARY, CLEAR PROCEDURE_CACHE, and IDENTITY_CACHE variants
+- 1 integration test with `tests/fixtures/db_scoped_config/` fixture verifying statements are silently skipped (no model elements produced, build succeeds)
 
-Parse `ALTER DATABASE SCOPED CONFIGURATION` statements.
+**Implementation approach:**
+- Added a single detection clause in `try_fallback_parse()` checking for `ALTER DATABASE` + `SCOPED CONFIGURATION` keywords
+- No new parser module, no model element struct, no XML writer — minimal code footprint
+- Consistent with rust-sqlpackage's treatment of other DacFx-unsupported features
 
-**Tasks:**
-- [ ] Create `src/parser/db_scoped_config_parser.rs`
-- [ ] Parse `ALTER DATABASE SCOPED CONFIGURATION SET <option> = <value>`
-- [ ] Parse `ALTER DATABASE SCOPED CONFIGURATION FOR SECONDARY SET <option> = <value>`
-- [ ] Parse `ALTER DATABASE SCOPED CONFIGURATION CLEAR PROCEDURE_CACHE` (no value — action-only syntax)
-- [ ] Handle common options: `MAXDOP`, `LEGACY_CARDINALITY_ESTIMATION`, `PARAMETER_SNIFFING`, `QUERY_OPTIMIZER_HOTFIXES`, `IDENTITY_CACHE`, `BATCH_MODE_ADAPTIVE_JOINS`, `BATCH_MODE_MEMORY_GRANT_FEEDBACK`
-- [ ] Add `FallbackStatementType::DatabaseScopedConfiguration { option, value, is_secondary }` variant
-- [ ] Unit tests for each option type including `CLEAR PROCEDURE_CACHE`
-
-**Files:**
-- `src/parser/db_scoped_config_parser.rs` (new)
-- `src/parser/tsql_parser.rs`
-- `src/parser/mod.rs`
-
-#### Phase 59.2: Database Scoped Configuration Model Element
-
-**Model Design:** Each `ALTER DATABASE SCOPED CONFIGURATION SET` statement becomes a separate model element (one element per configuration option). Verify this against DacFx output before implementation — build a reference dacpac with multiple scoped configurations and inspect whether DacFx groups them or keeps them as individual elements.
-
-**Tasks:**
-- [ ] Build a reference dacpac with DotNet DacFx containing multiple `ALTER DATABASE SCOPED CONFIGURATION` statements; inspect model.xml to confirm element type name and structure (one-per-option vs grouped)
-- [ ] Add `DatabaseScopedConfigurationElement` to `elements.rs`: `option_name`, `value`, `is_secondary`
-- [ ] Add `ModelElement::DatabaseScopedConfiguration` variant
-- [ ] Implement `type_name()` and `full_name()` — verify type name string against DacFx reference (expected: `"SqlDatabaseScopedConfigurationOptions"` but confirm)
-- [ ] Update `builder.rs` match arm
-
-**Files:**
-- `src/model/elements.rs`
-- `src/model/builder.rs`
-
-#### Phase 59.3: Database Scoped Configuration XML Writer
-
-**Tasks:**
-- [ ] Add `write_database_scoped_configuration()` to `other_writers.rs`
-- [ ] Write element with configuration option name and value properties
-- [ ] Handle primary vs secondary configuration distinction
-- [ ] Wire into element dispatch in `model_xml/mod.rs`
-
-**Files:**
-- `src/dacpac/model_xml/other_writers.rs`
-- `src/dacpac/model_xml/mod.rs`
-
-#### Phase 59.4: Database Scoped Configuration Tests
-
-**Tasks:**
-- [ ] Create `tests/fixtures/db_scoped_config/` with SQL files
-- [ ] Cover: MAXDOP, LEGACY_CARDINALITY_ESTIMATION, PARAMETER_SNIFFING, FOR SECONDARY variants, CLEAR PROCEDURE_CACHE
-- [ ] Integration test: fixture builds successfully
-- [ ] Unit tests: verify configuration elements in model.xml
-- [ ] Build reference dacpac with DotNet DacFx and run `rust-sqlpackage compare` to verify parity
-
-**Files:**
-- `tests/fixtures/db_scoped_config/` (new)
-- `tests/integration_tests.rs` (integration test entry point)
+**Files modified:**
+- `src/parser/tsql_parser.rs` (detection in `try_fallback_parse()` + 5 unit tests)
+- `tests/fixtures/db_scoped_config/` (new fixture: project.sqlproj, Tables.sql, ScopedConfigs.sql)
+- `tests/integration/dacpac_compatibility_tests.rs` (integration test)
 
 ---
 
-## Completed Phases (1-56)
+## Completed Phases (1-59)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -335,6 +292,9 @@ Parse `ALTER DATABASE SCOPED CONFIGURATION` statements.
 | 54 | Layer 7 inline constraint ordering (descending sort) | All |
 | 55 | Identifier extraction layer (double-bracket fix) | All |
 | 56 | Synonym support (CREATE SYNONYM, SqlSynonym element, XML writer) | All |
+| 57 | Temporal tables (SYSTEM_VERSIONING, PERIOD FOR SYSTEM_TIME, history table relationships) | All |
+| 58 | Security objects (CREATE USER, CREATE ROLE, ALTER ROLE ADD MEMBER, GRANT/DENY/REVOKE) | All |
+| 59 | Database scoped configurations (silently skip — DacFx does not support) | All |
 
 ### Key Milestones
 

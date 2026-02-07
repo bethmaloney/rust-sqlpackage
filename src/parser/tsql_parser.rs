@@ -719,6 +719,15 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         }
     }
 
+    // Check for ALTER DATABASE SCOPED CONFIGURATION — silently skip.
+    // DacFx does not model these statements (they produce SQL70001 errors in DacFx builds).
+    // In real SSDT projects, these go in post-deployment scripts, not regular SQL files.
+    if sql_upper.contains("ALTER DATABASE") && sql_upper.contains("SCOPED CONFIGURATION") {
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "DATABASE_SCOPED_CONFIGURATION".to_string(),
+        });
+    }
+
     // Check for ALTER DATABASE ... ADD FILEGROUP
     // Must check before generic ALTER DATABASE handling
     if sql_upper.contains("ALTER DATABASE") && sql_upper.contains("ADD FILEGROUP") {
@@ -2864,5 +2873,70 @@ CREATE TABLE [dbo].[Products] (
             parts[1].contains("[Action] NVARCHAR"),
             "Part 1 should be the Action column definition"
         );
+    }
+
+    #[test]
+    fn test_fallback_skip_alter_database_scoped_configuration_set() {
+        let sql = "ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 4;";
+        let fallback = try_fallback_parse(sql);
+        assert!(fallback.is_some());
+        match fallback.unwrap() {
+            FallbackStatementType::SkippedSecurityStatement { statement_type } => {
+                assert_eq!(statement_type, "DATABASE_SCOPED_CONFIGURATION");
+            }
+            other => panic!("Expected SkippedSecurityStatement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_fallback_skip_alter_database_scoped_configuration_on_off() {
+        let sql = "ALTER DATABASE SCOPED CONFIGURATION SET LEGACY_CARDINALITY_ESTIMATION = ON;";
+        let fallback = try_fallback_parse(sql);
+        assert!(fallback.is_some());
+        match fallback.unwrap() {
+            FallbackStatementType::SkippedSecurityStatement { statement_type } => {
+                assert_eq!(statement_type, "DATABASE_SCOPED_CONFIGURATION");
+            }
+            other => panic!("Expected SkippedSecurityStatement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_fallback_skip_alter_database_scoped_configuration_for_secondary() {
+        let sql = "ALTER DATABASE SCOPED CONFIGURATION FOR SECONDARY SET MAXDOP = 2;";
+        let fallback = try_fallback_parse(sql);
+        assert!(fallback.is_some());
+        match fallback.unwrap() {
+            FallbackStatementType::SkippedSecurityStatement { statement_type } => {
+                assert_eq!(statement_type, "DATABASE_SCOPED_CONFIGURATION");
+            }
+            other => panic!("Expected SkippedSecurityStatement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_fallback_skip_alter_database_scoped_configuration_clear() {
+        let sql = "ALTER DATABASE SCOPED CONFIGURATION CLEAR PROCEDURE_CACHE;";
+        let fallback = try_fallback_parse(sql);
+        assert!(fallback.is_some());
+        match fallback.unwrap() {
+            FallbackStatementType::SkippedSecurityStatement { statement_type } => {
+                assert_eq!(statement_type, "DATABASE_SCOPED_CONFIGURATION");
+            }
+            other => panic!("Expected SkippedSecurityStatement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_fallback_skip_alter_database_scoped_configuration_identity_cache() {
+        let sql = "ALTER DATABASE SCOPED CONFIGURATION SET IDENTITY_CACHE = OFF;";
+        let fallback = try_fallback_parse(sql);
+        assert!(fallback.is_some());
+        match fallback.unwrap() {
+            FallbackStatementType::SkippedSecurityStatement { statement_type } => {
+                assert_eq!(statement_type, "DATABASE_SCOPED_CONFIGURATION");
+            }
+            other => panic!("Expected SkippedSecurityStatement, got {:?}", other),
+        }
     }
 }
