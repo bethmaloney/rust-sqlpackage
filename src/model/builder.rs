@@ -1096,18 +1096,17 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
             }
 
             // ALTER ROLE ADD/DROP MEMBER (parsed by sqlparser)
-            Statement::AlterRole { name, operation } => {
-                match operation {
-                    AlterRoleOperation::AddMember { member_name } => {
-                        model.add_element(ModelElement::RoleMembership(RoleMembershipElement {
-                            role: name.value.clone(),
-                            member: member_name.value.clone(),
-                        }));
-                    }
-                    _ => {
-                        // DROP MEMBER, RenameRole, etc. — not modeled
-                    }
-                }
+            Statement::AlterRole {
+                name,
+                operation: AlterRoleOperation::AddMember { member_name },
+            } => {
+                model.add_element(ModelElement::RoleMembership(RoleMembershipElement {
+                    role: name.value.clone(),
+                    member: member_name.value.clone(),
+                }));
+            }
+            Statement::AlterRole { .. } => {
+                // DROP MEMBER, RenameRole, etc. — not modeled
             }
 
             // GRANT (parsed by sqlparser)
