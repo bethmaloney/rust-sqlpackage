@@ -292,4 +292,32 @@ FOR [OtherDatabase].[dbo].[SomeTable];
             parse_create_synonym_tokens("CREATE SYNONYM [dbo].[MySynonym] [dbo].[TargetTable]");
         assert!(result.is_none());
     }
+
+    // ========================================================================
+    // Edge case tests
+    // ========================================================================
+
+    #[test]
+    fn test_create_synonym_5part_target_fails() {
+        let sql = "CREATE SYNONYM [dbo].[MySyn] FOR [A].[B].[C].[D].[E]";
+        let result = parse_create_synonym_tokens(sql);
+        assert!(result.is_none(), "5-part target should fail gracefully");
+    }
+
+    #[test]
+    fn test_create_synonym_identifier_with_spaces() {
+        let sql = "CREATE SYNONYM [dbo].[Syn With Space] FOR [dbo].[Table With Space]";
+        let result = parse_create_synonym_tokens(sql).unwrap();
+        assert_eq!(result.name, "Syn With Space");
+        assert_eq!(result.target_name, "Table With Space");
+    }
+
+    #[test]
+    fn test_create_synonym_unquoted_no_schema_target() {
+        let sql = "CREATE SYNONYM dbo.MySyn FOR TargetTable";
+        let result = parse_create_synonym_tokens(sql).unwrap();
+        assert_eq!(result.schema, "dbo");
+        assert_eq!(result.target_schema, "dbo");
+        assert_eq!(result.target_name, "TargetTable");
+    }
 }
