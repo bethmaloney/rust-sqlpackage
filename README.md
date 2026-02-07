@@ -84,6 +84,9 @@ The command exits with code 0 if the dacpacs are equivalent, or code 1 if differ
 | Schemas | Full | Auto-created for all objects, AUTHORIZATION clause |
 | Sequences | Full | All options (START, INCREMENT, MIN/MAX, CYCLE, CACHE) |
 | User-Defined Types | Full | Table types with columns/constraints, scalar/alias types |
+| Synonyms | Full | CREATE SYNONYM with 1-part through 4-part target names, cross-database references |
+| Temporal Tables | Full | SYSTEM_VERSIONING, PERIOD FOR SYSTEM_TIME, history table references, GENERATED ALWAYS columns |
+| Security Objects | Full | CREATE USER, CREATE ROLE, ALTER ROLE ADD/DROP MEMBER, GRANT/DENY/REVOKE permissions |
 | Triggers | Full | DML triggers (INSERT, UPDATE, DELETE), AFTER and INSTEAD OF |
 | Full-Text Catalogs | Full | CREATE FULLTEXT CATALOG with all options |
 | Full-Text Indexes | Full | Language specifications, change tracking, stoplist |
@@ -126,10 +129,8 @@ These features are supported by .NET DacFx but not yet implemented:
 
 | Feature | Notes |
 |---------|-------|
-| Synonyms | CREATE SYNONYM statements |
 | Assembly/CLR Objects | CLR-based functions, procedures, and triggers |
 | External Tables | External data sources and tables |
-| Temporal Tables | System-versioned tables (SYSTEM_VERSIONING, PERIOD FOR SYSTEM_TIME) |
 | Memory-Optimized Tables | WITH (MEMORY_OPTIMIZED = ON) table option (filegroups are supported) |
 | XML Indexes | CREATE XML INDEX (primary and secondary) |
 | Spatial Indexes | CREATE SPATIAL INDEX |
@@ -140,10 +141,8 @@ These features are supported by .NET DacFx but not yet implemented:
 | Row-Level Security | CREATE SECURITY POLICY |
 | Always Encrypted | ENCRYPTED WITH on columns |
 | Ledger Tables | WITH (LEDGER = ON) |
-| Database Scoped Configurations | ALTER DATABASE SCOPED CONFIGURATION |
-| Security Objects | Users, roles, permissions, certificates (see note below) |
 
-**Note on security objects:** SQL files containing security statements (GRANT, DENY, REVOKE, CREATE LOGIN, CREATE USER, CREATE ROLE, certificates, keys, credentials) will **not cause build errors**. These statements are silently skipped during compilation and omitted from the dacpac. If your project includes security objects alongside schema objects, the build will succeed but the dacpac will only contain the schema objects.
+**Note on silently skipped statements:** Server-level security objects (CREATE LOGIN, certificates, keys, credentials) and `ALTER DATABASE SCOPED CONFIGURATION` statements will **not cause build errors**. These are silently skipped during compilation, consistent with DacFx behavior (which also does not include these in dacpac output).
 
 ### Known Limitations
 
