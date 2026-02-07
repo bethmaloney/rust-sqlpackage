@@ -1817,7 +1817,7 @@ fn extract_system_versioning_options(after_body: &str) -> (bool, Option<String>,
 
     // Check if it's ON (not OFF)
     let sv_re = Regex::new(r"(?i)SYSTEM_VERSIONING\s*=\s*ON").ok();
-    let is_on = sv_re.map_or(false, |re| re.is_match(after_body));
+    let is_on = sv_re.is_some_and(|re| re.is_match(after_body));
     if !is_on {
         return (false, None, None);
     }

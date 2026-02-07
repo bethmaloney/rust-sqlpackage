@@ -2350,7 +2350,7 @@ fn extract_versioning_options(sql: &str, upper: &str) -> (bool, Option<String>, 
     }
 
     let sv_re = regex::Regex::new(r"(?i)SYSTEM_VERSIONING\s*=\s*ON");
-    let is_on = sv_re.map_or(false, |re| re.is_match(sql));
+    let is_on = sv_re.is_ok_and(|re| re.is_match(sql));
     if !is_on {
         return (false, None, None);
     }
