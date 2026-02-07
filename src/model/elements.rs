@@ -177,6 +177,16 @@ pub struct TableElement {
     /// DotNet outputs AttachedAnnotations for constraints that appear BEFORE the annotated
     /// constraint in the sorted element list, in ascending order.
     pub attached_annotations_after_annotation: Vec<u32>,
+    /// PERIOD FOR SYSTEM_TIME start column name (temporal tables)
+    pub system_time_start_column: Option<String>,
+    /// PERIOD FOR SYSTEM_TIME end column name (temporal tables)
+    pub system_time_end_column: Option<String>,
+    /// Whether SYSTEM_VERSIONING = ON is set (temporal tables)
+    pub is_system_versioned: bool,
+    /// History table schema for temporal tables
+    pub history_table_schema: Option<String>,
+    /// History table name for temporal tables
+    pub history_table_name: Option<String>,
 }
 
 /// Column element
@@ -211,6 +221,12 @@ pub struct ColumnElement {
     /// Collation name for the column (e.g., "Latin1_General_CI_AS")
     /// Only populated for string columns with explicit COLLATE clause
     pub collation: Option<String>,
+    /// Whether this column is GENERATED ALWAYS AS ROW START (temporal table period start column)
+    pub is_generated_always_start: bool,
+    /// Whether this column is GENERATED ALWAYS AS ROW END (temporal table period end column)
+    pub is_generated_always_end: bool,
+    /// Whether this column has the HIDDEN attribute (temporal table hidden period columns)
+    pub is_hidden: bool,
 }
 
 /// View element

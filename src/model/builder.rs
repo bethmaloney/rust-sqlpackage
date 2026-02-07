@@ -367,6 +367,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     constraints,
                     is_node,
                     is_edge,
+                    system_time_start_column,
+                    system_time_end_column,
+                    is_system_versioned,
+                    history_table_schema,
+                    history_table_name,
                 } => {
                     let schema_owned = track_schema(&mut schemas, schema);
 
@@ -386,6 +391,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         inline_constraint_disambiguators: Vec::new(), // Set during post-processing
                         attached_annotations_before_annotation: Vec::new(), // Set during post-processing
                         attached_annotations_after_annotation: Vec::new(), // Set during post-processing
+                        system_time_start_column: system_time_start_column.clone(),
+                        system_time_end_column: system_time_end_column.clone(),
+                        is_system_versioned: *is_system_versioned,
+                        history_table_schema: history_table_schema.clone(),
+                        history_table_name: history_table_name.clone(),
                     }));
 
                     // Add constraints as separate elements, tracking source order
@@ -593,11 +603,42 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 // so we check if already tracked and reuse the existing allocation
                 let schema = track_schema(&mut schemas, &schema);
 
-                let columns = create_table
+                // Extract temporal table metadata from raw SQL text
+                // sqlparser-rs parses temporal tables successfully but doesn't expose
+                // PERIOD FOR SYSTEM_TIME or SYSTEM_VERSIONING in its AST, so we
+                // extract these from the original SQL text.
+                let temporal = extract_temporal_metadata_from_sql(&parsed.sql_text);
+
+                let mut columns: Vec<ColumnElement> = create_table
                     .columns
                     .iter()
                     .map(|c| column_from_def(c, &schema, &name))
                     .collect();
+
+                // Apply temporal column attributes from raw SQL extraction
+                for col in &mut columns {
+                    if temporal
+                        .generated_always_start_columns
+                        .iter()
+                        .any(|c| c.eq_ignore_ascii_case(&col.name))
+                    {
+                        col.is_generated_always_start = true;
+                    }
+                    if temporal
+                        .generated_always_end_columns
+                        .iter()
+                        .any(|c| c.eq_ignore_ascii_case(&col.name))
+                    {
+                        col.is_generated_always_end = true;
+                    }
+                    if temporal
+                        .hidden_columns
+                        .iter()
+                        .any(|c| c.eq_ignore_ascii_case(&col.name))
+                    {
+                        col.is_hidden = true;
+                    }
+                }
 
                 model.add_element(ModelElement::Table(TableElement {
                     schema: schema.clone(),
@@ -608,6 +649,11 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     inline_constraint_disambiguators: Vec::new(), // Set during post-processing
                     attached_annotations_before_annotation: Vec::new(), // Set during post-processing
                     attached_annotations_after_annotation: Vec::new(), // Set during post-processing
+                    system_time_start_column: temporal.system_time_start_column,
+                    system_time_end_column: temporal.system_time_end_column,
+                    is_system_versioned: temporal.is_system_versioned,
+                    history_table_schema: temporal.history_table_schema,
+                    history_table_name: temporal.history_table_name,
                 }));
 
                 // Extract constraints from table definition (table-level constraints)
@@ -1671,6 +1717,9 @@ fn column_from_def(col: &ColumnDef, _schema: &str, _table_name: &str) -> ColumnE
         computed_expression,
         is_persisted,
         collation,
+        is_generated_always_start: false, // AST-parsed tables don't have temporal syntax
+        is_generated_always_end: false,
+        is_hidden: false,
     }
 }
 
@@ -1855,6 +1904,9 @@ fn column_from_fallback_table(
         computed_expression: col.computed_expression.clone(),
         is_persisted: col.is_persisted,
         collation: col.collation.clone(),
+        is_generated_always_start: col.is_generated_always_start,
+        is_generated_always_end: col.is_generated_always_end,
+        is_hidden: col.is_hidden,
     }
 }
 
@@ -2220,4 +2272,128 @@ fn extract_view_options(sql: &str) -> (bool, bool, bool) {
     let is_metadata_reported = upper.contains("VIEW_METADATA");
 
     (is_schema_bound, is_with_check_option, is_metadata_reported)
+}
+
+/// Temporal metadata extracted from raw SQL text for AST-parsed CREATE TABLE statements.
+/// sqlparser-rs parses temporal tables but doesn't expose PERIOD FOR SYSTEM_TIME,
+/// SYSTEM_VERSIONING, or GENERATED ALWAYS in its AST.
+struct TemporalMetadata {
+    system_time_start_column: Option<String>,
+    system_time_end_column: Option<String>,
+    is_system_versioned: bool,
+    history_table_schema: Option<String>,
+    history_table_name: Option<String>,
+    /// Column names that are GENERATED ALWAYS AS ROW START
+    generated_always_start_columns: Vec<String>,
+    /// Column names that are GENERATED ALWAYS AS ROW END
+    generated_always_end_columns: Vec<String>,
+    /// Column names that have the HIDDEN attribute
+    hidden_columns: Vec<String>,
+}
+
+/// Extract temporal table metadata from raw SQL text.
+/// This is used when sqlparser-rs successfully parses a CREATE TABLE
+/// but doesn't expose temporal-specific properties in the AST.
+fn extract_temporal_metadata_from_sql(sql: &str) -> TemporalMetadata {
+    let upper = sql.to_uppercase();
+
+    // Extract PERIOD FOR SYSTEM_TIME columns
+    let (start_col, end_col) = extract_period_columns(sql, &upper);
+
+    // Extract SYSTEM_VERSIONING options
+    let (is_system_versioned, history_schema, history_name) =
+        extract_versioning_options(sql, &upper);
+
+    // Extract GENERATED ALWAYS AS ROW START/END column names
+    let generated_always_start_columns = extract_generated_always_columns(sql, "START");
+    let generated_always_end_columns = extract_generated_always_columns(sql, "END");
+
+    // Extract HIDDEN columns
+    let hidden_columns = extract_hidden_columns(sql);
+
+    TemporalMetadata {
+        system_time_start_column: start_col,
+        system_time_end_column: end_col,
+        is_system_versioned,
+        history_table_schema: history_schema,
+        history_table_name: history_name,
+        generated_always_start_columns,
+        generated_always_end_columns,
+        hidden_columns,
+    }
+}
+
+/// Extract PERIOD FOR SYSTEM_TIME column names from SQL
+fn extract_period_columns(sql: &str, upper: &str) -> (Option<String>, Option<String>) {
+    if !upper.contains("PERIOD") || !upper.contains("SYSTEM_TIME") {
+        return (None, None);
+    }
+
+    let re = regex::Regex::new(
+        r"(?i)PERIOD\s+FOR\s+SYSTEM_TIME\s*\(\s*\[?(\w+)\]?\s*,\s*\[?(\w+)\]?\s*\)",
+    );
+    if let Ok(re) = re {
+        if let Some(caps) = re.captures(sql) {
+            return (
+                Some(caps.get(1).unwrap().as_str().to_string()),
+                Some(caps.get(2).unwrap().as_str().to_string()),
+            );
+        }
+    }
+    (None, None)
+}
+
+/// Extract SYSTEM_VERSIONING options from SQL
+fn extract_versioning_options(sql: &str, upper: &str) -> (bool, Option<String>, Option<String>) {
+    if !upper.contains("SYSTEM_VERSIONING") {
+        return (false, None, None);
+    }
+
+    let sv_re = regex::Regex::new(r"(?i)SYSTEM_VERSIONING\s*=\s*ON");
+    let is_on = sv_re.map_or(false, |re| re.is_match(sql));
+    if !is_on {
+        return (false, None, None);
+    }
+
+    let ht_re = regex::Regex::new(r"(?i)HISTORY_TABLE\s*=\s*\[?(\w+)\]?\.\[?(\w+)\]?");
+    let (history_schema, history_name) = ht_re
+        .ok()
+        .and_then(|re| re.captures(sql))
+        .map(|caps| {
+            (
+                Some(caps.get(1).unwrap().as_str().to_string()),
+                Some(caps.get(2).unwrap().as_str().to_string()),
+            )
+        })
+        .unwrap_or((None, None));
+
+    (true, history_schema, history_name)
+}
+
+/// Extract column names with GENERATED ALWAYS AS ROW START or END
+fn extract_generated_always_columns(sql: &str, start_or_end: &str) -> Vec<String> {
+    let pattern = format!(
+        r"(?i)\[?(\w+)\]?\s+DATETIME2(?:\(\d+\))?\s+GENERATED\s+ALWAYS\s+AS\s+ROW\s+{}",
+        start_or_end
+    );
+    let re = match regex::Regex::new(&pattern) {
+        Ok(re) => re,
+        Err(_) => return Vec::new(),
+    };
+    re.captures_iter(sql)
+        .filter_map(|caps| caps.get(1).map(|m| m.as_str().to_string()))
+        .collect()
+}
+
+/// Extract column names with the HIDDEN attribute
+fn extract_hidden_columns(sql: &str) -> Vec<String> {
+    let re = match regex::Regex::new(
+        r"(?i)\[?(\w+)\]?\s+DATETIME2(?:\(\d+\))?\s+GENERATED\s+ALWAYS\s+AS\s+ROW\s+(?:START|END)\s+HIDDEN",
+    ) {
+        Ok(re) => re,
+        Err(_) => return Vec::new(),
+    };
+    re.captures_iter(sql)
+        .filter_map(|caps| caps.get(1).map(|m| m.as_str().to_string()))
+        .collect()
 }

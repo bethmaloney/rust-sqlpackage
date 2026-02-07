@@ -171,6 +171,12 @@ pub struct ExtractedTableColumn {
     /// Collation name (e.g., "Latin1_General_CS_AS")
     /// Only populated for string columns with explicit COLLATE clause
     pub collation: Option<String>,
+    /// Whether this column is GENERATED ALWAYS AS ROW START (temporal table period start column)
+    pub is_generated_always_start: bool,
+    /// Whether this column is GENERATED ALWAYS AS ROW END (temporal table period end column)
+    pub is_generated_always_end: bool,
+    /// Whether this column has the HIDDEN attribute (temporal table hidden period columns)
+    pub is_hidden: bool,
 }
 
 /// A column reference in a constraint with optional sort direction
@@ -332,6 +338,16 @@ pub enum FallbackStatementType {
         is_node: bool,
         /// Whether this is a graph edge table (CREATE TABLE AS EDGE)
         is_edge: bool,
+        /// PERIOD FOR SYSTEM_TIME start column name (temporal tables)
+        system_time_start_column: Option<String>,
+        /// PERIOD FOR SYSTEM_TIME end column name (temporal tables)
+        system_time_end_column: Option<String>,
+        /// Whether SYSTEM_VERSIONING = ON is set (temporal tables)
+        is_system_versioned: bool,
+        /// History table schema for temporal tables (from HISTORY_TABLE option)
+        history_table_schema: Option<String>,
+        /// History table name for temporal tables (from HISTORY_TABLE option)
+        history_table_name: Option<String>,
     },
     /// Generic fallback for any statement that can't be parsed
     RawStatement {
@@ -1758,11 +1774,21 @@ fn extract_table_structure(sql: &str, sql_upper: &str) -> Option<FallbackStateme
     let table_match = table_re.find(sql)?;
     let paren_start = table_match.end() - 1; // Position of the opening '('
 
-    // Find matching closing parenthesis
-    let table_body = extract_balanced_parens(&sql[paren_start..])?;
+    // Find matching closing parenthesis and get remaining SQL after it
+    let remaining_sql = &sql[paren_start..];
+    let table_body = extract_balanced_parens(remaining_sql)?;
 
-    // Parse columns and constraints from the table body
-    let (columns, constraints) = parse_table_body(&table_body, &name);
+    // Calculate position after the closing parenthesis of the table body
+    // table_body is the content inside parens, so the closing paren is at offset 1 + body_len + 1
+    let body_len_with_parens = table_body.len() + 2; // +2 for the outer ( and )
+    let after_body = &remaining_sql[body_len_with_parens..];
+
+    // Parse columns, constraints, and PERIOD FOR SYSTEM_TIME from the table body
+    let (columns, constraints, period) = parse_table_body(&table_body, &name);
+
+    // Extract temporal table options from WITH clause after the closing parenthesis
+    let (is_system_versioned, history_table_schema, history_table_name) =
+        extract_system_versioning_options(after_body);
 
     Some(FallbackStatementType::Table {
         schema,
@@ -1771,7 +1797,44 @@ fn extract_table_structure(sql: &str, sql_upper: &str) -> Option<FallbackStateme
         constraints,
         is_node,
         is_edge,
+        system_time_start_column: period.start_column,
+        system_time_end_column: period.end_column,
+        is_system_versioned,
+        history_table_schema,
+        history_table_name,
     })
+}
+
+/// Extract SYSTEM_VERSIONING options from the WITH clause after a CREATE TABLE body.
+/// Returns (is_system_versioned, history_table_schema, history_table_name).
+fn extract_system_versioning_options(after_body: &str) -> (bool, Option<String>, Option<String>) {
+    let upper = after_body.to_uppercase();
+
+    // Check for SYSTEM_VERSIONING = ON
+    if !upper.contains("SYSTEM_VERSIONING") {
+        return (false, None, None);
+    }
+
+    // Check if it's ON (not OFF)
+    let sv_re = Regex::new(r"(?i)SYSTEM_VERSIONING\s*=\s*ON").ok();
+    let is_on = sv_re.map_or(false, |re| re.is_match(after_body));
+    if !is_on {
+        return (false, None, None);
+    }
+
+    // Extract HISTORY_TABLE = [schema].[name]
+    let ht_re = Regex::new(r"(?i)HISTORY_TABLE\s*=\s*\[?(\w+)\]?\.\[?(\w+)\]?").ok();
+    let (history_schema, history_name) = ht_re
+        .and_then(|re| re.captures(after_body))
+        .map(|caps| {
+            (
+                Some(caps.get(1).unwrap().as_str().to_string()),
+                Some(caps.get(2).unwrap().as_str().to_string()),
+            )
+        })
+        .unwrap_or((None, None));
+
+    (true, history_schema, history_name)
 }
 
 /// Extract content between balanced parentheses (returns content without the outer parens)
@@ -1804,17 +1867,29 @@ fn extract_balanced_parens(sql: &str) -> Option<String> {
     }
 }
 
-/// Parse table body to extract columns and constraints
+/// Result of parsing a PERIOD FOR SYSTEM_TIME clause
+#[derive(Debug, Clone, Default)]
+struct ParsedSystemTimePeriod {
+    start_column: Option<String>,
+    end_column: Option<String>,
+}
+
+/// Parse table body to extract columns, constraints, and PERIOD FOR SYSTEM_TIME
 fn parse_table_body(
     body: &str,
     table_name: &str,
-) -> (Vec<ExtractedTableColumn>, Vec<ExtractedTableConstraint>) {
+) -> (
+    Vec<ExtractedTableColumn>,
+    Vec<ExtractedTableConstraint>,
+    ParsedSystemTimePeriod,
+) {
     // Split by top-level commas (not inside parentheses)
     let parts = split_by_top_level_comma(body);
 
     // Most parts are columns, with a few constraints
     let mut columns = Vec::with_capacity(parts.len());
     let mut constraints = Vec::with_capacity(parts.len().min(4));
+    let mut period = ParsedSystemTimePeriod::default();
 
     for part in parts {
         let trimmed = part.trim();
@@ -1823,6 +1898,14 @@ fn parse_table_body(
         }
 
         let upper = trimmed.to_uppercase();
+
+        // Check for PERIOD FOR SYSTEM_TIME ([col1], [col2])
+        if upper.starts_with("PERIOD") && upper.contains("SYSTEM_TIME") {
+            if let Some(parsed) = parse_period_for_system_time(trimmed) {
+                period = parsed;
+            }
+            continue;
+        }
 
         // Check if this is a table-level constraint
         if upper.starts_with("CONSTRAINT")
@@ -1842,7 +1925,40 @@ fn parse_table_body(
         }
     }
 
-    (columns, constraints)
+    (columns, constraints, period)
+}
+
+/// Parse PERIOD FOR SYSTEM_TIME ([start_col], [end_col])
+fn parse_period_for_system_time(def: &str) -> Option<ParsedSystemTimePeriod> {
+    // Extract the content within parentheses
+    let paren_start = def.find('(')?;
+    let paren_end = def.rfind(')')?;
+    if paren_end <= paren_start {
+        return None;
+    }
+
+    let inner = &def[paren_start + 1..paren_end];
+    let parts: Vec<&str> = inner.split(',').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    // Strip brackets and whitespace from column names
+    let start_col = parts[0]
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    let end_col = parts[1]
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+
+    Some(ParsedSystemTimePeriod {
+        start_column: Some(start_col),
+        end_column: Some(end_col),
+    })
 }
 
 /// Split string by commas at the top level (not inside parentheses)
@@ -2112,6 +2228,9 @@ fn convert_token_parsed_column(parsed: TokenParsedColumn) -> ExtractedTableColum
         computed_expression: parsed.computed_expression,
         is_persisted: parsed.is_persisted,
         collation: parsed.collation,
+        is_generated_always_start: parsed.is_generated_always_start,
+        is_generated_always_end: parsed.is_generated_always_end,
+        is_hidden: parsed.is_hidden,
     }
 }
 

@@ -4552,6 +4552,9 @@ mod tests {
                     computed_expression: None,
                     is_persisted: false,
                     collation: None,
+                    is_generated_always_start: false,
+                    is_generated_always_end: false,
+                    is_hidden: false,
                 })
                 .collect();
             model.elements.push(ModelElement::Table(TableElement {
@@ -4563,6 +4566,11 @@ mod tests {
                 inline_constraint_disambiguators: vec![],
                 attached_annotations_before_annotation: vec![],
                 attached_annotations_after_annotation: vec![],
+                system_time_start_column: None,
+                system_time_end_column: None,
+                is_system_versioned: false,
+                history_table_schema: None,
+                history_table_name: None,
             }));
         }
         // Use "dbo" as default schema for test registry

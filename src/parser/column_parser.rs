@@ -62,6 +62,12 @@ pub struct TokenParsedColumn {
     /// Collation name (e.g., "Latin1_General_CS_AS")
     /// Only populated for string columns with explicit COLLATE clause
     pub collation: Option<String>,
+    /// Whether this column is GENERATED ALWAYS AS ROW START (temporal table period start column)
+    pub is_generated_always_start: bool,
+    /// Whether this column is GENERATED ALWAYS AS ROW END (temporal table period end column)
+    pub is_generated_always_end: bool,
+    /// Whether this column has the HIDDEN attribute (temporal table hidden period columns)
+    pub is_hidden: bool,
 }
 
 /// Token-based column definition parser
@@ -281,6 +287,42 @@ impl ColumnTokenParser {
             if self.base.check_word_ci("FILESTREAM") {
                 self.base.advance();
                 result.is_filestream = true;
+                continue;
+            }
+
+            // Check for GENERATED ALWAYS AS ROW START/END (temporal table period columns)
+            if self.base.check_word_ci("GENERATED") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_word_ci("ALWAYS") {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    if self.base.check_keyword(Keyword::AS) {
+                        self.base.advance();
+                        self.base.skip_whitespace();
+                        if self.base.check_word_ci("ROW") {
+                            self.base.advance();
+                            self.base.skip_whitespace();
+                            if self.base.check_word_ci("START") {
+                                self.base.advance();
+                                result.is_generated_always_start = true;
+                            } else if self.base.check_word_ci("END") {
+                                self.base.advance();
+                                result.is_generated_always_end = true;
+                            }
+                        }
+                    }
+                }
+                // GENERATED ALWAYS separates CONSTRAINT from DEFAULT
+                constraint_immediately_precedes = false;
+                continue;
+            }
+
+            // Check for HIDDEN (temporal table hidden period columns)
+            if self.base.check_word_ci("HIDDEN") {
+                self.base.advance();
+                result.is_hidden = true;
+                constraint_immediately_precedes = false;
                 continue;
             }
 
@@ -927,5 +969,87 @@ mod tests {
 
         let result = parse_column_definition_tokens("[Name] NVARCHAR(100) NOT NULL").unwrap();
         assert!(result.collation.is_none());
+    }
+
+    // ========================================================================
+    // Temporal column tests (Phase 57)
+    // ========================================================================
+
+    #[test]
+    fn test_generated_always_as_row_start() {
+        let result = parse_column_definition_tokens(
+            "[SysStartTime] DATETIME2 GENERATED ALWAYS AS ROW START NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "SysStartTime");
+        assert_eq!(result.data_type, "DATETIME2");
+        assert!(result.is_generated_always_start);
+        assert!(!result.is_generated_always_end);
+        assert!(!result.is_hidden);
+        assert_eq!(result.nullability, Some(false));
+    }
+
+    #[test]
+    fn test_generated_always_as_row_end() {
+        let result = parse_column_definition_tokens(
+            "[SysEndTime] DATETIME2 GENERATED ALWAYS AS ROW END NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "SysEndTime");
+        assert_eq!(result.data_type, "DATETIME2");
+        assert!(!result.is_generated_always_start);
+        assert!(result.is_generated_always_end);
+        assert!(!result.is_hidden);
+        assert_eq!(result.nullability, Some(false));
+    }
+
+    #[test]
+    fn test_generated_always_with_hidden() {
+        let result = parse_column_definition_tokens(
+            "[ValidFrom] DATETIME2 GENERATED ALWAYS AS ROW START HIDDEN NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "ValidFrom");
+        assert_eq!(result.data_type, "DATETIME2");
+        assert!(result.is_generated_always_start);
+        assert!(result.is_hidden);
+        assert_eq!(result.nullability, Some(false));
+    }
+
+    #[test]
+    fn test_generated_always_end_hidden() {
+        let result = parse_column_definition_tokens(
+            "[ValidTo] DATETIME2 GENERATED ALWAYS AS ROW END HIDDEN NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "ValidTo");
+        assert!(result.is_generated_always_end);
+        assert!(result.is_hidden);
+    }
+
+    #[test]
+    fn test_regular_column_no_temporal_flags() {
+        let result = parse_column_definition_tokens("[Name] NVARCHAR(100) NOT NULL").unwrap();
+        assert!(!result.is_generated_always_start);
+        assert!(!result.is_generated_always_end);
+        assert!(!result.is_hidden);
+    }
+
+    #[test]
+    fn test_generated_always_with_constraint_default() {
+        // ALTER TABLE pattern: GENERATED ALWAYS + HIDDEN + CONSTRAINT DEFAULT
+        let result = parse_column_definition_tokens(
+            "[ValidFrom] DATETIME2 GENERATED ALWAYS AS ROW START HIDDEN CONSTRAINT [DF_ValidFrom] DEFAULT SYSUTCDATETIME() NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "ValidFrom");
+        assert!(result.is_generated_always_start);
+        assert!(result.is_hidden);
+        assert_eq!(
+            result.default_constraint_name,
+            Some("DF_ValidFrom".to_string())
+        );
+        assert_eq!(result.default_value, Some("SYSUTCDATETIME()".to_string()));
+        assert_eq!(result.nullability, Some(false));
     }
 }

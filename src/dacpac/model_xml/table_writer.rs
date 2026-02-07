@@ -34,6 +34,11 @@ pub(crate) fn write_table<W: Write>(
     // Write IsAnsiNullsOn property (always true for tables - ANSI_NULLS ON is default)
     write_property(writer, "IsAnsiNullsOn", "True")?;
 
+    // Write temporal table property: IsSystemVersioningOn
+    if table.is_system_versioned {
+        write_property(writer, "IsSystemVersioningOn", "True")?;
+    }
+
     // Relationship to columns
     if !table.columns.is_empty() {
         let rel = BytesStart::new("Relationship").with_attributes([("Name", "Columns")]);
@@ -48,6 +53,45 @@ pub(crate) fn write_table<W: Write>(
 
     // Relationship to schema (comes after Columns in DotNet output)
     write_schema_relationship(writer, &table.schema)?;
+
+    // Temporal table relationships: SystemTimePeriodStartColumn, SystemTimePeriodEndColumn
+    if let Some(ref start_col) = table.system_time_start_column {
+        let col_ref = format!("{}.[{}]", full_name, start_col);
+        let rel = BytesStart::new("Relationship")
+            .with_attributes([("Name", "SystemTimePeriodStartColumn")]);
+        writer.write_event(Event::Start(rel))?;
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+        let refs = BytesStart::new("References").with_attributes([("Name", col_ref.as_str())]);
+        writer.write_event(Event::Empty(refs))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    if let Some(ref end_col) = table.system_time_end_column {
+        let col_ref = format!("{}.[{}]", full_name, end_col);
+        let rel = BytesStart::new("Relationship")
+            .with_attributes([("Name", "SystemTimePeriodEndColumn")]);
+        writer.write_event(Event::Start(rel))?;
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+        let refs = BytesStart::new("References").with_attributes([("Name", col_ref.as_str())]);
+        writer.write_event(Event::Empty(refs))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    // Temporal table relationship: HistoryTable
+    if let (Some(ref hist_schema), Some(ref hist_name)) =
+        (&table.history_table_schema, &table.history_table_name)
+    {
+        let hist_ref = format!("[{}].[{}]", hist_schema, hist_name);
+        let rel = BytesStart::new("Relationship").with_attributes([("Name", "HistoryTable")]);
+        writer.write_event(Event::Start(rel))?;
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+        let refs = BytesStart::new("References").with_attributes([("Name", hist_ref.as_str())]);
+        writer.write_event(Event::Empty(refs))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
 
     // Write AttachedAnnotation elements that come BEFORE the Annotation
     // DotNet outputs AttachedAnnotations for constraints appearing after the annotated one first
@@ -316,6 +360,19 @@ pub(crate) fn write_column_with_type<W: Write>(
 
     if column.is_filestream {
         write_property(writer, "IsFileStream", "True")?;
+    }
+
+    // Temporal column properties
+    if column.is_generated_always_start {
+        write_property(writer, "GeneratedAlwaysType", "1")?;
+    }
+
+    if column.is_generated_always_end {
+        write_property(writer, "GeneratedAlwaysType", "2")?;
+    }
+
+    if column.is_hidden {
+        write_property(writer, "IsHidden", "True")?;
     }
 
     // Data type relationship
@@ -683,6 +740,9 @@ mod tests {
             attached_annotations: vec![],
             inline_constraint_annotation: None,
             collation: None,
+            is_generated_always_start: false,
+            is_generated_always_end: false,
+            is_hidden: false,
         };
         let mut writer = create_test_writer();
         write_column_with_type(&mut writer, &column, "[dbo].[TestTable]", "SqlSimpleColumn")
@@ -712,6 +772,9 @@ mod tests {
             attached_annotations: vec![],
             inline_constraint_annotation: None,
             collation: None,
+            is_generated_always_start: false,
+            is_generated_always_end: false,
+            is_hidden: false,
         };
         let mut writer = create_test_writer();
         write_column_with_type(&mut writer, &column, "[dbo].[TestTable]", "SqlSimpleColumn")
@@ -742,12 +805,20 @@ mod tests {
                 attached_annotations: vec![],
                 inline_constraint_annotation: None,
                 collation: None,
+                is_generated_always_start: false,
+                is_generated_always_end: false,
+                is_hidden: false,
             }],
             is_node: false,
             is_edge: false,
             inline_constraint_disambiguators: vec![],
             attached_annotations_before_annotation: vec![],
             attached_annotations_after_annotation: vec![],
+            system_time_start_column: None,
+            system_time_end_column: None,
+            is_system_versioned: false,
+            history_table_schema: None,
+            history_table_name: None,
         };
         let mut writer = create_test_writer();
         write_table(&mut writer, &table).unwrap();
@@ -769,6 +840,11 @@ mod tests {
             inline_constraint_disambiguators: vec![1],
             attached_annotations_before_annotation: vec![],
             attached_annotations_after_annotation: vec![],
+            system_time_start_column: None,
+            system_time_end_column: None,
+            is_system_versioned: false,
+            history_table_schema: None,
+            history_table_name: None,
         };
         let mut writer = create_test_writer();
         write_table(&mut writer, &table).unwrap();

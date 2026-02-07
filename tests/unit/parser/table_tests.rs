@@ -316,8 +316,7 @@ GO
                     name,
                     columns,
                     constraints,
-                    is_node: _,
-                    is_edge: _,
+                    ..
                 }) = &stmt.fallback_type
                 {
                     println!("Fallback Table: [{schema}].[{name}]");
@@ -1142,4 +1141,223 @@ fn test_parse_table_with_commaless_inline_default() {
             &parsed[0].fallback_type
         );
     }
+}
+
+// ============================================================================
+// Temporal table metadata extraction tests (Phase 57)
+// ============================================================================
+
+use rust_sqlpackage::parser::FallbackStatementType;
+
+#[test]
+fn test_temporal_table_extracts_period_columns() {
+    let sql = r#"
+CREATE TABLE [dbo].[Employee] (
+    [EmployeeId] INT NOT NULL PRIMARY KEY,
+    [Name] NVARCHAR(100) NOT NULL,
+    [SysStartTime] DATETIME2 GENERATED ALWAYS AS ROW START NOT NULL,
+    [SysEndTime] DATETIME2 GENERATED ALWAYS AS ROW END NOT NULL,
+    PERIOD FOR SYSTEM_TIME ([SysStartTime], [SysEndTime])
+)
+WITH (SYSTEM_VERSIONING = ON);
+"#;
+    let file = create_sql_file(sql);
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path()).unwrap();
+    assert_eq!(result.len(), 1);
+
+    if let Some(FallbackStatementType::Table {
+        system_time_start_column,
+        system_time_end_column,
+        is_system_versioned,
+        columns,
+        ..
+    }) = &result[0].fallback_type
+    {
+        // Verify PERIOD FOR SYSTEM_TIME extraction
+        assert_eq!(
+            system_time_start_column.as_deref(),
+            Some("SysStartTime"),
+            "Should extract start column from PERIOD FOR SYSTEM_TIME"
+        );
+        assert_eq!(
+            system_time_end_column.as_deref(),
+            Some("SysEndTime"),
+            "Should extract end column from PERIOD FOR SYSTEM_TIME"
+        );
+
+        // Verify SYSTEM_VERSIONING = ON extraction
+        assert!(*is_system_versioned, "Should detect SYSTEM_VERSIONING = ON");
+
+        // Verify GENERATED ALWAYS AS ROW START/END extraction
+        let start_col = columns
+            .iter()
+            .find(|c| c.name == "SysStartTime")
+            .expect("Should have SysStartTime column");
+        assert!(
+            start_col.is_generated_always_start,
+            "SysStartTime should be is_generated_always_start"
+        );
+        assert!(
+            !start_col.is_generated_always_end,
+            "SysStartTime should NOT be is_generated_always_end"
+        );
+
+        let end_col = columns
+            .iter()
+            .find(|c| c.name == "SysEndTime")
+            .expect("Should have SysEndTime column");
+        assert!(
+            end_col.is_generated_always_end,
+            "SysEndTime should be is_generated_always_end"
+        );
+        assert!(
+            !end_col.is_generated_always_start,
+            "SysEndTime should NOT be is_generated_always_start"
+        );
+    } else {
+        panic!(
+            "Expected FallbackStatementType::Table, got {:?}",
+            &result[0].fallback_type
+        );
+    }
+}
+
+#[test]
+fn test_temporal_table_extracts_history_table() {
+    let sql = r#"
+CREATE TABLE [dbo].[Product] (
+    [ProductId] INT NOT NULL PRIMARY KEY,
+    [ValidFrom] DATETIME2 GENERATED ALWAYS AS ROW START NOT NULL,
+    [ValidTo] DATETIME2 GENERATED ALWAYS AS ROW END NOT NULL,
+    PERIOD FOR SYSTEM_TIME ([ValidFrom], [ValidTo])
+)
+WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = [dbo].[ProductHistory]));
+"#;
+    let file = create_sql_file(sql);
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path()).unwrap();
+    assert_eq!(result.len(), 1);
+
+    if let Some(FallbackStatementType::Table {
+        is_system_versioned,
+        history_table_schema,
+        history_table_name,
+        ..
+    }) = &result[0].fallback_type
+    {
+        assert!(*is_system_versioned, "Should detect SYSTEM_VERSIONING = ON");
+        assert_eq!(
+            history_table_schema.as_deref(),
+            Some("dbo"),
+            "Should extract history table schema"
+        );
+        assert_eq!(
+            history_table_name.as_deref(),
+            Some("ProductHistory"),
+            "Should extract history table name"
+        );
+    } else {
+        panic!(
+            "Expected FallbackStatementType::Table, got {:?}",
+            &result[0].fallback_type
+        );
+    }
+}
+
+#[test]
+fn test_temporal_table_extracts_hidden_columns() {
+    let sql = r#"
+CREATE TABLE [dbo].[Customer] (
+    [CustomerId] INT NOT NULL PRIMARY KEY,
+    [SysStart] DATETIME2 GENERATED ALWAYS AS ROW START HIDDEN NOT NULL,
+    [SysEnd] DATETIME2 GENERATED ALWAYS AS ROW END HIDDEN NOT NULL,
+    PERIOD FOR SYSTEM_TIME ([SysStart], [SysEnd])
+)
+WITH (SYSTEM_VERSIONING = ON);
+"#;
+    let file = create_sql_file(sql);
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path()).unwrap();
+    assert_eq!(result.len(), 1);
+
+    if let Some(FallbackStatementType::Table { columns, .. }) = &result[0].fallback_type {
+        let start_col = columns
+            .iter()
+            .find(|c| c.name == "SysStart")
+            .expect("Should have SysStart column");
+        assert!(start_col.is_hidden, "SysStart should be HIDDEN");
+        assert!(
+            start_col.is_generated_always_start,
+            "SysStart should be GENERATED ALWAYS AS ROW START"
+        );
+
+        let end_col = columns
+            .iter()
+            .find(|c| c.name == "SysEnd")
+            .expect("Should have SysEnd column");
+        assert!(end_col.is_hidden, "SysEnd should be HIDDEN");
+        assert!(
+            end_col.is_generated_always_end,
+            "SysEnd should be GENERATED ALWAYS AS ROW END"
+        );
+
+        // Regular column should NOT be hidden
+        let regular_col = columns
+            .iter()
+            .find(|c| c.name == "CustomerId")
+            .expect("Should have CustomerId column");
+        assert!(
+            !regular_col.is_hidden,
+            "Regular column should NOT be HIDDEN"
+        );
+        assert!(
+            !regular_col.is_generated_always_start,
+            "Regular column should NOT be GENERATED ALWAYS"
+        );
+    } else {
+        panic!(
+            "Expected FallbackStatementType::Table, got {:?}",
+            &result[0].fallback_type
+        );
+    }
+}
+
+#[test]
+fn test_non_temporal_table_has_no_temporal_metadata() {
+    // A regular table without temporal features. sqlparser-rs handles this
+    // successfully (no fallback), so we verify it parses correctly and
+    // the sql_text is present for the builder to extract metadata from.
+    // The builder's extract_temporal_metadata_from_sql() should find no
+    // temporal metadata in this SQL.
+    let sql = r#"
+CREATE TABLE [dbo].[RegularTable] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [Name] NVARCHAR(100) NOT NULL
+);
+"#;
+    let file = create_sql_file(sql);
+    let result = rust_sqlpackage::parser::parse_sql_file(file.path()).unwrap();
+    assert_eq!(result.len(), 1);
+
+    // sqlparser-rs handles simple CREATE TABLE, so fallback_type is None
+    assert!(
+        result[0].fallback_type.is_none(),
+        "Simple CREATE TABLE should be parsed by sqlparser-rs, not fallback"
+    );
+    // The sql_text should still be available for builder-level metadata extraction
+    assert!(
+        !result[0].sql_text.is_empty(),
+        "sql_text should be preserved for builder processing"
+    );
+    // Verify no temporal syntax in the SQL
+    assert!(
+        !result[0].sql_text.contains("SYSTEM_TIME"),
+        "Non-temporal table should not contain SYSTEM_TIME"
+    );
+    assert!(
+        !result[0].sql_text.contains("SYSTEM_VERSIONING"),
+        "Non-temporal table should not contain SYSTEM_VERSIONING"
+    );
+    assert!(
+        !result[0].sql_text.contains("GENERATED ALWAYS"),
+        "Non-temporal table should not contain GENERATED ALWAYS"
+    );
 }
