@@ -43,10 +43,12 @@ Simple `CREATE SYNONYM` support. High real-world usage for cross-database refere
 
 Parse `CREATE SYNONYM [schema].[name] FOR [target_schema].[target_name]` (and 3/4-part target names for cross-database/server references).
 
+**Note:** `CREATE SYNONYM` is currently caught by `try_generic_create_fallback()` and parsed into `FallbackStatementType::RawStatement` with `object_type: "SYNONYM"`, then silently dropped in `builder.rs` because `"SYNONYM"` is not in the approved type list. The new dedicated parser must intercept `CREATE SYNONYM` **before** the generic fallback to avoid conflicts.
+
 **Tasks:**
 - [ ] Create `src/parser/synonym_parser.rs` with token-based parser
 - [ ] Add `FallbackStatementType::Synonym { schema, name, target }` variant to `tsql_parser.rs`
-- [ ] Detect `CREATE SYNONYM` in fallback dispatch and route to parser
+- [ ] Add `CREATE SYNONYM` detection in `try_fallback_parse()` **above** the `try_generic_create_fallback()` call, routing to the new parser
 - [ ] Unit tests for 1-part, 2-part, 3-part, and 4-part target names
 
 **Files:**
@@ -76,8 +78,8 @@ Write `SqlSynonym` elements to model.xml.
 **Tasks:**
 - [ ] Add `write_synonym()` function in `src/dacpac/model_xml/other_writers.rs`
 - [ ] Write `<Element Type="SqlSynonym" Name="[schema].[name]">`
-- [ ] Write `ForObject` relationship pointing to the target object
-- [ ] Handle cross-database/server target references (ExternalSource)
+- [ ] Write `ForObject` relationship pointing to the target object (local references)
+- [ ] For cross-database/server targets: write an `UnresolvedEntity` reference in the `ForObject` relationship (defer full `ExternalSource` element infrastructure to a future phase — cross-database synonyms are uncommon and DacFx itself often leaves these unresolved)
 - [ ] Wire into element dispatch in `model_xml/mod.rs`
 
 **Files:**
@@ -91,10 +93,11 @@ Write `SqlSynonym` elements to model.xml.
 - [ ] Cover: basic synonym, cross-schema target, cross-database target, synonym for procedure/function/view
 - [ ] Integration test: fixture builds successfully
 - [ ] Unit tests: verify element count, names, and target references in model
+- [ ] Build reference dacpac with DotNet DacFx and run `rust-sqlpackage compare` to verify parity
 
 **Files:**
 - `tests/fixtures/synonyms/` (new)
-- `tests/integration/dacpac_compatibility_tests.rs`
+- `tests/integration_tests.rs` (integration test entry point)
 
 ---
 
@@ -102,17 +105,20 @@ Write `SqlSynonym` elements to model.xml.
 
 Support for `SYSTEM_VERSIONING`, `PERIOD FOR SYSTEM_TIME`, and history table references. The biggest functional gap for modern OLTP apps (audit trails, slowly-changing data).
 
-**DacFx Properties:** Properties on existing `SqlTable` element — no new element type needed.
+**DacFx Properties:** Properties on existing `SqlTable` element — no new element type needed. However, history tables referenced via `HISTORY_TABLE = [schema].[name]` must appear as their own `SqlTable` elements in the model (DacFx includes them as separate table definitions).
+
+**Existing State:** The parser already handles temporal SQL syntax without errors — 8 unit tests in `tests/unit/parser/table_tests.rs` (lines 359-609) and 2 ALTER TABLE tests in `tests/unit/parser/alter_tests.rs` (lines 738-785) all pass. The gap is that temporal **metadata** (period columns, versioning options, history table references) is not extracted or included in the dacpac output. Phases 57.1-57.2 are about adding metadata extraction to the existing parsing, not building parsing from scratch.
+
+**Scope:** Only `CREATE TABLE` with temporal syntax is in scope. `ALTER TABLE ... SET (SYSTEM_VERSIONING = ON/OFF)` is deferred — it requires a different model builder path and is less common in project-based SQL.
 
 #### Phase 57.1: Temporal Table Parser — PERIOD FOR SYSTEM_TIME
 
-Parse the `PERIOD FOR SYSTEM_TIME` column-level clause in CREATE TABLE.
+Extract `PERIOD FOR SYSTEM_TIME` metadata during CREATE TABLE column/constraint parsing. The SQL already parses without errors; this phase adds structured metadata extraction.
 
 **Tasks:**
-- [ ] Detect `PERIOD FOR SYSTEM_TIME (start_col, end_col)` in column/constraint parsing
-- [ ] Extract the two datetime2 column names (period start, period end)
+- [ ] During column/constraint parsing, detect `PERIOD FOR SYSTEM_TIME (start_col, end_col)` and extract the two column names
 - [ ] Store in a new `SystemTimePeriod { start_column, end_column }` struct
-- [ ] Unit tests for PERIOD syntax variations
+- [ ] Adapt existing unit tests to verify extracted metadata (not just successful parsing)
 
 **Files:**
 - `src/parser/column_parser.rs` or `src/parser/constraint_parser.rs`
@@ -120,14 +126,14 @@ Parse the `PERIOD FOR SYSTEM_TIME` column-level clause in CREATE TABLE.
 
 #### Phase 57.2: Temporal Table Parser — SYSTEM_VERSIONING Option
 
-Parse `WITH (SYSTEM_VERSIONING = ON (...))` table option.
+Extract `WITH (SYSTEM_VERSIONING = ON (...))` metadata during table option parsing. The SQL already parses; this phase adds structured extraction.
 
 **Tasks:**
-- [ ] Detect `SYSTEM_VERSIONING = ON` in table options parsing
+- [ ] During table options parsing, detect `SYSTEM_VERSIONING = ON` and extract sub-options
 - [ ] Extract optional `HISTORY_TABLE = [schema].[name]`
 - [ ] Extract optional `DATA_CONSISTENCY_CHECK = ON|OFF`
 - [ ] Extract optional `HISTORY_RETENTION_PERIOD = N {DAYS|WEEKS|MONTHS|YEARS}`
-- [ ] Unit tests for each option combination
+- [ ] Adapt existing unit tests to verify extracted metadata
 
 **Files:**
 - `src/parser/tsql_parser.rs` (table option parsing)
@@ -166,12 +172,14 @@ Generate DacFx-compatible XML properties and relationships for temporal tables.
 **Tasks:**
 - [ ] Create `tests/fixtures/temporal_tables/` with `project.sqlproj` and SQL files
 - [ ] Cover: basic temporal table, custom history table name, default history table, hidden period columns, retention period
+- [ ] Verify history tables appear as separate `SqlTable` elements in the model
 - [ ] Integration test: fixture builds successfully
 - [ ] Unit tests: verify temporal properties and relationships in model.xml
+- [ ] Build reference dacpac with DotNet DacFx and run `rust-sqlpackage compare` to verify parity
 
 **Files:**
 - `tests/fixtures/temporal_tables/` (new)
-- `tests/integration/dacpac_compatibility_tests.rs`
+- `tests/integration_tests.rs` (integration test entry point)
 
 ---
 
@@ -180,6 +188,10 @@ Generate DacFx-compatible XML properties and relationships for temporal tables.
 Support for users, roles, and permissions. Currently silently skipped (`SkippedSecurityStatement`). Present in virtually every production database.
 
 **DacFx Element Types:** `SqlUser`, `SqlRole`, `SqlPermissionStatement`, `SqlRoleMembership`
+
+**Existing State:** `try_security_statement_fallback()` in `tsql_parser.rs` (lines 909-1002) currently catches 11 categories of security statements and returns them all as `SkippedSecurityStatement`. This phase implements 4 of them (USER, ROLE, PERMISSION, ROLE_MEMBERSHIP). The remaining categories — LOGIN, APPLICATION_ROLE, SERVER_ROLE, CERTIFICATE, ASYMMETRIC_KEY, SYMMETRIC_KEY, CREDENTIAL — continue to be silently skipped as they are server-level objects not included in dacpacs.
+
+**Key Wiring Change:** The `try_security_statement_fallback()` function must be refactored so that USER, ROLE, GRANT/DENY/REVOKE, and ROLE_MEMBERSHIP statements are routed to the new `security_parser.rs` instead of returning `SkippedSecurityStatement`. The remaining categories continue through the existing skip path.
 
 #### Phase 58.1: Security Parser — CREATE USER
 
@@ -192,11 +204,12 @@ Parse `CREATE USER` statements with various authentication options.
 - [ ] Parse `CREATE USER [name] WITH DEFAULT_SCHEMA = [schema]`
 - [ ] Parse `CREATE USER [name] FROM EXTERNAL PROVIDER`
 - [ ] Add `FallbackStatementType::CreateUser { ... }` variant
+- [ ] Refactor `try_security_statement_fallback()`: extract USER detection to call the new parser instead of returning `SkippedSecurityStatement`. Other categories remain unchanged.
 - [ ] Unit tests for each CREATE USER variation
 
 **Files:**
 - `src/parser/security_parser.rs` (new)
-- `src/parser/tsql_parser.rs`
+- `src/parser/tsql_parser.rs` (refactor `try_security_statement_fallback()`)
 - `src/parser/mod.rs`
 
 #### Phase 58.2: Security Parser — CREATE ROLE and Role Membership
@@ -207,8 +220,9 @@ Parse role creation and `ALTER ROLE ... ADD MEMBER` statements.
 - [ ] Parse `CREATE ROLE [name]` with optional `AUTHORIZATION [owner]`
 - [ ] Parse `ALTER ROLE [role] ADD MEMBER [member]`
 - [ ] Parse `ALTER ROLE [role] DROP MEMBER [member]`
-- [ ] Parse legacy `sp_addrolemember` calls
+- [ ] Parse legacy `sp_addrolemember` calls (already detected by `try_security_statement_fallback()` as `ROLE_MEMBERSHIP` — redirect to new parser)
 - [ ] Add `FallbackStatementType::CreateRole { ... }` and `AlterRoleMembership { ... }` variants
+- [ ] Redirect ROLE and ROLE_MEMBERSHIP categories in `try_security_statement_fallback()` to new parser
 - [ ] Unit tests for role and membership variations
 
 **Files:**
@@ -227,6 +241,7 @@ Parse permission statements.
 - [ ] Handle schema-level permissions (`ON SCHEMA::[schema]`)
 - [ ] Handle database-level permissions (no ON clause)
 - [ ] Add `FallbackStatementType::Permission { action, permission, object, principal }` variant
+- [ ] Redirect GRANT/DENY/REVOKE detection in `try_security_statement_fallback()` to new parser
 - [ ] Unit tests for GRANT/DENY/REVOKE on tables, schemas, procedures
 
 **Files:**
@@ -243,8 +258,9 @@ Add element types for users, roles, permissions, and role memberships.
 - [ ] Add `PermissionElement`: `action` (Grant/Deny/Revoke), `permission`, `object_schema`, `object_name`, `principal`
 - [ ] Add `RoleMembershipElement`: `role`, `member`
 - [ ] Add corresponding `ModelElement` variants
-- [ ] Implement `type_name()` for each: `"SqlUser"`, `"SqlRole"`, `"SqlPermissionStatement"`, `"SqlRoleMembership"`
-- [ ] Update `builder.rs` match arms to construct elements (replace `SkippedSecurityStatement`)
+- [ ] Implement `type_name()` and `full_name()` for each: `"SqlUser"`, `"SqlRole"`, `"SqlPermissionStatement"`, `"SqlRoleMembership"`
+- [ ] Update `builder.rs`: add match arms for the new `FallbackStatementType` variants (`CreateUser`, `CreateRole`, `AlterRoleMembership`, `Permission`) to construct elements
+- [ ] Verify the existing `SkippedSecurityStatement` match arm in `builder.rs` still handles the remaining skipped categories (LOGIN, CERTIFICATE, etc.)
 
 **Files:**
 - `src/model/elements.rs`
@@ -267,16 +283,24 @@ Write security elements to model.xml.
 
 #### Phase 58.6: Security Tests
 
+**Backward Compatibility — Critical:** Switching from `SkippedSecurityStatement` to actual element processing means any SQL file containing GRANT/DENY/REVOKE/CREATE USER/CREATE ROLE will now produce model elements where none existed before. This changes dacpac output for any project that includes security statements. Before merging:
+
+- Audit all existing fixtures for security statements that were previously silently skipped
+- Run the full parity test suite (`just test`) to confirm no regressions
+- If any real-world projects are used for testing, rebuild them and verify output
+
 **Tasks:**
 - [ ] Create `tests/fixtures/security_objects/` with SQL files
 - [ ] Cover: CREATE USER (login-based, without login, external), CREATE ROLE, ALTER ROLE ADD MEMBER, GRANT/DENY/REVOKE on table/schema/database
 - [ ] Integration test: fixture builds successfully (security elements present in dacpac)
 - [ ] Unit tests: verify element types, counts, properties, and relationships
-- [ ] Verify existing fixtures still pass (security statements no longer skipped — ensure backward compat)
+- [ ] **Regression sweep:** run `just test` and confirm all existing fixtures still pass — no existing fixture should contain security SQL, but verify this explicitly
+- [ ] Build reference dacpac with DotNet DacFx and run `rust-sqlpackage compare` to verify parity
+- [ ] Verify that LOGIN, CERTIFICATE, ASYMMETRIC_KEY, SYMMETRIC_KEY, CREDENTIAL, APPLICATION_ROLE, SERVER_ROLE statements still produce `SkippedSecurityStatement` (not errors)
 
 **Files:**
 - `tests/fixtures/security_objects/` (new)
-- `tests/integration/dacpac_compatibility_tests.rs`
+- `tests/integration_tests.rs` (integration test entry point)
 
 ---
 
@@ -288,15 +312,16 @@ Support for `ALTER DATABASE SCOPED CONFIGURATION` statements. Common in modern S
 
 #### Phase 59.1: Database Scoped Configuration Parser
 
-Parse `ALTER DATABASE SCOPED CONFIGURATION SET` statements.
+Parse `ALTER DATABASE SCOPED CONFIGURATION` statements.
 
 **Tasks:**
 - [ ] Create `src/parser/db_scoped_config_parser.rs`
 - [ ] Parse `ALTER DATABASE SCOPED CONFIGURATION SET <option> = <value>`
 - [ ] Parse `ALTER DATABASE SCOPED CONFIGURATION FOR SECONDARY SET <option> = <value>`
+- [ ] Parse `ALTER DATABASE SCOPED CONFIGURATION CLEAR PROCEDURE_CACHE` (no value — action-only syntax)
 - [ ] Handle common options: `MAXDOP`, `LEGACY_CARDINALITY_ESTIMATION`, `PARAMETER_SNIFFING`, `QUERY_OPTIMIZER_HOTFIXES`, `IDENTITY_CACHE`, `BATCH_MODE_ADAPTIVE_JOINS`, `BATCH_MODE_MEMORY_GRANT_FEEDBACK`
 - [ ] Add `FallbackStatementType::DatabaseScopedConfiguration { option, value, is_secondary }` variant
-- [ ] Unit tests for each option type
+- [ ] Unit tests for each option type including `CLEAR PROCEDURE_CACHE`
 
 **Files:**
 - `src/parser/db_scoped_config_parser.rs` (new)
@@ -305,10 +330,13 @@ Parse `ALTER DATABASE SCOPED CONFIGURATION SET` statements.
 
 #### Phase 59.2: Database Scoped Configuration Model Element
 
+**Model Design:** Each `ALTER DATABASE SCOPED CONFIGURATION SET` statement becomes a separate model element (one element per configuration option). Verify this against DacFx output before implementation — build a reference dacpac with multiple scoped configurations and inspect whether DacFx groups them or keeps them as individual elements.
+
 **Tasks:**
+- [ ] Build a reference dacpac with DotNet DacFx containing multiple `ALTER DATABASE SCOPED CONFIGURATION` statements; inspect model.xml to confirm element type name and structure (one-per-option vs grouped)
 - [ ] Add `DatabaseScopedConfigurationElement` to `elements.rs`: `option_name`, `value`, `is_secondary`
 - [ ] Add `ModelElement::DatabaseScopedConfiguration` variant
-- [ ] Implement `type_name()` → `"SqlDatabaseScopedConfigurationOptions"`
+- [ ] Implement `type_name()` and `full_name()` — verify type name string against DacFx reference (expected: `"SqlDatabaseScopedConfigurationOptions"` but confirm)
 - [ ] Update `builder.rs` match arm
 
 **Files:**
@@ -331,13 +359,14 @@ Parse `ALTER DATABASE SCOPED CONFIGURATION SET` statements.
 
 **Tasks:**
 - [ ] Create `tests/fixtures/db_scoped_config/` with SQL files
-- [ ] Cover: MAXDOP, LEGACY_CARDINALITY_ESTIMATION, PARAMETER_SNIFFING, FOR SECONDARY variants
+- [ ] Cover: MAXDOP, LEGACY_CARDINALITY_ESTIMATION, PARAMETER_SNIFFING, FOR SECONDARY variants, CLEAR PROCEDURE_CACHE
 - [ ] Integration test: fixture builds successfully
 - [ ] Unit tests: verify configuration elements in model.xml
+- [ ] Build reference dacpac with DotNet DacFx and run `rust-sqlpackage compare` to verify parity
 
 **Files:**
 - `tests/fixtures/db_scoped_config/` (new)
-- `tests/integration/dacpac_compatibility_tests.rs`
+- `tests/integration_tests.rs` (integration test entry point)
 
 ---
 
