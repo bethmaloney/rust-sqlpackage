@@ -641,3 +641,126 @@ fn test_build_with_temporal_tables() {
         "Non-temporal Category table should still be present"
     );
 }
+
+// ============================================================================
+// Security Objects Tests (Phase 58)
+// ============================================================================
+
+#[test]
+fn test_build_with_security_objects() {
+    let ctx = TestContext::with_fixture("security_objects");
+    let dacpac_path = ctx.build_successfully();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    // Verify tables are present (base objects for permissions)
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Employees]""#),
+        "Model should contain Employees table"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[AuditLog]""#),
+        "Model should contain AuditLog table"
+    );
+
+    // Verify SqlUser elements
+    assert!(
+        model_xml.contains("SqlUser"),
+        "Model should contain SqlUser elements"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[AppUser]""#),
+        "Should contain user [AppUser]"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[ContainedUser]""#),
+        "Should contain user [ContainedUser]"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[ExternalUser]""#),
+        "Should contain user [ExternalUser]"
+    );
+
+    // Verify AuthenticationType property
+    assert!(
+        model_xml.contains(r#"<Property Name="AuthenticationType" Value="#),
+        "Users should have AuthenticationType property"
+    );
+
+    // Verify SqlRole elements
+    assert!(
+        model_xml.contains("SqlRole"),
+        "Model should contain SqlRole elements"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[AppRole]""#),
+        "Should contain role [AppRole]"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[AdminRole]""#),
+        "Should contain role [AdminRole]"
+    );
+
+    // Verify role authorization
+    assert!(
+        model_xml.contains(r#"Name="Authorizer""#),
+        "AdminRole should have Authorizer relationship"
+    );
+
+    // Verify SqlRoleMembership elements
+    assert!(
+        model_xml.contains("SqlRoleMembership"),
+        "Model should contain SqlRoleMembership elements"
+    );
+    assert!(
+        model_xml.contains(r#"Name="Role""#),
+        "Role membership should have Role relationship"
+    );
+    assert!(
+        model_xml.contains(r#"Name="Member""#),
+        "Role membership should have Member relationship"
+    );
+
+    // Verify SqlPermissionStatement elements
+    assert!(
+        model_xml.contains("SqlPermissionStatement"),
+        "Model should contain SqlPermissionStatement elements"
+    );
+    assert!(
+        model_xml.contains(r#"Name="Permission""#),
+        "Permissions should have Permission property"
+    );
+    assert!(
+        model_xml.contains(r#"Name="Grantee""#),
+        "Permissions should have Grantee relationship"
+    );
+    assert!(
+        model_xml.contains(r#"Name="SecuredObject""#),
+        "Object-level permissions should have SecuredObject relationship"
+    );
+
+    // Verify GRANT SELECT on Employees
+    assert!(
+        model_xml.contains(r#"Value="SELECT""#),
+        "Should have SELECT permission"
+    );
+
+    // Verify GRANT EXECUTE
+    assert!(
+        model_xml.contains(r#"Value="EXECUTE""#),
+        "Should have EXECUTE permission"
+    );
+
+    // Verify DENY DELETE
+    assert!(
+        model_xml.contains(r#"Value="DELETE""#),
+        "Should have DELETE permission (DENY)"
+    );
+
+    // Verify VIEW DEFINITION (database-level permission)
+    assert!(
+        model_xml.contains(r#"Value="VIEW DEFINITION""#),
+        "Should have VIEW DEFINITION permission"
+    );
+}

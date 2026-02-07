@@ -9,8 +9,8 @@ use std::collections::{BTreeSet, HashMap};
 
 use anyhow::Result;
 use sqlparser::ast::{
-    BinaryOperator, ColumnDef, ColumnOption, DataType, Expr, ObjectName, SchemaName, Statement,
-    TableConstraint,
+    Action, AlterRoleOperation, BinaryOperator, ColumnDef, ColumnOption, DataType, Expr,
+    GrantObjects, ObjectName, Privileges, SchemaName, Statement, TableConstraint,
 };
 
 use crate::parser::{
@@ -29,9 +29,10 @@ use super::{
     DatabaseModel, ExtendedPropertyElement, FilegroupElement, FullTextCatalogElement,
     FullTextColumnElement, FullTextIndexElement, FunctionElement, FunctionType, IndexColumn,
     IndexElement, ModelElement, ParameterElement, PartitionFunctionElement, PartitionSchemeElement,
-    ProcedureElement, RawElement, ScalarTypeElement, SchemaElement, SequenceElement,
-    SynonymElement, TableElement, TableTypeColumnElement, TableTypeConstraint, TriggerElement,
-    UserDefinedTypeElement, ViewElement,
+    PermissionElement, ProcedureElement, RawElement, RoleElement, RoleMembershipElement,
+    ScalarTypeElement, SchemaElement, SequenceElement, SynonymElement, TableElement,
+    TableTypeColumnElement, TableTypeConstraint, TriggerElement, UserDefinedTypeElement,
+    UserElement, ViewElement,
 };
 
 /// Static schema name for "dbo" - avoids allocation for the most common schema
@@ -581,10 +582,62 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                         target_server: target_server.clone(),
                     }));
                 }
+                FallbackStatementType::CreateUser {
+                    name,
+                    auth_type,
+                    login,
+                    default_schema,
+                } => {
+                    model.add_element(ModelElement::User(UserElement {
+                        name: name.clone(),
+                        auth_type: auth_type.clone(),
+                        login: login.clone(),
+                        default_schema: default_schema.clone(),
+                    }));
+                }
+                FallbackStatementType::CreateRole { name, owner } => {
+                    model.add_element(ModelElement::Role(RoleElement {
+                        name: name.clone(),
+                        owner: owner.clone(),
+                    }));
+                }
+                FallbackStatementType::AlterRoleMembership {
+                    role,
+                    member,
+                    is_add,
+                } => {
+                    if *is_add {
+                        model.add_element(ModelElement::RoleMembership(RoleMembershipElement {
+                            role: role.clone(),
+                            member: member.clone(),
+                        }));
+                    }
+                    // DROP MEMBER doesn't create an element — it would be handled at deployment time
+                }
+                FallbackStatementType::Permission {
+                    action,
+                    permission,
+                    target_schema,
+                    target_name,
+                    target_type,
+                    principal,
+                    with_grant_option,
+                    cascade,
+                } => {
+                    model.add_element(ModelElement::Permission(PermissionElement {
+                        action: action.clone(),
+                        permission: permission.clone(),
+                        target_schema: target_schema.clone(),
+                        target_name: target_name.clone(),
+                        target_type: target_type.clone(),
+                        principal: principal.clone(),
+                        with_grant_option: *with_grant_option,
+                        cascade: *cascade,
+                    }));
+                }
                 FallbackStatementType::SkippedSecurityStatement { statement_type: _ } => {
-                    // Security/deployment statements are silently skipped
-                    // They are valid T-SQL but not schema elements that belong in a dacpac
-                    // Examples: GRANT, DENY, REVOKE, CREATE LOGIN, CREATE USER, etc.
+                    // Server-level security statements are silently skipped
+                    // LOGIN, CERTIFICATE, ASYMMETRIC_KEY, SYMMETRIC_KEY, CREDENTIAL, etc.
                 }
             }
             continue;
@@ -1021,6 +1074,92 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                             model.add_element(ModelElement::ExtendedProperty(ext_prop));
                         }
                     }
+                }
+            }
+
+            // CREATE ROLE (parsed by sqlparser)
+            Statement::CreateRole {
+                names,
+                authorization_owner,
+                ..
+            } => {
+                for name in names {
+                    let role_name = name.0.last().map(|i| i.value.clone()).unwrap_or_default();
+                    let owner = authorization_owner
+                        .as_ref()
+                        .map(|o| o.0.last().map(|i| i.value.clone()).unwrap_or_default());
+                    model.add_element(ModelElement::Role(RoleElement {
+                        name: role_name,
+                        owner,
+                    }));
+                }
+            }
+
+            // ALTER ROLE ADD/DROP MEMBER (parsed by sqlparser)
+            Statement::AlterRole { name, operation } => {
+                match operation {
+                    AlterRoleOperation::AddMember { member_name } => {
+                        model.add_element(ModelElement::RoleMembership(RoleMembershipElement {
+                            role: name.value.clone(),
+                            member: member_name.value.clone(),
+                        }));
+                    }
+                    _ => {
+                        // DROP MEMBER, RenameRole, etc. — not modeled
+                    }
+                }
+            }
+
+            // GRANT (parsed by sqlparser)
+            Statement::Grant {
+                privileges,
+                objects,
+                grantees,
+                with_grant_option,
+                ..
+            } => {
+                let permission_names = extract_privilege_names(privileges);
+                let (target_schema, target_name, target_type) = extract_grant_target(objects);
+                let principal = extract_grantee_name(grantees);
+
+                for perm_name in permission_names {
+                    model.add_element(ModelElement::Permission(PermissionElement {
+                        action: "Grant".to_string(),
+                        permission: perm_name,
+                        target_schema: target_schema.clone(),
+                        target_name: target_name.clone(),
+                        target_type: target_type.clone(),
+                        principal: principal.clone(),
+                        with_grant_option: *with_grant_option,
+                        cascade: false,
+                    }));
+                }
+            }
+
+            // REVOKE (parsed by sqlparser)
+            Statement::Revoke {
+                privileges,
+                objects,
+                grantees,
+                cascade,
+                ..
+            } => {
+                let permission_names = extract_privilege_names(privileges);
+                let (target_schema, target_name, target_type) = extract_grant_target(objects);
+                let principal = extract_grantee_name(grantees);
+                let is_cascade = cascade.is_some();
+
+                for perm_name in permission_names {
+                    model.add_element(ModelElement::Permission(PermissionElement {
+                        action: "Revoke".to_string(),
+                        permission: perm_name,
+                        target_schema: target_schema.clone(),
+                        target_name: target_name.clone(),
+                        target_type: target_type.clone(),
+                        principal: principal.clone(),
+                        with_grant_option: false,
+                        cascade: is_cascade,
+                    }));
                 }
             }
 
@@ -2396,4 +2535,93 @@ fn extract_hidden_columns(sql: &str) -> Vec<String> {
     re.captures_iter(sql)
         .filter_map(|caps| caps.get(1).map(|m| m.as_str().to_string()))
         .collect()
+}
+
+/// Extract permission names from sqlparser Privileges enum
+fn extract_privilege_names(privileges: &Privileges) -> Vec<String> {
+    match privileges {
+        Privileges::All { .. } => vec!["ALL".to_string()],
+        Privileges::Actions(actions) => actions
+            .iter()
+            .map(|action| match action {
+                Action::Select { .. } => "SELECT".to_string(),
+                Action::Insert { .. } => "INSERT".to_string(),
+                Action::Update { .. } => "UPDATE".to_string(),
+                Action::Delete => "DELETE".to_string(),
+                Action::Execute => "EXECUTE".to_string(),
+                Action::References { .. } => "REFERENCES".to_string(),
+                Action::Create => "CREATE".to_string(),
+                Action::Connect => "CONNECT".to_string(),
+                Action::Temporary => "TEMPORARY".to_string(),
+                Action::Trigger => "TRIGGER".to_string(),
+                Action::Truncate => "TRUNCATE".to_string(),
+                Action::Usage => "USAGE".to_string(),
+            })
+            .collect(),
+    }
+}
+
+/// Extract target info from sqlparser GrantObjects enum
+fn extract_grant_target(objects: &GrantObjects) -> (Option<String>, Option<String>, String) {
+    match objects {
+        GrantObjects::Tables(tables) => {
+            if let Some(table) = tables.first() {
+                let parts: Vec<_> = table.0.iter().map(|p| p.value.clone()).collect();
+                match parts.len() {
+                    1 => (None, Some(parts[0].clone()), "Object".to_string()),
+                    2 => (
+                        Some(parts[0].clone()),
+                        Some(parts[1].clone()),
+                        "Object".to_string(),
+                    ),
+                    _ => (None, None, "Database".to_string()),
+                }
+            } else {
+                (None, None, "Database".to_string())
+            }
+        }
+        GrantObjects::Schemas(schemas) => {
+            if let Some(schema) = schemas.first() {
+                let name = schema.0.last().map(|i| i.value.clone());
+                (name, None, "Schema".to_string())
+            } else {
+                (None, None, "Database".to_string())
+            }
+        }
+        GrantObjects::Sequences(seqs) => {
+            if let Some(seq) = seqs.first() {
+                let parts: Vec<_> = seq.0.iter().map(|p| p.value.clone()).collect();
+                match parts.len() {
+                    1 => (None, Some(parts[0].clone()), "Object".to_string()),
+                    2 => (
+                        Some(parts[0].clone()),
+                        Some(parts[1].clone()),
+                        "Object".to_string(),
+                    ),
+                    _ => (None, None, "Database".to_string()),
+                }
+            } else {
+                (None, None, "Database".to_string())
+            }
+        }
+        _ => (None, None, "Database".to_string()),
+    }
+}
+
+/// Extract the principal name from sqlparser Grantee list
+fn extract_grantee_name(grantees: &[sqlparser::ast::Grantee]) -> String {
+    if let Some(grantee) = grantees.first() {
+        if let Some(ref name) = grantee.name {
+            match name {
+                sqlparser::ast::GranteeName::ObjectName(obj) => {
+                    obj.0.last().map(|i| i.value.clone()).unwrap_or_default()
+                }
+                sqlparser::ast::GranteeName::UserHost { user, .. } => user.value.clone(),
+            }
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    }
 }

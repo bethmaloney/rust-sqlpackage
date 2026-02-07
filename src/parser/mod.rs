@@ -10,6 +10,7 @@ pub mod identifier_utils;
 pub mod index_parser;
 mod preprocess_parser;
 mod procedure_parser;
+mod security_parser;
 mod sequence_parser;
 mod sqlcmd;
 mod statement_parser;

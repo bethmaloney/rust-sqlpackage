@@ -45,7 +45,8 @@ use programmability_writer::{write_function, write_procedure};
 // Re-export other writers functions for use within this module
 use other_writers::{
     write_extended_property, write_filegroup, write_fulltext_catalog, write_fulltext_index,
-    write_index, write_partition_function, write_partition_scheme, write_sequence, write_synonym,
+    write_index, write_partition_function, write_partition_scheme, write_permission, write_role,
+    write_role_membership, write_sequence, write_synonym, write_user,
 };
 
 // Re-export body dependency extraction functions and types
@@ -260,6 +261,10 @@ fn write_element<W: Write>(
         ModelElement::PartitionFunction(pf) => write_partition_function(writer, pf),
         ModelElement::PartitionScheme(ps) => write_partition_scheme(writer, ps),
         ModelElement::Synonym(s) => write_synonym(writer, s),
+        ModelElement::User(u) => write_user(writer, u),
+        ModelElement::Role(r) => write_role(writer, r),
+        ModelElement::Permission(p) => write_permission(writer, p),
+        ModelElement::RoleMembership(rm) => write_role_membership(writer, rm),
         ModelElement::Raw(r) => write_raw(writer, r, model, default_schema, column_registry),
     }
 }

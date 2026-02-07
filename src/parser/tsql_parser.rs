@@ -27,6 +27,10 @@ use super::index_parser::{
 };
 use super::preprocess_parser::preprocess_tsql_tokens;
 use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
+use super::security_parser::{
+    parse_alter_role_membership_tokens, parse_create_role_tokens, parse_create_user_tokens,
+    parse_permission_tokens, parse_sp_addrolemember, PermissionAction, PermissionTarget,
+};
 use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
 use super::statement_parser::{
     try_parse_cte_dml_tokens, try_parse_drop_tokens, try_parse_generic_create_tokens,
@@ -419,8 +423,37 @@ pub enum FallbackStatementType {
         /// Target server (for cross-server synonyms)
         target_server: Option<String>,
     },
+    /// CREATE USER statement
+    CreateUser {
+        name: String,
+        auth_type: String,
+        login: Option<String>,
+        default_schema: Option<String>,
+    },
+    /// CREATE ROLE statement
+    CreateRole {
+        name: String,
+        owner: Option<String>,
+    },
+    /// ALTER ROLE ... ADD/DROP MEMBER statement
+    AlterRoleMembership {
+        role: String,
+        member: String,
+        is_add: bool,
+    },
+    /// GRANT/DENY/REVOKE permission statement
+    Permission {
+        action: String,
+        permission: String,
+        target_schema: Option<String>,
+        target_name: Option<String>,
+        target_type: String,
+        principal: String,
+        with_grant_option: bool,
+        cascade: bool,
+    },
     /// Security/deployment statements that should be silently skipped
-    /// These are valid T-SQL but not schema elements (CREATE LOGIN, CREATE USER, GRANT, DENY, REVOKE, etc.)
+    /// Server-level objects not included in dacpacs (LOGIN, CERTIFICATE, etc.)
     SkippedSecurityStatement {
         /// Type of statement (for logging/debugging)
         statement_type: String,
@@ -818,12 +851,10 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         }
     }
 
-    // Check for security/deployment statements that should be silently skipped
-    // These are valid T-SQL but not schema elements - they're typically deployment-time only
-    if let Some(security_type) = try_security_statement_fallback(&sql_upper) {
-        return Some(FallbackStatementType::SkippedSecurityStatement {
-            statement_type: security_type,
-        });
+    // Check for security statements — route USER, ROLE, PERMISSION, ROLE_MEMBERSHIP
+    // to actual parsers; remaining categories (LOGIN, CERTIFICATE, etc.) are silently skipped
+    if let Some(result) = try_security_statement_dispatch(sql, &sql_upper) {
+        return Some(result);
     }
 
     // Check for CREATE SYNONYM (must be before generic CREATE fallback to avoid being
@@ -935,112 +966,197 @@ fn try_xml_method_fallback(sql: &str) -> Option<FallbackStatementType> {
     })
 }
 
-/// Check for security/deployment statements that should be silently skipped.
-/// These are valid T-SQL but not schema elements that belong in a dacpac.
-/// Returns Some(statement_type) if the SQL matches a security statement pattern.
-///
-/// Skipped statements:
-/// - GRANT/DENY/REVOKE - permission statements
-/// - CREATE/ALTER/DROP LOGIN - server-level authentication
-/// - CREATE/ALTER/DROP USER - database-level authentication
-/// - CREATE/ALTER/DROP ROLE - database roles
-/// - CREATE/ALTER/DROP APPLICATION ROLE - application roles
-/// - CREATE/ALTER/DROP CERTIFICATE - security certificates
-/// - CREATE/ALTER/DROP ASYMMETRIC KEY - asymmetric key management
-/// - CREATE/ALTER/DROP SYMMETRIC KEY - symmetric key management
-/// - CREATE/ALTER/DROP CREDENTIAL - server credentials
-/// - ADD/DROP MEMBER - role membership
-/// - CREATE/ALTER/DROP SERVER ROLE - server roles
-fn try_security_statement_fallback(sql_upper: &str) -> Option<String> {
-    // Permission statements (most common)
-    if sql_upper.starts_with("GRANT ") {
-        return Some("GRANT".to_string());
-    }
-    if sql_upper.starts_with("DENY ") {
-        return Some("DENY".to_string());
-    }
-    if sql_upper.starts_with("REVOKE ") {
-        return Some("REVOKE".to_string());
+/// Dispatch security statements to appropriate parsers.
+/// USER, ROLE, ROLE_MEMBERSHIP, and GRANT/DENY/REVOKE are parsed into typed variants.
+/// Remaining categories (LOGIN, CERTIFICATE, etc.) are returned as SkippedSecurityStatement.
+fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<FallbackStatementType> {
+    // GRANT/DENY/REVOKE — parse into Permission variant
+    if sql_upper.starts_with("GRANT ")
+        || sql_upper.starts_with("DENY ")
+        || sql_upper.starts_with("REVOKE ")
+    {
+        if let Some(parsed) = parse_permission_tokens(sql) {
+            let (target_schema, target_name, target_type) = match &parsed.target {
+                PermissionTarget::Object { schema, name } => {
+                    (schema.clone(), Some(name.clone()), "Object".to_string())
+                }
+                PermissionTarget::Schema(s) => (Some(s.clone()), None, "Schema".to_string()),
+                PermissionTarget::Database => (None, None, "Database".to_string()),
+            };
+            let action = match parsed.action {
+                PermissionAction::Grant => "Grant",
+                PermissionAction::Deny => "Deny",
+                PermissionAction::Revoke => "Revoke",
+            };
+            return Some(FallbackStatementType::Permission {
+                action: action.to_string(),
+                permission: parsed.permission,
+                target_schema,
+                target_name,
+                target_type,
+                principal: parsed.principal,
+                with_grant_option: parsed.with_grant_option,
+                cascade: parsed.cascade,
+            });
+        }
+        // If parsing fails, fall through to skip
+        let action = if sql_upper.starts_with("GRANT ") {
+            "GRANT"
+        } else if sql_upper.starts_with("DENY ") {
+            "DENY"
+        } else {
+            "REVOKE"
+        };
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: action.to_string(),
+        });
     }
 
-    // Login management (server-level)
+    // Role membership — sp_addrolemember / sp_droprolemember / ALTER ROLE ... ADD/DROP MEMBER
+    // Must check BEFORE generic ROLE to avoid role membership being caught as ROLE
+    if sql_upper.contains("SP_ADDROLEMEMBER") || sql_upper.contains("SP_DROPROLEMEMBER") {
+        if let Some(parsed) = parse_sp_addrolemember(sql) {
+            return Some(FallbackStatementType::AlterRoleMembership {
+                role: parsed.role,
+                member: parsed.member,
+                is_add: parsed.is_add,
+            });
+        }
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "ROLE_MEMBERSHIP".to_string(),
+        });
+    }
+    if sql_upper.contains("ALTER ROLE") && sql_upper.contains("MEMBER") {
+        if let Some(parsed) = parse_alter_role_membership_tokens(sql) {
+            return Some(FallbackStatementType::AlterRoleMembership {
+                role: parsed.role,
+                member: parsed.member,
+                is_add: parsed.is_add,
+            });
+        }
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "ROLE_MEMBERSHIP".to_string(),
+        });
+    }
+
+    // Login management (server-level) — always skip
     if sql_upper.contains("CREATE LOGIN")
         || sql_upper.contains("ALTER LOGIN")
         || sql_upper.contains("DROP LOGIN")
     {
-        return Some("LOGIN".to_string());
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "LOGIN".to_string(),
+        });
     }
 
-    // User management (database-level)
-    if sql_upper.contains("CREATE USER")
-        || sql_upper.contains("ALTER USER")
-        || sql_upper.contains("DROP USER")
-    {
-        return Some("USER".to_string());
+    // CREATE USER — parse into CreateUser variant (ALTER/DROP USER still skipped)
+    if sql_upper.contains("CREATE USER") {
+        if let Some(parsed) = parse_create_user_tokens(sql) {
+            let (auth_type_str, login) = match &parsed.auth_type {
+                super::security_parser::UserAuthType::Login(l) => {
+                    ("Login".to_string(), Some(l.clone()))
+                }
+                super::security_parser::UserAuthType::WithoutLogin => {
+                    ("WithoutLogin".to_string(), None)
+                }
+                super::security_parser::UserAuthType::ExternalProvider => {
+                    ("ExternalProvider".to_string(), None)
+                }
+                super::security_parser::UserAuthType::Default => ("Default".to_string(), None),
+            };
+            return Some(FallbackStatementType::CreateUser {
+                name: parsed.name,
+                auth_type: auth_type_str,
+                login,
+                default_schema: parsed.default_schema,
+            });
+        }
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "USER".to_string(),
+        });
+    }
+    if sql_upper.contains("ALTER USER") || sql_upper.contains("DROP USER") {
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "USER".to_string(),
+        });
     }
 
-    // Role management
-    if sql_upper.contains("CREATE ROLE")
-        || sql_upper.contains("ALTER ROLE")
-        || sql_upper.contains("DROP ROLE")
-    {
-        return Some("ROLE".to_string());
-    }
-
-    // Application role management
+    // Application role management (must check before generic ROLE)
     if sql_upper.contains("CREATE APPLICATION ROLE")
         || sql_upper.contains("ALTER APPLICATION ROLE")
         || sql_upper.contains("DROP APPLICATION ROLE")
     {
-        return Some("APPLICATION_ROLE".to_string());
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "APPLICATION_ROLE".to_string(),
+        });
     }
 
-    // Server role management
+    // Server role management (must check before generic ROLE)
     if sql_upper.contains("CREATE SERVER ROLE")
         || sql_upper.contains("ALTER SERVER ROLE")
         || sql_upper.contains("DROP SERVER ROLE")
     {
-        return Some("SERVER_ROLE".to_string());
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "SERVER_ROLE".to_string(),
+        });
     }
 
-    // Certificate management
+    // CREATE ROLE — parse into CreateRole variant (ALTER/DROP ROLE still skipped)
+    if sql_upper.contains("CREATE ROLE") {
+        if let Some(parsed) = parse_create_role_tokens(sql) {
+            return Some(FallbackStatementType::CreateRole {
+                name: parsed.name,
+                owner: parsed.owner,
+            });
+        }
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "ROLE".to_string(),
+        });
+    }
+    if sql_upper.contains("ALTER ROLE") || sql_upper.contains("DROP ROLE") {
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "ROLE".to_string(),
+        });
+    }
+
+    // Certificate management — always skip
     if sql_upper.contains("CREATE CERTIFICATE")
         || sql_upper.contains("ALTER CERTIFICATE")
         || sql_upper.contains("DROP CERTIFICATE")
     {
-        return Some("CERTIFICATE".to_string());
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "CERTIFICATE".to_string(),
+        });
     }
 
-    // Asymmetric key management
+    // Asymmetric key management — always skip
     if sql_upper.contains("CREATE ASYMMETRIC KEY")
         || sql_upper.contains("ALTER ASYMMETRIC KEY")
         || sql_upper.contains("DROP ASYMMETRIC KEY")
     {
-        return Some("ASYMMETRIC_KEY".to_string());
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "ASYMMETRIC_KEY".to_string(),
+        });
     }
 
-    // Symmetric key management
+    // Symmetric key management — always skip
     if sql_upper.contains("CREATE SYMMETRIC KEY")
         || sql_upper.contains("ALTER SYMMETRIC KEY")
         || sql_upper.contains("DROP SYMMETRIC KEY")
     {
-        return Some("SYMMETRIC_KEY".to_string());
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "SYMMETRIC_KEY".to_string(),
+        });
     }
 
-    // Credential management
+    // Credential management — always skip
     if sql_upper.contains("CREATE CREDENTIAL")
         || sql_upper.contains("ALTER CREDENTIAL")
         || sql_upper.contains("DROP CREDENTIAL")
     {
-        return Some("CREDENTIAL".to_string());
-    }
-
-    // Role membership - sp_addrolemember, sp_droprolemember, ALTER ROLE ... ADD MEMBER
-    if sql_upper.contains("SP_ADDROLEMEMBER")
-        || sql_upper.contains("SP_DROPROLEMEMBER")
-        || (sql_upper.contains("ALTER ROLE") && sql_upper.contains("MEMBER"))
-    {
-        return Some("ROLE_MEMBERSHIP".to_string());
+        return Some(FallbackStatementType::SkippedSecurityStatement {
+            statement_type: "CREDENTIAL".to_string(),
+        });
     }
 
     None

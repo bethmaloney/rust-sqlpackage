@@ -26,6 +26,14 @@ pub enum ModelElement {
     PartitionScheme(PartitionSchemeElement),
     /// Synonym element (CREATE SYNONYM ... FOR ...)
     Synonym(SynonymElement),
+    /// Database user (CREATE USER)
+    User(UserElement),
+    /// Database role (CREATE ROLE)
+    Role(RoleElement),
+    /// Permission statement (GRANT/DENY/REVOKE)
+    Permission(PermissionElement),
+    /// Role membership (ALTER ROLE ... ADD MEMBER)
+    RoleMembership(RoleMembershipElement),
     /// Generic raw element for statements that couldn't be fully parsed
     Raw(RawElement),
 }
@@ -62,6 +70,10 @@ impl ModelElement {
             ModelElement::PartitionFunction(_) => "SqlPartitionFunction",
             ModelElement::PartitionScheme(_) => "SqlPartitionScheme",
             ModelElement::Synonym(_) => "SqlSynonym",
+            ModelElement::User(_) => "SqlUser",
+            ModelElement::Role(_) => "SqlRole",
+            ModelElement::Permission(_) => "SqlPermissionStatement",
+            ModelElement::RoleMembership(_) => "SqlRoleMembership",
             ModelElement::Raw(r) => match r.sql_type.as_str() {
                 "SqlTable" => "SqlTable",
                 "SqlView" => "SqlView",
@@ -104,6 +116,10 @@ impl ModelElement {
             ModelElement::PartitionFunction(pf) => format!("[{}]", pf.name),
             ModelElement::PartitionScheme(ps) => format!("[{}]", ps.name),
             ModelElement::Synonym(s) => format!("[{}].[{}]", s.schema, s.name),
+            ModelElement::User(u) => format!("[{}]", u.name),
+            ModelElement::Role(r) => format!("[{}]", r.name),
+            ModelElement::Permission(p) => p.full_name(),
+            ModelElement::RoleMembership(rm) => rm.full_name(),
             ModelElement::Raw(r) => format!("[{}].[{}]", r.schema, r.name),
         }
     }
@@ -776,4 +792,94 @@ pub struct SynonymElement {
     pub target_database: Option<String>,
     /// Target server (for cross-server synonyms)
     pub target_server: Option<String>,
+}
+
+/// Database user element (CREATE USER)
+#[derive(Debug, Clone)]
+pub struct UserElement {
+    pub name: String,
+    /// Authentication type: "Login", "WithoutLogin", "ExternalProvider", "Default"
+    pub auth_type: String,
+    /// Login name (for login-based users)
+    pub login: Option<String>,
+    /// Default schema for the user
+    pub default_schema: Option<String>,
+}
+
+/// Database role element (CREATE ROLE)
+#[derive(Debug, Clone)]
+pub struct RoleElement {
+    pub name: String,
+    /// Role owner (from AUTHORIZATION clause)
+    pub owner: Option<String>,
+}
+
+/// Permission statement element (GRANT/DENY/REVOKE)
+#[derive(Debug, Clone)]
+pub struct PermissionElement {
+    /// "Grant", "Deny", or "Revoke"
+    pub action: String,
+    /// Permission name (e.g., "SELECT", "EXECUTE", "VIEW DEFINITION")
+    pub permission: String,
+    /// Target object schema (for object-level permissions)
+    pub target_schema: Option<String>,
+    /// Target object name (for object-level and schema-level permissions)
+    pub target_name: Option<String>,
+    /// Target type: "Object", "Schema", or "Database"
+    pub target_type: String,
+    /// Principal (user or role) receiving the permission
+    pub principal: String,
+    /// Whether WITH GRANT OPTION was specified
+    pub with_grant_option: bool,
+    /// Whether CASCADE was specified (for REVOKE)
+    pub cascade: bool,
+}
+
+impl PermissionElement {
+    /// Build the full element name for DacFx XML
+    pub fn full_name(&self) -> String {
+        // DacFx names permissions as [action].[permission].[target_ref].[principal]
+        // For simplicity, use a unique name based on the permission details
+        match self.target_type.as_str() {
+            "Object" => {
+                let schema = self.target_schema.as_deref().unwrap_or("dbo");
+                let name = self.target_name.as_deref().unwrap_or("");
+                format!(
+                    "[{}].[{}].[{}].[{}].[{}]",
+                    self.action, self.permission, schema, name, self.principal
+                )
+            }
+            "Schema" => {
+                let name = self
+                    .target_name
+                    .as_deref()
+                    .unwrap_or(self.target_schema.as_deref().unwrap_or(""));
+                format!(
+                    "[{}].[{}].[{}].[{}]",
+                    self.action, self.permission, name, self.principal
+                )
+            }
+            _ => {
+                format!(
+                    "[{}].[{}].[{}]",
+                    self.action, self.permission, self.principal
+                )
+            }
+        }
+    }
+}
+
+/// Role membership element (ALTER ROLE ... ADD MEMBER)
+#[derive(Debug, Clone)]
+pub struct RoleMembershipElement {
+    /// Role name
+    pub role: String,
+    /// Member name (user or role being added)
+    pub member: String,
+}
+
+impl RoleMembershipElement {
+    pub fn full_name(&self) -> String {
+        format!("[{}].[{}]", self.role, self.member)
+    }
 }

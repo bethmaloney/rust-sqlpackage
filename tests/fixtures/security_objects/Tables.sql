@@ -1,0 +1,13 @@
+CREATE TABLE [dbo].[Employees] (
+    [Id] INT NOT NULL PRIMARY KEY,
+    [Name] NVARCHAR(100) NOT NULL,
+    [Email] NVARCHAR(200) NULL
+);
+GO
+
+CREATE TABLE [dbo].[AuditLog] (
+    [Id] INT NOT NULL IDENTITY(1,1) PRIMARY KEY,
+    [Action] NVARCHAR(50) NOT NULL,
+    [Timestamp] DATETIME2 NOT NULL DEFAULT GETDATE()
+);
+GO

@@ -10,7 +10,8 @@ use std::io::Write;
 use crate::model::{
     DataCompressionType, ExtendedPropertyElement, FilegroupElement, FullTextCatalogElement,
     FullTextIndexElement, IndexElement, PartitionFunctionElement, PartitionSchemeElement,
-    SequenceElement, SynonymElement,
+    PermissionElement, RoleElement, RoleMembershipElement, SequenceElement, SynonymElement,
+    UserElement,
 };
 
 use super::body_deps::BodyDependency;
@@ -607,6 +608,139 @@ fn build_synonym_target_ref(synonym: &SynonymElement) -> String {
             format!("[{}].[{}]", synonym.target_schema, synonym.target_name)
         }
     }
+}
+
+/// Write a database user element to model.xml
+pub(crate) fn write_user<W: Write>(
+    writer: &mut Writer<W>,
+    user: &UserElement,
+) -> anyhow::Result<()> {
+    let full_name = format!("[{}]", user.name);
+
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlUser"), ("Name", full_name.as_str())]);
+    writer.write_event(Event::Start(elem))?;
+
+    // AuthenticationType property
+    // DacFx values: 1 = WithoutLogin, 2 = Login, 4 = ExternalProvider
+    let auth_value = match user.auth_type.as_str() {
+        "WithoutLogin" => "2",
+        "ExternalProvider" => "4",
+        _ => "1", // Login and Default both map to 1
+    };
+    write_property(writer, "AuthenticationType", auth_value)?;
+
+    // DefaultSchema relationship
+    if let Some(ref schema) = user.default_schema {
+        let schema_ref = format!("[{}]", schema);
+        write_relationship(writer, "DefaultSchema", &[schema_ref.as_str()])?;
+    }
+
+    // Login relationship
+    if let Some(ref login) = user.login {
+        let login_ref = format!("[{}]", login);
+        let rel = BytesStart::new("Relationship").with_attributes([("Name", "Login")]);
+        writer.write_event(Event::Start(rel))?;
+        writer.write_event(Event::Start(BytesStart::new("Entry")))?;
+        let refs = BytesStart::new("References")
+            .with_attributes([("ExternalSource", "BuiltIns"), ("Name", login_ref.as_str())]);
+        writer.write_event(Event::Empty(refs))?;
+        writer.write_event(Event::End(BytesEnd::new("Entry")))?;
+        writer.write_event(Event::End(BytesEnd::new("Relationship")))?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write a database role element to model.xml
+pub(crate) fn write_role<W: Write>(
+    writer: &mut Writer<W>,
+    role: &RoleElement,
+) -> anyhow::Result<()> {
+    let full_name = format!("[{}]", role.name);
+
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlRole"), ("Name", full_name.as_str())]);
+    writer.write_event(Event::Start(elem))?;
+
+    // Authorization relationship (owner)
+    if let Some(ref owner) = role.owner {
+        let owner_ref = format!("[{}]", owner);
+        write_relationship(writer, "Authorizer", &[owner_ref.as_str()])?;
+    }
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write a permission statement element to model.xml
+pub(crate) fn write_permission<W: Write>(
+    writer: &mut Writer<W>,
+    perm: &PermissionElement,
+) -> anyhow::Result<()> {
+    let full_name = perm.full_name();
+
+    let elem = BytesStart::new("Element").with_attributes([
+        ("Type", "SqlPermissionStatement"),
+        ("Name", full_name.as_str()),
+    ]);
+    writer.write_event(Event::Start(elem))?;
+
+    // Permission property (e.g., "SELECT", "EXECUTE")
+    write_property(writer, "Permission", &perm.permission)?;
+
+    // Write the action value (Grant=0, Deny=2, Revoke=1 in DacFx)
+    // DacFx actually names this differently, but we'll use the action string directly
+    // as a property since the exact DacFx schema varies
+
+    // SecuredObject relationship
+    match perm.target_type.as_str() {
+        "Object" => {
+            let schema = perm.target_schema.as_deref().unwrap_or("dbo");
+            let name = perm.target_name.as_deref().unwrap_or("");
+            let obj_ref = format!("[{}].[{}]", schema, name);
+            write_relationship(writer, "SecuredObject", &[obj_ref.as_str()])?;
+        }
+        "Schema" => {
+            let schema_name = perm.target_schema.as_deref().unwrap_or("");
+            let schema_ref = format!("[{}]", schema_name);
+            write_relationship(writer, "SecuredObject", &[schema_ref.as_str()])?;
+        }
+        _ => {
+            // Database-level: no SecuredObject relationship
+        }
+    }
+
+    // Grantee relationship (the principal receiving the permission)
+    let principal_ref = format!("[{}]", perm.principal);
+    write_relationship(writer, "Grantee", &[principal_ref.as_str()])?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
+}
+
+/// Write a role membership element to model.xml
+pub(crate) fn write_role_membership<W: Write>(
+    writer: &mut Writer<W>,
+    rm: &RoleMembershipElement,
+) -> anyhow::Result<()> {
+    let full_name = rm.full_name();
+
+    let elem = BytesStart::new("Element")
+        .with_attributes([("Type", "SqlRoleMembership"), ("Name", full_name.as_str())]);
+    writer.write_event(Event::Start(elem))?;
+
+    // Role relationship
+    let role_ref = format!("[{}]", rm.role);
+    write_relationship(writer, "Role", &[role_ref.as_str()])?;
+
+    // Member relationship
+    let member_ref = format!("[{}]", rm.member);
+    write_relationship(writer, "Member", &[member_ref.as_str()])?;
+
+    writer.write_event(Event::End(BytesEnd::new("Element")))?;
+    Ok(())
 }
 
 #[cfg(test)]
