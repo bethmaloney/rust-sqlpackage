@@ -239,15 +239,8 @@ CREATE TABLE [dbo].[TableWithComputed] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    // Computed columns may or may not be fully supported
-    match result {
-        Ok(statements) => {
-            assert_eq!(statements.len(), 1);
-        }
-        Err(e) => {
-            println!("Note: Computed columns not fully supported: {:?}", e);
-        }
-    }
+    let statements = result.expect("Should parse table with computed column");
+    assert_eq!(statements.len(), 1);
 }
 
 #[test]
@@ -262,15 +255,8 @@ CREATE TABLE [dbo].[TableWithPersistedComputed] (
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    // PERSISTED computed columns may or may not be supported
-    match result {
-        Ok(statements) => {
-            assert_eq!(statements.len(), 1);
-        }
-        Err(e) => {
-            println!("Note: PERSISTED computed columns not supported: {:?}", e);
-        }
-    }
+    let statements = result.expect("Should parse table with PERSISTED computed column");
+    assert_eq!(statements.len(), 1);
 }
 
 #[test]

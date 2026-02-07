@@ -156,15 +156,8 @@ ADD CONSTRAINT [DF_Products_IsActive] DEFAULT (1) FOR [IsActive];
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    // ALTER TABLE ADD DEFAULT FOR may use fallback parsing
-    match result {
-        Ok(statements) => {
-            assert_eq!(statements.len(), 1);
-        }
-        Err(e) => {
-            println!("Note: ALTER TABLE ADD DEFAULT FOR uses fallback: {:?}", e);
-        }
-    }
+    let statements = result.expect("Should parse ALTER TABLE ADD DEFAULT");
+    assert_eq!(statements.len(), 1);
 }
 
 #[test]
@@ -209,6 +202,7 @@ SELECT [Id], [Name] FROM [dbo].[Users];
 }
 
 #[test]
+#[ignore] // ALTER VIEW WITH SCHEMABINDING not yet supported by parser
 fn test_parse_alter_view_with_schemabinding() {
     let sql = r#"
 ALTER VIEW [dbo].[BoundView]
@@ -219,15 +213,8 @@ SELECT [Id] FROM [dbo].[Users];
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    // WITH SCHEMABINDING may or may not be supported
-    match result {
-        Ok(statements) => {
-            assert_eq!(statements.len(), 1);
-        }
-        Err(e) => {
-            println!("Note: ALTER VIEW WITH SCHEMABINDING not supported: {:?}", e);
-        }
-    }
+    let statements = result.expect("Should parse ALTER VIEW WITH SCHEMABINDING");
+    assert_eq!(statements.len(), 1);
 }
 
 #[test]

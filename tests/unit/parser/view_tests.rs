@@ -75,15 +75,8 @@ SELECT 1 AS [Value];
     let file = create_sql_file(sql);
 
     let result = rust_sqlpackage::parser::parse_sql_file(file.path());
-    // SCHEMABINDING may or may not be supported
-    match result {
-        Ok(statements) => {
-            assert_eq!(statements.len(), 1);
-        }
-        Err(e) => {
-            println!("Note: WITH SCHEMABINDING not supported: {:?}", e);
-        }
-    }
+    let statements = result.expect("Should parse view WITH SCHEMABINDING");
+    assert_eq!(statements.len(), 1);
 }
 
 // ============================================================================
