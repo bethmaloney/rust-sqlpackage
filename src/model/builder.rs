@@ -884,7 +884,7 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 }
             }
 
-            Statement::CreateView { name, .. } => {
+            Statement::CreateView { name, .. } | Statement::AlterView { name, .. } => {
                 let (schema, view_name) = extract_schema_and_name(name, &project.default_schema);
                 let schema = track_schema(&mut schemas, &schema);
 

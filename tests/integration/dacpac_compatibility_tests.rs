@@ -795,3 +795,64 @@ fn test_build_with_db_scoped_config() {
         "Model should NOT contain SCOPED CONFIGURATION text"
     );
 }
+
+// ============================================================================
+// Phase 60: ALTER VIEW WITH SCHEMABINDING
+// ============================================================================
+
+#[test]
+fn test_build_with_alter_view() {
+    // ALTER VIEW WITH SCHEMABINDING should produce SqlView elements,
+    // just like CREATE VIEW WITH SCHEMABINDING does.
+    let ctx = TestContext::with_fixture("alter_view");
+    let dacpac_path = ctx.build_successfully();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    // ALTER VIEW WITH SCHEMABINDING should produce a SqlView element
+    assert!(
+        model_xml.contains(r#"Type="SqlView""#),
+        "Model should contain SqlView elements"
+    );
+
+    // BoundView (ALTER VIEW WITH SCHEMABINDING) should be present
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[BoundView]""#),
+        "Model should contain [dbo].[BoundView]"
+    );
+
+    // BoundView should have IsSchemaBound=True
+    assert!(
+        model_xml.contains(r#"<Property Name="IsSchemaBound" Value="True" />"#),
+        "BoundView should have IsSchemaBound=True"
+    );
+
+    // BoundView should have a QueryScript property with the SELECT query
+    assert!(
+        model_xml.contains("QueryScript"),
+        "SqlView elements should have QueryScript property"
+    );
+
+    // SimpleView (ALTER VIEW without SCHEMABINDING) should also be present
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[SimpleView]""#),
+        "Model should contain [dbo].[SimpleView]"
+    );
+
+    // Schema relationship should be present
+    assert!(
+        model_xml.contains(r#"Name="Schema""#),
+        "SqlView elements should have Schema relationship"
+    );
+
+    // Tables should also be in the model
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Users]""#),
+        "Model should contain Users table"
+    );
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Orders]""#),
+        "Model should contain Orders table"
+    );
+}

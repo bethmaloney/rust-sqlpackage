@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | OLTP FEATURE SUPPORT IN PROGRESS
 
-**Phases 1-59 complete. Full parity: 47/48 (97.9%).**
+**Phases 1-60 complete. Full parity: 47/48 (97.9%).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -259,53 +259,38 @@ Since DacFx does not model these statements, rust-sqlpackage follows the same ap
 
 ---
 
-### Phase 60: ALTER VIEW WITH SCHEMABINDING Support
+### ~~Phase 60: ALTER VIEW WITH SCHEMABINDING Support~~ ✅ COMPLETE
 
-**Problem:** `ALTER VIEW ... WITH SCHEMABINDING AS ...` causes a parse error. sqlparser-rs's `parse_alter_view()` (parser/mod.rs:7995) calls `parse_options(Keyword::WITH)` which expects `WITH (option = value)` parenthesized syntax. For `WITH SCHEMABINDING`, it consumes `WITH`, then expects `(` but finds the bare keyword `SCHEMABINDING` → error `Expected: (, found: SCHEMABINDING`.
+Implemented ALTER VIEW support with both fallback and AST paths.
 
-**Test:** `tests/unit/parser/alter_tests.rs::test_parse_alter_view_with_schemabinding` (currently `#[ignore]`)
+**What was implemented:**
+- Token-based ALTER VIEW parser (`try_parse_alter_view_tokens()` in `statement_parser.rs`) extracts schema and name from `ALTER VIEW [schema].[name]`
+- Fallback handler in `try_fallback_parse()` catches ALTER VIEW WITH SCHEMABINDING (which fails in sqlparser-rs) and returns `RawStatement { object_type: "VIEW" }` — routed to `write_raw_view()` which correctly handles ALTER VIEW definitions
+- `Statement::AlterView` match arm in `builder.rs` (merged with `Statement::CreateView`) handles ALTER VIEW without SCHEMABINDING (successfully parsed by sqlparser-rs) — creates `ViewElement` with options from `extract_view_options()`
+- No XML writer changes needed — `extract_view_query()` and `extract_view_header()` scan for `VIEW` + `AS` keywords, working with both CREATE and ALTER prefixes
+- Removed `#[ignore]` from `test_parse_alter_view_with_schemabinding`
+- 5 unit tests in `statement_parser.rs` for token-based ALTER VIEW parsing
+- 3 unit tests in `tsql_parser.rs` for fallback ALTER VIEW handling
+- 1 integration test with `tests/fixtures/alter_view/` fixture (2 tables + 2 views: one with SCHEMABINDING, one without)
 
-**Root Cause Analysis:**
+**Dual-path behavior:**
 
-sqlparser-rs's `parse_options()` only supports parenthesized options (`WITH (...)`), not bare keywords like `WITH SCHEMABINDING`. This is the same limitation that affects `CREATE VIEW WITH SCHEMABINDING` — which also fails in sqlparser-rs and is caught by `try_generic_create_fallback()` as a `RawStatement { object_type: "VIEW" }`. However, `try_generic_create_fallback()` only handles CREATE statements, so ALTER VIEW WITH SCHEMABINDING falls through with no handler.
+| Statement | Path | Result |
+|-----------|------|--------|
+| `ALTER VIEW WITH SCHEMABINDING` | sqlparser fails → fallback → `RawStatement { VIEW }` → `write_raw_view()` | `SqlView` element with IsSchemaBound=True |
+| `ALTER VIEW` (basic) | sqlparser succeeds → `Statement::AlterView` → `ViewElement` → `write_view()` | `SqlView` element |
 
-**Current behavior of related statements:**
-
-| Statement | sqlparser-rs | Fallback | Builder |
-|-----------|-------------|----------|---------|
-| `CREATE VIEW WITH SCHEMABINDING` | Fails (same WITH issue) | `try_generic_create_fallback()` → `RawStatement { VIEW }` | `RawElement` with sql_type="SqlView" |
-| `ALTER VIEW` (basic) | Parses as `Statement::AlterView` | N/A | Silently ignored (`_ => {}` catch-all) |
-| `ALTER VIEW WITH SCHEMABINDING` | Fails | No handler → parse error | N/A |
-| `ALTER PROCEDURE` | Fails | `try_fallback_parse()` → `FallbackStatementType::Procedure` | Creates procedure element |
-| `ALTER FUNCTION` | Fails | `try_fallback_parse()` → `FallbackStatementType::Function` | Creates function element |
-
-**Note:** ALTER VIEW basic (without SCHEMABINDING) parses successfully via sqlparser-rs as `Statement::AlterView`, but the builder has no match arm for it — it falls to `_ => {}` and is silently ignored. No model element is produced. This is inconsistent with ALTER PROCEDURE and ALTER FUNCTION, which do produce model elements.
-
-**Approach:** Add an ALTER VIEW handler in `try_fallback_parse()` (consistent with the existing ALTER PROCEDURE and ALTER FUNCTION handlers at lines 636-674). When sqlparser-rs fails on ALTER VIEW WITH SCHEMABINDING, the fallback catches it and creates a `RawStatement { object_type: "VIEW" }` — the same path used for CREATE VIEW WITH SCHEMABINDING. Also add a `Statement::AlterView` match arm in the builder for consistency (handles the case where sqlparser-rs succeeds, e.g., ALTER VIEW without SCHEMABINDING).
-
-**Dacpac Output:**
-
-Both XML writer paths handle ALTER VIEW correctly — no writer changes needed:
-- **RawElement path** (ALTER VIEW WITH SCHEMABINDING → fallback → `write_raw_view()`): `extract_view_query()` and `extract_view_header()` use token-based parsing that scans for `VIEW` + `AS` keywords, not `CREATE` specifically. Works with ALTER VIEW definitions.
-- **ViewElement path** (ALTER VIEW basic → sqlparser-rs → `write_view()`): Same extraction functions operate on the raw `definition` text. SCHEMABINDING detection uses `upper.contains("WITH SCHEMABINDING")` which matches regardless of CREATE/ALTER prefix.
-
-**Scope:**
-
-- [ ] Add ALTER VIEW detection in `try_fallback_parse()` (before the generic CREATE fallback) that extracts schema and name, returning `FallbackStatementType::RawStatement { object_type: "VIEW" }`
-- [ ] Add `Statement::AlterView { name, .. }` match arm in builder.rs (consistent with ALTER PROCEDURE/ALTER FUNCTION handling) — create a `ViewElement` with options extracted from raw SQL text via `extract_view_options()`
-- [ ] Remove `#[ignore]` from `test_parse_alter_view_with_schemabinding` and verify it passes
-- [ ] Add unit test for ALTER VIEW WITH SCHEMABINDING in `try_fallback_parse()` (tsql_parser.rs tests)
-- [ ] Integration test: create fixture with ALTER VIEW WITH SCHEMABINDING, build dacpac, verify SqlView element appears with `IsSchemaBound=True`, correct `QueryScript`, `Schema` relationship, and `SysCommentsObjectAnnotation`
-
-**Files:**
-- `src/parser/tsql_parser.rs` (add ALTER VIEW handler in `try_fallback_parse()`)
-- `src/model/builder.rs` (add `Statement::AlterView` match arm)
-- `tests/unit/parser/alter_tests.rs` (remove `#[ignore]`)
-- `tests/integration/dacpac_compatibility_tests.rs` or `tests/integration_tests.rs` (integration test)
+**Files modified:**
+- `src/parser/statement_parser.rs` (`try_parse_alter_view()` method + `try_parse_alter_view_tokens()` public function + 5 tests)
+- `src/parser/tsql_parser.rs` (ALTER VIEW detection in `try_fallback_parse()` + import + 3 tests)
+- `src/model/builder.rs` (`Statement::AlterView` merged with `Statement::CreateView` match arm)
+- `tests/unit/parser/alter_tests.rs` (removed `#[ignore]` from schemabinding test)
+- `tests/fixtures/alter_view/` (new fixture: project.sqlproj, Tables.sql, Views.sql)
+- `tests/integration/dacpac_compatibility_tests.rs` (integration test)
 
 ---
 
-## Completed Phases (1-59)
+## Completed Phases (1-60)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -341,6 +326,7 @@ Both XML writer paths handle ALTER VIEW correctly — no writer changes needed:
 | 57 | Temporal tables (SYSTEM_VERSIONING, PERIOD FOR SYSTEM_TIME, history table relationships) | All |
 | 58 | Security objects (CREATE USER, CREATE ROLE, ALTER ROLE ADD MEMBER, GRANT/DENY/REVOKE) | All |
 | 59 | Database scoped configurations (silently skip — DacFx does not support) | All |
+| 60 | ALTER VIEW WITH SCHEMABINDING (fallback + AST dual-path support) | All |
 
 ### Key Milestones
 

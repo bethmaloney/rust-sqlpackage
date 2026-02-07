@@ -434,6 +434,37 @@ impl StatementTokenParser {
         })
     }
 
+    /// Try to parse an ALTER VIEW statement
+    ///
+    /// Handles: ALTER VIEW [schema].[name] ...
+    /// Returns the schema and name so it can be wrapped as RawStatement { object_type: "VIEW" }
+    pub fn try_parse_alter_view(&mut self) -> Option<TokenParsedGenericCreate> {
+        self.base.skip_whitespace();
+
+        // Must start with ALTER keyword
+        if !self.base.check_word_ci("ALTER") {
+            return None;
+        }
+        self.base.advance();
+        self.base.skip_whitespace();
+
+        // Must be followed by VIEW keyword
+        if !self.base.check_keyword(Keyword::VIEW) {
+            return None;
+        }
+        self.base.advance();
+        self.base.skip_whitespace();
+
+        // Parse the schema-qualified name
+        let (schema, name) = self.base.parse_schema_qualified_name()?;
+
+        Some(TokenParsedGenericCreate {
+            object_type: "VIEW".to_string(),
+            schema,
+            name,
+        })
+    }
+
     // ========================================================================
     // Helper methods
     // ========================================================================
@@ -513,6 +544,15 @@ pub fn try_parse_drop_tokens(sql: &str) -> Option<TokenParsedDrop> {
 pub fn try_parse_generic_create_tokens(sql: &str) -> Option<TokenParsedGenericCreate> {
     let mut parser = StatementTokenParser::new(sql)?;
     parser.try_parse_generic_create()
+}
+
+/// Try to parse an ALTER VIEW statement using tokens
+///
+/// Returns Some(TokenParsedGenericCreate) with object_type="VIEW" and the schema/name.
+/// Used when sqlparser-rs fails on ALTER VIEW WITH SCHEMABINDING.
+pub fn try_parse_alter_view_tokens(sql: &str) -> Option<TokenParsedGenericCreate> {
+    let mut parser = StatementTokenParser::new(sql)?;
+    parser.try_parse_alter_view()
 }
 
 #[cfg(test)]
@@ -980,5 +1020,58 @@ mod tests {
         assert_eq!(parsed.object_type, "table");
         assert_eq!(parsed.schema, "dbo");
         assert_eq!(parsed.name, "products");
+    }
+
+    // ========================================================================
+    // ALTER VIEW token parsing tests (Phase 60)
+    // ========================================================================
+
+    #[test]
+    fn test_alter_view_with_schemabinding() {
+        let sql =
+            "ALTER VIEW [dbo].[BoundView] WITH SCHEMABINDING AS SELECT [Id] FROM [dbo].[Users]";
+        let result = try_parse_alter_view_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "VIEW");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "BoundView");
+    }
+
+    #[test]
+    fn test_alter_view_basic() {
+        let sql = "ALTER VIEW [dbo].[MyView] AS SELECT 1";
+        let result = try_parse_alter_view_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "VIEW");
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "MyView");
+    }
+
+    #[test]
+    fn test_alter_view_unqualified() {
+        let sql = "ALTER VIEW [SimpleView] AS SELECT 1";
+        let result = try_parse_alter_view_tokens(sql);
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.object_type, "VIEW");
+        // parse_schema_qualified_name() defaults unqualified names to "dbo"
+        assert_eq!(parsed.schema, "dbo");
+        assert_eq!(parsed.name, "SimpleView");
+    }
+
+    #[test]
+    fn test_alter_view_not_a_view() {
+        let sql = "ALTER TABLE [dbo].[Users] ADD [Col] INT";
+        let result = try_parse_alter_view_tokens(sql);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_alter_view_create_not_matched() {
+        let sql = "CREATE VIEW [dbo].[MyView] AS SELECT 1";
+        let result = try_parse_alter_view_tokens(sql);
+        assert!(result.is_none());
     }
 }

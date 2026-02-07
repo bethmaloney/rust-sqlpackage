@@ -33,8 +33,8 @@ use super::security_parser::{
 };
 use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
 use super::statement_parser::{
-    try_parse_cte_dml_tokens, try_parse_drop_tokens, try_parse_generic_create_tokens,
-    try_parse_merge_output_tokens, try_parse_xml_update_tokens,
+    try_parse_alter_view_tokens, try_parse_cte_dml_tokens, try_parse_drop_tokens,
+    try_parse_generic_create_tokens, try_parse_merge_output_tokens, try_parse_xml_update_tokens,
 };
 use super::storage_parser::{
     parse_filegroup_tokens, parse_partition_function_tokens, parse_partition_scheme_tokens,
@@ -877,6 +877,19 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
                 target_name: parsed.target_name,
                 target_database: parsed.target_database,
                 target_server: parsed.target_server,
+            });
+        }
+    }
+
+    // Check for ALTER VIEW (e.g., ALTER VIEW WITH SCHEMABINDING — sqlparser-rs fails on bare WITH keywords)
+    // Must be before generic CREATE fallback. Returns RawStatement with object_type "VIEW"
+    // which routes to write_raw_view() in the XML writer.
+    if sql_upper.contains("ALTER") && sql_upper.contains("VIEW") {
+        if let Some(parsed) = try_parse_alter_view_tokens(sql) {
+            return Some(FallbackStatementType::RawStatement {
+                object_type: parsed.object_type,
+                schema: parsed.schema,
+                name: parsed.name,
             });
         }
     }
@@ -2937,6 +2950,80 @@ CREATE TABLE [dbo].[Products] (
                 assert_eq!(statement_type, "DATABASE_SCOPED_CONFIGURATION");
             }
             other => panic!("Expected SkippedSecurityStatement, got {:?}", other),
+        }
+    }
+
+    // ========================================================================
+    // ALTER VIEW fallback tests (Phase 60)
+    // ========================================================================
+
+    #[test]
+    fn test_fallback_alter_view_with_schemabinding() {
+        let sql = r#"ALTER VIEW [dbo].[BoundView]
+WITH SCHEMABINDING
+AS
+SELECT [Id] FROM [dbo].[Users];"#;
+        let fallback = try_fallback_parse(sql);
+        assert!(
+            fallback.is_some(),
+            "ALTER VIEW WITH SCHEMABINDING should be handled by fallback"
+        );
+        match fallback.unwrap() {
+            FallbackStatementType::RawStatement {
+                object_type,
+                schema,
+                name,
+            } => {
+                assert_eq!(object_type, "VIEW");
+                assert_eq!(schema, "dbo");
+                assert_eq!(name, "BoundView");
+            }
+            other => panic!("Expected RawStatement for ALTER VIEW, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_fallback_alter_view_with_schemabinding_and_view_metadata() {
+        let sql = r#"ALTER VIEW [sales].[OrderSummary]
+WITH SCHEMABINDING, VIEW_METADATA
+AS
+SELECT [OrderId], [Total] FROM [sales].[Orders];"#;
+        let fallback = try_fallback_parse(sql);
+        assert!(fallback.is_some());
+        match fallback.unwrap() {
+            FallbackStatementType::RawStatement {
+                object_type,
+                schema,
+                name,
+            } => {
+                assert_eq!(object_type, "VIEW");
+                assert_eq!(schema, "sales");
+                assert_eq!(name, "OrderSummary");
+            }
+            other => panic!("Expected RawStatement for ALTER VIEW, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_fallback_alter_view_unqualified_name() {
+        let sql = r#"ALTER VIEW [SimpleView]
+WITH SCHEMABINDING
+AS
+SELECT 1 AS [Val];"#;
+        let fallback = try_fallback_parse(sql);
+        assert!(fallback.is_some());
+        match fallback.unwrap() {
+            FallbackStatementType::RawStatement {
+                object_type,
+                schema,
+                name,
+            } => {
+                assert_eq!(object_type, "VIEW");
+                // parse_schema_qualified_name() defaults unqualified names to "dbo"
+                assert_eq!(schema, "dbo");
+                assert_eq!(name, "SimpleView");
+            }
+            other => panic!("Expected RawStatement for ALTER VIEW, got {:?}", other),
         }
     }
 }

@@ -202,7 +202,6 @@ SELECT [Id], [Name] FROM [dbo].[Users];
 }
 
 #[test]
-#[ignore] // ALTER VIEW WITH SCHEMABINDING not yet supported by parser
 fn test_parse_alter_view_with_schemabinding() {
     let sql = r#"
 ALTER VIEW [dbo].[BoundView]
