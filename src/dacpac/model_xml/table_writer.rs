@@ -375,6 +375,11 @@ pub(crate) fn write_column_with_type<W: Write>(
         write_property(writer, "IsHidden", "True")?;
     }
 
+    // Dynamic data masking function
+    if let Some(ref masking_fn) = column.masking_function {
+        write_property(writer, "MaskingFunction", masking_fn)?;
+    }
+
     // Data type relationship
     write_type_specifier(
         writer,
@@ -743,6 +748,7 @@ mod tests {
             is_generated_always_start: false,
             is_generated_always_end: false,
             is_hidden: false,
+            masking_function: None,
         };
         let mut writer = create_test_writer();
         write_column_with_type(&mut writer, &column, "[dbo].[TestTable]", "SqlSimpleColumn")
@@ -775,6 +781,7 @@ mod tests {
             is_generated_always_start: false,
             is_generated_always_end: false,
             is_hidden: false,
+            masking_function: None,
         };
         let mut writer = create_test_writer();
         write_column_with_type(&mut writer, &column, "[dbo].[TestTable]", "SqlSimpleColumn")
@@ -808,6 +815,7 @@ mod tests {
                 is_generated_always_start: false,
                 is_generated_always_end: false,
                 is_hidden: false,
+                masking_function: None,
             }],
             is_node: false,
             is_edge: false,

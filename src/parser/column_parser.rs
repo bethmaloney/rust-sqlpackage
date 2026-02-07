@@ -68,6 +68,8 @@ pub struct TokenParsedColumn {
     pub is_generated_always_end: bool,
     /// Whether this column has the HIDDEN attribute (temporal table hidden period columns)
     pub is_hidden: bool,
+    /// Dynamic data masking function (e.g., "default()", "email()", "partial(1,\"XXXX\",0)")
+    pub masking_function: Option<String>,
 }
 
 /// Token-based column definition parser
@@ -326,6 +328,19 @@ impl ColumnTokenParser {
                 continue;
             }
 
+            // Check for MASKED WITH (FUNCTION = 'masking_function')
+            if self.base.check_word_ci("MASKED") {
+                self.base.advance();
+                self.base.skip_whitespace();
+                if self.base.check_keyword(Keyword::WITH) {
+                    self.base.advance();
+                    self.base.skip_whitespace();
+                    result.masking_function = self.parse_masking_function();
+                }
+                constraint_immediately_precedes = false;
+                continue;
+            }
+
             // Check for PERSISTED (for computed columns, but can appear in regular column context)
             if self.base.check_word_ci("PERSISTED") {
                 self.base.advance();
@@ -443,6 +458,53 @@ impl ColumnTokenParser {
         }
 
         None
+    }
+
+    /// Parse a masking function from `(FUNCTION = 'function_name(args)')`.
+    /// Returns the function string (e.g., "default()", "email()", "partial(1,\"XXXX\",0)").
+    fn parse_masking_function(&mut self) -> Option<String> {
+        // Expect opening parenthesis
+        if !self.base.check_token(&Token::LParen) {
+            return None;
+        }
+        self.base.advance(); // consume (
+        self.base.skip_whitespace();
+
+        // Expect FUNCTION keyword (it's a regular word, not a sqlparser keyword)
+        if !self.base.check_word_ci("FUNCTION") {
+            return None;
+        }
+        self.base.advance(); // consume FUNCTION
+        self.base.skip_whitespace();
+
+        // Expect = sign
+        if !self.base.check_token(&Token::Eq) {
+            return None;
+        }
+        self.base.advance(); // consume =
+        self.base.skip_whitespace();
+
+        // Expect string literal with the masking function
+        let function_value = if let Some(token) = self.base.current_token() {
+            match &token.token {
+                Token::SingleQuotedString(s) => {
+                    let val = s.clone();
+                    self.base.advance();
+                    Some(val)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        // Skip to closing parenthesis
+        self.base.skip_whitespace();
+        if self.base.check_token(&Token::RParen) {
+            self.base.advance(); // consume )
+        }
+
+        function_value
     }
 
     /// Parse a DEFAULT value (handles various forms: function calls, literals, parenthesized expressions)
@@ -1051,5 +1113,104 @@ mod tests {
         );
         assert_eq!(result.default_value, Some("SYSUTCDATETIME()".to_string()));
         assert_eq!(result.nullability, Some(false));
+    }
+
+    // ========================================================================
+    // Dynamic Data Masking tests (Phase 62)
+    // ========================================================================
+
+    #[test]
+    fn test_masked_default_function() {
+        let result = parse_column_definition_tokens(
+            "[CreditCard] VARCHAR(20) MASKED WITH (FUNCTION = 'default()') NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "CreditCard");
+        assert_eq!(result.data_type, "VARCHAR(20)");
+        assert_eq!(result.masking_function, Some("default()".to_string()));
+        assert_eq!(result.nullability, Some(true));
+    }
+
+    #[test]
+    fn test_masked_email_function() {
+        let result = parse_column_definition_tokens(
+            "[Email] NVARCHAR(100) MASKED WITH (FUNCTION = 'email()') NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Email");
+        assert_eq!(result.data_type, "NVARCHAR(100)");
+        assert_eq!(result.masking_function, Some("email()".to_string()));
+    }
+
+    #[test]
+    fn test_masked_partial_function() {
+        let result = parse_column_definition_tokens(
+            r#"[SSN] CHAR(11) MASKED WITH (FUNCTION = 'partial(0,"XXX-XX-",4)') NULL"#,
+        )
+        .unwrap();
+        assert_eq!(result.name, "SSN");
+        assert_eq!(result.data_type, "CHAR(11)");
+        assert_eq!(
+            result.masking_function,
+            Some(r#"partial(0,"XXX-XX-",4)"#.to_string())
+        );
+    }
+
+    #[test]
+    fn test_masked_random_function() {
+        let result = parse_column_definition_tokens(
+            "[Salary] DECIMAL(18, 2) MASKED WITH (FUNCTION = 'random(1000, 50000)') NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Salary");
+        assert_eq!(result.data_type, "DECIMAL(18, 2)");
+        assert_eq!(
+            result.masking_function,
+            Some("random(1000, 50000)".to_string())
+        );
+    }
+
+    #[test]
+    fn test_masked_with_not_null() {
+        let result = parse_column_definition_tokens(
+            "[Phone] VARCHAR(20) MASKED WITH (FUNCTION = 'default()') NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Phone");
+        assert_eq!(result.masking_function, Some("default()".to_string()));
+        assert_eq!(result.nullability, Some(false));
+    }
+
+    #[test]
+    fn test_no_masking_function() {
+        let result = parse_column_definition_tokens("[Name] NVARCHAR(100) NOT NULL").unwrap();
+        assert!(result.masking_function.is_none());
+    }
+
+    #[test]
+    fn test_masked_with_collate() {
+        let result = parse_column_definition_tokens(
+            "[Name] NVARCHAR(100) COLLATE Latin1_General_CI_AS MASKED WITH (FUNCTION = 'default()') NULL",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Name");
+        assert_eq!(result.collation, Some("Latin1_General_CI_AS".to_string()));
+        assert_eq!(result.masking_function, Some("default()".to_string()));
+    }
+
+    #[test]
+    fn test_masked_with_default_constraint() {
+        let result = parse_column_definition_tokens(
+            "[Status] INT MASKED WITH (FUNCTION = 'default()') NOT NULL CONSTRAINT [DF_Status] DEFAULT ((0))",
+        )
+        .unwrap();
+        assert_eq!(result.name, "Status");
+        assert_eq!(result.masking_function, Some("default()".to_string()));
+        assert_eq!(result.nullability, Some(false));
+        assert_eq!(
+            result.default_constraint_name,
+            Some("DF_Status".to_string())
+        );
+        assert_eq!(result.default_value, Some("((0))".to_string()));
     }
 }

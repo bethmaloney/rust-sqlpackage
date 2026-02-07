@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | OLTP FEATURE SUPPORT IN PROGRESS
 
-**Phases 1-61 complete. Full parity: 47/48 (97.9%).**
+**Phases 1-62 complete. Full parity: 47/48 (97.9%).**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -325,7 +325,44 @@ Support for `CREATE CLUSTERED COLUMNSTORE INDEX` and `CREATE NONCLUSTERED COLUMN
 
 ---
 
-## Completed Phases (1-61)
+### Phase 62: Dynamic Data Masking ✅ COMPLETED
+
+Support for `MASKED WITH (FUNCTION = ...)` column property. Commonly needed for GDPR/PCI-DSS compliance in production databases.
+
+**What was implemented:**
+- Token-based `MASKED WITH (FUNCTION = '...')` parsing in `column_parser.rs` — extracts the masking function string from the single-quoted value
+- `masking_function: Option<String>` field added to `TokenParsedColumn`, `ExtractedTableColumn`, and `ColumnElement`
+- `MaskingFunction` XML property emitted in `table_writer.rs` after `IsHidden` and before `TypeSpecifier`
+- 8 parser unit tests + 1 integration test with `tests/fixtures/dynamic_data_masking/` fixture
+
+**Supported masking functions:**
+| Function | Example |
+|----------|---------|
+| `default()` | Full masking based on data type |
+| `email()` | Shows first letter and domain |
+| `partial(prefix,padding,suffix)` | Shows prefix/suffix, masks middle |
+| `random(start,end)` | Random value in range |
+
+**Implementation approach:**
+- sqlparser-rs 0.54 does NOT support T-SQL `MASKED` keyword — tables with masked columns go through the **fallback path only**
+- No AST path handling needed (sqlparser fails to parse MASKED syntax, triggering fallback)
+- Column-level property addition — no new element type, parser module, or builder dispatch needed
+
+**Files modified:**
+- `src/parser/column_parser.rs` (`masking_function` field + `parse_masking_function()` method + 8 unit tests)
+- `src/parser/tsql_parser.rs` (`masking_function` field on `ExtractedTableColumn` + wired in `convert_token_parsed_column()`)
+- `src/model/elements.rs` (`masking_function` field on `ColumnElement`)
+- `src/model/builder.rs` (`masking_function` propagation in `column_from_fallback_table()` and `column_from_def()`)
+- `src/dacpac/model_xml/table_writer.rs` (`MaskingFunction` property emission + test struct updates)
+- `src/dacpac/model_xml/body_deps.rs` (test struct update)
+- `src/dacpac/model_xml/column_registry.rs` (test struct update)
+- `tests/fixtures/dynamic_data_masking/` (new fixture: project.sqlproj, Tables.sql)
+- `tests/integration/dacpac_compatibility_tests.rs` (integration test)
+- `README.md` (moved DDM from "Not Yet Supported" to supported features)
+
+---
+
+## Completed Phases (1-62)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -363,6 +400,7 @@ Support for `CREATE CLUSTERED COLUMNSTORE INDEX` and `CREATE NONCLUSTERED COLUMN
 | 59 | Database scoped configurations (silently skip — DacFx does not support) | All |
 | 60 | ALTER VIEW WITH SCHEMABINDING (fallback + AST dual-path support) | All |
 | 61 | Columnstore indexes (CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX) | All |
+| 62 | Dynamic data masking (MASKED WITH column property, GDPR/PCI-DSS compliance) | All |
 
 ### Key Milestones
 

@@ -182,6 +182,8 @@ pub struct ExtractedTableColumn {
     pub is_generated_always_end: bool,
     /// Whether this column has the HIDDEN attribute (temporal table hidden period columns)
     pub is_hidden: bool,
+    /// Dynamic data masking function (e.g., "default()", "email()", "partial(1,\"XXXX\",0)")
+    pub masking_function: Option<String>,
 }
 
 /// A column reference in a constraint with optional sort direction
@@ -2399,6 +2401,7 @@ fn convert_token_parsed_column(parsed: TokenParsedColumn) -> ExtractedTableColum
         is_generated_always_start: parsed.is_generated_always_start,
         is_generated_always_end: parsed.is_generated_always_end,
         is_hidden: parsed.is_hidden,
+        masking_function: parsed.masking_function,
     }
 }
 

@@ -96,6 +96,7 @@ The command exits with code 0 if the dacpacs are equivalent, or code 1 if differ
 | Partition Functions | Full | RANGE LEFT/RIGHT, boundary values, all data types |
 | Partition Schemes | Full | Partition function reference, filegroup mappings |
 | Graph Tables | Full | CREATE TABLE AS NODE / AS EDGE |
+| Dynamic Data Masking | Full | MASKED WITH (FUNCTION = 'default()/email()/partial()/random()') on columns |
 
 ### Constraints
 
@@ -137,7 +138,6 @@ These features are supported by .NET DacFx but not yet implemented:
 | Spatial Indexes | CREATE SPATIAL INDEX |
 | Service Broker | Queues, services, contracts, message types |
 | Database-level Triggers | DDL triggers (DML triggers are supported) |
-| Dynamic Data Masking | MASKED WITH (FUNCTION = ...) on columns |
 | Row-Level Security | CREATE SECURITY POLICY |
 | Always Encrypted | ENCRYPTED WITH on columns |
 | Ledger Tables | WITH (LEDGER = ON) |

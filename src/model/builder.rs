@@ -1887,6 +1887,7 @@ fn column_from_def(col: &ColumnDef, _schema: &str, _table_name: &str) -> ColumnE
         is_generated_always_start: false, // AST-parsed tables don't have temporal syntax
         is_generated_always_end: false,
         is_hidden: false,
+        masking_function: None, // AST path: sqlparser-rs doesn't support MASKED WITH syntax
     }
 }
 
@@ -2074,6 +2075,7 @@ fn column_from_fallback_table(
         is_generated_always_start: col.is_generated_always_start,
         is_generated_always_end: col.is_generated_always_end,
         is_hidden: col.is_hidden,
+        masking_function: col.masking_function.clone(),
     }
 }
 

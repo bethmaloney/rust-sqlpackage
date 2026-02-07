@@ -4555,6 +4555,7 @@ mod tests {
                     is_generated_always_start: false,
                     is_generated_always_end: false,
                     is_hidden: false,
+                    masking_function: None,
                 })
                 .collect();
             model.elements.push(ModelElement::Table(TableElement {

@@ -913,3 +913,56 @@ fn test_build_with_columnstore_indexes() {
         "Model should contain Archive table"
     );
 }
+
+#[test]
+fn test_build_with_dynamic_data_masking() {
+    let ctx = TestContext::with_fixture("dynamic_data_masking");
+    let dacpac_path = ctx.build_successfully();
+    let info = DacpacInfo::from_dacpac(&dacpac_path).expect("Should parse dacpac");
+
+    let model_xml = info.model_xml_content.expect("Should have model XML");
+
+    // Customers table should be present
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Customers]""#),
+        "Model should contain Customers table"
+    );
+
+    // Orders table (no masking) should also be present
+    assert!(
+        model_xml.contains(r#"Name="[dbo].[Orders]""#),
+        "Model should contain Orders table"
+    );
+
+    // Email column should have email() masking function
+    assert!(
+        model_xml.contains(r#"<Property Name="MaskingFunction" Value="email()" />"#),
+        "Email column should have email() masking function"
+    );
+
+    // CreditCard column should have default() masking function
+    assert!(
+        model_xml.contains(r#"<Property Name="MaskingFunction" Value="default()" />"#),
+        "CreditCard column should have default() masking function"
+    );
+
+    // SSN column should have partial() masking function
+    assert!(
+        model_xml.contains(r#"MaskingFunction"#),
+        "Model should contain MaskingFunction properties"
+    );
+
+    // Salary column should have random() masking function
+    assert!(
+        model_xml.contains(r#"random(1000, 50000)"#),
+        "Salary column should have random() masking function"
+    );
+
+    // FirstName (unmasked) should NOT have MaskingFunction in its element
+    // Count the number of MaskingFunction occurrences — should be 5 (Email, SSN, CreditCard, Salary, Phone)
+    let mask_count = model_xml.matches("MaskingFunction").count();
+    assert_eq!(
+        mask_count, 5,
+        "Should have exactly 5 MaskingFunction properties (Email, SSN, CreditCard, Salary, Phone)"
+    );
+}

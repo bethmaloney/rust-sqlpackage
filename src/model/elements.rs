@@ -249,6 +249,8 @@ pub struct ColumnElement {
     pub is_generated_always_end: bool,
     /// Whether this column has the HIDDEN attribute (temporal table hidden period columns)
     pub is_hidden: bool,
+    /// Dynamic data masking function (e.g., "default()", "email()", "partial(1,\"XXXX\",0)")
+    pub masking_function: Option<String>,
 }
 
 /// View element
