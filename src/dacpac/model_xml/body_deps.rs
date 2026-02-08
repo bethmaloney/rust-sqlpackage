@@ -11,8 +11,15 @@
 
 use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::{Token, Tokenizer};
+use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 use std::collections::{HashMap, HashSet};
+
+/// Tokenize SQL text once, returning the token list.
+/// Used to avoid repeated tokenization of the same SQL body.
+fn tokenize_sql(sql: &str) -> Option<Vec<TokenWithSpan>> {
+    let dialect = MsSqlDialect {};
+    Tokenizer::new(&dialect, sql).tokenize_with_location().ok()
+}
 
 /// Represents dependencies extracted from a procedure/function body.
 /// These map to XML `<Relationship>` elements with specific types.
@@ -179,11 +186,13 @@ pub(crate) struct BodyDependencyTokenScanner {
 impl BodyDependencyTokenScanner {
     /// Create a new scanner for SQL body text
     pub fn new(sql: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
+        let tokens = tokenize_sql(sql)?;
         Some(Self { tokens, pos: 0 })
+    }
+
+    /// Create a new scanner from pre-tokenized tokens (Phase 73)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self { tokens, pos: 0 }
     }
 
     /// Scan the body and return all matched tokens in order of appearance
@@ -731,11 +740,21 @@ pub(crate) fn extract_table_refs_tokenized(
     table_aliases: &HashMap<String, String>,
     subquery_aliases: &HashSet<String>,
 ) -> Vec<String> {
+    let Some(tokens) = tokenize_sql(body) else {
+        return Vec::new();
+    };
+    extract_table_refs_from_tokens(tokens, table_aliases, subquery_aliases)
+}
+
+/// Extract table references from pre-tokenized tokens (Phase 73).
+fn extract_table_refs_from_tokens(
+    tokens: Vec<TokenWithSpan>,
+    table_aliases: &HashMap<String, String>,
+    subquery_aliases: &HashSet<String>,
+) -> Vec<String> {
     let mut table_refs: Vec<String> = Vec::with_capacity(5);
 
-    let Some(mut scanner) = BodyDependencyTokenScanner::new(body) else {
-        return table_refs;
-    };
+    let mut scanner = BodyDependencyTokenScanner::from_tokens(tokens);
 
     for token in scanner.scan() {
         match token {
@@ -834,17 +853,9 @@ pub(crate) fn extract_table_refs_tokenized(
 // Function Call Detection
 // =============================================================================
 
-/// Extract function call references from SQL body.
-/// Detects patterns like `dbo.f_split(` or `[schema].[func](` after FROM/JOIN/APPLY keywords.
-/// Returns a set of lowercase `[schema].[function]` references.
-fn extract_function_call_refs(body: &str) -> HashSet<String> {
+/// Extract function call references from pre-tokenized tokens.
+fn extract_function_call_refs_from_tokens(tokens: &[TokenWithSpan]) -> HashSet<String> {
     let mut function_refs = HashSet::new();
-
-    let dialect = MsSqlDialect {};
-    let tokens = match Tokenizer::new(&dialect, body).tokenize_with_location() {
-        Ok(t) => t,
-        Err(_) => return function_refs,
-    };
 
     let mut pos = 0;
     while pos < tokens.len() {
@@ -886,7 +897,7 @@ fn extract_function_call_refs(body: &str) -> HashSet<String> {
                 }
                 // Try to parse a qualified name followed by (
                 if let Some((schema, name, next_pos)) =
-                    try_parse_qualified_name_for_function(&tokens, pos)
+                    try_parse_qualified_name_for_function(tokens, pos)
                 {
                     // Check if followed by ( after optional whitespace
                     let mut check_pos = next_pos;
@@ -1010,6 +1021,15 @@ pub(crate) fn extract_body_dependencies(
     let body_no_comments = strip_sql_comments_for_body_deps(body);
     let body = body_no_comments.as_str();
 
+    // Phase 73: Tokenize the comment-stripped body once and share tokens across all consumers.
+    // Previously each sub-function (aliases, column aliases, table vars, function refs,
+    // table refs, subquery scopes, main scanner) tokenized independently — 7 tokenizations
+    // of the same text. Now we tokenize once and clone the token vec for consumers that
+    // need ownership.
+    let Some(body_tokens) = tokenize_sql(body) else {
+        return deps;
+    };
+
     // Phase 18: Extract table aliases for resolution
     // Maps alias (lowercase) -> table reference (e.g., "a" -> "[dbo].[Account]")
     let mut table_aliases: HashMap<String, String> = HashMap::new();
@@ -1022,14 +1042,19 @@ pub(crate) fn extract_body_dependencies(
 
     // Extract aliases from FROM/JOIN clauses with proper alias tracking
     // Phase 52: Pass full_name for procedure-scoped table variable references
-    extract_table_aliases_for_body_deps(body, full_name, &mut table_aliases, &mut subquery_aliases);
+    extract_table_aliases_for_body_deps_from_tokens(
+        body_tokens.clone(),
+        full_name,
+        &mut table_aliases,
+        &mut subquery_aliases,
+    );
 
     // Extract column aliases (SELECT expr AS alias patterns)
-    extract_column_aliases_for_body_deps(body, &mut column_aliases);
+    extract_column_aliases_for_body_deps_from_tokens(&body_tokens, &mut column_aliases);
 
     // Extract table variable column names to exclude from resolution
     // Pattern: DECLARE @name TABLE ([col1] type, [col2] type, ...)
-    for table_var in extract_table_variable_definitions(body) {
+    for table_var in extract_table_variable_definitions_from_tokens(&body_tokens) {
         for col in &table_var.columns {
             table_var_columns.insert(col.name.to_lowercase());
         }
@@ -1038,12 +1063,13 @@ pub(crate) fn extract_body_dependencies(
     // Extract function call names to exclude from column resolution targets
     // Pattern: FROM dbo.f_split(...) or CROSS APPLY dbo.func(...)
     // These shouldn't be used as default tables for unqualified column resolution
-    let function_refs: HashSet<String> = extract_function_call_refs(body);
+    let function_refs: HashSet<String> = extract_function_call_refs_from_tokens(&body_tokens);
 
     // First pass: collect all table references using token-based extraction
     // Phase 20.4.3: Replaced BRACKETED_TABLE_RE and UNBRACKETED_TABLE_RE with tokenization
     // This handles whitespace (tabs, multiple spaces, newlines) correctly and is more robust
-    let all_table_refs = extract_table_refs_tokenized(body, &table_aliases, &subquery_aliases);
+    let all_table_refs =
+        extract_table_refs_from_tokens(body_tokens.clone(), &table_aliases, &subquery_aliases);
 
     // Filter out function calls from table refs used for column resolution
     // Function refs are still valid as table refs (for dependency tracking), but shouldn't
@@ -1056,14 +1082,15 @@ pub(crate) fn extract_body_dependencies(
 
     // Phase 34+43: Extract ALL subquery scopes for scope-aware column and alias resolution
     // Phase 43: Extended to include derived tables and per-scope alias tracking
-    let all_scopes = extract_all_subquery_scopes(body);
+    let all_scopes = extract_all_subquery_scopes_from_tokens(body_tokens.clone(), body);
 
     // Scan body sequentially for all references in order of appearance using token-based scanner
     // Note: DotNet has a complex ordering that depends on SQL clause structure (FROM first, etc.)
     // We process in textual order which may differ from DotNet's order but contains the same refs
     // Phase 20.2.1: Replaced TOKEN_RE regex with BodyDependencyTokenScanner for robust whitespace handling
 
-    if let Some(mut scanner) = BodyDependencyTokenScanner::new(body) {
+    {
+        let mut scanner = BodyDependencyTokenScanner::from_tokens(body_tokens);
         // Phase 34: Use position-aware scanning for scope-aware column resolution
         for token_with_pos in scanner.scan_with_positions(body) {
             let token = token_with_pos.token;
@@ -1396,6 +1423,17 @@ pub(crate) fn extract_table_aliases_for_body_deps(
     parser.extract_all_aliases(table_aliases, subquery_aliases);
 }
 
+/// Extract table aliases from pre-tokenized tokens (Phase 73).
+fn extract_table_aliases_for_body_deps_from_tokens(
+    tokens: Vec<TokenWithSpan>,
+    full_name: &str,
+    table_aliases: &mut HashMap<String, String>,
+    subquery_aliases: &mut HashSet<String>,
+) {
+    let mut parser = TableAliasTokenParser::from_tokens_with_context(tokens, "dbo", full_name);
+    parser.extract_all_aliases(table_aliases, subquery_aliases);
+}
+
 /// Phase 43: Extract ALL subquery scopes (APPLY + derived tables) with their aliases.
 /// This is the primary scope extraction function for body dependency analysis.
 /// Each scope contains byte range, tables, and aliases defined within.
@@ -1404,6 +1442,15 @@ pub(crate) fn extract_all_subquery_scopes(body: &str) -> Vec<ApplySubqueryScope>
         Some(p) => p,
         None => return Vec::new(),
     };
+    parser.extract_all_scopes(body)
+}
+
+/// Extract subquery scopes from pre-tokenized tokens (Phase 73).
+fn extract_all_subquery_scopes_from_tokens(
+    tokens: Vec<TokenWithSpan>,
+    body: &str,
+) -> Vec<ApplySubqueryScope> {
+    let mut parser = TableAliasTokenParser::from_tokens_with_context(tokens, "dbo", "");
     parser.extract_all_scopes(body)
 }
 
@@ -1525,16 +1572,27 @@ impl TableAliasTokenParser {
     /// - `full_name`: Full name of the parent procedure/function (e.g., "[dbo].[ProcName]")
     ///   Used for creating procedure-scoped table variable references.
     pub fn with_context(sql: &str, default_schema: &str, full_name: &str) -> Option<Self> {
-        let dialect = MsSqlDialect {};
-        let tokens = Tokenizer::new(&dialect, sql)
-            .tokenize_with_location()
-            .ok()?;
+        let tokens = tokenize_sql(sql)?;
         Some(Self {
             tokens,
             pos: 0,
             default_schema: default_schema.to_string(),
             full_name: full_name.to_string(),
         })
+    }
+
+    /// Create a parser from pre-tokenized tokens with full context (Phase 73)
+    pub fn from_tokens_with_context(
+        tokens: Vec<TokenWithSpan>,
+        default_schema: &str,
+        full_name: &str,
+    ) -> Self {
+        Self {
+            tokens,
+            pos: 0,
+            default_schema: default_schema.to_string(),
+            full_name: full_name.to_string(),
+        }
     }
 
     /// Create a new parser with a custom default schema (backwards compatible)
@@ -2658,9 +2716,12 @@ pub(crate) fn strip_sql_comments_for_body_deps(body: &str) -> String {
 
 /// Extract column aliases from SELECT expressions (expr AS alias patterns).
 /// These are output column names that should not be treated as column references.
-fn extract_column_aliases_for_body_deps(body: &str, column_aliases: &mut HashSet<String>) {
-    // Use tokenizer-based extraction (replaces COLUMN_ALIAS_RE regex)
-    for alias in extract_column_aliases_tokenized(body) {
+/// Extract column aliases from pre-tokenized tokens for body dependency analysis.
+fn extract_column_aliases_for_body_deps_from_tokens(
+    tokens: &[TokenWithSpan],
+    column_aliases: &mut HashSet<String>,
+) {
+    for alias in extract_column_aliases_from_tokens(tokens) {
         column_aliases.insert(alias);
     }
 }
@@ -2679,12 +2740,15 @@ fn extract_column_aliases_for_body_deps(body: &str, column_aliases: &mut HashSet
 /// # Returns
 /// A vector of alias names (without brackets, lowercase) in order of appearance.
 pub(crate) fn extract_column_aliases_tokenized(sql: &str) -> Vec<String> {
-    let mut results = Vec::new();
-
-    let dialect = MsSqlDialect {};
-    let Ok(tokens) = Tokenizer::new(&dialect, sql).tokenize_with_location() else {
-        return results;
+    let Some(tokens) = tokenize_sql(sql) else {
+        return Vec::new();
     };
+    extract_column_aliases_from_tokens(&tokens)
+}
+
+/// Extract column aliases from pre-tokenized tokens (Phase 73).
+fn extract_column_aliases_from_tokens(tokens: &[TokenWithSpan]) -> Vec<String> {
+    let mut results = Vec::new();
 
     // SQL keywords that should not be treated as aliases
     let alias_keywords = [
@@ -4222,12 +4286,16 @@ fn is_data_type_name(word: &str) -> bool {
 /// # Returns
 /// Vector of TableVariableDefinition structs, one per table variable found in the body
 pub(crate) fn extract_table_variable_definitions(sql: &str) -> Vec<TableVariableDefinition> {
-    let dialect = MsSqlDialect {};
-    let tokens = match Tokenizer::new(&dialect, sql).tokenize_with_location() {
-        Ok(t) => t,
-        Err(_) => return Vec::new(),
+    let Some(tokens) = tokenize_sql(sql) else {
+        return Vec::new();
     };
+    extract_table_variable_definitions_from_tokens(&tokens)
+}
 
+/// Extract table variable definitions from pre-tokenized tokens (Phase 73).
+fn extract_table_variable_definitions_from_tokens(
+    tokens: &[TokenWithSpan],
+) -> Vec<TableVariableDefinition> {
     let mut table_variables = Vec::new();
     let mut table_variable_number = 0u32;
     let mut pos = 0;

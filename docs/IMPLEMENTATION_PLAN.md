@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-69, 71-72 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-72 complete, 73-77 pending.**
+**Phases 1-69, 71-73 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-73 complete, 74-77 pending.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-69, 71-72)
+## Completed Phases (1-69, 71-73)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -67,6 +67,7 @@
 | 63-69 | Performance tuning: regex caching, ZIP level, dead code, index-based keys, cached names, zero-alloc CI helpers, Arc\<str\> | All |
 | 71 | Pre-allocate model.xml buffer (+ DacMetadata.xml, Origin.xml) | All |
 | 72 | Cache ColumnRegistry view extraction results (eliminate double view parsing) | All |
+| 73 | Single tokenization for body dependency extraction | All |
 
 ### Key Milestones
 
@@ -79,7 +80,7 @@
 
 ## Performance Tuning (Phases 63-77)
 
-### Completed (Phases 63-69, 71-72)
+### Completed (Phases 63-69, 71-73)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms → 30ms (3.4x improvement)
 
@@ -94,8 +95,9 @@
 | 69 | `Arc<str>` for SQL definition text | Eliminated deep String copies across pipeline |
 | 71 | Pre-allocate model.xml buffer (`elements.len() * 2000`) | Eliminated ~24 Vec reallocations for large projects |
 | 72 | Cache view extraction results in ColumnRegistry | Eliminated double view parsing (10-20 tokenizations saved per view) |
+| 73 | Single tokenization for body dependency extraction | Eliminated 6 redundant tokenizations per procedure/function body |
 
-### Pending (Phases 73-77)
+### Pending (Phases 74-77)
 
 **Large project profiling (920 files, 8083 elements, 15MB model.xml):** ~1050ms total
 
@@ -138,18 +140,21 @@ Eliminated double view parsing during XML generation. `ColumnRegistry::from_mode
 
 ---
 
-### Phase 73 — Single tokenization for body dependency extraction — PENDING
+### Phase 73 — Single tokenization for body dependency extraction — COMPLETE
 
-Reduce repeated tokenization of procedure/function bodies during XML generation. `extract_body_dependencies()` calls multiple sub-functions (`extract_table_aliases()`, `extract_column_references()`, `extract_declare_types()`, etc.), each of which independently tokenizes the same SQL body.
+Eliminated 6 redundant tokenizations per procedure/function body in `extract_body_dependencies()`. Previously, each sub-function (table aliases, column aliases, table variables, function call refs, table refs, subquery scopes, main scanner) independently tokenized the same comment-stripped SQL body — 7 tokenizations total. Now the body is tokenized once and the token vec is shared (cloned for consumers needing ownership).
 
-**Tasks:**
-1. Tokenize the body once at the start of `extract_body_dependencies()`
-2. Pass the token list to sub-functions instead of raw SQL
-3. Update sub-function signatures to accept `&[TokenWithLocation]`
-4. Verify parity — body dependency output must be identical
+**Changes:**
+- Added `tokenize_sql()` helper for single-point tokenization
+- Added `BodyDependencyTokenScanner::from_tokens()` constructor
+- Added `TableAliasTokenParser::from_tokens_with_context()` constructor
+- Created `_from_tokens` variants for: `extract_function_call_refs`, `extract_column_aliases_for_body_deps`, `extract_table_variable_definitions`, `extract_table_refs`, `extract_table_aliases_for_body_deps`, `extract_all_subquery_scopes`
+- `extract_body_dependencies()` now tokenizes the comment-stripped body once and passes tokens to all consumers
+- Original string-accepting functions preserved for test API compatibility
+- Note: `extract_declare_types_tokenized()` still tokenizes separately (runs on original body before comment stripping — only 1 call)
 
 **Files:** `src/dacpac/model_xml/body_deps.rs`
-**Estimated savings:** 30-50ms on large projects with many procedures/functions
+**Savings:** Eliminates 6 tokenizations per procedure/function body (estimated 30-50ms on large projects)
 
 ---
 
