@@ -14,6 +14,7 @@
 //! ```
 
 use crate::parser::identifier_utils::format_word_bracketed;
+use crate::util::find_ci;
 use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
 use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
@@ -835,13 +836,11 @@ fn tokens_to_predicate_string(tokens: &[TokenWithSpan]) -> String {
 /// ```
 pub fn extract_index_is_padded(sql: &str) -> bool {
     static PAD_INDEX_RE: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"PAD_INDEX\s*=\s*ON\b").unwrap());
+        std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)PAD_INDEX\s*=\s*ON\b").unwrap());
 
-    let sql_upper = sql.to_uppercase();
-    // Look for PAD_INDEX = ON in the SQL
-    if let Some(with_pos) = sql_upper.find("WITH") {
-        let after_with = &sql_upper[with_pos..];
-        // Match PAD_INDEX followed by = and ON (with optional whitespace)
+    // Look for PAD_INDEX = ON in the SQL (zero-alloc)
+    if let Some(with_pos) = find_ci(sql, "WITH") {
+        let after_with = &sql[with_pos..];
         return PAD_INDEX_RE.is_match(after_with);
     }
     false

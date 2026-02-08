@@ -25,6 +25,7 @@ use sqlparser::keywords::Keyword;
 use sqlparser::tokenizer::Token;
 
 use super::token_parser_base::TokenParser;
+use crate::util::contains_ci;
 
 /// Result of parsing a function definition using tokens
 #[derive(Debug, Clone, Default)]
@@ -458,11 +459,10 @@ pub fn detect_function_type_tokens(sql: &str) -> TokenParsedFunctionType {
     if let Some(func) = parse_create_function_full(sql).or_else(|| parse_alter_function_full(sql)) {
         func.function_type
     } else {
-        // Fallback to simple string matching if tokenization fails
-        let sql_upper = sql.to_uppercase();
-        if sql_upper.contains("RETURNS TABLE") {
+        // Fallback to simple string matching if tokenization fails (zero-alloc)
+        if contains_ci(sql, "RETURNS TABLE") {
             TokenParsedFunctionType::InlineTableValued
-        } else if sql_upper.contains("RETURNS @") {
+        } else if contains_ci(sql, "RETURNS @") {
             TokenParsedFunctionType::TableValued
         } else {
             TokenParsedFunctionType::Scalar

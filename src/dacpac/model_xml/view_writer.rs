@@ -11,18 +11,7 @@ use sqlparser::tokenizer::{Token, Tokenizer};
 use std::io::Write;
 
 use crate::model::{DatabaseModel, ModelElement, RawElement, ViewElement};
-
-/// Case-insensitive substring search without allocating an uppercase copy.
-pub(crate) fn contains_ci(haystack: &str, needle: &str) -> bool {
-    let needle_bytes = needle.as_bytes();
-    let haystack_bytes = haystack.as_bytes();
-    if needle_bytes.len() > haystack_bytes.len() {
-        return false;
-    }
-    haystack_bytes
-        .windows(needle_bytes.len())
-        .any(|window| window.eq_ignore_ascii_case(needle_bytes))
-}
+pub(crate) use crate::util::contains_ci;
 
 use super::xml_helpers::{
     escape_newlines_for_attr, normalize_script_content, write_property, write_property_raw,

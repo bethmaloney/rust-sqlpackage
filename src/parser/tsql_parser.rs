@@ -46,6 +46,7 @@ use super::table_type_parser::parse_create_table_type_tokens;
 use super::trigger_parser::parse_create_trigger_tokens;
 use super::tsql_dialect::ExtendedTsqlDialect;
 use crate::error::SqlPackageError;
+use crate::util::{contains_ci, starts_with_ci};
 
 /// Sentinel value used to represent MAX in binary types (since sqlparser expects u64)
 pub const BINARY_MAX_SENTINEL: u64 = 2_147_483_647;
@@ -59,7 +60,7 @@ static INDEX_FALLBACK_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)CREATE\s+(UNIQUE\s+)?(CLUSTERED|NONCLUSTERED)\s+INDEX\s+\[?(\w+)\]?\s*ON\s*(?:\[?(\w+)\]?\.)?\[?(\w+)\]?\s*\(([^)]+)\)").unwrap()
 });
 static PAD_INDEX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"PAD_INDEX\s*=\s*ON\b").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)PAD_INDEX\s*=\s*ON\b").unwrap());
 static COLUMN_WITH_DIR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\[?(\w+)\]?(?:\s+(ASC|DESC))?").unwrap());
 static INCLUDE_COLUMNS_RE: LazyLock<Regex> =
@@ -665,13 +666,11 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
 /// Try to parse a statement using fallback regex-based parsing
 /// Returns Some(FallbackStatementType) if the statement is a procedure or function
 fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
-    let sql_upper = sql.to_uppercase();
-
     // Check for CREATE PROCEDURE or CREATE PROC (T-SQL shorthand)
-    if sql_upper.contains("CREATE PROCEDURE")
-        || sql_upper.contains("CREATE OR ALTER PROCEDURE")
-        || sql_upper.contains("CREATE PROC")
-        || sql_upper.contains("CREATE OR ALTER PROC")
+    if contains_ci(sql, "CREATE PROCEDURE")
+        || contains_ci(sql, "CREATE OR ALTER PROCEDURE")
+        || contains_ci(sql, "CREATE PROC")
+        || contains_ci(sql, "CREATE OR ALTER PROC")
     {
         if let Some((schema, name)) = extract_procedure_name(sql) {
             return Some(FallbackStatementType::Procedure { schema, name });
@@ -680,14 +679,14 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for ALTER PROCEDURE or ALTER PROC (T-SQL shorthand)
     // Note: sqlparser doesn't support ALTER PROCEDURE, so we use fallback
-    if sql_upper.contains("ALTER PROCEDURE") || sql_upper.contains("ALTER PROC") {
+    if contains_ci(sql, "ALTER PROCEDURE") || contains_ci(sql, "ALTER PROC") {
         if let Some((schema, name)) = extract_alter_procedure_name(sql) {
             return Some(FallbackStatementType::Procedure { schema, name });
         }
     }
 
     // Check for CREATE FUNCTION
-    if sql_upper.contains("CREATE FUNCTION") || sql_upper.contains("CREATE OR ALTER FUNCTION") {
+    if contains_ci(sql, "CREATE FUNCTION") || contains_ci(sql, "CREATE OR ALTER FUNCTION") {
         if let Some((schema, name)) = extract_function_name(sql) {
             let function_type = detect_function_type(sql);
             let parameters = extract_function_parameters(sql);
@@ -704,7 +703,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for ALTER FUNCTION
     // Note: sqlparser doesn't support ALTER FUNCTION, so we use fallback
-    if sql_upper.contains("ALTER FUNCTION") {
+    if contains_ci(sql, "ALTER FUNCTION") {
         if let Some((schema, name)) = extract_alter_function_name(sql) {
             let function_type = detect_function_type(sql);
             let parameters = extract_function_parameters(sql);
@@ -720,7 +719,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Check for CREATE COLUMNSTORE INDEX (must be before regular index check)
-    if sql_upper.contains("COLUMNSTORE INDEX") {
+    if contains_ci(sql, "COLUMNSTORE INDEX") {
         if let Some(parsed) = parse_create_columnstore_index_tokens(sql) {
             return Some(FallbackStatementType::ColumnstoreIndex {
                 name: parsed.name,
@@ -735,10 +734,10 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Check for CREATE CLUSTERED/NONCLUSTERED INDEX (T-SQL specific syntax)
-    if sql_upper.contains("CREATE CLUSTERED INDEX")
-        || sql_upper.contains("CREATE NONCLUSTERED INDEX")
-        || sql_upper.contains("CREATE UNIQUE CLUSTERED INDEX")
-        || sql_upper.contains("CREATE UNIQUE NONCLUSTERED INDEX")
+    if contains_ci(sql, "CREATE CLUSTERED INDEX")
+        || contains_ci(sql, "CREATE NONCLUSTERED INDEX")
+        || contains_ci(sql, "CREATE UNIQUE CLUSTERED INDEX")
+        || contains_ci(sql, "CREATE UNIQUE NONCLUSTERED INDEX")
     {
         if let Some(index_info) = extract_index_info(sql) {
             return Some(index_info);
@@ -747,7 +746,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for CREATE FULLTEXT INDEX (must check before generic CREATE fallback)
     // Use token-based parser (Phase 15.3 B7)
-    if sql_upper.contains("CREATE FULLTEXT INDEX") {
+    if contains_ci(sql, "CREATE FULLTEXT INDEX") {
         if let Some(parsed) = parse_fulltext_index_tokens(sql) {
             let columns = parsed
                 .columns
@@ -770,7 +769,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for CREATE FULLTEXT CATALOG
     // Use token-based parser (Phase 15.3 B8)
-    if sql_upper.contains("CREATE FULLTEXT CATALOG") {
+    if contains_ci(sql, "CREATE FULLTEXT CATALOG") {
         if let Some(parsed) = parse_fulltext_catalog_tokens(sql) {
             return Some(FallbackStatementType::FullTextCatalog {
                 name: parsed.name,
@@ -782,7 +781,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for ALTER DATABASE SCOPED CONFIGURATION — silently skip.
     // DacFx does not model these statements (they produce SQL70001 errors in DacFx builds).
     // In real SSDT projects, these go in post-deployment scripts, not regular SQL files.
-    if sql_upper.contains("ALTER DATABASE") && sql_upper.contains("SCOPED CONFIGURATION") {
+    if contains_ci(sql, "ALTER DATABASE") && contains_ci(sql, "SCOPED CONFIGURATION") {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: "DATABASE_SCOPED_CONFIGURATION".to_string(),
         });
@@ -790,7 +789,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for ALTER DATABASE ... ADD FILEGROUP
     // Must check before generic ALTER DATABASE handling
-    if sql_upper.contains("ALTER DATABASE") && sql_upper.contains("ADD FILEGROUP") {
+    if contains_ci(sql, "ALTER DATABASE") && contains_ci(sql, "ADD FILEGROUP") {
         if let Some(parsed) = parse_filegroup_tokens(sql) {
             return Some(FallbackStatementType::Filegroup {
                 name: parsed.name,
@@ -800,7 +799,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Check for CREATE PARTITION FUNCTION
-    if sql_upper.contains("CREATE PARTITION FUNCTION") {
+    if contains_ci(sql, "CREATE PARTITION FUNCTION") {
         if let Some(parsed) = parse_partition_function_tokens(sql) {
             return Some(FallbackStatementType::PartitionFunction {
                 name: parsed.name,
@@ -812,7 +811,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Check for CREATE PARTITION SCHEME
-    if sql_upper.contains("CREATE PARTITION SCHEME") {
+    if contains_ci(sql, "CREATE PARTITION SCHEME") {
         if let Some(parsed) = parse_partition_scheme_tokens(sql) {
             return Some(FallbackStatementType::PartitionScheme {
                 name: parsed.name,
@@ -823,7 +822,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Check for CREATE SEQUENCE (T-SQL multiline syntax not fully supported by sqlparser)
-    if sql_upper.contains("CREATE SEQUENCE") {
+    if contains_ci(sql, "CREATE SEQUENCE") {
         if let Some(seq_info) = extract_sequence_info(sql) {
             return Some(FallbackStatementType::Sequence {
                 schema: seq_info.schema,
@@ -843,7 +842,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for ALTER SEQUENCE
     // Note: sqlparser doesn't support ALTER SEQUENCE, so we use fallback
-    if sql_upper.contains("ALTER SEQUENCE") {
+    if contains_ci(sql, "ALTER SEQUENCE") {
         if let Some(seq_info) = extract_alter_sequence_info(sql) {
             return Some(FallbackStatementType::Sequence {
                 schema: seq_info.schema,
@@ -865,13 +864,13 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Scalar types use: CREATE TYPE x FROM basetype
     // Table types use: CREATE TYPE x AS TABLE
     // Uses token-based parsing (Phase 15.8 J6) to handle any whitespace between keywords
-    if sql_upper.contains("CREATE TYPE") {
+    if contains_ci(sql, "CREATE TYPE") {
         // Check if this is a scalar type (FROM basetype) or table type (AS TABLE)
         match is_scalar_type_definition(sql) {
             Some(true) => {
                 // Scalar type - CREATE TYPE [dbo].[TypeName] FROM basetype [NULL|NOT NULL]
                 if let Some((schema, name)) = extract_type_name(sql) {
-                    if let Some(scalar_info) = extract_scalar_type_info(sql, &sql_upper) {
+                    if let Some(scalar_info) = extract_scalar_type_info(sql) {
                         return Some(FallbackStatementType::ScalarType {
                             schema,
                             name,
@@ -900,21 +899,21 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Fallback for CREATE TABLE statements that fail parsing
-    if sql_upper.contains("CREATE TABLE") {
-        if let Some(table_info) = extract_table_structure(sql, &sql_upper) {
+    if contains_ci(sql, "CREATE TABLE") {
+        if let Some(table_info) = extract_table_structure(sql) {
             return Some(table_info);
         }
     }
 
     // Check for EXEC sp_addextendedproperty
-    if sql_upper.contains("SP_ADDEXTENDEDPROPERTY") {
+    if contains_ci(sql, "SP_ADDEXTENDEDPROPERTY") {
         if let Some(property) = extract_extended_property_from_sql(sql) {
             return Some(FallbackStatementType::ExtendedProperty { property });
         }
     }
 
     // Check for CREATE TRIGGER
-    if sql_upper.contains("CREATE TRIGGER") || sql_upper.contains("CREATE OR ALTER TRIGGER") {
+    if contains_ci(sql, "CREATE TRIGGER") || contains_ci(sql, "CREATE OR ALTER TRIGGER") {
         if let Some(trigger) = extract_trigger_info(sql) {
             return Some(trigger);
         }
@@ -922,13 +921,13 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for security statements — route USER, ROLE, PERMISSION, ROLE_MEMBERSHIP
     // to actual parsers; remaining categories (LOGIN, CERTIFICATE, etc.) are silently skipped
-    if let Some(result) = try_security_statement_dispatch(sql, &sql_upper) {
+    if let Some(result) = try_security_statement_dispatch(sql) {
         return Some(result);
     }
 
     // Check for CREATE SYNONYM (must be before generic CREATE fallback to avoid being
     // captured as RawStatement with object_type "SYNONYM" which would be silently dropped)
-    if sql_upper.contains("CREATE SYNONYM") {
+    if contains_ci(sql, "CREATE SYNONYM") {
         if let Some(parsed) = parse_create_synonym_tokens(sql) {
             return Some(FallbackStatementType::Synonym {
                 schema: parsed.schema,
@@ -944,7 +943,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for ALTER VIEW (e.g., ALTER VIEW WITH SCHEMABINDING — sqlparser-rs fails on bare WITH keywords)
     // Must be before generic CREATE fallback. Returns RawStatement with object_type "VIEW"
     // which routes to write_raw_view() in the XML writer.
-    if sql_upper.contains("ALTER") && sql_upper.contains("VIEW") {
+    if contains_ci(sql, "ALTER") && contains_ci(sql, "VIEW") {
         if let Some(parsed) = try_parse_alter_view_tokens(sql) {
             return Some(FallbackStatementType::RawStatement {
                 object_type: parsed.object_type,
@@ -960,14 +959,14 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Check for ALTER TABLE ... ADD CONSTRAINT
-    if sql_upper.contains("ALTER TABLE") && sql_upper.contains("ADD CONSTRAINT") {
+    if contains_ci(sql, "ALTER TABLE") && contains_ci(sql, "ADD CONSTRAINT") {
         if let Some(fallback) = extract_alter_table_add_constraint(sql) {
             return Some(fallback);
         }
     }
 
     // Generic fallback for ALTER TABLE statements that can't be parsed
-    if sql_upper.contains("ALTER TABLE") {
+    if contains_ci(sql, "ALTER TABLE") {
         if let Some((schema, name)) = extract_alter_table_name(sql) {
             return Some(FallbackStatementType::RawStatement {
                 object_type: "AlterTable".to_string(),
@@ -1051,11 +1050,11 @@ fn try_xml_method_fallback(sql: &str) -> Option<FallbackStatementType> {
 /// Dispatch security statements to appropriate parsers.
 /// USER, ROLE, ROLE_MEMBERSHIP, and GRANT/DENY/REVOKE are parsed into typed variants.
 /// Remaining categories (LOGIN, CERTIFICATE, etc.) are returned as SkippedSecurityStatement.
-fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<FallbackStatementType> {
+fn try_security_statement_dispatch(sql: &str) -> Option<FallbackStatementType> {
     // GRANT/DENY/REVOKE — parse into Permission variant
-    if sql_upper.starts_with("GRANT ")
-        || sql_upper.starts_with("DENY ")
-        || sql_upper.starts_with("REVOKE ")
+    if starts_with_ci(sql, "GRANT ")
+        || starts_with_ci(sql, "DENY ")
+        || starts_with_ci(sql, "REVOKE ")
     {
         if let Some(parsed) = parse_permission_tokens(sql) {
             let (target_schema, target_name, target_type) = match &parsed.target {
@@ -1082,9 +1081,9 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
             });
         }
         // If parsing fails, fall through to skip
-        let action = if sql_upper.starts_with("GRANT ") {
+        let action = if starts_with_ci(sql, "GRANT ") {
             "GRANT"
-        } else if sql_upper.starts_with("DENY ") {
+        } else if starts_with_ci(sql, "DENY ") {
             "DENY"
         } else {
             "REVOKE"
@@ -1096,7 +1095,7 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
 
     // Role membership — sp_addrolemember / sp_droprolemember / ALTER ROLE ... ADD/DROP MEMBER
     // Must check BEFORE generic ROLE to avoid role membership being caught as ROLE
-    if sql_upper.contains("SP_ADDROLEMEMBER") || sql_upper.contains("SP_DROPROLEMEMBER") {
+    if contains_ci(sql, "SP_ADDROLEMEMBER") || contains_ci(sql, "SP_DROPROLEMEMBER") {
         if let Some(parsed) = parse_sp_addrolemember(sql) {
             return Some(FallbackStatementType::AlterRoleMembership {
                 role: parsed.role,
@@ -1108,7 +1107,7 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
             statement_type: "ROLE_MEMBERSHIP".to_string(),
         });
     }
-    if sql_upper.contains("ALTER ROLE") && sql_upper.contains("MEMBER") {
+    if contains_ci(sql, "ALTER ROLE") && contains_ci(sql, "MEMBER") {
         if let Some(parsed) = parse_alter_role_membership_tokens(sql) {
             return Some(FallbackStatementType::AlterRoleMembership {
                 role: parsed.role,
@@ -1122,9 +1121,9 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
     }
 
     // Login management (server-level) — always skip
-    if sql_upper.contains("CREATE LOGIN")
-        || sql_upper.contains("ALTER LOGIN")
-        || sql_upper.contains("DROP LOGIN")
+    if contains_ci(sql, "CREATE LOGIN")
+        || contains_ci(sql, "ALTER LOGIN")
+        || contains_ci(sql, "DROP LOGIN")
     {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: "LOGIN".to_string(),
@@ -1132,7 +1131,7 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
     }
 
     // CREATE USER — parse into CreateUser variant (ALTER/DROP USER still skipped)
-    if sql_upper.contains("CREATE USER") {
+    if contains_ci(sql, "CREATE USER") {
         if let Some(parsed) = parse_create_user_tokens(sql) {
             let (auth_type_str, login) = match &parsed.auth_type {
                 super::security_parser::UserAuthType::Login(l) => {
@@ -1157,16 +1156,16 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
             statement_type: "USER".to_string(),
         });
     }
-    if sql_upper.contains("ALTER USER") || sql_upper.contains("DROP USER") {
+    if contains_ci(sql, "ALTER USER") || contains_ci(sql, "DROP USER") {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: "USER".to_string(),
         });
     }
 
     // Application role management (must check before generic ROLE)
-    if sql_upper.contains("CREATE APPLICATION ROLE")
-        || sql_upper.contains("ALTER APPLICATION ROLE")
-        || sql_upper.contains("DROP APPLICATION ROLE")
+    if contains_ci(sql, "CREATE APPLICATION ROLE")
+        || contains_ci(sql, "ALTER APPLICATION ROLE")
+        || contains_ci(sql, "DROP APPLICATION ROLE")
     {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: "APPLICATION_ROLE".to_string(),
@@ -1174,9 +1173,9 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
     }
 
     // Server role management (must check before generic ROLE)
-    if sql_upper.contains("CREATE SERVER ROLE")
-        || sql_upper.contains("ALTER SERVER ROLE")
-        || sql_upper.contains("DROP SERVER ROLE")
+    if contains_ci(sql, "CREATE SERVER ROLE")
+        || contains_ci(sql, "ALTER SERVER ROLE")
+        || contains_ci(sql, "DROP SERVER ROLE")
     {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: "SERVER_ROLE".to_string(),
@@ -1184,7 +1183,7 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
     }
 
     // CREATE ROLE — parse into CreateRole variant (ALTER/DROP ROLE still skipped)
-    if sql_upper.contains("CREATE ROLE") {
+    if contains_ci(sql, "CREATE ROLE") {
         if let Some(parsed) = parse_create_role_tokens(sql) {
             return Some(FallbackStatementType::CreateRole {
                 name: parsed.name,
@@ -1195,16 +1194,16 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
             statement_type: "ROLE".to_string(),
         });
     }
-    if sql_upper.contains("ALTER ROLE") || sql_upper.contains("DROP ROLE") {
+    if contains_ci(sql, "ALTER ROLE") || contains_ci(sql, "DROP ROLE") {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: "ROLE".to_string(),
         });
     }
 
     // Certificate management — always skip
-    if sql_upper.contains("CREATE CERTIFICATE")
-        || sql_upper.contains("ALTER CERTIFICATE")
-        || sql_upper.contains("DROP CERTIFICATE")
+    if contains_ci(sql, "CREATE CERTIFICATE")
+        || contains_ci(sql, "ALTER CERTIFICATE")
+        || contains_ci(sql, "DROP CERTIFICATE")
     {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: "CERTIFICATE".to_string(),
@@ -1212,9 +1211,9 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
     }
 
     // Asymmetric key management — always skip
-    if sql_upper.contains("CREATE ASYMMETRIC KEY")
-        || sql_upper.contains("ALTER ASYMMETRIC KEY")
-        || sql_upper.contains("DROP ASYMMETRIC KEY")
+    if contains_ci(sql, "CREATE ASYMMETRIC KEY")
+        || contains_ci(sql, "ALTER ASYMMETRIC KEY")
+        || contains_ci(sql, "DROP ASYMMETRIC KEY")
     {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: "ASYMMETRIC_KEY".to_string(),
@@ -1222,9 +1221,9 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
     }
 
     // Symmetric key management — always skip
-    if sql_upper.contains("CREATE SYMMETRIC KEY")
-        || sql_upper.contains("ALTER SYMMETRIC KEY")
-        || sql_upper.contains("DROP SYMMETRIC KEY")
+    if contains_ci(sql, "CREATE SYMMETRIC KEY")
+        || contains_ci(sql, "ALTER SYMMETRIC KEY")
+        || contains_ci(sql, "DROP SYMMETRIC KEY")
     {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: "SYMMETRIC_KEY".to_string(),
@@ -1232,9 +1231,9 @@ fn try_security_statement_dispatch(sql: &str, sql_upper: &str) -> Option<Fallbac
     }
 
     // Credential management — always skip
-    if sql_upper.contains("CREATE CREDENTIAL")
-        || sql_upper.contains("ALTER CREDENTIAL")
-        || sql_upper.contains("DROP CREDENTIAL")
+    if contains_ci(sql, "CREATE CREDENTIAL")
+        || contains_ci(sql, "ALTER CREDENTIAL")
+        || contains_ci(sql, "DROP CREDENTIAL")
     {
         return Some(FallbackStatementType::SkippedSecurityStatement {
             statement_type: "CREDENTIAL".to_string(),
@@ -1552,7 +1551,7 @@ fn is_scalar_type_definition(sql: &str) -> Option<bool> {
 /// e.g., CREATE TYPE [dbo].[PhoneNumber] FROM VARCHAR(20) NOT NULL
 ///
 /// Uses token-based parsing to handle any whitespace between keywords (Phase 15.8 J7)
-fn extract_scalar_type_info(sql: &str, _sql_upper: &str) -> Option<ScalarTypeInfo> {
+fn extract_scalar_type_info(sql: &str) -> Option<ScalarTypeInfo> {
     let dialect = MsSqlDialect {};
     let tokens = match Tokenizer::new(&dialect, sql).tokenize() {
         Ok(t) => t,
@@ -1853,13 +1852,11 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
 
 /// Extract PAD_INDEX option from CREATE INDEX WITH clause
 fn extract_index_pad_index(sql: &str) -> bool {
-    // Match PAD_INDEX = ON in WITH clause (case-insensitive)
-    let sql_upper = sql.to_uppercase();
-    if let Some(with_pos) = sql_upper.find("WITH") {
-        let after_with = &sql_upper[with_pos..];
-        // Look for PAD_INDEX = ON
-        if after_with.contains("PAD_INDEX") {
-            return PAD_INDEX_RE.is_match(&sql_upper[with_pos..]);
+    // Match PAD_INDEX = ON in WITH clause (case-insensitive, zero-alloc)
+    if let Some(with_pos) = crate::util::find_ci(sql, "WITH") {
+        let after_with = &sql[with_pos..];
+        if contains_ci(after_with, "PAD_INDEX") {
+            return PAD_INDEX_RE.is_match(after_with);
         }
     }
     false
@@ -1934,14 +1931,12 @@ fn extract_index_data_compression(sql: &str) -> Option<String> {
 
 /// Extract full table structure from CREATE TABLE statement
 ///
-/// Takes a pre-computed uppercase SQL string to avoid redundant `.to_uppercase()` calls
-/// when called from `try_fallback_parse()` which already has the uppercase version.
-fn extract_table_structure(sql: &str, sql_upper: &str) -> Option<FallbackStatementType> {
+fn extract_table_structure(sql: &str) -> Option<FallbackStatementType> {
     let (schema, name) = extract_generic_object_name(sql, "TABLE")?;
 
     // Check for graph table syntax (AS NODE or AS EDGE)
-    let is_node = sql_upper.contains("AS NODE");
-    let is_edge = sql_upper.contains("AS EDGE");
+    let is_node = contains_ci(sql, "AS NODE");
+    let is_edge = contains_ci(sql, "AS EDGE");
 
     // Find the opening parenthesis after CREATE TABLE [schema].[name]
     let table_name_pattern = format!(
@@ -1987,10 +1982,8 @@ fn extract_table_structure(sql: &str, sql_upper: &str) -> Option<FallbackStateme
 /// Extract SYSTEM_VERSIONING options from the WITH clause after a CREATE TABLE body.
 /// Returns (is_system_versioned, history_table_schema, history_table_name).
 fn extract_system_versioning_options(after_body: &str) -> (bool, Option<String>, Option<String>) {
-    let upper = after_body.to_uppercase();
-
-    // Check for SYSTEM_VERSIONING = ON
-    if !upper.contains("SYSTEM_VERSIONING") {
+    // Check for SYSTEM_VERSIONING = ON (zero-alloc)
+    if !contains_ci(after_body, "SYSTEM_VERSIONING") {
         return (false, None, None);
     }
 
@@ -2073,10 +2066,8 @@ fn parse_table_body(
             continue;
         }
 
-        let upper = trimmed.to_uppercase();
-
         // Check for PERIOD FOR SYSTEM_TIME ([col1], [col2])
-        if upper.starts_with("PERIOD") && upper.contains("SYSTEM_TIME") {
+        if starts_with_ci(trimmed, "PERIOD") && contains_ci(trimmed, "SYSTEM_TIME") {
             if let Some(parsed) = parse_period_for_system_time(trimmed) {
                 period = parsed;
             }
@@ -2084,11 +2075,11 @@ fn parse_table_body(
         }
 
         // Check if this is a table-level constraint
-        if upper.starts_with("CONSTRAINT")
-            || upper.starts_with("PRIMARY KEY")
-            || upper.starts_with("FOREIGN KEY")
-            || upper.starts_with("UNIQUE")
-            || upper.starts_with("CHECK")
+        if starts_with_ci(trimmed, "CONSTRAINT")
+            || starts_with_ci(trimmed, "PRIMARY KEY")
+            || starts_with_ci(trimmed, "FOREIGN KEY")
+            || starts_with_ci(trimmed, "UNIQUE")
+            || starts_with_ci(trimmed, "CHECK")
         {
             if let Some(constraint) = parse_table_constraint(trimmed, table_name) {
                 constraints.push(constraint);

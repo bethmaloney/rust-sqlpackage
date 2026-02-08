@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-69, 71-74 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-74 complete, 75-77 pending.**
+**Phases 1-69, 71-75 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-75 complete, 76-77 pending.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-69, 71-74)
+## Completed Phases (1-69, 71-75)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -69,6 +69,7 @@
 | 72 | Cache ColumnRegistry view extraction results (eliminate double view parsing) | All |
 | 73 | Single tokenization for body dependency extraction | All |
 | 74 | Fast-path preprocessing bypass (skip tokenization when no transformations needed) | All |
+| 75 | Zero-alloc fallback parse dispatch (shared `util` module, eliminate `to_uppercase()`) | All |
 
 ### Key Milestones
 
@@ -81,7 +82,7 @@
 
 ## Performance Tuning (Phases 63-77)
 
-### Completed (Phases 63-69, 71-74)
+### Completed (Phases 63-69, 71-75)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms → 30ms (3.4x improvement)
 
@@ -98,8 +99,9 @@
 | 72 | Cache view extraction results in ColumnRegistry | Eliminated double view parsing (10-20 tokenizations saved per view) |
 | 73 | Single tokenization for body dependency extraction | Eliminated 6 redundant tokenizations per procedure/function body |
 | 74 | Fast-path preprocessing bypass | Skip tokenize-and-reconstruct for SQL without trigger patterns |
+| 75 | Zero-alloc fallback parse dispatch | Eliminated `to_uppercase()` in `try_fallback_parse()` and 5 other functions |
 
-### Pending (Phases 75-77)
+### Pending (Phases 76-77)
 
 **Large project profiling (920 files, 8083 elements, 15MB model.xml):** ~1050ms total
 
@@ -135,7 +137,7 @@ Eliminated double view parsing during XML generation. `ColumnRegistry::from_mode
 - `from_model()` now caches extraction results for both `ViewElement` and `RawElement` views
 - `write_view()` and `write_raw_view()` use cached results, with fallback to fresh extraction
 - Raw views (`ModelElement::Raw` with `sql_type == "SqlView"`) now also populate the column registry
-- Made `contains_ci()` in view_writer.rs `pub(crate)` for reuse in column_registry.rs
+- `contains_ci()` in view_writer.rs re-exports from shared `src/util.rs` (Phase 75)
 
 **Files:** `src/dacpac/model_xml/column_registry.rs`, `src/dacpac/model_xml/view_writer.rs`
 **Savings:** Eliminates 10-20 tokenizations per view (estimated 150-200ms on large projects)
@@ -179,17 +181,25 @@ If none of these patterns are found, the input is returned unchanged without tok
 
 ---
 
-### Phase 75 — Zero-alloc fallback parse dispatch — PENDING
+### Phase 75 — Zero-alloc fallback parse dispatch — COMPLETE
 
-Replace `sql.to_uppercase()` allocation in `try_fallback_parse()` with zero-allocation case-insensitive matching. Currently every statement that fails sqlparser-rs gets a full uppercase clone of the SQL text, then 300+ lines of `.contains()` checks against the uppercase copy.
+Replaced all `sql.to_uppercase()` allocations with zero-allocation case-insensitive matching using shared `contains_ci()` / `starts_with_ci()` / `find_ci()` helpers.
 
-**Tasks:**
-1. Replace `let sql_upper = sql.to_uppercase()` with `contains_ci()` / `starts_with_ci()` checks (helpers already exist in `builder.rs`)
-2. Move the case-insensitive helpers to a shared utility module (or reuse existing ones)
-3. Add early-exit based on first keyword token (peek at position 0-3) before scanning full SQL
+**Changes:**
+- Created `src/util.rs` shared utility module with `contains_ci`, `starts_with_ci`, `find_ci`
+- `try_fallback_parse()`: eliminated `sql.to_uppercase()` + 57 `.contains()` checks → direct `contains_ci()` calls
+- `try_security_statement_dispatch()`: removed `sql_upper` parameter, uses `contains_ci()` / `starts_with_ci()` directly
+- `extract_table_structure()`: removed `sql_upper` parameter, uses `contains_ci()` for AS NODE/AS EDGE
+- `extract_scalar_type_info()`: removed unused `_sql_upper` parameter
+- `extract_index_pad_index()`: replaced `to_uppercase()` + `.find("WITH")` with `find_ci()`; made `PAD_INDEX_RE` case-insensitive
+- `extract_system_versioning_options()`: replaced `to_uppercase()` with `contains_ci()`
+- `parse_table_body()`: replaced `to_uppercase()` + `starts_with()` with `starts_with_ci()` / `contains_ci()`
+- `extract_index_is_padded()` (index_parser.rs): replaced `to_uppercase()` with `find_ci()`; made regex `(?i)`
+- `detect_function_type_tokens()` (function_parser.rs): replaced `to_uppercase()` with `contains_ci()`
+- Consolidated duplicate `contains_ci` from `builder.rs` and `view_writer.rs` → single `src/util.rs` module
 
-**Files:** `src/parser/tsql_parser.rs`
-**Estimated savings:** 5-15ms on large projects
+**Files:** `src/util.rs` (new), `src/lib.rs`, `src/parser/tsql_parser.rs`, `src/parser/index_parser.rs`, `src/parser/function_parser.rs`, `src/model/builder.rs`, `src/dacpac/model_xml/view_writer.rs`
+**Savings:** Eliminates 6+ `to_uppercase()` heap allocations per fallback-parsed statement (estimated 5-15ms on large projects)
 
 ---
 

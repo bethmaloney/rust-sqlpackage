@@ -9,6 +9,7 @@ pub mod error;
 pub mod model;
 pub mod parser;
 pub mod project;
+pub mod util;
 
 use std::path::PathBuf;
 
