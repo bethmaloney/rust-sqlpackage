@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-68 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
+**Phases 1-69 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-68)
+## Completed Phases (1-69)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -74,6 +74,7 @@
 | 66 | Index-based HashMap keys in disambiguator (eliminate String clones) | All |
 | 67 | Pre-compute element full_name and xml_name_attr (cached in DatabaseModel) | All |
 | 68 | Reduce to_uppercase() calls (case-insensitive helpers, zero-alloc) | All |
+| 69 | Arc\<str\> for SQL definition text (eliminate deep String copies) | All |
 
 ### Key Milestones
 
@@ -84,7 +85,7 @@
 
 ---
 
-## Performance Tuning (Phases 63-70, 68 complete)
+## Performance Tuning (Phases 63-70, 69 complete)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms total
 
@@ -181,16 +182,20 @@ Introduced zero-allocation case-insensitive helpers (`contains_ci`, `starts_with
 
 ---
 
-### Phase 69 — Arc\<str\> for SQL definition text (~2-3ms)
+### Phase 69 — Arc\<str\> for SQL definition text — COMPLETE
 
-Every model element clones the full SQL definition text (builder.rs:188,212,338,...). For 135 statements, this is 135 deep String copies. Procedures/functions can be kilobytes each.
+Changed `ParsedStatement.sql_text` from `String` to `Arc<str>` and all element struct `definition` fields from `String` to `Arc<str>`. The SQL text is now allocated once at parse time (`Arc::from(trimmed)`) and shared via cheap `Arc::clone()` into all downstream element structs, eliminating deep String copies of the full SQL definition text.
 
-| Task | Description |
-|------|-------------|
-| 69.1 | Change `definition: String` fields in element structs to `definition: Arc<str>` |
-| 69.2 | Convert `ParsedStatement.sql_text` to `Arc<str>` at parse time so all downstream consumers share the allocation |
-| 69.3 | Update all `definition` consumers (model builders, XML writers) to work with `Arc<str>` |
-| 69.4 | Run full test suite, confirm no regressions |
+**Key design decisions:**
+- `Arc<str>` (not `Arc<String>`) avoids the double indirection of `Arc<String>` and allows direct deref to `&str`
+- Constraint `definition: Option<String>` left unchanged — these are small generated expressions (`expr.to_string()`, extracted defaults), not shared from `ParsedStatement.sql_text`
+- All extraction functions (XML writers, view_query, procedure_body, etc.) accept `&str` and work unchanged via `Deref<Target=str>` on `Arc<str>`
+- The `Arc` is created once per SQL batch in `parse_sql_file()`, before the `for stmt in parsed` loop, so multiple statements from the same batch share the same allocation
+- Test code using `.contains()` on `sql_text` works unchanged via deref
+
+**Files changed:** `tsql_parser.rs` (struct + 3 factory methods + parse_sql_file call site), `elements.rs` (7 element structs), `column_registry.rs` (1 test helper), `other_writers.rs` (1 test helper).
+
+**All 1,894 tests pass.** No parity regressions.
 
 ---
 

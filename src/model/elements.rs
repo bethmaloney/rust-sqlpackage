@@ -1,5 +1,7 @@
 //! Database model element types
 
+use std::sync::Arc;
+
 /// A database model element
 #[derive(Debug, Clone)]
 pub enum ModelElement {
@@ -258,7 +260,7 @@ pub struct ColumnElement {
 pub struct ViewElement {
     pub schema: String,
     pub name: String,
-    pub definition: String,
+    pub definition: Arc<str>,
     /// Whether the view has WITH SCHEMABINDING option
     pub is_schema_bound: bool,
     /// Whether the view has WITH CHECK OPTION
@@ -272,7 +274,7 @@ pub struct ViewElement {
 pub struct ProcedureElement {
     pub schema: String,
     pub name: String,
-    pub definition: String,
+    pub definition: Arc<str>,
     pub parameters: Vec<ParameterElement>,
     /// Whether this procedure is natively compiled (WITH NATIVE_COMPILATION)
     pub is_natively_compiled: bool,
@@ -372,7 +374,7 @@ impl DataCompressionType {
 pub struct FunctionElement {
     pub schema: String,
     pub name: String,
-    pub definition: String,
+    pub definition: Arc<str>,
     pub function_type: FunctionType,
     pub parameters: Vec<ParameterElement>,
     pub return_type: Option<String>,
@@ -552,7 +554,7 @@ pub struct ConstraintElement {
 pub struct SequenceElement {
     pub schema: String,
     pub name: String,
-    pub definition: String,
+    pub definition: Arc<str>,
     /// Data type (e.g., "INT", "BIGINT")
     pub data_type: Option<String>,
     /// START WITH value
@@ -578,7 +580,7 @@ pub struct SequenceElement {
 pub struct UserDefinedTypeElement {
     pub schema: String,
     pub name: String,
-    pub definition: String,
+    pub definition: Arc<str>,
     /// Columns for table types (if parsed)
     pub columns: Vec<TableTypeColumnElement>,
     /// Constraints for table types (PRIMARY KEY, UNIQUE, CHECK, INDEX)
@@ -645,7 +647,7 @@ pub struct TriggerElement {
     pub schema: String,
     pub name: String,
     /// The raw SQL definition including CREATE TRIGGER
-    pub definition: String,
+    pub definition: Arc<str>,
     /// Schema of the parent table/view
     pub parent_schema: String,
     /// Name of the parent table/view
@@ -666,7 +668,7 @@ pub struct RawElement {
     pub schema: String,
     pub name: String,
     pub sql_type: String,
-    pub definition: String,
+    pub definition: Arc<str>,
 }
 
 /// Extended property element (from sp_addextendedproperty)

@@ -421,7 +421,7 @@ mod tests {
         ViewElement {
             schema: schema.to_string(),
             name: name.to_string(),
-            definition: definition.to_string(),
+            definition: definition.into(),
             is_schema_bound: false,
             is_with_check_option: false,
             is_metadata_reported: false,

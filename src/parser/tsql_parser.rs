@@ -1,7 +1,7 @@
 //! T-SQL parser using sqlparser-rs
 
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::Result;
 use rayon::prelude::*;
@@ -250,8 +250,8 @@ pub struct ParsedStatement {
     pub statement: Option<Statement>,
     /// Source file path
     pub source_file: PathBuf,
-    /// Original SQL text
-    pub sql_text: String,
+    /// Original SQL text (Arc-shared to avoid deep copies into element definitions)
+    pub sql_text: Arc<str>,
     /// Fallback-parsed statement type (for procedures/functions that sqlparser can't handle)
     pub fallback_type: Option<FallbackStatementType>,
     /// Default constraints extracted during preprocessing (T-SQL DEFAULT FOR syntax)
@@ -512,7 +512,7 @@ pub enum FallbackFunctionType {
 
 impl ParsedStatement {
     /// Create a new ParsedStatement from a sqlparser Statement
-    pub fn from_statement(statement: Statement, source_file: PathBuf, sql_text: String) -> Self {
+    pub fn from_statement(statement: Statement, source_file: PathBuf, sql_text: Arc<str>) -> Self {
         Self {
             statement: Some(statement),
             source_file,
@@ -526,7 +526,7 @@ impl ParsedStatement {
     pub fn from_statement_with_defaults(
         statement: Statement,
         source_file: PathBuf,
-        sql_text: String,
+        sql_text: Arc<str>,
         extracted_defaults: Vec<ExtractedDefaultConstraint>,
     ) -> Self {
         Self {
@@ -542,7 +542,7 @@ impl ParsedStatement {
     pub fn from_fallback(
         fallback_type: FallbackStatementType,
         source_file: PathBuf,
-        sql_text: String,
+        sql_text: Arc<str>,
     ) -> Self {
         Self {
             statement: None,
@@ -609,6 +609,9 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
         // Preprocess T-SQL to handle syntax that sqlparser doesn't support
         let preprocessed = preprocess_tsql(trimmed);
 
+        // Allocate the SQL text once as Arc<str> — shared across all statements from this batch
+        let sql_arc: Arc<str> = Arc::from(trimmed);
+
         match Parser::parse_sql(&dialect, &preprocessed.sql) {
             Ok(parsed) => {
                 for stmt in parsed {
@@ -618,13 +621,13 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
                         statements.push(ParsedStatement::from_statement(
                             stmt,
                             path.to_path_buf(),
-                            trimmed.to_string(),
+                            Arc::clone(&sql_arc),
                         ));
                     } else {
                         statements.push(ParsedStatement::from_statement_with_defaults(
                             stmt,
                             path.to_path_buf(),
-                            trimmed.to_string(),
+                            Arc::clone(&sql_arc),
                             preprocessed.extracted_defaults.clone(),
                         ));
                     }
@@ -637,7 +640,7 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
                     statements.push(ParsedStatement::from_fallback(
                         fallback,
                         path.to_path_buf(),
-                        trimmed.to_string(),
+                        sql_arc,
                     ));
                 } else {
                     // Calculate absolute line number from batch offset and error line

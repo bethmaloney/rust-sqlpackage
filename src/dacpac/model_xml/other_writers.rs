@@ -976,7 +976,7 @@ mod tests {
         let seq = SequenceElement {
             schema: "dbo".to_string(),
             name: "TestSeq".to_string(),
-            definition: "".to_string(),
+            definition: "".into(),
             data_type: Some("BIGINT".to_string()),
             start_value: Some(1),
             increment_value: Some(1),
