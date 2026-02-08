@@ -720,21 +720,12 @@ pub(crate) fn extract_bracketed_identifiers_tokenized(sql: &str) -> Vec<Brackete
 // Token-based extraction of table references from SQL body text.
 // Replaces BRACKETED_TABLE_RE and UNBRACKETED_TABLE_RE regex patterns.
 
-/// Extract all two-part table references from SQL body text using tokenization.
+/// Extract all two-part table references from SQL body text using tokenization (test helper).
 ///
-/// This function scans the body and extracts references in both formats:
-/// - Bracketed: `[schema].[table]`
-/// - Unbracketed: `schema.table`
-///
-/// It filters out:
-/// - Parameter references (starting with @)
-/// - SQL keywords as schema names (FROM.something)
-/// - Table alias references (alias.column)
-///
-/// Returns a deduplicated list of table references in `[schema].[table]` format.
-///
-/// This replaces the BRACKETED_TABLE_RE and UNBRACKETED_TABLE_RE regex patterns
-/// for more robust parsing that handles whitespace, comments, and edge cases correctly.
+/// **Note:** This function re-tokenizes the SQL which is inefficient for production use.
+/// Production code should use `extract_table_refs_from_tokens()` with pre-tokenized input.
+/// This wrapper is provided for test convenience only.
+#[cfg(test)]
 pub(crate) fn extract_table_refs_tokenized(
     body: &str,
     table_aliases: &HashMap<String, String>,
@@ -1396,20 +1387,12 @@ pub(crate) fn extract_body_dependencies(
     deps
 }
 
-/// Extract table aliases from FROM/JOIN clauses for body dependency resolution.
-/// Populates two maps:
-/// - table_aliases: maps alias (lowercase) -> full table reference (e.g., "a" -> "[dbo].[Account]")
-/// - subquery_aliases: set of aliases that refer to subqueries/derived tables (should be skipped)
+/// Extract table aliases from FROM/JOIN clauses (test helper).
 ///
-/// Handles:
-/// - FROM [schema].[table] alias
-/// - FROM [schema].[table] AS alias
-/// - JOIN [schema].[table] alias ON ...
-/// - LEFT JOIN (...) AS SubqueryAlias ON ...
-/// - CROSS APPLY (...) AS ApplyAlias
-/// - FROM @TableVariable alias (Phase 52: procedure-scoped table variable references)
-///
-/// This implementation uses sqlparser-rs tokenizer instead of regex for more robust parsing.
+/// **Note:** This function re-tokenizes the SQL which is inefficient for production use.
+/// Production code should use `extract_table_aliases_for_body_deps_from_tokens()`.
+/// This wrapper is provided for test convenience only.
+#[cfg(test)]
 pub(crate) fn extract_table_aliases_for_body_deps(
     body: &str,
     full_name: &str,
@@ -1434,9 +1417,12 @@ fn extract_table_aliases_for_body_deps_from_tokens(
     parser.extract_all_aliases(table_aliases, subquery_aliases);
 }
 
-/// Phase 43: Extract ALL subquery scopes (APPLY + derived tables) with their aliases.
-/// This is the primary scope extraction function for body dependency analysis.
-/// Each scope contains byte range, tables, and aliases defined within.
+/// Extract all subquery scopes from SQL body (test helper).
+///
+/// **Note:** This function re-tokenizes the SQL which is inefficient for production use.
+/// Production code should use `extract_all_subquery_scopes_from_tokens()`.
+/// This wrapper is provided for test convenience only.
+#[cfg(test)]
 pub(crate) fn extract_all_subquery_scopes(body: &str) -> Vec<ApplySubqueryScope> {
     let mut parser = match TableAliasTokenParser::new(body) {
         Some(p) => p,
@@ -2726,19 +2712,12 @@ fn extract_column_aliases_for_body_deps_from_tokens(
     }
 }
 
-/// Extract column aliases from SQL text using tokenization.
+/// Extract column aliases from SQL text using tokenization (test helper).
 ///
-/// This function scans SQL and extracts identifiers that follow the AS keyword.
-/// Pattern: `expr AS alias` or `expr AS [alias]`
-///
-/// Used in `extract_column_aliases_for_body_deps()` to find output column names
-/// that should not be treated as column references.
-///
-/// # Arguments
-/// * `sql` - SQL text to scan (e.g., SELECT clause with aliases)
-///
-/// # Returns
-/// A vector of alias names (without brackets, lowercase) in order of appearance.
+/// **Note:** This function re-tokenizes the SQL which is inefficient for production use.
+/// Production code should use `extract_column_aliases_from_tokens()` with pre-tokenized input.
+/// This wrapper is provided for test convenience only.
+#[cfg(test)]
 pub(crate) fn extract_column_aliases_tokenized(sql: &str) -> Vec<String> {
     let Some(tokens) = tokenize_sql(sql) else {
         return Vec::new();
@@ -4319,7 +4298,7 @@ fn extract_table_variable_definitions_from_tokens(
             }
 
             // Look for @name pattern (variable name starting with @)
-            let var_name = extract_table_variable_name(&tokens, &mut pos);
+            let var_name = extract_table_variable_name(tokens, &mut pos);
             if let Some(name) = var_name {
                 // Skip whitespace
                 while pos < tokens.len() && matches!(tokens[pos].token, Token::Whitespace(_)) {
@@ -4978,6 +4957,34 @@ mod tests {
     }
 
     // ============================================================================
+    // extract_column_aliases_tokenized tests
+    // ============================================================================
+
+    #[test]
+    fn test_extract_column_alias_simple() {
+        let aliases = extract_column_aliases_tokenized("SELECT col AS alias");
+        assert_eq!(aliases, vec!["alias"]);
+    }
+
+    #[test]
+    fn test_extract_column_alias_with_whitespace() {
+        let aliases = extract_column_aliases_tokenized("SELECT col   AS   alias");
+        assert_eq!(aliases, vec!["alias"]);
+    }
+
+    #[test]
+    fn test_extract_column_alias_multiple() {
+        let aliases = extract_column_aliases_tokenized("SELECT a AS x, b AS y");
+        assert_eq!(aliases, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn test_extract_column_alias_filters_keywords() {
+        let aliases = extract_column_aliases_tokenized("SELECT a AS FROM, b AS alias");
+        assert_eq!(aliases, vec!["alias"]);
+    }
+
+    // ============================================================================
     // extract_declare_types_tokenized tests
     // ============================================================================
 
@@ -5043,34 +5050,6 @@ mod tests {
     fn test_preserve_string_literal() {
         let result = strip_sql_comments_for_body_deps("SELECT 'text -- not a comment'");
         assert_eq!(result, "SELECT 'text -- not a comment'");
-    }
-
-    // ============================================================================
-    // extract_column_aliases_tokenized tests
-    // ============================================================================
-
-    #[test]
-    fn test_extract_column_alias_simple() {
-        let aliases = extract_column_aliases_tokenized("SELECT col AS alias");
-        assert_eq!(aliases, vec!["alias"]);
-    }
-
-    #[test]
-    fn test_extract_column_alias_with_whitespace() {
-        let aliases = extract_column_aliases_tokenized("SELECT col   AS   alias");
-        assert_eq!(aliases, vec!["alias"]);
-    }
-
-    #[test]
-    fn test_extract_column_alias_multiple() {
-        let aliases = extract_column_aliases_tokenized("SELECT a AS x, b AS y");
-        assert_eq!(aliases, vec!["x", "y"]);
-    }
-
-    #[test]
-    fn test_extract_column_alias_filters_keywords() {
-        let aliases = extract_column_aliases_tokenized("SELECT a AS FROM, b AS alias");
-        assert_eq!(aliases, vec!["alias"]);
     }
 
     // ============================================================================
@@ -5445,39 +5424,6 @@ mod tests {
         assert_eq!(table_vars[0].columns[1].name, "Name");
     }
 
-    #[test]
-    fn test_extract_table_variable_with_primary_key_inline() {
-        let sql = r#"
-            DECLARE @Items TABLE (
-                Id INT NOT NULL PRIMARY KEY,
-                Name VARCHAR(50)
-            )
-        "#;
-        let table_vars = extract_table_variable_definitions(sql);
-        assert_eq!(table_vars.len(), 1);
-        assert_eq!(table_vars[0].columns.len(), 2);
-        // First column should still be extracted even with inline PRIMARY KEY
-        assert_eq!(table_vars[0].columns[0].name, "Id");
-        assert!(!table_vars[0].columns[0].is_nullable);
-    }
-
-    #[test]
-    fn test_extract_table_variable_mixed_with_regular_declare() {
-        // Ensure we don't confuse regular DECLARE statements with table variables
-        let sql = r#"
-            DECLARE @MyInt INT
-            DECLARE @MyTable TABLE (
-                Id INT,
-                Value VARCHAR(50)
-            )
-            DECLARE @MyString NVARCHAR(100)
-        "#;
-        let table_vars = extract_table_variable_definitions(sql);
-        assert_eq!(table_vars.len(), 1);
-        assert_eq!(table_vars[0].name, "@MyTable");
-        assert_eq!(table_vars[0].columns.len(), 2);
-    }
-
     // ============================================================================
     // Phase 34: APPLY subquery scope tests
     // ============================================================================
@@ -5524,6 +5470,39 @@ mod tests {
             scopes[0].tables.contains(&"[dbo].[Tag]".to_string()),
             "APPLY scope should contain Tag"
         );
+    }
+
+    #[test]
+    fn test_extract_table_variable_with_primary_key_inline() {
+        let sql = r#"
+            DECLARE @Items TABLE (
+                Id INT NOT NULL PRIMARY KEY,
+                Name VARCHAR(50)
+            )
+        "#;
+        let table_vars = extract_table_variable_definitions(sql);
+        assert_eq!(table_vars.len(), 1);
+        assert_eq!(table_vars[0].columns.len(), 2);
+        // First column should still be extracted even with inline PRIMARY KEY
+        assert_eq!(table_vars[0].columns[0].name, "Id");
+        assert!(!table_vars[0].columns[0].is_nullable);
+    }
+
+    #[test]
+    fn test_extract_table_variable_mixed_with_regular_declare() {
+        // Ensure we don't confuse regular DECLARE statements with table variables
+        let sql = r#"
+            DECLARE @MyInt INT
+            DECLARE @MyTable TABLE (
+                Id INT,
+                Value VARCHAR(50)
+            )
+            DECLARE @MyString NVARCHAR(100)
+        "#;
+        let table_vars = extract_table_variable_definitions(sql);
+        assert_eq!(table_vars.len(), 1);
+        assert_eq!(table_vars[0].name, "@MyTable");
+        assert_eq!(table_vars[0].columns.len(), 2);
     }
 
     #[test]
