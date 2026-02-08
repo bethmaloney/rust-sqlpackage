@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-66 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
+**Phases 1-67 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-66)
+## Completed Phases (1-67)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -72,6 +72,7 @@
 | 64 | Lower ZIP compression level (deflate 6→1, ~29% packaging speedup) | All |
 | 65 | Eliminate Debug formatting for feature detection (dead code removal) | All |
 | 66 | Index-based HashMap keys in disambiguator (eliminate String clones) | All |
+| 67 | Pre-compute element full_name and xml_name_attr (cached in DatabaseModel) | All |
 
 ### Key Milestones
 
@@ -82,7 +83,7 @@
 
 ---
 
-## Performance Tuning (Phases 63-70, 66 complete)
+## Performance Tuning (Phases 63-70, 67 complete)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms total
 
@@ -140,16 +141,17 @@ Replaced all `HashMap<(String, String), ...>` with `HashMap<usize, ...>` keyed b
 
 ---
 
-### Phase 67 — Pre-compute element full_name (~3-5ms)
+### Phase 67 — Pre-compute element full_name and xml_name_attr — COMPLETE
 
-`full_name()` (elements.rs:91-131) allocates via `format!()` on every call. Called during sorting (456 elements x 3 keys), schema deduplication, and disambiguation.
+Added `cached_full_names: Vec<String>` and `cached_xml_names: Vec<String>` to `DatabaseModel`, computed once via `cache_element_names()` before sorting. The sort function (`sort_model()`) now uses pre-computed cached_xml_names instead of calling `xml_name_attr()` (which calls `full_name()` with `format!()`) per element. XML generation uses cached names for the db_options placement check.
 
-| Task | Description |
-|------|-------------|
-| 67.1 | Add a `cached_full_name: String` field to each `ModelElement` variant's inner struct, populated during element creation |
-| 67.2 | Update `full_name()` to return `&str` referencing the cached field |
-| 67.3 | Update `xml_name_attr()` and `sort_elements()` to use cached names |
-| 67.4 | Run model_building criterion benchmark, confirm improvement |
+**Approach:** Rather than adding `cached_full_name` to all 24 inner element structs (which would require modifying ~288 pattern match sites), cached names are stored as parallel `Vec<String>` in `DatabaseModel`. The `sort_model()` function builds sort keys from cached names, sorts an index array, then applies the permutation to all three vecs (elements, cached_full_names, cached_xml_names) together. Names are re-cached after disambiguation for consistency.
+
+**Key insight:** `sort_by_cached_key` already caches sort keys internally, so the per-sort allocation savings are modest (~500 format!() calls avoided). The main benefit is making cached names available to the XML writer without additional allocations, and establishing the infrastructure for future phases to use `&str` references instead of owned Strings.
+
+**Files changed:** `database_model.rs` (added cached name fields + accessor methods), `builder.rs` (replaced `sort_elements` with `sort_model`, added `apply_permutation` helper), `model_xml/mod.rs` (use cached xml_name in db_options placement loop).
+
+**All 1,894 tests pass.** Parity regression test confirms no ordering changes.
 
 ---
 

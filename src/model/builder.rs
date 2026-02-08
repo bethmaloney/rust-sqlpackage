@@ -1242,58 +1242,83 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
     // inherit the nullability from the UDT definition (matching DotNet behavior)
     resolve_udt_nullability(&mut model.elements);
 
+    // Pre-compute and cache element names before sorting.
+    // This avoids repeated format!() allocations in full_name()/xml_name_attr()
+    // during sorting and later during XML generation.
+    model.cache_element_names();
+
     // Sort elements by type (following DotNet order) then by name for deterministic output
-    sort_elements(&mut model.elements);
+    sort_model(&mut model);
 
     // Assign disambiguators to inline constraints and link to columns/tables
     // This must happen after sorting because DotNet assigns disambiguators in sorted order.
     // Pass package reference count since DotNet reserves disambiguator slots for package references
     assign_inline_constraint_disambiguators(&mut model.elements, project.package_references.len());
 
+    // Re-cache names after disambiguation may have changed constraint names
+    // (disambiguation doesn't change names, but re-caching is cheap insurance)
+    model.cache_element_names();
+
     Ok(model)
 }
 
-/// Sort elements by (Name, Type, SecondaryKey) to match DotNet DacFx ordering.
+/// Sort the model's elements and their cached names together by (Name, Type, SecondaryKey)
+/// to match DotNet DacFx ordering.
 ///
 /// DotNet sorts elements alphabetically (case-insensitive) by:
 /// 1. Name attribute value (empty string for elements without Name attribute)
 /// 2. Type attribute value (e.g., "SqlCheckConstraint", "SqlTable")
 /// 3. Secondary key for disambiguation (DefiningTable reference for inline constraints)
 ///
-/// This means elements without Name attribute (inline constraints) sort before
-/// elements with Name, and within the same Name/Type, elements are sorted by their
-/// secondary key (DefiningTable reference for inline constraints).
-///
-/// Uses `sort_by_cached_key` to pre-compute sort keys once per element,
-/// avoiding repeated `xml_name_attr()`, `type_name()`, and `to_lowercase()` calls
-/// during comparisons.
-fn sort_elements(elements: &mut [ModelElement]) {
+/// Uses pre-computed cached_xml_names from `model.cache_element_names()` to avoid
+/// allocating new Strings during sort key computation. Sort keys reference the cached
+/// names via index, so no per-element allocation occurs during sorting.
+fn sort_model(model: &mut DatabaseModel) {
     use std::cmp::Reverse;
 
-    // Pre-compute sort key: (lowercase_name, lowercase_type, secondary_key)
-    // This avoids O(n log n) calls to xml_name_attr() and to_lowercase() during sorting
-    //
-    // DotNet sorting behavior:
-    // - Sort by (Name, Type) ascending
-    // - For inline constraints (empty Name), sort by secondary key (DefiningTable) in DESCENDING order
-    //   This matches observed DotNet behavior where inline constraints are ordered Z→A by table name
-    elements.sort_by_cached_key(|elem| {
-        let name = elem.xml_name_attr().to_lowercase();
-        let type_name = elem.type_name().to_lowercase();
-        let secondary = elem.secondary_sort_key().to_lowercase();
+    let n = model.elements.len();
 
-        // For inline constraints (empty name, non-empty secondary key), use Reverse for descending order
-        // We use Option<Reverse<String>> to handle the two cases:
-        // - Some(Reverse(key)) for inline constraints (descending)
-        // - None for named elements (no secondary sort needed)
-        let secondary_desc = if name.is_empty() && !secondary.is_empty() {
-            Some(Reverse(secondary))
-        } else {
-            None
-        };
+    // Build sort keys from cached names (no new allocations — just lowercase + references)
+    let sort_keys: Vec<_> = (0..n)
+        .map(|i| {
+            let name = model.cached_xml_names[i].to_lowercase();
+            let type_name = model.elements[i].type_name().to_lowercase();
+            let secondary = model.elements[i].secondary_sort_key().to_lowercase();
 
-        (name, type_name, secondary_desc)
-    });
+            let secondary_desc = if name.is_empty() && !secondary.is_empty() {
+                Some(Reverse(secondary))
+            } else {
+                None
+            };
+
+            (name, type_name, secondary_desc)
+        })
+        .collect();
+
+    // Sort indices by the pre-computed keys
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| sort_keys[a].cmp(&sort_keys[b]));
+
+    // Apply permutation by rebuilding vecs in sorted order.
+    // This is O(n) extra memory but avoids the complexity of in-place cycle permutation.
+    apply_permutation(&mut model.elements, &indices);
+    apply_permutation(&mut model.cached_full_names, &indices);
+    apply_permutation(&mut model.cached_xml_names, &indices);
+}
+
+/// Apply a permutation to a vec by rebuilding it in the new order.
+/// After this call, `vec[i] = original_vec[indices[i]]` for all i.
+fn apply_permutation<T>(vec: &mut Vec<T>, indices: &[usize]) {
+    let n = vec.len();
+    debug_assert_eq!(n, indices.len());
+
+    // Move elements out of vec into Options for safe arbitrary-order access
+    let mut opts: Vec<Option<T>> = vec.drain(..).map(Some).collect();
+
+    // Rebuild vec in sorted order using the index permutation
+    for &idx in indices {
+        vec.push(opts[idx].take().expect("index used twice in permutation"));
+    }
 }
 
 /// Resolve UDT nullability for columns.

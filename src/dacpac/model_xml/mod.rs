@@ -196,13 +196,13 @@ pub fn generate_model_xml<W: Write>(
     let db_options_sort_key: (&str, &str) = ("", "sqldatabaseoptions");
     let mut db_options_written = false;
 
-    for element in &model.elements {
+    for (idx, element) in model.elements.iter().enumerate() {
         // Check if SqlDatabaseOptions should be written before this element
         if !db_options_written {
-            // Compute sort key only when needed (before db_options is written)
-            let elem_name = element.xml_name_attr().to_lowercase();
+            // Use cached xml_name to avoid format!() allocation per element
+            let elem_name_lower = model.xml_name(idx).to_lowercase();
             let elem_type = element.type_name().to_lowercase();
-            if db_options_sort_key <= (elem_name.as_str(), elem_type.as_str()) {
+            if db_options_sort_key <= (elem_name_lower.as_str(), elem_type.as_str()) {
                 write_database_options(&mut xml_writer, project)?;
                 db_options_written = true;
             }
