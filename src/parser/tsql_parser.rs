@@ -1,6 +1,7 @@
 //! T-SQL parser using sqlparser-rs
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use rayon::prelude::*;
@@ -49,6 +50,31 @@ use crate::error::SqlPackageError;
 /// Sentinel value used to represent MAX in binary types (since sqlparser expects u64)
 pub const BINARY_MAX_SENTINEL: u64 = 2_147_483_647;
 
+// Cached regex patterns (Phase 63) — compiled once, reused on every call
+static ERROR_LINE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Line:\s*(\d+)").unwrap());
+static TYPE_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)CREATE\s+TYPE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))").unwrap()
+});
+static INDEX_FALLBACK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)CREATE\s+(UNIQUE\s+)?(CLUSTERED|NONCLUSTERED)\s+INDEX\s+\[?(\w+)\]?\s*ON\s*(?:\[?(\w+)\]?\.)?\[?(\w+)\]?\s*\(([^)]+)\)").unwrap()
+});
+static PAD_INDEX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"PAD_INDEX\s*=\s*ON\b").unwrap());
+static COLUMN_WITH_DIR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\[?(\w+)\]?(?:\s+(ASC|DESC))?").unwrap());
+static INCLUDE_COLUMNS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)INCLUDE\s*\(([^)]+)\)").unwrap());
+static SIMPLE_COLUMN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\[?(\w+)\]?").unwrap());
+static FILL_FACTOR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)FILLFACTOR\s*=\s*(\d+)").unwrap());
+static DATA_COMPRESSION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)DATA_COMPRESSION\s*=\s*(\w+)").unwrap());
+static SYSTEM_VERSIONING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)SYSTEM_VERSIONING\s*=\s*ON").unwrap());
+static HISTORY_TABLE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)HISTORY_TABLE\s*=\s*\[?(\w+)\]?\.\[?(\w+)\]?").unwrap());
+
 /// A SQL batch with its content and source location
 struct Batch<'a> {
     content: &'a str,
@@ -57,8 +83,7 @@ struct Batch<'a> {
 
 /// Extract line number from sqlparser error message (format: "... at Line: X, Column: Y")
 fn extract_line_from_error(error_msg: &str) -> Option<usize> {
-    let re = Regex::new(r"Line:\s*(\d+)").ok()?;
-    let caps = re.captures(error_msg)?;
+    let caps = ERROR_LINE_RE.captures(error_msg)?;
     caps.get(1)?.as_str().parse().ok()
 }
 
@@ -1434,12 +1459,7 @@ fn extract_type_name(sql: &str) -> Option<(String, String)> {
     // CREATE TYPE [dbo].[TypeName] AS TABLE
     // CREATE TYPE dbo.TypeName AS TABLE
     // Use [^\]]+ for bracketed identifiers to capture special characters like &
-    let re = regex::Regex::new(
-        r"(?i)CREATE\s+TYPE\s+(?:(?:\[([^\]]+)\]|(\w+))\.)?(?:\[([^\]]+)\]|(\w+))",
-    )
-    .ok()?;
-
-    let caps = re.captures(sql)?;
+    let caps = TYPE_NAME_RE.captures(sql)?;
     // Schema can be in group 1 (bracketed) or group 2 (unbracketed)
     let schema = caps
         .get(1)
@@ -1780,11 +1800,7 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     // CREATE NONCLUSTERED INDEX [IX_Name] ON [schema].[Table] ([Col]) INCLUDE ([Col2])
     // CREATE UNIQUE CLUSTERED INDEX IX_Name ON dbo.Table (Col)
     // Also handles malformed SQL with missing whitespace (e.g., "]ON" instead of "] ON")
-    let re = regex::Regex::new(
-        r"(?i)CREATE\s+(UNIQUE\s+)?(CLUSTERED|NONCLUSTERED)\s+INDEX\s+\[?(\w+)\]?\s*ON\s*(?:\[?(\w+)\]?\.)?\[?(\w+)\]?\s*\(([^)]+)\)"
-    ).ok()?;
-
-    let caps = re.captures(sql)?;
+    let caps = INDEX_FALLBACK_RE.captures(sql)?;
 
     let is_unique = caps.get(1).is_some();
     let is_clustered = caps
@@ -1840,9 +1856,7 @@ fn extract_index_pad_index(sql: &str) -> bool {
         let after_with = &sql_upper[with_pos..];
         // Look for PAD_INDEX = ON
         if after_with.contains("PAD_INDEX") {
-            // Check if followed by = ON
-            let re = regex::Regex::new(r"PAD_INDEX\s*=\s*ON\b").unwrap();
-            return re.is_match(&sql_upper[with_pos..]);
+            return PAD_INDEX_RE.is_match(&sql_upper[with_pos..]);
         }
     }
     false
@@ -1855,8 +1869,7 @@ fn parse_column_list(columns_str: &str) -> Vec<ParsedIndexColumn> {
         .map(|col| {
             // Extract column name and sort direction
             let col = col.trim();
-            let re_col = regex::Regex::new(r"(?i)\[?(\w+)\]?(?:\s+(ASC|DESC))?").ok();
-            if let Some(caps) = re_col.and_then(|r| r.captures(col)) {
+            if let Some(caps) = COLUMN_WITH_DIR_RE.captures(col) {
                 let name = caps
                     .get(1)
                     .map(|m| m.as_str().to_string())
@@ -1876,9 +1889,8 @@ fn parse_column_list(columns_str: &str) -> Vec<ParsedIndexColumn> {
 /// Extract columns from INCLUDE clause if present
 fn extract_include_columns(sql: &str) -> Vec<String> {
     // Match INCLUDE ([Col1], [Col2], ...)
-    let re = regex::Regex::new(r"(?i)INCLUDE\s*\(([^)]+)\)").ok();
-
-    re.and_then(|r| r.captures(sql))
+    INCLUDE_COLUMNS_RE
+        .captures(sql)
         .and_then(|caps| caps.get(1))
         .map(|m| parse_simple_column_list(m.as_str()))
         .unwrap_or_default()
@@ -1890,8 +1902,7 @@ fn parse_simple_column_list(columns_str: &str) -> Vec<String> {
         .split(',')
         .filter_map(|col| {
             let col = col.trim();
-            let re_col = regex::Regex::new(r"(?i)\[?(\w+)\]?").ok()?;
-            re_col
+            SIMPLE_COLUMN_RE
                 .captures(col)
                 .and_then(|c| c.get(1))
                 .map(|m| m.as_str().to_string())
@@ -1901,21 +1912,16 @@ fn parse_simple_column_list(columns_str: &str) -> Vec<String> {
 
 /// Extract FILLFACTOR value from index WITH clause
 fn extract_index_fill_factor(sql: &str) -> Option<u8> {
-    // Match FILLFACTOR = <number> in WITH clause
-    let re = regex::Regex::new(r"(?i)FILLFACTOR\s*=\s*(\d+)").ok()?;
-
-    re.captures(sql)
+    FILL_FACTOR_RE
+        .captures(sql)
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse::<u8>().ok())
 }
 
 /// Extract DATA_COMPRESSION value from index WITH clause
 fn extract_index_data_compression(sql: &str) -> Option<String> {
-    // Match DATA_COMPRESSION = <type> in WITH clause
-    // Type can be: NONE, ROW, PAGE, COLUMNSTORE, COLUMNSTORE_ARCHIVE
-    let re = regex::Regex::new(r"(?i)DATA_COMPRESSION\s*=\s*(\w+)").ok()?;
-
-    re.captures(sql)
+    DATA_COMPRESSION_RE
+        .captures(sql)
         .and_then(|caps| caps.get(1))
         .map(|m| m.as_str().to_uppercase())
 }
@@ -1986,16 +1992,13 @@ fn extract_system_versioning_options(after_body: &str) -> (bool, Option<String>,
     }
 
     // Check if it's ON (not OFF)
-    let sv_re = Regex::new(r"(?i)SYSTEM_VERSIONING\s*=\s*ON").ok();
-    let is_on = sv_re.is_some_and(|re| re.is_match(after_body));
-    if !is_on {
+    if !SYSTEM_VERSIONING_RE.is_match(after_body) {
         return (false, None, None);
     }
 
     // Extract HISTORY_TABLE = [schema].[name]
-    let ht_re = Regex::new(r"(?i)HISTORY_TABLE\s*=\s*\[?(\w+)\]?\.\[?(\w+)\]?").ok();
-    let (history_schema, history_name) = ht_re
-        .and_then(|re| re.captures(after_body))
+    let (history_schema, history_name) = HISTORY_TABLE_RE
+        .captures(after_body)
         .map(|caps| {
             (
                 Some(caps.get(1).unwrap().as_str().to_string()),

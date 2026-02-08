@@ -5,12 +5,20 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use encoding_rs::WINDOWS_1252;
 use regex::Regex;
 
 use crate::error::SqlPackageError;
+
+// Cached regex patterns (Phase 63) — compiled once, reused on every call
+static SETVAR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?m)^\s*:setvar\s+(\w+)\s+"?([^"\r\n]+)"?\s*$"#).unwrap());
+static INCLUDE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?m)^\s*:r\s+(?:"([^"]+)"|(\S+))[ \t]*\r?\n?"#).unwrap());
+static VAR_SUBST_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\((\w+)\)").unwrap());
 
 /// Read a file as a string, trying UTF-8 first, then Windows-1252 as fallback
 fn read_file_with_encoding_fallback(path: &Path) -> std::io::Result<String> {
@@ -68,9 +76,7 @@ fn expand_includes_recursive(
 ) -> Result<String> {
     // First, extract any :setvar definitions and build a variable map
     let mut variables = std::collections::HashMap::new();
-    let setvar_re = Regex::new(r#"(?m)^\s*:setvar\s+(\w+)\s+"?([^"\r\n]+)"?\s*$"#)
-        .expect("Invalid setvar regex");
-    for caps in setvar_re.captures_iter(content) {
+    for caps in SETVAR_RE.captures_iter(content) {
         let var_name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
         let var_value = caps
             .get(2)
@@ -79,20 +85,11 @@ fn expand_includes_recursive(
         variables.insert(var_name.to_string(), var_value.to_string());
     }
 
-    // Regex to match :r directives including the trailing newline
-    // Matches: :r path\to\file.sql or :r "path with spaces\file.sql"
-    // The :r must be at the start of a line (possibly with leading whitespace)
-    // We consume the trailing newline so it doesn't create extra blank lines
-    // Use [ \t]* instead of \s* at end to avoid matching newlines (blank lines)
-    let re = Regex::new(r#"(?m)^\s*:r\s+(?:"([^"]+)"|(\S+))[ \t]*\r?\n?"#)
-        .expect("Invalid regex pattern");
-
     let source_dir = source_file.parent().unwrap_or(Path::new("."));
     let mut result = String::new();
     let mut last_end = 0;
-    let var_re = Regex::new(r"\$\((\w+)\)").expect("Invalid var regex");
 
-    for caps in re.captures_iter(content) {
+    for caps in INCLUDE_RE.captures_iter(content) {
         let match_range = caps.get(0).unwrap();
 
         // Add content before this match
@@ -106,7 +103,7 @@ fn expand_includes_recursive(
             .unwrap_or("");
 
         // Substitute SQLCMD variables $(varname)
-        let include_path_str = var_re
+        let include_path_str = VAR_SUBST_RE
             .replace_all(include_path_str, |caps: &regex::Captures| {
                 let var_name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
                 variables

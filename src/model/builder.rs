@@ -6,8 +6,10 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
+use std::sync::LazyLock;
 
 use anyhow::Result;
+use regex::Regex;
 use sqlparser::ast::{
     Action, AlterRoleOperation, BinaryOperator, ColumnDef, ColumnOption, DataType, Expr,
     GrantObjects, ObjectName, Privileges, SchemaName, Statement, TableConstraint,
@@ -37,6 +39,28 @@ use super::{
 
 /// Static schema name for "dbo" - avoids allocation for the most common schema
 const DBO_SCHEMA: &str = "dbo";
+
+// Cached regex patterns (Phase 63) — compiled once, reused on every call
+static TYPE_PARAMS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\((\d+)(?:\s*,\s*(\d+))?\)").unwrap());
+static PERIOD_COLUMNS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)PERIOD\s+FOR\s+SYSTEM_TIME\s*\(\s*\[?(\w+)\]?\s*,\s*\[?(\w+)\]?\s*\)").unwrap()
+});
+static SYSTEM_VERSIONING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)SYSTEM_VERSIONING\s*=\s*ON").unwrap());
+static HISTORY_TABLE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)HISTORY_TABLE\s*=\s*\[?(\w+)\]?\.\[?(\w+)\]?").unwrap());
+static GENERATED_ALWAYS_START_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\[?(\w+)\]?\s+DATETIME2(?:\(\d+\))?\s+GENERATED\s+ALWAYS\s+AS\s+ROW\s+START")
+        .unwrap()
+});
+static GENERATED_ALWAYS_END_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\[?(\w+)\]?\s+DATETIME2(?:\(\d+\))?\s+GENERATED\s+ALWAYS\s+AS\s+ROW\s+END")
+        .unwrap()
+});
+static HIDDEN_COLUMNS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\[?(\w+)\]?\s+DATETIME2(?:\(\d+\))?\s+GENERATED\s+ALWAYS\s+AS\s+ROW\s+(?:START|END)\s+HIDDEN").unwrap()
+});
 
 /// Type alias for constraint tracking: maps (table_schema, table_name) to Vec<(element_index, is_inline, emit_name, source_order)>
 type TableConstraintMap = HashMap<(String, String), Vec<(usize, bool, bool, u32)>>;
@@ -1976,8 +2000,7 @@ fn extract_type_params_from_string(data_type: &str) -> (Option<i32>, Option<u8>,
     let base_type = data_type.to_uppercase();
 
     // Parse parameters from type string like "NVARCHAR(50)" or "DECIMAL(18, 2)"
-    let re = regex::Regex::new(r"\((\d+)(?:\s*,\s*(\d+))?\)").unwrap();
-    if let Some(caps) = re.captures(data_type) {
+    if let Some(caps) = TYPE_PARAMS_RE.captures(data_type) {
         let first: Option<i32> = caps.get(1).and_then(|m| m.as_str().parse().ok());
         let second: Option<u8> = caps.get(2).and_then(|m| m.as_str().parse().ok());
 
@@ -2498,16 +2521,11 @@ fn extract_period_columns(sql: &str, upper: &str) -> (Option<String>, Option<Str
         return (None, None);
     }
 
-    let re = regex::Regex::new(
-        r"(?i)PERIOD\s+FOR\s+SYSTEM_TIME\s*\(\s*\[?(\w+)\]?\s*,\s*\[?(\w+)\]?\s*\)",
-    );
-    if let Ok(re) = re {
-        if let Some(caps) = re.captures(sql) {
-            return (
-                Some(caps.get(1).unwrap().as_str().to_string()),
-                Some(caps.get(2).unwrap().as_str().to_string()),
-            );
-        }
+    if let Some(caps) = PERIOD_COLUMNS_RE.captures(sql) {
+        return (
+            Some(caps.get(1).unwrap().as_str().to_string()),
+            Some(caps.get(2).unwrap().as_str().to_string()),
+        );
     }
     (None, None)
 }
@@ -2518,16 +2536,12 @@ fn extract_versioning_options(sql: &str, upper: &str) -> (bool, Option<String>, 
         return (false, None, None);
     }
 
-    let sv_re = regex::Regex::new(r"(?i)SYSTEM_VERSIONING\s*=\s*ON");
-    let is_on = sv_re.is_ok_and(|re| re.is_match(sql));
-    if !is_on {
+    if !SYSTEM_VERSIONING_RE.is_match(sql) {
         return (false, None, None);
     }
 
-    let ht_re = regex::Regex::new(r"(?i)HISTORY_TABLE\s*=\s*\[?(\w+)\]?\.\[?(\w+)\]?");
-    let (history_schema, history_name) = ht_re
-        .ok()
-        .and_then(|re| re.captures(sql))
+    let (history_schema, history_name) = HISTORY_TABLE_RE
+        .captures(sql)
         .map(|caps| {
             (
                 Some(caps.get(1).unwrap().as_str().to_string()),
@@ -2541,13 +2555,10 @@ fn extract_versioning_options(sql: &str, upper: &str) -> (bool, Option<String>, 
 
 /// Extract column names with GENERATED ALWAYS AS ROW START or END
 fn extract_generated_always_columns(sql: &str, start_or_end: &str) -> Vec<String> {
-    let pattern = format!(
-        r"(?i)\[?(\w+)\]?\s+DATETIME2(?:\(\d+\))?\s+GENERATED\s+ALWAYS\s+AS\s+ROW\s+{}",
-        start_or_end
-    );
-    let re = match regex::Regex::new(&pattern) {
-        Ok(re) => re,
-        Err(_) => return Vec::new(),
+    let re = match start_or_end {
+        "START" => &*GENERATED_ALWAYS_START_RE,
+        "END" => &*GENERATED_ALWAYS_END_RE,
+        _ => return Vec::new(),
     };
     re.captures_iter(sql)
         .filter_map(|caps| caps.get(1).map(|m| m.as_str().to_string()))
@@ -2556,13 +2567,8 @@ fn extract_generated_always_columns(sql: &str, start_or_end: &str) -> Vec<String
 
 /// Extract column names with the HIDDEN attribute
 fn extract_hidden_columns(sql: &str) -> Vec<String> {
-    let re = match regex::Regex::new(
-        r"(?i)\[?(\w+)\]?\s+DATETIME2(?:\(\d+\))?\s+GENERATED\s+ALWAYS\s+AS\s+ROW\s+(?:START|END)\s+HIDDEN",
-    ) {
-        Ok(re) => re,
-        Err(_) => return Vec::new(),
-    };
-    re.captures_iter(sql)
+    HIDDEN_COLUMNS_RE
+        .captures_iter(sql)
         .filter_map(|caps| caps.get(1).map(|m| m.as_str().to_string()))
         .collect()
 }

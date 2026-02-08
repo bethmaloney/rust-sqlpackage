@@ -912,16 +912,15 @@ fn extract_body_dependencies_with_tvp(
 
     // Now scan the body for column references from TVP parameters
     // Pattern: FROM @ParamName or @ParamName.Column or just column names used with TVP
+    let body_upper = body.to_uppercase();
     for (tvp_param_name, columns) in &tvp_columns {
-        // Look for column references in SELECT, WHERE, etc. that match TVP columns
-        // Pattern: column names that appear after FROM @ParamName
-        let param_pattern = format!(r"(?i)FROM\s+{}\b", regex::escape(tvp_param_name));
-        if regex::Regex::new(&param_pattern).unwrap().is_match(body) {
+        // Look for FROM followed by the TVP parameter name (case-insensitive)
+        let search = format!("FROM {}", tvp_param_name.to_uppercase());
+        if contains_word_boundary(&body_upper, &search) {
             // This TVP is used as a table source - add column references
             for col_name in columns {
-                // Check if this column is referenced in the body
-                let col_pattern = format!(r"\b{}\b", regex::escape(col_name));
-                if regex::Regex::new(&col_pattern).unwrap().is_match(body) {
+                // Check if this column is referenced in the body (word-boundary match)
+                if contains_word_boundary(&body_upper, &col_name.to_uppercase()) {
                     let col_ref = format!(
                         "{}.[@{}].[{}]",
                         full_name,
@@ -938,6 +937,32 @@ fn extract_body_dependencies_with_tvp(
     }
 
     deps
+}
+
+/// Check if `haystack` contains `needle` at a word boundary.
+/// Both `haystack` and `needle` should already be in the same case (e.g. uppercase).
+fn contains_word_boundary(haystack: &str, needle: &str) -> bool {
+    let needle_bytes = needle.as_bytes();
+    let haystack_bytes = haystack.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return false;
+    }
+    for i in 0..=(haystack_bytes.len() - needle_bytes.len()) {
+        if &haystack_bytes[i..i + needle_bytes.len()] == needle_bytes {
+            // Check left boundary: start of string or non-alphanumeric/underscore
+            let left_ok = i == 0
+                || !haystack_bytes[i - 1].is_ascii_alphanumeric() && haystack_bytes[i - 1] != b'_';
+            // Check right boundary: end of string or non-alphanumeric/underscore
+            let right_end = i + needle_bytes.len();
+            let right_ok = right_end == haystack_bytes.len()
+                || !haystack_bytes[right_end].is_ascii_alphanumeric()
+                    && haystack_bytes[right_end] != b'_';
+            if left_ok && right_ok {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 // =============================================================================

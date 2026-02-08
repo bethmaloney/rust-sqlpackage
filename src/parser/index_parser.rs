@@ -834,13 +834,15 @@ fn tokens_to_predicate_string(tokens: &[TokenWithSpan]) -> String {
 /// assert!(!extract_index_is_padded(sql));
 /// ```
 pub fn extract_index_is_padded(sql: &str) -> bool {
+    static PAD_INDEX_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"PAD_INDEX\s*=\s*ON\b").unwrap());
+
     let sql_upper = sql.to_uppercase();
     // Look for PAD_INDEX = ON in the SQL
     if let Some(with_pos) = sql_upper.find("WITH") {
         let after_with = &sql_upper[with_pos..];
         // Match PAD_INDEX followed by = and ON (with optional whitespace)
-        let re = regex::Regex::new(r"PAD_INDEX\s*=\s*ON\b").unwrap();
-        return re.is_match(after_with);
+        return PAD_INDEX_RE.is_match(after_with);
     }
     false
 }
