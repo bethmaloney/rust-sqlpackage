@@ -21,6 +21,7 @@
 //! ```
 
 use sqlparser::keywords::Keyword;
+use sqlparser::tokenizer::TokenWithSpan;
 
 use super::token_parser_base::TokenParser;
 
@@ -62,6 +63,13 @@ impl SequenceTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Parse CREATE SEQUENCE and return sequence info
@@ -287,6 +295,22 @@ pub fn parse_create_sequence_tokens(sql: &str) -> Option<TokenParsedSequence> {
 /// - ALTER SEQUENCE [dbo].[SeqName] MINVALUE 1 MAXVALUE 10000 CYCLE
 pub fn parse_alter_sequence_tokens(sql: &str) -> Option<TokenParsedSequence> {
     let mut parser = SequenceTokenParser::new(sql)?;
+    parser.parse_alter_sequence()
+}
+
+/// Parse CREATE SEQUENCE from pre-tokenized tokens (Phase 76)
+pub fn parse_create_sequence_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedSequence> {
+    let mut parser = SequenceTokenParser::from_tokens(tokens);
+    parser.parse_create_sequence()
+}
+
+/// Parse ALTER SEQUENCE from pre-tokenized tokens (Phase 76)
+pub fn parse_alter_sequence_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedSequence> {
+    let mut parser = SequenceTokenParser::from_tokens(tokens);
     parser.parse_alter_sequence()
 }
 

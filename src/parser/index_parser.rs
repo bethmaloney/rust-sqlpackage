@@ -86,6 +86,13 @@ impl IndexTokenParser {
         })
     }
 
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
+    }
+
     /// Parse CREATE INDEX and return index info
     pub fn parse_create_index(&mut self) -> Option<TokenParsedIndex> {
         self.base.skip_whitespace();
@@ -662,6 +669,22 @@ pub struct TokenParsedColumnstoreIndex {
 /// - WHERE clause for filtered NONCLUSTERED columnstore indexes
 pub fn parse_create_columnstore_index_tokens(sql: &str) -> Option<TokenParsedColumnstoreIndex> {
     let mut parser = IndexTokenParser::new(sql)?;
+    parser.parse_create_columnstore_index()
+}
+
+/// Parse CREATE INDEX from pre-tokenized tokens (Phase 76)
+pub fn parse_create_index_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedIndex> {
+    let mut parser = IndexTokenParser::from_tokens(tokens);
+    parser.parse_create_index()
+}
+
+/// Parse CREATE COLUMNSTORE INDEX from pre-tokenized tokens (Phase 76)
+pub fn parse_create_columnstore_index_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedColumnstoreIndex> {
+    let mut parser = IndexTokenParser::from_tokens(tokens);
     parser.parse_create_columnstore_index()
 }
 

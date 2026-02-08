@@ -19,7 +19,7 @@
 //! ```
 
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use super::token_parser_base::TokenParser;
 
@@ -55,6 +55,13 @@ impl TriggerTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Parse CREATE TRIGGER and return trigger info
@@ -189,6 +196,14 @@ impl TriggerTokenParser {
 /// - CREATE OR ALTER TRIGGER [dbo].[TriggerName] ON [dbo].[TableName] AFTER INSERT, UPDATE, DELETE
 pub fn parse_create_trigger_tokens(sql: &str) -> Option<TokenParsedTrigger> {
     let mut parser = TriggerTokenParser::new(sql)?;
+    parser.parse_create_trigger()
+}
+
+/// Parse CREATE TRIGGER from pre-tokenized tokens (Phase 76)
+pub fn parse_create_trigger_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedTrigger> {
+    let mut parser = TriggerTokenParser::from_tokens(tokens);
     parser.parse_create_trigger()
 }
 

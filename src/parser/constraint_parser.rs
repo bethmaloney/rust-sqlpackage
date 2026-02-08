@@ -25,7 +25,7 @@
 //! ```
 
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use super::token_parser_base::TokenParser;
 
@@ -85,6 +85,13 @@ impl ConstraintTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Parse ALTER TABLE ... ADD CONSTRAINT statement
@@ -512,6 +519,36 @@ pub fn parse_alter_table_name_tokens(sql: &str) -> Option<(String, String)> {
     parser.base.skip_whitespace();
 
     // Parse table name (schema-qualified)
+    parser.base.parse_schema_qualified_name()
+}
+
+/// Parse ALTER TABLE ADD CONSTRAINT from pre-tokenized tokens (Phase 76)
+pub fn parse_alter_table_add_constraint_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedAlterTableConstraint> {
+    let mut parser = ConstraintTokenParser::from_tokens(tokens);
+    parser.parse_alter_table_add_constraint()
+}
+
+/// Extract schema and table name from ALTER TABLE using pre-tokenized tokens (Phase 76)
+pub fn parse_alter_table_name_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<(String, String)> {
+    let mut parser = ConstraintTokenParser::from_tokens(tokens);
+    parser.base.skip_whitespace();
+
+    if !parser.base.check_keyword(Keyword::ALTER) {
+        return None;
+    }
+    parser.base.advance();
+    parser.base.skip_whitespace();
+
+    if !parser.base.check_keyword(Keyword::TABLE) {
+        return None;
+    }
+    parser.base.advance();
+    parser.base.skip_whitespace();
+
     parser.base.parse_schema_qualified_name()
 }
 

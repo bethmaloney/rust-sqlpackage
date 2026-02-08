@@ -24,7 +24,7 @@
 //! ```
 
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use super::token_parser_base::TokenParser;
 
@@ -65,6 +65,13 @@ impl ProcedureTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Parse CREATE PROCEDURE and return schema/name (without parameters)
@@ -513,6 +520,24 @@ pub fn parse_create_procedure_tokens(sql: &str) -> Option<(String, String)> {
 /// - ALTER PROC [dbo].[name]
 pub fn parse_alter_procedure_tokens(sql: &str) -> Option<(String, String)> {
     let mut parser = ProcedureTokenParser::new(sql)?;
+    let result = parser.parse_alter_procedure()?;
+    Some((result.schema, result.name))
+}
+
+/// Parse CREATE PROCEDURE from pre-tokenized tokens (Phase 76)
+pub fn parse_create_procedure_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<(String, String)> {
+    let mut parser = ProcedureTokenParser::from_tokens(tokens);
+    let result = parser.parse_create_procedure()?;
+    Some((result.schema, result.name))
+}
+
+/// Parse ALTER PROCEDURE from pre-tokenized tokens (Phase 76)
+pub fn parse_alter_procedure_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<(String, String)> {
+    let mut parser = ProcedureTokenParser::from_tokens(tokens);
     let result = parser.parse_alter_procedure()?;
     Some((result.schema, result.name))
 }

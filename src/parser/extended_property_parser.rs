@@ -21,7 +21,7 @@
 //! - Mixed case parameter names
 
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use super::token_parser_base::TokenParser;
 
@@ -55,6 +55,13 @@ impl ExtendedPropertyTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Parse sp_addextendedproperty call and return property info
@@ -236,6 +243,14 @@ impl ExtendedPropertyTokenParser {
 /// Parse an extended property from SQL using token-based parsing
 pub fn parse_extended_property_tokens(sql: &str) -> Option<TokenParsedExtendedProperty> {
     let mut parser = ExtendedPropertyTokenParser::new(sql)?;
+    parser.parse_extended_property()
+}
+
+/// Parse extended property from pre-tokenized tokens (Phase 76)
+pub fn parse_extended_property_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedExtendedProperty> {
+    let mut parser = ExtendedPropertyTokenParser::from_tokens(tokens);
     parser.parse_extended_property()
 }
 

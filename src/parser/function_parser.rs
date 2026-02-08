@@ -22,7 +22,7 @@
 //! - Multi-statement table-valued functions (RETURNS @var TABLE)
 
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use super::token_parser_base::TokenParser;
 use crate::util::contains_ci;
@@ -74,6 +74,13 @@ impl FunctionTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Parse CREATE FUNCTION and return complete function info
@@ -467,6 +474,54 @@ pub fn detect_function_type_tokens(sql: &str) -> TokenParsedFunctionType {
         } else {
             TokenParsedFunctionType::Scalar
         }
+    }
+}
+
+/// Parse CREATE FUNCTION from pre-tokenized tokens (Phase 76)
+pub fn parse_create_function_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<(String, String)> {
+    let mut parser = FunctionTokenParser::from_tokens(tokens);
+    let result = parser.parse_create_function()?;
+    Some((result.schema, result.name))
+}
+
+/// Parse ALTER FUNCTION from pre-tokenized tokens (Phase 76)
+pub fn parse_alter_function_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<(String, String)> {
+    let mut parser = FunctionTokenParser::from_tokens(tokens);
+    let result = parser.parse_alter_function()?;
+    Some((result.schema, result.name))
+}
+
+/// Parse CREATE FUNCTION full info from pre-tokenized tokens (Phase 76)
+pub fn parse_create_function_full_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedFunction> {
+    let mut parser = FunctionTokenParser::from_tokens(tokens);
+    parser.parse_create_function()
+}
+
+/// Parse ALTER FUNCTION full info from pre-tokenized tokens (Phase 76)
+pub fn parse_alter_function_full_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedFunction> {
+    let mut parser = FunctionTokenParser::from_tokens(tokens);
+    parser.parse_alter_function()
+}
+
+/// Detect function type from pre-tokenized tokens (Phase 76)
+pub fn detect_function_type_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> TokenParsedFunctionType {
+    if let Some(func) = parse_create_function_full_with_tokens(tokens.clone())
+        .or_else(|| parse_alter_function_full_with_tokens(tokens))
+    {
+        func.function_type
+    } else {
+        // Cannot fall back to string matching without original SQL — return Scalar as default
+        TokenParsedFunctionType::Scalar
     }
 }
 

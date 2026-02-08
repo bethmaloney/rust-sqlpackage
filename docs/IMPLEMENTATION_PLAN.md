@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-69, 71-75 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-75 complete, 76-77 pending.**
+**Phases 1-69, 71-76 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-76 complete, 77 pending.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-69, 71-75)
+## Completed Phases (1-69, 71-76)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -70,6 +70,7 @@
 | 73 | Single tokenization for body dependency extraction | All |
 | 74 | Fast-path preprocessing bypass (skip tokenization when no transformations needed) | All |
 | 75 | Zero-alloc fallback parse dispatch (shared `util` module, eliminate `to_uppercase()`) | All |
+| 76 | Single tokenization for fallback parser chain (eliminate 5-20 re-tokenizations per statement) | All |
 
 ### Key Milestones
 
@@ -82,7 +83,7 @@
 
 ## Performance Tuning (Phases 63-77)
 
-### Completed (Phases 63-69, 71-75)
+### Completed (Phases 63-69, 71-76)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms → 30ms (3.4x improvement)
 
@@ -100,8 +101,9 @@
 | 73 | Single tokenization for body dependency extraction | Eliminated 6 redundant tokenizations per procedure/function body |
 | 74 | Fast-path preprocessing bypass | Skip tokenize-and-reconstruct for SQL without trigger patterns |
 | 75 | Zero-alloc fallback parse dispatch | Eliminated `to_uppercase()` in `try_fallback_parse()` and 5 other functions |
+| 76 | Single tokenization for fallback parser chain | Eliminated 5-20 redundant tokenizations per fallback-parsed statement |
 
-### Pending (Phases 76-77)
+### Pending (Phase 77)
 
 **Large project profiling (920 files, 8083 elements, 15MB model.xml):** ~1050ms total
 
@@ -203,18 +205,23 @@ Replaced all `sql.to_uppercase()` allocations with zero-allocation case-insensit
 
 ---
 
-### Phase 76 — Single tokenization for fallback parser chain — PENDING
+### Phase 76 — Single tokenization for fallback parser chain — COMPLETE
 
-Eliminate repeated tokenization in the fallback parser chain. When `try_fallback_parse()` is called, each token-based parser (`parse_create_procedure_tokens`, `parse_create_function_tokens`, `parse_create_index_tokens`, etc.) creates a new `TokenParser` which re-tokenizes the SQL from scratch. A single statement can be tokenized 5-10 times as each parser tries and fails.
+Eliminated repeated tokenization in the fallback parser chain. When `try_fallback_parse()` is called, the SQL is now tokenized once at the top and the shared token vec is cloned for each parser attempt. Previously each token-based parser (`parse_create_procedure_tokens`, `parse_create_function_tokens`, etc.) created a new `TokenParser` which re-tokenized the SQL from scratch — a single statement could be tokenized 5-20 times as each parser tried and failed.
 
-**Tasks:**
-1. Tokenize once at the top of `try_fallback_parse()`
-2. Create a `TokenParser::from_tokens()` constructor that accepts pre-tokenized tokens
-3. Pass the shared token list to each fallback parser attempt
-4. Verify all tests pass — fallback parsing results must be identical
+**Changes:**
+- Added `from_tokens(tokens: Vec<TokenWithSpan>)` constructor to all 12 wrapper parser structs
+- Created `_with_tokens` variants of 33 public parse functions across 13 parser files
+- `try_fallback_parse()` now tokenizes once via `Tokenizer::new(&dialect, sql).tokenize_with_location()` and passes cloned tokens to all downstream parsers
+- Added `try_security_statement_dispatch_with_tokens()` with same single-tokenization pattern
+- Added `_with_tokens` helper functions for index, trigger, extended property, and constraint extraction
+- Removed ~500 lines of dead wrapper functions from `tsql_parser.rs`
+- Original `parse_*_tokens(sql: &str)` functions preserved for test API compatibility
+- Note: `TokenParser::from_tokens()` already existed but was unused — now wired into all parsers
+- Note: `is_scalar_type_definition()`, `extract_scalar_type_info()`, and `extract_table_structure()` still tokenize independently (they operate on different SQL substrings, not the full statement)
 
-**Files:** `src/parser/tsql_parser.rs`, `src/parser/token_parser_base.rs`
-**Estimated savings:** 20-40ms on large projects
+**Files:** `src/parser/tsql_parser.rs`, `src/parser/procedure_parser.rs`, `src/parser/function_parser.rs`, `src/parser/index_parser.rs`, `src/parser/fulltext_parser.rs`, `src/parser/sequence_parser.rs`, `src/parser/table_type_parser.rs`, `src/parser/extended_property_parser.rs`, `src/parser/trigger_parser.rs`, `src/parser/security_parser.rs`, `src/parser/synonym_parser.rs`, `src/parser/statement_parser.rs`, `src/parser/constraint_parser.rs`, `src/parser/storage_parser.rs`
+**Savings:** Eliminates 5-20 tokenizations per fallback-parsed statement (estimated 20-40ms on large projects)
 
 ---
 

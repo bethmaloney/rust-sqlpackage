@@ -22,7 +22,7 @@ use crate::parser::tsql_parser::{
     ExtractedConstraintColumn, ExtractedTableTypeColumn, ExtractedTableTypeConstraint,
 };
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use super::token_parser_base::TokenParser;
 
@@ -50,6 +50,13 @@ impl TableTypeTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Parse CREATE TYPE AS TABLE and return table type info
@@ -478,6 +485,14 @@ impl TableTypeTokenParser {
 /// - CREATE TYPE TypeName AS TABLE (...)
 pub fn parse_create_table_type_tokens(sql: &str) -> Option<TokenParsedTableType> {
     let mut parser = TableTypeTokenParser::new(sql)?;
+    parser.parse_create_table_type()
+}
+
+/// Parse CREATE TYPE AS TABLE from pre-tokenized tokens (Phase 76)
+pub fn parse_create_table_type_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedTableType> {
+    let mut parser = TableTypeTokenParser::from_tokens(tokens);
     parser.parse_create_table_type()
 }
 

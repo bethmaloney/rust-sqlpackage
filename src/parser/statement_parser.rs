@@ -34,7 +34,7 @@
 //! ```
 
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use super::token_parser_base::TokenParser;
 
@@ -136,6 +136,13 @@ impl StatementTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Try to parse a CTE followed by DML (DELETE, UPDATE, INSERT, MERGE)
@@ -552,6 +559,52 @@ pub fn try_parse_generic_create_tokens(sql: &str) -> Option<TokenParsedGenericCr
 /// Used when sqlparser-rs fails on ALTER VIEW WITH SCHEMABINDING.
 pub fn try_parse_alter_view_tokens(sql: &str) -> Option<TokenParsedGenericCreate> {
     let mut parser = StatementTokenParser::new(sql)?;
+    parser.try_parse_alter_view()
+}
+
+/// Parse CTE DML from pre-tokenized tokens (Phase 76)
+pub fn try_parse_cte_dml_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedCteDml> {
+    let mut parser = StatementTokenParser::from_tokens(tokens);
+    parser.try_parse_cte_dml()
+}
+
+/// Parse MERGE OUTPUT from pre-tokenized tokens (Phase 76)
+pub fn try_parse_merge_output_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedMergeOutput> {
+    let mut parser = StatementTokenParser::from_tokens(tokens);
+    parser.try_parse_merge_output()
+}
+
+/// Parse XML update from pre-tokenized tokens (Phase 76)
+pub fn try_parse_xml_update_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedXmlUpdate> {
+    let mut parser = StatementTokenParser::from_tokens(tokens);
+    parser.try_parse_xml_update()
+}
+
+/// Parse DROP statement from pre-tokenized tokens (Phase 76)
+pub fn try_parse_drop_tokens_with_tokens(tokens: Vec<TokenWithSpan>) -> Option<TokenParsedDrop> {
+    let mut parser = StatementTokenParser::from_tokens(tokens);
+    parser.try_parse_drop()
+}
+
+/// Parse generic CREATE from pre-tokenized tokens (Phase 76)
+pub fn try_parse_generic_create_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedGenericCreate> {
+    let mut parser = StatementTokenParser::from_tokens(tokens);
+    parser.try_parse_generic_create()
+}
+
+/// Parse ALTER VIEW from pre-tokenized tokens (Phase 76)
+pub fn try_parse_alter_view_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedGenericCreate> {
+    let mut parser = StatementTokenParser::from_tokens(tokens);
     parser.try_parse_alter_view()
 }
 

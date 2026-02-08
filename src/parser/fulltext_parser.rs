@@ -14,7 +14,7 @@
 //! ```
 
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use super::token_parser_base::TokenParser;
 
@@ -64,6 +64,13 @@ impl FullTextTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Parse CREATE FULLTEXT INDEX and return index info
@@ -335,6 +342,22 @@ pub fn parse_fulltext_index_tokens(sql: &str) -> Option<TokenParsedFullTextIndex
 /// This function replaces the regex-based `extract_fulltext_catalog_info` function.
 pub fn parse_fulltext_catalog_tokens(sql: &str) -> Option<TokenParsedFullTextCatalog> {
     let mut parser = FullTextTokenParser::new(sql)?;
+    parser.parse_fulltext_catalog()
+}
+
+/// Parse CREATE FULLTEXT INDEX from pre-tokenized tokens (Phase 76)
+pub fn parse_fulltext_index_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedFullTextIndex> {
+    let mut parser = FullTextTokenParser::from_tokens(tokens);
+    parser.parse_fulltext_index()
+}
+
+/// Parse CREATE FULLTEXT CATALOG from pre-tokenized tokens (Phase 76)
+pub fn parse_fulltext_catalog_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedFullTextCatalog> {
+    let mut parser = FullTextTokenParser::from_tokens(tokens);
     parser.parse_fulltext_catalog()
 }
 

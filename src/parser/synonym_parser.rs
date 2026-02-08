@@ -12,7 +12,7 @@
 //! ```
 
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use super::token_parser_base::TokenParser;
 
@@ -44,6 +44,13 @@ impl SynonymTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Parse CREATE SYNONYM and return synonym info
@@ -146,6 +153,14 @@ impl SynonymTokenParser {
 /// Parse CREATE SYNONYM using tokens and return synonym info
 pub fn parse_create_synonym_tokens(sql: &str) -> Option<TokenParsedSynonym> {
     let mut parser = SynonymTokenParser::new(sql)?;
+    parser.parse_create_synonym()
+}
+
+/// Parse CREATE SYNONYM from pre-tokenized tokens (Phase 76)
+pub fn parse_create_synonym_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedSynonym> {
+    let mut parser = SynonymTokenParser::from_tokens(tokens);
     parser.parse_create_synonym()
 }
 

@@ -2,7 +2,7 @@
 //! ALTER ROLE ADD/DROP MEMBER, GRANT/DENY/REVOKE).
 
 use sqlparser::keywords::Keyword;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, TokenWithSpan};
 
 use super::token_parser_base::TokenParser;
 
@@ -84,6 +84,13 @@ impl SecurityTokenParser {
         Some(Self {
             base: TokenParser::new(sql)?,
         })
+    }
+
+    /// Create a new parser from pre-tokenized tokens (Phase 76)
+    pub fn from_tokens(tokens: Vec<TokenWithSpan>) -> Self {
+        Self {
+            base: TokenParser::from_tokens(tokens),
+        }
     }
 
     /// Parse CREATE USER [name] with various options
@@ -553,6 +560,78 @@ pub fn parse_alter_role_membership_tokens(sql: &str) -> Option<TokenParsedRoleMe
 pub fn parse_permission_tokens(sql: &str) -> Option<TokenParsedPermission> {
     let mut parser = SecurityTokenParser::new(sql)?;
     parser.parse_permission()
+}
+
+/// Parse GRANT/DENY/REVOKE from pre-tokenized tokens (Phase 76)
+pub fn parse_permission_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedPermission> {
+    let mut parser = SecurityTokenParser::from_tokens(tokens);
+    parser.parse_permission()
+}
+
+/// Parse sp_addrolemember from pre-tokenized tokens (Phase 76)
+pub fn parse_sp_addrolemember_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedRoleMembership> {
+    let mut parser = TokenParser::from_tokens(tokens);
+    parser.skip_whitespace();
+
+    // Skip EXEC/EXECUTE if present
+    if parser.check_keyword(Keyword::EXECUTE) || parser.check_word_ci("EXEC") {
+        parser.advance();
+        parser.skip_whitespace();
+    }
+
+    // Expect sp_addrolemember or sp_droprolemember
+    let is_add = if parser.check_word_ci("sp_addrolemember") {
+        true
+    } else if parser.check_word_ci("sp_droprolemember") {
+        false
+    } else {
+        return None;
+    };
+    parser.advance();
+    parser.skip_whitespace();
+
+    // Parse role name (string literal or identifier)
+    let role = parse_string_or_ident(&mut parser)?;
+    parser.skip_whitespace();
+
+    // Skip comma
+    if parser.check_token(&Token::Comma) {
+        parser.advance();
+        parser.skip_whitespace();
+    }
+
+    // Parse member name (string literal or identifier)
+    let member = parse_string_or_ident(&mut parser)?;
+
+    Some(TokenParsedRoleMembership {
+        role,
+        member,
+        is_add,
+    })
+}
+
+/// Parse ALTER ROLE ... ADD/DROP MEMBER from pre-tokenized tokens (Phase 76)
+pub fn parse_alter_role_membership_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<TokenParsedRoleMembership> {
+    let mut parser = SecurityTokenParser::from_tokens(tokens);
+    parser.parse_alter_role_membership()
+}
+
+/// Parse CREATE USER from pre-tokenized tokens (Phase 76)
+pub fn parse_create_user_tokens_with_tokens(tokens: Vec<TokenWithSpan>) -> Option<TokenParsedUser> {
+    let mut parser = SecurityTokenParser::from_tokens(tokens);
+    parser.parse_create_user()
+}
+
+/// Parse CREATE ROLE from pre-tokenized tokens (Phase 76)
+pub fn parse_create_role_tokens_with_tokens(tokens: Vec<TokenWithSpan>) -> Option<TokenParsedRole> {
+    let mut parser = SecurityTokenParser::from_tokens(tokens);
+    parser.parse_create_role()
 }
 
 #[cfg(test)]

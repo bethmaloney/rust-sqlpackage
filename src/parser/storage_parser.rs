@@ -3,6 +3,7 @@
 //! These are database-level storage constructs that don't use schema qualification.
 
 use crate::parser::token_parser_base::TokenParser;
+use sqlparser::tokenizer::TokenWithSpan;
 
 /// Result of parsing ALTER DATABASE ... ADD FILEGROUP
 #[derive(Debug, Clone)]
@@ -151,6 +152,94 @@ pub fn parse_partition_scheme_tokens(sql: &str) -> Option<ParsedPartitionScheme>
     parser.skip_keyword("TO")?;
 
     // Parse filegroup list
+    parser.skip_symbol('(')?;
+    let filegroups = parser.parse_identifier_list()?;
+
+    Some(ParsedPartitionScheme {
+        name,
+        partition_function,
+        filegroups,
+    })
+}
+
+/// Parse filegroup from pre-tokenized tokens (Phase 76)
+pub fn parse_filegroup_tokens_with_tokens(tokens: Vec<TokenWithSpan>) -> Option<ParsedFilegroup> {
+    let mut parser = TokenParser::from_tokens(tokens);
+
+    parser.skip_keyword("ALTER")?;
+    parser.skip_keyword("DATABASE")?;
+    parser.skip_identifier()?;
+    parser.skip_keyword("ADD")?;
+    parser.skip_keyword("FILEGROUP")?;
+
+    let name = parser.expect_identifier()?;
+    let contains_memory_optimized_data =
+        parser.try_skip_keyword("CONTAINS") && parser.try_skip_keyword("MEMORY_OPTIMIZED_DATA");
+
+    Some(ParsedFilegroup {
+        name,
+        contains_memory_optimized_data,
+    })
+}
+
+/// Parse partition function from pre-tokenized tokens (Phase 76)
+pub fn parse_partition_function_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<ParsedPartitionFunction> {
+    let mut parser = TokenParser::from_tokens(tokens);
+
+    parser.skip_keyword("CREATE")?;
+    parser.skip_keyword("PARTITION")?;
+    parser.skip_keyword("FUNCTION")?;
+
+    let name = parser.expect_identifier()?;
+    parser.skip_symbol('(')?;
+    let data_type = parser.expect_data_type()?;
+    parser.skip_symbol(')')?;
+    parser.skip_keyword("AS")?;
+    parser.skip_keyword("RANGE")?;
+
+    let is_range_right = if parser.try_skip_keyword("RIGHT") {
+        true
+    } else if parser.try_skip_keyword("LEFT") {
+        false
+    } else {
+        true
+    };
+
+    parser.skip_keyword("FOR")?;
+    parser.skip_keyword("VALUES")?;
+    parser.skip_symbol('(')?;
+    let boundary_values = parser.parse_string_list()?;
+
+    Some(ParsedPartitionFunction {
+        name,
+        data_type,
+        boundary_values,
+        is_range_right,
+    })
+}
+
+/// Parse partition scheme from pre-tokenized tokens (Phase 76)
+pub fn parse_partition_scheme_tokens_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<ParsedPartitionScheme> {
+    let mut parser = TokenParser::from_tokens(tokens);
+
+    parser.skip_keyword("CREATE")?;
+    parser.skip_keyword("PARTITION")?;
+    parser.skip_keyword("SCHEME")?;
+
+    let name = parser.expect_identifier()?;
+    parser.skip_keyword("AS")?;
+    parser.skip_keyword("PARTITION")?;
+
+    let partition_function = parser.expect_identifier()?;
+
+    // Check for ALL keyword
+    parser.try_skip_keyword("ALL");
+
+    parser.skip_keyword("TO")?;
     parser.skip_symbol('(')?;
     let filegroups = parser.parse_identifier_list()?;
 

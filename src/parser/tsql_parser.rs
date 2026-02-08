@@ -10,40 +10,51 @@ use sqlparser::ast::Statement;
 use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
 use sqlparser::parser::Parser;
-use sqlparser::tokenizer::{Token, Tokenizer};
+use sqlparser::tokenizer::{Token, TokenWithSpan, Tokenizer};
 
 use super::column_parser::{parse_column_definition_tokens, TokenParsedColumn};
 use super::constraint_parser::{
-    parse_alter_table_add_constraint_tokens, parse_alter_table_name_tokens,
+    parse_alter_table_add_constraint_tokens_with_tokens, parse_alter_table_name_tokens_with_tokens,
     parse_table_constraint_tokens, TokenParsedConstraint,
 };
-use super::fulltext_parser::{parse_fulltext_catalog_tokens, parse_fulltext_index_tokens};
+use super::extended_property_parser::parse_extended_property_tokens_with_tokens;
+use super::fulltext_parser::{
+    parse_fulltext_catalog_tokens_with_tokens, parse_fulltext_index_tokens_with_tokens,
+};
 use super::function_parser::{
-    detect_function_type_tokens, parse_alter_function_tokens, parse_create_function_full,
-    parse_create_function_tokens, TokenParsedFunctionType,
+    detect_function_type_tokens_with_tokens, parse_alter_function_tokens_with_tokens,
+    parse_create_function_full_with_tokens, parse_create_function_tokens_with_tokens,
+    TokenParsedFunctionType,
 };
 use super::identifier_utils::format_token_sql;
 use super::index_parser::{
-    extract_index_filter_predicate_tokenized, parse_create_columnstore_index_tokens,
-    parse_create_index_tokens, ParsedIndexColumn,
+    extract_index_filter_predicate_tokenized, parse_create_columnstore_index_tokens_with_tokens,
+    parse_create_index_tokens_with_tokens, ParsedIndexColumn,
 };
 use super::preprocess_parser::preprocess_tsql_tokens;
-use super::procedure_parser::{parse_alter_procedure_tokens, parse_create_procedure_tokens};
-use super::security_parser::{
-    parse_alter_role_membership_tokens, parse_create_role_tokens, parse_create_user_tokens,
-    parse_permission_tokens, parse_sp_addrolemember, PermissionAction, PermissionTarget,
+use super::procedure_parser::{
+    parse_alter_procedure_tokens_with_tokens, parse_create_procedure_tokens_with_tokens,
 };
-use super::sequence_parser::{parse_alter_sequence_tokens, parse_create_sequence_tokens};
+use super::security_parser::{
+    parse_alter_role_membership_tokens_with_tokens, parse_create_role_tokens_with_tokens,
+    parse_create_user_tokens_with_tokens, parse_permission_tokens_with_tokens,
+    parse_sp_addrolemember_with_tokens, PermissionAction, PermissionTarget,
+};
+use super::sequence_parser::{
+    parse_alter_sequence_tokens_with_tokens, parse_create_sequence_tokens_with_tokens,
+};
 use super::statement_parser::{
-    try_parse_alter_view_tokens, try_parse_cte_dml_tokens, try_parse_drop_tokens,
-    try_parse_generic_create_tokens, try_parse_merge_output_tokens, try_parse_xml_update_tokens,
+    try_parse_alter_view_tokens_with_tokens, try_parse_cte_dml_tokens_with_tokens,
+    try_parse_drop_tokens_with_tokens, try_parse_generic_create_tokens_with_tokens,
+    try_parse_merge_output_tokens_with_tokens, try_parse_xml_update_tokens_with_tokens,
 };
 use super::storage_parser::{
-    parse_filegroup_tokens, parse_partition_function_tokens, parse_partition_scheme_tokens,
+    parse_filegroup_tokens_with_tokens, parse_partition_function_tokens_with_tokens,
+    parse_partition_scheme_tokens_with_tokens,
 };
-use super::synonym_parser::parse_create_synonym_tokens;
-use super::table_type_parser::parse_create_table_type_tokens;
-use super::trigger_parser::parse_create_trigger_tokens;
+use super::synonym_parser::parse_create_synonym_tokens_with_tokens;
+use super::table_type_parser::parse_create_table_type_tokens_with_tokens;
+use super::trigger_parser::parse_create_trigger_tokens_with_tokens;
 use super::tsql_dialect::ExtendedTsqlDialect;
 use crate::error::SqlPackageError;
 use crate::util::{contains_ci, starts_with_ci};
@@ -663,16 +674,30 @@ pub fn parse_sql_file(path: &Path) -> Result<Vec<ParsedStatement>> {
     Ok(statements)
 }
 
-/// Try to parse a statement using fallback regex-based parsing
-/// Returns Some(FallbackStatementType) if the statement is a procedure or function
+/// Try to parse a statement using fallback token-based parsing.
+/// Phase 76: Single tokenization — tokens are produced once and shared across all parser attempts.
+/// Returns Some(FallbackStatementType) if the statement matches a known pattern.
 fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
+    // Phase 76: Tokenize once and reuse across all parser attempts.
+    // This eliminates 5-20 redundant tokenizations per fallback-parsed statement.
+    let dialect = MsSqlDialect {};
+    let shared_tokens = Tokenizer::new(&dialect, sql).tokenize_with_location().ok();
+
+    // Helper to clone shared tokens for each parser attempt
+    let tk = || -> Vec<TokenWithSpan> {
+        shared_tokens
+            .as_ref()
+            .map(|t| t.clone())
+            .unwrap_or_default()
+    };
+
     // Check for CREATE PROCEDURE or CREATE PROC (T-SQL shorthand)
     if contains_ci(sql, "CREATE PROCEDURE")
         || contains_ci(sql, "CREATE OR ALTER PROCEDURE")
         || contains_ci(sql, "CREATE PROC")
         || contains_ci(sql, "CREATE OR ALTER PROC")
     {
-        if let Some((schema, name)) = extract_procedure_name(sql) {
+        if let Some((schema, name)) = parse_create_procedure_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::Procedure { schema, name });
         }
     }
@@ -680,17 +705,17 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for ALTER PROCEDURE or ALTER PROC (T-SQL shorthand)
     // Note: sqlparser doesn't support ALTER PROCEDURE, so we use fallback
     if contains_ci(sql, "ALTER PROCEDURE") || contains_ci(sql, "ALTER PROC") {
-        if let Some((schema, name)) = extract_alter_procedure_name(sql) {
+        if let Some((schema, name)) = parse_alter_procedure_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::Procedure { schema, name });
         }
     }
 
     // Check for CREATE FUNCTION
     if contains_ci(sql, "CREATE FUNCTION") || contains_ci(sql, "CREATE OR ALTER FUNCTION") {
-        if let Some((schema, name)) = extract_function_name(sql) {
-            let function_type = detect_function_type(sql);
-            let parameters = extract_function_parameters(sql);
-            let return_type = extract_function_return_type(sql);
+        if let Some((schema, name)) = parse_create_function_tokens_with_tokens(tk()) {
+            let function_type = detect_function_type_with_tokens(tk());
+            let parameters = extract_function_parameters_with_tokens(tk());
+            let return_type = extract_function_return_type_with_tokens(tk());
             return Some(FallbackStatementType::Function {
                 schema,
                 name,
@@ -704,10 +729,10 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for ALTER FUNCTION
     // Note: sqlparser doesn't support ALTER FUNCTION, so we use fallback
     if contains_ci(sql, "ALTER FUNCTION") {
-        if let Some((schema, name)) = extract_alter_function_name(sql) {
-            let function_type = detect_function_type(sql);
-            let parameters = extract_function_parameters(sql);
-            let return_type = extract_function_return_type(sql);
+        if let Some((schema, name)) = parse_alter_function_tokens_with_tokens(tk()) {
+            let function_type = detect_function_type_with_tokens(tk());
+            let parameters = extract_function_parameters_with_tokens(tk());
+            let return_type = extract_function_return_type_with_tokens(tk());
             return Some(FallbackStatementType::Function {
                 schema,
                 name,
@@ -720,7 +745,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for CREATE COLUMNSTORE INDEX (must be before regular index check)
     if contains_ci(sql, "COLUMNSTORE INDEX") {
-        if let Some(parsed) = parse_create_columnstore_index_tokens(sql) {
+        if let Some(parsed) = parse_create_columnstore_index_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::ColumnstoreIndex {
                 name: parsed.name,
                 table_schema: parsed.table_schema,
@@ -739,7 +764,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
         || contains_ci(sql, "CREATE UNIQUE CLUSTERED INDEX")
         || contains_ci(sql, "CREATE UNIQUE NONCLUSTERED INDEX")
     {
-        if let Some(index_info) = extract_index_info(sql) {
+        if let Some(index_info) = extract_index_info_with_tokens(sql, tk()) {
             return Some(index_info);
         }
     }
@@ -747,7 +772,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for CREATE FULLTEXT INDEX (must check before generic CREATE fallback)
     // Use token-based parser (Phase 15.3 B7)
     if contains_ci(sql, "CREATE FULLTEXT INDEX") {
-        if let Some(parsed) = parse_fulltext_index_tokens(sql) {
+        if let Some(parsed) = parse_fulltext_index_tokens_with_tokens(tk()) {
             let columns = parsed
                 .columns
                 .into_iter()
@@ -770,7 +795,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for CREATE FULLTEXT CATALOG
     // Use token-based parser (Phase 15.3 B8)
     if contains_ci(sql, "CREATE FULLTEXT CATALOG") {
-        if let Some(parsed) = parse_fulltext_catalog_tokens(sql) {
+        if let Some(parsed) = parse_fulltext_catalog_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::FullTextCatalog {
                 name: parsed.name,
                 is_default: parsed.is_default,
@@ -790,7 +815,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for ALTER DATABASE ... ADD FILEGROUP
     // Must check before generic ALTER DATABASE handling
     if contains_ci(sql, "ALTER DATABASE") && contains_ci(sql, "ADD FILEGROUP") {
-        if let Some(parsed) = parse_filegroup_tokens(sql) {
+        if let Some(parsed) = parse_filegroup_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::Filegroup {
                 name: parsed.name,
                 contains_memory_optimized_data: parsed.contains_memory_optimized_data,
@@ -800,7 +825,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for CREATE PARTITION FUNCTION
     if contains_ci(sql, "CREATE PARTITION FUNCTION") {
-        if let Some(parsed) = parse_partition_function_tokens(sql) {
+        if let Some(parsed) = parse_partition_function_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::PartitionFunction {
                 name: parsed.name,
                 data_type: parsed.data_type,
@@ -812,7 +837,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for CREATE PARTITION SCHEME
     if contains_ci(sql, "CREATE PARTITION SCHEME") {
-        if let Some(parsed) = parse_partition_scheme_tokens(sql) {
+        if let Some(parsed) = parse_partition_scheme_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::PartitionScheme {
                 name: parsed.name,
                 partition_function: parsed.partition_function,
@@ -823,19 +848,19 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for CREATE SEQUENCE (T-SQL multiline syntax not fully supported by sqlparser)
     if contains_ci(sql, "CREATE SEQUENCE") {
-        if let Some(seq_info) = extract_sequence_info(sql) {
+        if let Some(parsed) = parse_create_sequence_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::Sequence {
-                schema: seq_info.schema,
-                name: seq_info.name,
-                data_type: seq_info.data_type,
-                start_value: seq_info.start_value,
-                increment_value: seq_info.increment_value,
-                min_value: seq_info.min_value,
-                max_value: seq_info.max_value,
-                is_cycling: seq_info.is_cycling,
-                has_no_min_value: seq_info.has_no_min_value,
-                has_no_max_value: seq_info.has_no_max_value,
-                cache_size: seq_info.cache_size,
+                schema: parsed.schema,
+                name: parsed.name,
+                data_type: parsed.data_type,
+                start_value: parsed.start_value,
+                increment_value: parsed.increment_value,
+                min_value: parsed.min_value,
+                max_value: parsed.max_value,
+                is_cycling: parsed.is_cycling,
+                has_no_min_value: parsed.has_no_min_value,
+                has_no_max_value: parsed.has_no_max_value,
+                cache_size: parsed.cache_size,
             });
         }
     }
@@ -843,19 +868,19 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Check for ALTER SEQUENCE
     // Note: sqlparser doesn't support ALTER SEQUENCE, so we use fallback
     if contains_ci(sql, "ALTER SEQUENCE") {
-        if let Some(seq_info) = extract_alter_sequence_info(sql) {
+        if let Some(parsed) = parse_alter_sequence_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::Sequence {
-                schema: seq_info.schema,
-                name: seq_info.name,
-                data_type: seq_info.data_type,
-                start_value: seq_info.start_value,
-                increment_value: seq_info.increment_value,
-                min_value: seq_info.min_value,
-                max_value: seq_info.max_value,
-                is_cycling: seq_info.is_cycling,
-                has_no_min_value: seq_info.has_no_min_value,
-                has_no_max_value: seq_info.has_no_max_value,
-                cache_size: seq_info.cache_size,
+                schema: parsed.schema,
+                name: parsed.name,
+                data_type: None, // ALTER SEQUENCE doesn't change the data type
+                start_value: parsed.start_value,
+                increment_value: parsed.increment_value,
+                min_value: parsed.min_value,
+                max_value: parsed.max_value,
+                is_cycling: parsed.is_cycling,
+                has_no_min_value: parsed.has_no_min_value,
+                has_no_max_value: parsed.has_no_max_value,
+                cache_size: parsed.cache_size,
             });
         }
     }
@@ -886,7 +911,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
             Some(false) | None => {
                 // Table type - CREATE TYPE x AS TABLE (...)
                 // Uses token-based parsing (Phase 15.3) for improved maintainability and edge case handling.
-                if let Some(parsed) = parse_create_table_type_tokens(sql) {
+                if let Some(parsed) = parse_create_table_type_tokens_with_tokens(tk()) {
                     return Some(FallbackStatementType::UserDefinedType {
                         schema: parsed.schema,
                         name: parsed.name,
@@ -907,28 +932,28 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 
     // Check for EXEC sp_addextendedproperty
     if contains_ci(sql, "SP_ADDEXTENDEDPROPERTY") {
-        if let Some(property) = extract_extended_property_from_sql(sql) {
+        if let Some(property) = extract_extended_property_from_sql_with_tokens(sql, tk()) {
             return Some(FallbackStatementType::ExtendedProperty { property });
         }
     }
 
     // Check for CREATE TRIGGER
     if contains_ci(sql, "CREATE TRIGGER") || contains_ci(sql, "CREATE OR ALTER TRIGGER") {
-        if let Some(trigger) = extract_trigger_info(sql) {
+        if let Some(trigger) = extract_trigger_info_with_tokens(sql, tk()) {
             return Some(trigger);
         }
     }
 
     // Check for security statements — route USER, ROLE, PERMISSION, ROLE_MEMBERSHIP
     // to actual parsers; remaining categories (LOGIN, CERTIFICATE, etc.) are silently skipped
-    if let Some(result) = try_security_statement_dispatch(sql) {
+    if let Some(result) = try_security_statement_dispatch_with_tokens(sql, &tk) {
         return Some(result);
     }
 
     // Check for CREATE SYNONYM (must be before generic CREATE fallback to avoid being
     // captured as RawStatement with object_type "SYNONYM" which would be silently dropped)
     if contains_ci(sql, "CREATE SYNONYM") {
-        if let Some(parsed) = parse_create_synonym_tokens(sql) {
+        if let Some(parsed) = parse_create_synonym_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::Synonym {
                 schema: parsed.schema,
                 name: parsed.name,
@@ -944,7 +969,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     // Must be before generic CREATE fallback. Returns RawStatement with object_type "VIEW"
     // which routes to write_raw_view() in the XML writer.
     if contains_ci(sql, "ALTER") && contains_ci(sql, "VIEW") {
-        if let Some(parsed) = try_parse_alter_view_tokens(sql) {
+        if let Some(parsed) = try_parse_alter_view_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::RawStatement {
                 object_type: parsed.object_type,
                 schema: parsed.schema,
@@ -954,20 +979,24 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Generic fallback for any other CREATE statements
-    if let Some(fallback) = try_generic_create_fallback(sql) {
-        return Some(fallback);
+    if let Some(parsed) = try_parse_generic_create_tokens_with_tokens(tk()) {
+        return Some(FallbackStatementType::RawStatement {
+            object_type: parsed.object_type,
+            schema: parsed.schema,
+            name: parsed.name,
+        });
     }
 
     // Check for ALTER TABLE ... ADD CONSTRAINT
     if contains_ci(sql, "ALTER TABLE") && contains_ci(sql, "ADD CONSTRAINT") {
-        if let Some(fallback) = extract_alter_table_add_constraint(sql) {
+        if let Some(fallback) = extract_alter_table_add_constraint_with_tokens(tk()) {
             return Some(fallback);
         }
     }
 
     // Generic fallback for ALTER TABLE statements that can't be parsed
     if contains_ci(sql, "ALTER TABLE") {
-        if let Some((schema, name)) = extract_alter_table_name(sql) {
+        if let Some((schema, name)) = parse_alter_table_name_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::RawStatement {
                 object_type: "AlterTable".to_string(),
                 schema,
@@ -977,22 +1006,22 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Fallback for DROP statements that sqlparser doesn't support
-    if let Some(fallback) = try_drop_fallback(sql) {
+    if let Some(fallback) = try_drop_fallback_with_tokens(tk()) {
         return Some(fallback);
     }
 
     // Fallback for CTE with DELETE/UPDATE/INSERT/MERGE
-    if let Some(fallback) = try_cte_dml_fallback(sql) {
+    if let Some(fallback) = try_cte_dml_fallback_with_tokens(tk()) {
         return Some(fallback);
     }
 
     // Fallback for MERGE with OUTPUT clause
-    if let Some(fallback) = try_merge_output_fallback(sql) {
+    if let Some(fallback) = try_merge_output_fallback_with_tokens(tk()) {
         return Some(fallback);
     }
 
     // Fallback for UPDATE with XML methods (.modify(), .value(), etc.)
-    if let Some(fallback) = try_xml_method_fallback(sql) {
+    if let Some(fallback) = try_xml_method_fallback_with_tokens(tk()) {
         return Some(fallback);
     }
 
@@ -1002,8 +1031,9 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
 /// Fallback for DROP statements that sqlparser doesn't support
 /// Handles: DROP SYNONYM, DROP TRIGGER, DROP INDEX ... ON, DROP PROC
 /// Phase 15.5: Uses token-based parsing instead of regex
-fn try_drop_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let parsed = try_parse_drop_tokens(sql)?;
+/// Phase 76: DROP fallback using pre-tokenized tokens
+fn try_drop_fallback_with_tokens(tokens: Vec<TokenWithSpan>) -> Option<FallbackStatementType> {
+    let parsed = try_parse_drop_tokens_with_tokens(tokens)?;
     Some(FallbackStatementType::RawStatement {
         object_type: parsed.drop_type.object_type_str().to_string(),
         schema: parsed.schema,
@@ -1011,11 +1041,9 @@ fn try_drop_fallback(sql: &str) -> Option<FallbackStatementType> {
     })
 }
 
-/// Fallback for CTEs followed by DELETE, UPDATE, INSERT, or MERGE
-/// sqlparser only supports CTEs followed by SELECT
-/// Phase 15.5: Uses token-based parsing instead of regex
-fn try_cte_dml_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let parsed = try_parse_cte_dml_tokens(sql)?;
+/// Phase 76: CTE DML fallback using pre-tokenized tokens
+fn try_cte_dml_fallback_with_tokens(tokens: Vec<TokenWithSpan>) -> Option<FallbackStatementType> {
+    let parsed = try_parse_cte_dml_tokens_with_tokens(tokens)?;
     Some(FallbackStatementType::RawStatement {
         object_type: format!("CteWith{}", parsed.dml_type.as_str()),
         schema: "dbo".to_string(),
@@ -1023,11 +1051,11 @@ fn try_cte_dml_fallback(sql: &str) -> Option<FallbackStatementType> {
     })
 }
 
-/// Fallback for MERGE statements with OUTPUT clause
-/// sqlparser doesn't support the OUTPUT clause on MERGE
-/// Phase 15.5: Uses token-based parsing instead of regex
-fn try_merge_output_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let parsed = try_parse_merge_output_tokens(sql)?;
+/// Phase 76: MERGE OUTPUT fallback using pre-tokenized tokens
+fn try_merge_output_fallback_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<FallbackStatementType> {
+    let parsed = try_parse_merge_output_tokens_with_tokens(tokens)?;
     Some(FallbackStatementType::RawStatement {
         object_type: "MergeWithOutput".to_string(),
         schema: parsed.schema,
@@ -1035,11 +1063,11 @@ fn try_merge_output_fallback(sql: &str) -> Option<FallbackStatementType> {
     })
 }
 
-/// Fallback for UPDATE statements with XML methods (.modify(), .value(), etc.)
-/// sqlparser doesn't support XML method call syntax
-/// Phase 15.5: Uses token-based parsing instead of regex
-fn try_xml_method_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let parsed = try_parse_xml_update_tokens(sql)?;
+/// Phase 76: XML method fallback using pre-tokenized tokens
+fn try_xml_method_fallback_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<FallbackStatementType> {
+    let parsed = try_parse_xml_update_tokens_with_tokens(tokens)?;
     Some(FallbackStatementType::RawStatement {
         object_type: "UpdateWithXmlMethod".to_string(),
         schema: parsed.schema,
@@ -1050,13 +1078,17 @@ fn try_xml_method_fallback(sql: &str) -> Option<FallbackStatementType> {
 /// Dispatch security statements to appropriate parsers.
 /// USER, ROLE, ROLE_MEMBERSHIP, and GRANT/DENY/REVOKE are parsed into typed variants.
 /// Remaining categories (LOGIN, CERTIFICATE, etc.) are returned as SkippedSecurityStatement.
-fn try_security_statement_dispatch(sql: &str) -> Option<FallbackStatementType> {
+/// Phase 76: Security statement dispatch using pre-tokenized tokens
+fn try_security_statement_dispatch_with_tokens(
+    sql: &str,
+    tk: &dyn Fn() -> Vec<TokenWithSpan>,
+) -> Option<FallbackStatementType> {
     // GRANT/DENY/REVOKE — parse into Permission variant
     if starts_with_ci(sql, "GRANT ")
         || starts_with_ci(sql, "DENY ")
         || starts_with_ci(sql, "REVOKE ")
     {
-        if let Some(parsed) = parse_permission_tokens(sql) {
+        if let Some(parsed) = parse_permission_tokens_with_tokens(tk()) {
             let (target_schema, target_name, target_type) = match &parsed.target {
                 PermissionTarget::Object { schema, name } => {
                     (schema.clone(), Some(name.clone()), "Object".to_string())
@@ -1094,9 +1126,8 @@ fn try_security_statement_dispatch(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Role membership — sp_addrolemember / sp_droprolemember / ALTER ROLE ... ADD/DROP MEMBER
-    // Must check BEFORE generic ROLE to avoid role membership being caught as ROLE
     if contains_ci(sql, "SP_ADDROLEMEMBER") || contains_ci(sql, "SP_DROPROLEMEMBER") {
-        if let Some(parsed) = parse_sp_addrolemember(sql) {
+        if let Some(parsed) = parse_sp_addrolemember_with_tokens(tk()) {
             return Some(FallbackStatementType::AlterRoleMembership {
                 role: parsed.role,
                 member: parsed.member,
@@ -1108,7 +1139,7 @@ fn try_security_statement_dispatch(sql: &str) -> Option<FallbackStatementType> {
         });
     }
     if contains_ci(sql, "ALTER ROLE") && contains_ci(sql, "MEMBER") {
-        if let Some(parsed) = parse_alter_role_membership_tokens(sql) {
+        if let Some(parsed) = parse_alter_role_membership_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::AlterRoleMembership {
                 role: parsed.role,
                 member: parsed.member,
@@ -1132,7 +1163,7 @@ fn try_security_statement_dispatch(sql: &str) -> Option<FallbackStatementType> {
 
     // CREATE USER — parse into CreateUser variant (ALTER/DROP USER still skipped)
     if contains_ci(sql, "CREATE USER") {
-        if let Some(parsed) = parse_create_user_tokens(sql) {
+        if let Some(parsed) = parse_create_user_tokens_with_tokens(tk()) {
             let (auth_type_str, login) = match &parsed.auth_type {
                 super::security_parser::UserAuthType::Login(l) => {
                     ("Login".to_string(), Some(l.clone()))
@@ -1184,7 +1215,7 @@ fn try_security_statement_dispatch(sql: &str) -> Option<FallbackStatementType> {
 
     // CREATE ROLE — parse into CreateRole variant (ALTER/DROP ROLE still skipped)
     if contains_ci(sql, "CREATE ROLE") {
-        if let Some(parsed) = parse_create_role_tokens(sql) {
+        if let Some(parsed) = parse_create_role_tokens_with_tokens(tk()) {
             return Some(FallbackStatementType::CreateRole {
                 name: parsed.name,
                 owner: parsed.owner,
@@ -1244,27 +1275,12 @@ fn try_security_statement_dispatch(sql: &str) -> Option<FallbackStatementType> {
 }
 
 /// Extract schema and name from ALTER TABLE statement
-fn extract_alter_table_name(sql: &str) -> Option<(String, String)> {
-    // Use token-based parser for better accuracy
-    parse_alter_table_name_tokens(sql)
-}
-
-/// Extract ALTER TABLE ... ADD CONSTRAINT statement
-/// Handles both WITH CHECK and WITH NOCHECK variants:
-/// ```sql
-/// ALTER TABLE [dbo].[Table] WITH NOCHECK
-/// ADD CONSTRAINT [FK_Name] FOREIGN KEY ([Col]) REFERENCES [Other]([Id]);
-///
-/// ALTER TABLE [dbo].[Table] WITH CHECK
-/// ADD CONSTRAINT [CK_Name] CHECK ([Col] > 0);
-/// ```
-fn extract_alter_table_add_constraint(sql: &str) -> Option<FallbackStatementType> {
-    // Use token-based parser for better accuracy
-    let parsed = parse_alter_table_add_constraint_tokens(sql)?;
-
-    // Convert token-parsed constraint to ExtractedTableConstraint
+/// Phase 76: Extract ALTER TABLE ADD CONSTRAINT using pre-tokenized tokens
+fn extract_alter_table_add_constraint_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Option<FallbackStatementType> {
+    let parsed = parse_alter_table_add_constraint_tokens_with_tokens(tokens)?;
     let constraint = convert_token_parsed_constraint(parsed.constraint);
-
     Some(FallbackStatementType::AlterTableAddConstraint {
         table_schema: parsed.table_schema,
         table_name: parsed.table_name,
@@ -1386,17 +1402,29 @@ pub fn extract_extended_property_from_sql(sql: &str) -> Option<ExtractedExtended
     })
 }
 
-/// Try to extract any CREATE statement as a generic fallback
-/// Phase 15.5: Uses token-based parsing (A5) instead of regex
-fn try_generic_create_fallback(sql: &str) -> Option<FallbackStatementType> {
-    let parsed = try_parse_generic_create_tokens(sql)?;
-    Some(FallbackStatementType::RawStatement {
-        object_type: parsed.object_type,
-        schema: parsed.schema,
-        name: parsed.name,
-    })
+/// Phase 76: Extract extended property using pre-tokenized tokens
+fn extract_extended_property_from_sql_with_tokens(
+    sql: &str,
+    tokens: Vec<TokenWithSpan>,
+) -> Option<ExtractedExtendedProperty> {
+    if let Some(parsed) = parse_extended_property_tokens_with_tokens(tokens) {
+        return Some(ExtractedExtendedProperty {
+            property_name: parsed.property_name,
+            property_value: parsed.property_value,
+            level0name: parsed.level0name,
+            level1type: parsed.level1type,
+            level1name: parsed.level1name,
+            level2type: parsed.level2type,
+            level2name: parsed.level2name,
+        });
+    }
+
+    // Fallback to the original string-based extractor
+    extract_extended_property_from_sql(sql)
 }
 
+/// Try to extract any CREATE statement as a generic fallback
+/// Phase 15.5: Uses token-based parsing (A5) instead of regex
 /// Extract schema and name for a specific object type
 fn extract_generic_object_name(sql: &str, object_type: &str) -> Option<(String, String)> {
     // Use [^\]]+ for bracketed identifiers to capture special characters like &
@@ -1417,42 +1445,6 @@ fn extract_generic_object_name(sql: &str, object_type: &str) -> Option<(String, 
     let name = caps.get(3).or_else(|| caps.get(4))?.as_str().to_string();
 
     Some((schema, name))
-}
-
-/// Information extracted from a sequence definition
-#[derive(Debug)]
-struct SequenceInfo {
-    schema: String,
-    name: String,
-    data_type: Option<String>,
-    start_value: Option<i64>,
-    increment_value: Option<i64>,
-    min_value: Option<i64>,
-    max_value: Option<i64>,
-    is_cycling: bool,
-    has_no_min_value: bool,
-    has_no_max_value: bool,
-    cache_size: Option<i64>,
-}
-
-/// Extract complete sequence information from CREATE SEQUENCE statement
-///
-/// Uses token-based parsing (Phase 15.3 B4) for improved maintainability and edge case handling.
-fn extract_sequence_info(sql: &str) -> Option<SequenceInfo> {
-    let parsed = parse_create_sequence_tokens(sql)?;
-    Some(SequenceInfo {
-        schema: parsed.schema,
-        name: parsed.name,
-        data_type: parsed.data_type,
-        start_value: parsed.start_value,
-        increment_value: parsed.increment_value,
-        min_value: parsed.min_value,
-        max_value: parsed.max_value,
-        is_cycling: parsed.is_cycling,
-        has_no_min_value: parsed.has_no_min_value,
-        has_no_max_value: parsed.has_no_max_value,
-        cache_size: parsed.cache_size,
-    })
 }
 
 /// Extract schema and name from CREATE TYPE statement
@@ -1677,9 +1669,12 @@ fn extract_scalar_type_info(sql: &str) -> Option<ScalarTypeInfo> {
 /// Parses trigger name, parent table/view, events (INSERT/UPDATE/DELETE), and type (AFTER/INSTEAD OF)
 ///
 /// Uses token-based parsing (Phase 15.3) for improved maintainability and edge case handling.
-fn extract_trigger_info(sql: &str) -> Option<FallbackStatementType> {
-    let parsed = parse_create_trigger_tokens(sql)?;
-
+/// Phase 76: Extract trigger info using pre-tokenized tokens
+fn extract_trigger_info_with_tokens(
+    _sql: &str,
+    tokens: Vec<TokenWithSpan>,
+) -> Option<FallbackStatementType> {
+    let parsed = parse_create_trigger_tokens_with_tokens(tokens)?;
     Some(FallbackStatementType::Trigger {
         schema: parsed.schema,
         name: parsed.name,
@@ -1695,67 +1690,20 @@ fn extract_trigger_info(sql: &str) -> Option<FallbackStatementType> {
 /// Extract schema and name from CREATE PROCEDURE statement
 ///
 /// Uses token-based parsing (Phase 15.3) for improved maintainability and edge case handling.
-fn extract_procedure_name(sql: &str) -> Option<(String, String)> {
-    parse_create_procedure_tokens(sql)
-}
-
-/// Extract schema and name from ALTER PROCEDURE statement
-///
-/// Uses token-based parsing (Phase 15.3) for improved maintainability and edge case handling.
-fn extract_alter_procedure_name(sql: &str) -> Option<(String, String)> {
-    parse_alter_procedure_tokens(sql)
-}
-
-/// Extract schema and name from ALTER FUNCTION statement
-///
-/// Uses token-based parsing (Phase 15.3 B2) for improved maintainability and edge case handling.
-fn extract_alter_function_name(sql: &str) -> Option<(String, String)> {
-    parse_alter_function_tokens(sql)
-}
-
-/// Extract complete sequence information from ALTER SEQUENCE statement
-///
-/// Uses token-based parsing (Phase 15.3 B4) for improved maintainability and edge case handling.
-fn extract_alter_sequence_info(sql: &str) -> Option<SequenceInfo> {
-    let parsed = parse_alter_sequence_tokens(sql)?;
-    Some(SequenceInfo {
-        schema: parsed.schema,
-        name: parsed.name,
-        data_type: None, // ALTER SEQUENCE doesn't change the data type
-        start_value: parsed.start_value,
-        increment_value: parsed.increment_value,
-        min_value: parsed.min_value,
-        max_value: parsed.max_value,
-        is_cycling: parsed.is_cycling,
-        has_no_min_value: parsed.has_no_min_value,
-        has_no_max_value: parsed.has_no_max_value,
-        cache_size: parsed.cache_size,
-    })
-}
-
-/// Extract schema and name from CREATE FUNCTION statement
-///
-/// Uses token-based parsing (Phase 15.3 B2) for improved maintainability and edge case handling.
-fn extract_function_name(sql: &str) -> Option<(String, String)> {
-    parse_create_function_tokens(sql)
-}
-
-/// Detect function type from SQL definition
-///
-/// Uses token-based parsing (Phase 15.3 B2) for improved maintainability and edge case handling.
-fn detect_function_type(sql: &str) -> FallbackFunctionType {
-    match detect_function_type_tokens(sql) {
+/// Phase 76: Detect function type using pre-tokenized tokens
+fn detect_function_type_with_tokens(tokens: Vec<TokenWithSpan>) -> FallbackFunctionType {
+    match detect_function_type_tokens_with_tokens(tokens) {
         TokenParsedFunctionType::Scalar => FallbackFunctionType::Scalar,
         TokenParsedFunctionType::TableValued => FallbackFunctionType::TableValued,
         TokenParsedFunctionType::InlineTableValued => FallbackFunctionType::InlineTableValued,
     }
 }
 
-/// Extract parameters from a function definition
-///
-/// Uses token-based parsing (Phase 15.3 B2) for improved maintainability and edge case handling.
-fn extract_function_parameters(sql: &str) -> Vec<ExtractedFunctionParameter> {
-    if let Some(func) = parse_create_function_full(sql) {
+/// Phase 76: Extract function parameters using pre-tokenized tokens
+fn extract_function_parameters_with_tokens(
+    tokens: Vec<TokenWithSpan>,
+) -> Vec<ExtractedFunctionParameter> {
+    if let Some(func) = parse_create_function_full_with_tokens(tokens) {
         func.parameters
             .into_iter()
             .map(|p| ExtractedFunctionParameter {
@@ -1768,19 +1716,20 @@ fn extract_function_parameters(sql: &str) -> Vec<ExtractedFunctionParameter> {
     }
 }
 
-/// Extract the return type from a function definition
-///
-/// Uses token-based parsing (Phase 15.3 B2) for improved maintainability and edge case handling.
-fn extract_function_return_type(sql: &str) -> Option<String> {
-    parse_create_function_full(sql).and_then(|f| f.return_type)
+/// Phase 76: Extract function return type using pre-tokenized tokens
+fn extract_function_return_type_with_tokens(tokens: Vec<TokenWithSpan>) -> Option<String> {
+    parse_create_function_full_with_tokens(tokens).and_then(|f| f.return_type)
 }
 
 /// Extract index information from CREATE CLUSTERED/NONCLUSTERED INDEX statement
 ///
 /// Uses token-based parsing (Phase 15.3 B6) for improved maintainability and edge case handling.
-fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
-    // Try token-based parsing first (Phase 15.3 B6)
-    if let Some(parsed) = parse_create_index_tokens(sql) {
+/// Phase 76: Extract index info using pre-tokenized tokens
+fn extract_index_info_with_tokens(
+    sql: &str,
+    tokens: Vec<TokenWithSpan>,
+) -> Option<FallbackStatementType> {
+    if let Some(parsed) = parse_create_index_tokens_with_tokens(tokens) {
         return Some(FallbackStatementType::Index {
             name: parsed.name,
             table_schema: parsed.table_schema,
@@ -1797,46 +1746,59 @@ fn extract_index_info(sql: &str) -> Option<FallbackStatementType> {
     }
 
     // Fallback to regex for edge cases not yet covered by token parser
-    // Match patterns like:
-    // CREATE CLUSTERED INDEX [IX_Name] ON [dbo].[Table] ([Col1], [Col2] DESC)
-    // CREATE NONCLUSTERED INDEX [IX_Name] ON [schema].[Table] ([Col]) INCLUDE ([Col2])
-    // CREATE UNIQUE CLUSTERED INDEX IX_Name ON dbo.Table (Col)
-    // Also handles malformed SQL with missing whitespace (e.g., "]ON" instead of "] ON")
     let caps = INDEX_FALLBACK_RE.captures(sql)?;
-
     let is_unique = caps.get(1).is_some();
     let is_clustered = caps
         .get(2)
-        .map(|m| m.as_str().to_uppercase() == "CLUSTERED")
+        .map(|m| m.as_str().eq_ignore_ascii_case("CLUSTERED"))
         .unwrap_or(false);
-    let name = caps.get(3)?.as_str().to_string();
+    let index_name = caps.get(3)?.as_str().to_string();
     let table_schema = caps
         .get(4)
         .map(|m| m.as_str().to_string())
         .unwrap_or_else(|| "dbo".to_string());
     let table_name = caps.get(5)?.as_str().to_string();
-
-    // Parse column list with sort direction (ASC/DESC)
     let columns_str = caps.get(6)?.as_str();
-    let columns: Vec<ParsedIndexColumn> = parse_column_list(columns_str);
-
-    // Extract INCLUDE columns if present
-    let include_columns = extract_include_columns(sql);
-
-    // Extract FILLFACTOR from WITH clause if present
+    let columns: Vec<ParsedIndexColumn> = columns_str
+        .split(',')
+        .filter_map(|col| {
+            let col = col.trim();
+            if col.is_empty() {
+                return None;
+            }
+            let caps = COLUMN_WITH_DIR_RE.captures(col)?;
+            Some(ParsedIndexColumn {
+                name: caps.get(1)?.as_str().to_string(),
+                is_descending: caps
+                    .get(2)
+                    .map(|m| m.as_str().eq_ignore_ascii_case("DESC"))
+                    .unwrap_or(false),
+            })
+        })
+        .collect();
+    let include_columns = INCLUDE_COLUMNS_RE
+        .captures(sql)
+        .map(|caps| {
+            caps.get(1)
+                .unwrap()
+                .as_str()
+                .split(',')
+                .filter_map(|col| {
+                    let col = col.trim();
+                    SIMPLE_COLUMN_RE
+                        .captures(col)
+                        .and_then(|c| c.get(1))
+                        .map(|m| m.as_str().to_string())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let fill_factor = extract_index_fill_factor(sql);
-
-    // Extract DATA_COMPRESSION from WITH clause if present
-    let data_compression = extract_index_data_compression(sql);
-
-    // Extract filter predicate from WHERE clause if present (token-based, Phase 20.6.1)
     let filter_predicate = extract_index_filter_predicate_tokenized(sql);
-
-    // Extract PAD_INDEX from WITH clause if present
+    let data_compression = extract_index_data_compression(sql);
     let is_padded = extract_index_pad_index(sql);
-
     Some(FallbackStatementType::Index {
-        name,
+        name: index_name,
         table_schema,
         table_name,
         columns,
@@ -1863,53 +1825,6 @@ fn extract_index_pad_index(sql: &str) -> bool {
 }
 
 /// Parse a comma-separated column list, extracting column names and sort direction
-fn parse_column_list(columns_str: &str) -> Vec<ParsedIndexColumn> {
-    columns_str
-        .split(',')
-        .map(|col| {
-            // Extract column name and sort direction
-            let col = col.trim();
-            if let Some(caps) = COLUMN_WITH_DIR_RE.captures(col) {
-                let name = caps
-                    .get(1)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_else(|| col.to_string());
-                let is_descending = caps
-                    .get(2)
-                    .map(|m| m.as_str().to_uppercase() == "DESC")
-                    .unwrap_or(false);
-                ParsedIndexColumn::with_direction(name, is_descending)
-            } else {
-                ParsedIndexColumn::new(col.to_string())
-            }
-        })
-        .collect()
-}
-
-/// Extract columns from INCLUDE clause if present
-fn extract_include_columns(sql: &str) -> Vec<String> {
-    // Match INCLUDE ([Col1], [Col2], ...)
-    INCLUDE_COLUMNS_RE
-        .captures(sql)
-        .and_then(|caps| caps.get(1))
-        .map(|m| parse_simple_column_list(m.as_str()))
-        .unwrap_or_default()
-}
-
-/// Parse a comma-separated column list, extracting just column names (for INCLUDE clause)
-fn parse_simple_column_list(columns_str: &str) -> Vec<String> {
-    columns_str
-        .split(',')
-        .filter_map(|col| {
-            let col = col.trim();
-            SIMPLE_COLUMN_RE
-                .captures(col)
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_str().to_string())
-        })
-        .collect()
-}
-
 /// Extract FILLFACTOR value from index WITH clause
 fn extract_index_fill_factor(sql: &str) -> Option<u8> {
     FILL_FACTOR_RE
