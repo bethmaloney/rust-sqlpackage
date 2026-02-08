@@ -12,6 +12,18 @@ use std::io::Write;
 
 use crate::model::{DatabaseModel, ModelElement, RawElement, ViewElement};
 
+/// Case-insensitive substring search without allocating an uppercase copy.
+fn contains_ci(haystack: &str, needle: &str) -> bool {
+    let needle_bytes = needle.as_bytes();
+    let haystack_bytes = haystack.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return false;
+    }
+    haystack_bytes
+        .windows(needle_bytes.len())
+        .any(|window| window.eq_ignore_ascii_case(needle_bytes))
+}
+
 use super::xml_helpers::{
     escape_newlines_for_attr, normalize_script_content, write_property, write_property_raw,
     write_schema_relationship, write_script_property,
@@ -126,20 +138,17 @@ pub(crate) fn write_raw_view<W: Write>(
         .with_attributes([("Type", "SqlView"), ("Name", full_name.as_str())]);
     writer.write_event(Event::Start(elem))?;
 
-    // Extract view options from raw SQL text
-    let upper = raw.definition.to_uppercase();
-
+    // Extract view options from raw SQL text (case-insensitive, no allocation)
     // WITH SCHEMABINDING appears before AS in the view definition
-    let is_schema_bound = upper.contains("WITH SCHEMABINDING")
-        || upper.contains("WITH SCHEMABINDING,")
-        || upper.contains(", SCHEMABINDING")
-        || upper.contains(",SCHEMABINDING");
+    let is_schema_bound = contains_ci(&raw.definition, "WITH SCHEMABINDING")
+        || contains_ci(&raw.definition, ", SCHEMABINDING")
+        || contains_ci(&raw.definition, ",SCHEMABINDING");
 
     // WITH CHECK OPTION appears at the end of the view definition
-    let is_with_check_option = upper.contains("WITH CHECK OPTION");
+    let is_with_check_option = contains_ci(&raw.definition, "WITH CHECK OPTION");
 
     // VIEW_METADATA appears in WITH clause before AS
-    let is_metadata_reported = upper.contains("VIEW_METADATA");
+    let is_metadata_reported = contains_ci(&raw.definition, "VIEW_METADATA");
 
     // Write properties in DotNet order:
     // 1. IsSchemaBound (if true)

@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-67 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
+**Phases 1-68 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-67)
+## Completed Phases (1-68)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -73,6 +73,7 @@
 | 65 | Eliminate Debug formatting for feature detection (dead code removal) | All |
 | 66 | Index-based HashMap keys in disambiguator (eliminate String clones) | All |
 | 67 | Pre-compute element full_name and xml_name_attr (cached in DatabaseModel) | All |
+| 68 | Reduce to_uppercase() calls (case-insensitive helpers, zero-alloc) | All |
 
 ### Key Milestones
 
@@ -83,7 +84,7 @@
 
 ---
 
-## Performance Tuning (Phases 63-70, 67 complete)
+## Performance Tuning (Phases 63-70, 68 complete)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms total
 
@@ -155,17 +156,28 @@ Added `cached_full_names: Vec<String>` and `cached_xml_names: Vec<String>` to `D
 
 ---
 
-### Phase 68 — Reduce to_uppercase() calls (~2-3ms)
+### Phase 68 — Reduce to_uppercase() calls — COMPLETE
 
-Multiple call sites convert full SQL text to uppercase for case-insensitive matching: `builder.rs:1017,2173,2351,2429,2467`. Called per table (~40x), per constraint (~80x), per proc/func (~50x).
+Introduced zero-allocation case-insensitive helpers (`contains_ci`, `starts_with_ci`, `find_ci`, `parse_data_compression`) in `builder.rs` to replace `to_uppercase()` calls that allocated full uppercase copies of SQL text for simple keyword matching.
 
-| Task | Description |
-|------|-------------|
-| 68.1 | Replace `to_uppercase().contains()` patterns with case-insensitive regex (already cached from Phase 63) or `str::to_ascii_uppercase` where needed |
-| 68.2 | In `extract_temporal_metadata_from_sql` (builder.rs:2467), compute uppercase once and pass to all sub-functions |
-| 68.3 | In `extract_constraint_clustering` (builder.rs:2173), use case-insensitive matching instead of `to_uppercase()` |
-| 68.4 | In `is_natively_compiled` (builder.rs:2351), use `contains`-style case-insensitive check |
-| 68.5 | Run model_building criterion benchmark, confirm no regression |
+**Changes in `builder.rs` (15 `to_uppercase()` calls eliminated):**
+- `extract_view_options()`: 1 `to_uppercase()` → 5 `contains_ci()` calls
+- `extract_constraint_clustering()`: 2 `to_uppercase()` + string `find`/`contains` → `find_ci()`/`contains_ci()`
+- `is_natively_compiled()`: 1 `to_uppercase().contains()` → `contains_ci()`
+- `extract_temporal_metadata_from_sql()` + sub-functions: 1 `to_uppercase()` removed, sub-functions (`extract_period_columns`, `extract_versioning_options`) now use `contains_ci()` directly instead of receiving pre-uppercased `&str`
+- `extract_type_params_from_string()`: 2 `to_uppercase()` → `contains_ci()`/`starts_with_ci()`
+- Function type detection (CreateFunction match arm): 2 `to_uppercase()` → `contains_ci()`
+- `extract_fill_factor()`: 1 `ident.value.to_uppercase() == "FILLFACTOR"` → `eq_ignore_ascii_case()`
+- `extract_data_compression()`: 2 `to_uppercase()` → `eq_ignore_ascii_case()` via `parse_data_compression()`
+- Data compression matching (2 FallbackStatementType arms): 2 `to_uppercase()` match → `parse_data_compression()`
+- Raw statement object type: 1 `to_uppercase()` match → `eq_ignore_ascii_case()`
+
+**Changes in `view_writer.rs` (1 `to_uppercase()` call eliminated):**
+- Raw view writer: 1 `to_uppercase()` → local `contains_ci()` helper
+
+**Files changed:** `builder.rs` (~50 lines changed, 4 helper functions added), `view_writer.rs` (~15 lines changed, 1 helper function added).
+
+**All 1,623 tests pass.** No parity regressions.
 
 ---
 

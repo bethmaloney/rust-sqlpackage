@@ -40,6 +40,53 @@ use super::{
 /// Static schema name for "dbo" - avoids allocation for the most common schema
 const DBO_SCHEMA: &str = "dbo";
 
+/// Case-insensitive substring search without allocating an uppercase copy.
+fn contains_ci(haystack: &str, needle: &str) -> bool {
+    let needle_bytes = needle.as_bytes();
+    let haystack_bytes = haystack.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return false;
+    }
+    haystack_bytes
+        .windows(needle_bytes.len())
+        .any(|window| window.eq_ignore_ascii_case(needle_bytes))
+}
+
+/// Case-insensitive starts_with check without allocating.
+fn starts_with_ci(haystack: &str, needle: &str) -> bool {
+    haystack.as_bytes().len() >= needle.as_bytes().len()
+        && haystack.as_bytes()[..needle.len()].eq_ignore_ascii_case(needle.as_bytes())
+}
+
+/// Case-insensitive find — returns byte offset of first occurrence of `needle` in `haystack`.
+fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let needle_bytes = needle.as_bytes();
+    let haystack_bytes = haystack.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return None;
+    }
+    haystack_bytes
+        .windows(needle_bytes.len())
+        .position(|window| window.eq_ignore_ascii_case(needle_bytes))
+}
+
+/// Parse a data compression string into the corresponding enum type (case-insensitive).
+fn parse_data_compression(s: &str) -> Option<DataCompressionType> {
+    if s.eq_ignore_ascii_case("NONE") {
+        Some(DataCompressionType::None)
+    } else if s.eq_ignore_ascii_case("ROW") {
+        Some(DataCompressionType::Row)
+    } else if s.eq_ignore_ascii_case("PAGE") {
+        Some(DataCompressionType::Page)
+    } else if s.eq_ignore_ascii_case("COLUMNSTORE") {
+        Some(DataCompressionType::Columnstore)
+    } else if s.eq_ignore_ascii_case("COLUMNSTORE_ARCHIVE") {
+        Some(DataCompressionType::ColumnstoreArchive)
+    } else {
+        None
+    }
+}
+
 // Cached regex patterns (Phase 63) — compiled once, reused on every call
 static TYPE_PARAMS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\((\d+)(?:\s*,\s*(\d+))?\)").unwrap());
@@ -255,19 +302,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     is_padded,
                 } => {
                     // Convert string data_compression to DataCompressionType
-                    let compression_type =
-                        data_compression
-                            .as_ref()
-                            .and_then(|s| match s.to_uppercase().as_str() {
-                                "NONE" => Some(DataCompressionType::None),
-                                "ROW" => Some(DataCompressionType::Row),
-                                "PAGE" => Some(DataCompressionType::Page),
-                                "COLUMNSTORE" => Some(DataCompressionType::Columnstore),
-                                "COLUMNSTORE_ARCHIVE" => {
-                                    Some(DataCompressionType::ColumnstoreArchive)
-                                }
-                                _ => None,
-                            });
+                    let compression_type = data_compression
+                        .as_ref()
+                        .and_then(|s| parse_data_compression(s));
                     // Convert ParsedIndexColumn to IndexColumn
                     let index_columns: Vec<IndexColumn> = columns
                         .iter()
@@ -296,16 +333,9 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     data_compression,
                     filter_predicate,
                 } => {
-                    let compression_type =
-                        data_compression
-                            .as_ref()
-                            .and_then(|s| match s.to_uppercase().as_str() {
-                                "COLUMNSTORE" => Some(DataCompressionType::Columnstore),
-                                "COLUMNSTORE_ARCHIVE" => {
-                                    Some(DataCompressionType::ColumnstoreArchive)
-                                }
-                                _ => None,
-                            });
+                    let compression_type = data_compression
+                        .as_ref()
+                        .and_then(|s| parse_data_compression(s));
                     model.add_element(ModelElement::ColumnstoreIndex(ColumnstoreIndexElement {
                         name: name.clone(),
                         table_schema: table_schema.clone(),
@@ -532,13 +562,15 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                     schema,
                     name,
                 } => {
-                    let sql_type = match object_type.to_uppercase().as_str() {
-                        "TABLE" => Some("SqlTable"),
-                        "VIEW" => Some("SqlView"),
+                    let sql_type = if object_type.eq_ignore_ascii_case("TABLE") {
+                        Some("SqlTable")
+                    } else if object_type.eq_ignore_ascii_case("VIEW") {
+                        Some("SqlView")
+                    } else {
                         // Skip other object types - they would cause deployment failures
                         // ALTER TABLE, INDEX, FULLTEXT INDEX, etc. are not supported as raw elements
                         // Note: TRIGGER is now handled by FallbackStatementType::Trigger
-                        _ => None,
+                        None
                     };
                     if let Some(sql_type) = sql_type {
                         let schema_owned = track_schema(&mut schemas, schema);
@@ -1038,15 +1070,14 @@ pub fn build_model(statements: &[ParsedStatement], project: &SqlProject) -> Resu
                 // Detect function type from raw SQL (more reliable than parsed return type)
                 // Inline TVF: "RETURNS TABLE" without table variable
                 // Multi-statement TVF: "RETURNS @variable TABLE (...)"
-                let sql_upper = parsed.sql_text.to_uppercase();
-                let function_type = if sql_upper.contains("RETURNS TABLE") {
+                let function_type = if contains_ci(&parsed.sql_text, "RETURNS TABLE") {
                     FunctionType::InlineTableValued
-                } else if sql_upper.contains("RETURNS @") {
+                } else if contains_ci(&parsed.sql_text, "RETURNS @") {
                     FunctionType::TableValued
                 } else if create_func
                     .return_type
                     .as_ref()
-                    .map(|t| t.to_string().to_uppercase().contains("TABLE"))
+                    .map(|t| contains_ci(&t.to_string(), "TABLE"))
                     .unwrap_or(false)
                 {
                     // Fallback: if parsed return type contains TABLE but didn't match above patterns
@@ -1985,23 +2016,21 @@ fn fulltext_column_from_extracted(col: &ExtractedFullTextColumn) -> FullTextColu
 /// Extract type parameters from a string data type (e.g., "NVARCHAR(50)", "DECIMAL(18, 2)")
 fn extract_type_params_from_string(data_type: &str) -> (Option<i32>, Option<u8>, Option<u8>) {
     // Check for MAX indicator
-    if data_type.to_uppercase().contains("MAX") {
+    if contains_ci(data_type, "MAX") {
         return (Some(-1), None, None);
     }
-
-    let base_type = data_type.to_uppercase();
 
     // Parse parameters from type string like "NVARCHAR(50)" or "DECIMAL(18, 2)"
     if let Some(caps) = TYPE_PARAMS_RE.captures(data_type) {
         let first: Option<i32> = caps.get(1).and_then(|m| m.as_str().parse().ok());
         let second: Option<u8> = caps.get(2).and_then(|m| m.as_str().parse().ok());
 
-        if base_type.starts_with("DECIMAL") || base_type.starts_with("NUMERIC") {
+        if starts_with_ci(data_type, "DECIMAL") || starts_with_ci(data_type, "NUMERIC") {
             // For DECIMAL/NUMERIC: first is precision, second is scale
             return (None, first.map(|v| v as u8), second);
-        } else if base_type.starts_with("DATETIME2")
-            || base_type.starts_with("TIME")
-            || base_type.starts_with("DATETIMEOFFSET")
+        } else if starts_with_ci(data_type, "DATETIME2")
+            || starts_with_ci(data_type, "TIME")
+            || starts_with_ci(data_type, "DATETIMEOFFSET")
         {
             // For datetime types with fractional seconds: use Scale property (not Precision)
             // The value is the fractional seconds precision (0-7)
@@ -2013,9 +2042,9 @@ fn extract_type_params_from_string(data_type: &str) -> (Option<i32>, Option<u8>,
     }
 
     // Handle datetime types without explicit precision - they default to 7
-    if base_type.starts_with("DATETIME2")
-        || base_type.starts_with("TIME")
-        || base_type.starts_with("DATETIMEOFFSET")
+    if starts_with_ci(data_type, "DATETIME2")
+        || starts_with_ci(data_type, "TIME")
+        || starts_with_ci(data_type, "DATETIMEOFFSET")
     {
         // DotNet always emits Scale="7" for these types when no explicit precision
         return (None, None, Some(7));
@@ -2185,34 +2214,33 @@ fn extract_constraint_clustering(
     constraint_name: &str,
     is_primary_key: bool,
 ) -> Option<bool> {
-    let upper_sql = raw_sql.to_uppercase();
-
     // Try to find the constraint definition in the SQL
     // First, try to find a named constraint
-    let constraint_name_upper = constraint_name.to_uppercase();
-    let constraint_pattern = format!("CONSTRAINT [{}]", constraint_name_upper);
-    let constraint_pattern_bare = format!("CONSTRAINT {}", constraint_name_upper);
+    let constraint_pattern = format!("CONSTRAINT [{}]", constraint_name);
+    let constraint_pattern_bare = format!("CONSTRAINT {}", constraint_name);
 
-    // Find the position of the constraint in the SQL
-    let constraint_start = upper_sql
-        .find(&constraint_pattern)
-        .or_else(|| upper_sql.find(&constraint_pattern_bare));
+    // Find the position of the constraint in the SQL (case-insensitive)
+    let constraint_start = find_ci(raw_sql, &constraint_pattern)
+        .or_else(|| find_ci(raw_sql, &constraint_pattern_bare));
 
     if let Some(start_pos) = constraint_start {
         // Look at the text after the constraint name for CLUSTERED/NONCLUSTERED
-        let remaining = &upper_sql[start_pos..];
+        let remaining = &raw_sql[start_pos..];
 
         // Find the end of this constraint definition (next CONSTRAINT or end of CREATE TABLE)
-        let end_pos = remaining[20..]
-            .find("CONSTRAINT")
-            .map(|p| p + 20)
-            .unwrap_or(remaining.len());
+        let end_pos = if remaining.len() > 20 {
+            find_ci(&remaining[20..], "CONSTRAINT")
+                .map(|p| p + 20)
+                .unwrap_or(remaining.len())
+        } else {
+            remaining.len()
+        };
         let constraint_def = &remaining[..end_pos];
 
         // Check for NONCLUSTERED before CLUSTERED to avoid matching "NONCLUSTERED" as "CLUSTERED"
-        if constraint_def.contains("NONCLUSTERED") {
+        if contains_ci(constraint_def, "NONCLUSTERED") {
             return Some(false);
-        } else if constraint_def.contains("CLUSTERED") {
+        } else if contains_ci(constraint_def, "CLUSTERED") {
             return Some(true);
         }
     }
@@ -2224,17 +2252,17 @@ fn extract_constraint_clustering(
         "UNIQUE"
     };
 
-    if let Some(keyword_pos) = upper_sql.find(keyword) {
+    if let Some(keyword_pos) = find_ci(raw_sql, keyword) {
         // Look at the text after PRIMARY KEY or UNIQUE
-        let remaining = &upper_sql[keyword_pos..];
+        let remaining = &raw_sql[keyword_pos..];
         let end_pos = remaining
             .find('(')
             .unwrap_or_else(|| remaining.len().min(100));
         let constraint_def = &remaining[..end_pos];
 
-        if constraint_def.contains("NONCLUSTERED") {
+        if contains_ci(constraint_def, "NONCLUSTERED") {
             return Some(false);
-        } else if constraint_def.contains("CLUSTERED") {
+        } else if contains_ci(constraint_def, "CLUSTERED") {
             return Some(true);
         }
     }
@@ -2363,10 +2391,7 @@ fn constraint_from_table_constraint(
 
 /// Check if a procedure or function definition uses NATIVE_COMPILATION
 fn is_natively_compiled(definition: &str) -> bool {
-    let upper = definition.to_uppercase();
-    // Look for WITH NATIVE_COMPILATION in the definition
-    // It can appear as "WITH NATIVE_COMPILATION" or "WITH NATIVE_COMPILATION, SCHEMABINDING" etc.
-    upper.contains("NATIVE_COMPILATION")
+    contains_ci(definition, "NATIVE_COMPILATION")
 }
 
 /// Extract FILLFACTOR from index WITH clause options
@@ -2376,7 +2401,7 @@ fn extract_fill_factor(with_options: &[Expr]) -> Option<u8> {
             if *op == BinaryOperator::Eq {
                 // Check if the left side is FILLFACTOR identifier
                 if let Expr::Identifier(ident) = left.as_ref() {
-                    if ident.value.to_uppercase() == "FILLFACTOR" {
+                    if ident.value.eq_ignore_ascii_case("FILLFACTOR") {
                         // Extract the numeric value from the right side
                         if let Expr::Value(sqlparser::ast::Value::Number(n, _)) = right.as_ref() {
                             if let Ok(val) = n.parse::<u8>() {
@@ -2398,19 +2423,10 @@ fn extract_data_compression(with_options: &[Expr]) -> Option<DataCompressionType
             if *op == BinaryOperator::Eq {
                 // Check if the left side is DATA_COMPRESSION identifier
                 if let Expr::Identifier(ident) = left.as_ref() {
-                    if ident.value.to_uppercase() == "DATA_COMPRESSION" {
+                    if ident.value.eq_ignore_ascii_case("DATA_COMPRESSION") {
                         // Extract the compression type from the right side
                         if let Expr::Identifier(value_ident) = right.as_ref() {
-                            return match value_ident.value.to_uppercase().as_str() {
-                                "NONE" => Some(DataCompressionType::None),
-                                "ROW" => Some(DataCompressionType::Row),
-                                "PAGE" => Some(DataCompressionType::Page),
-                                "COLUMNSTORE" => Some(DataCompressionType::Columnstore),
-                                "COLUMNSTORE_ARCHIVE" => {
-                                    Some(DataCompressionType::ColumnstoreArchive)
-                                }
-                                _ => None,
-                            };
+                            return parse_data_compression(&value_ident.value);
                         }
                     }
                 }
@@ -2441,19 +2457,16 @@ fn extended_property_from_extracted(
 /// Extract view options (SCHEMABINDING, WITH CHECK OPTION, VIEW_METADATA) from SQL text
 /// Returns (is_schema_bound, is_with_check_option, is_metadata_reported)
 fn extract_view_options(sql: &str) -> (bool, bool, bool) {
-    let upper = sql.to_uppercase();
-
     // WITH SCHEMABINDING appears before AS in the view definition
-    let is_schema_bound = upper.contains("WITH SCHEMABINDING")
-        || upper.contains("WITH SCHEMABINDING,")
-        || upper.contains(", SCHEMABINDING")
-        || upper.contains(",SCHEMABINDING");
+    let is_schema_bound = contains_ci(sql, "WITH SCHEMABINDING")
+        || contains_ci(sql, ", SCHEMABINDING")
+        || contains_ci(sql, ",SCHEMABINDING");
 
     // WITH CHECK OPTION appears at the end of the view definition
-    let is_with_check_option = upper.contains("WITH CHECK OPTION");
+    let is_with_check_option = contains_ci(sql, "WITH CHECK OPTION");
 
     // VIEW_METADATA appears in WITH clause before AS
-    let is_metadata_reported = upper.contains("VIEW_METADATA");
+    let is_metadata_reported = contains_ci(sql, "VIEW_METADATA");
 
     (is_schema_bound, is_with_check_option, is_metadata_reported)
 }
@@ -2479,14 +2492,11 @@ struct TemporalMetadata {
 /// This is used when sqlparser-rs successfully parses a CREATE TABLE
 /// but doesn't expose temporal-specific properties in the AST.
 fn extract_temporal_metadata_from_sql(sql: &str) -> TemporalMetadata {
-    let upper = sql.to_uppercase();
-
     // Extract PERIOD FOR SYSTEM_TIME columns
-    let (start_col, end_col) = extract_period_columns(sql, &upper);
+    let (start_col, end_col) = extract_period_columns(sql);
 
     // Extract SYSTEM_VERSIONING options
-    let (is_system_versioned, history_schema, history_name) =
-        extract_versioning_options(sql, &upper);
+    let (is_system_versioned, history_schema, history_name) = extract_versioning_options(sql);
 
     // Extract GENERATED ALWAYS AS ROW START/END column names
     let generated_always_start_columns = extract_generated_always_columns(sql, "START");
@@ -2508,8 +2518,8 @@ fn extract_temporal_metadata_from_sql(sql: &str) -> TemporalMetadata {
 }
 
 /// Extract PERIOD FOR SYSTEM_TIME column names from SQL
-fn extract_period_columns(sql: &str, upper: &str) -> (Option<String>, Option<String>) {
-    if !upper.contains("PERIOD") || !upper.contains("SYSTEM_TIME") {
+fn extract_period_columns(sql: &str) -> (Option<String>, Option<String>) {
+    if !contains_ci(sql, "PERIOD") || !contains_ci(sql, "SYSTEM_TIME") {
         return (None, None);
     }
 
@@ -2523,8 +2533,8 @@ fn extract_period_columns(sql: &str, upper: &str) -> (Option<String>, Option<Str
 }
 
 /// Extract SYSTEM_VERSIONING options from SQL
-fn extract_versioning_options(sql: &str, upper: &str) -> (bool, Option<String>, Option<String>) {
-    if !upper.contains("SYSTEM_VERSIONING") {
+fn extract_versioning_options(sql: &str) -> (bool, Option<String>, Option<String>) {
+    if !contains_ci(sql, "SYSTEM_VERSIONING") {
         return (false, None, None);
     }
 
