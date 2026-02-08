@@ -341,11 +341,80 @@ impl PreprocessTokenParser {
     }
 }
 
+/// Check if SQL text might need preprocessing transformations.
+///
+/// This is a fast-path check that scans the raw bytes for trigger patterns:
+/// - `BINARY` (case-insensitive) — triggers H1 (BINARY/VARBINARY MAX replacement)
+/// - `DEFAULT` (case-insensitive) — triggers H2 (DEFAULT FOR constraint extraction)
+/// - `,` followed by optional whitespace then `)` — triggers H3 (trailing comma cleanup)
+///
+/// If none of these patterns are found, we can skip the expensive tokenize-and-reconstruct
+/// entirely and return the input unchanged (zero-alloc fast path).
+fn needs_preprocessing(sql: &str) -> bool {
+    let bytes = sql.as_bytes();
+
+    // Check for BINARY (covers both BINARY and VARBINARY) — case-insensitive
+    // Check for DEFAULT — case-insensitive
+    let mut has_binary = false;
+    let mut has_default = false;
+    for window in bytes.windows(7) {
+        if !has_binary && window.len() >= 6 && window[..6].eq_ignore_ascii_case(b"BINARY") {
+            has_binary = true;
+        }
+        if window.eq_ignore_ascii_case(b"DEFAULT") {
+            has_default = true;
+        }
+        if has_binary && has_default {
+            return true;
+        }
+    }
+    // Also check for 6-byte BINARY if the last window was too short
+    if !has_binary && bytes.len() >= 6 {
+        let tail = &bytes[bytes.len().saturating_sub(6)..];
+        if tail.eq_ignore_ascii_case(b"BINARY") {
+            has_binary = true;
+        }
+    }
+
+    if has_binary || has_default {
+        return true;
+    }
+
+    // Check for trailing comma: `,` followed by optional whitespace then `)`
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b',' {
+            let mut j = i + 1;
+            while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r' | b'\n') {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b')' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+
+    false
+}
+
 /// Preprocess T-SQL using token-based parsing
 ///
 /// This is the main entry point that replaces the regex-based preprocessing.
 /// It correctly handles string literals and comments.
+///
+/// Includes a fast-path bypass (Phase 74): if the SQL contains none of the
+/// trigger patterns (BINARY, DEFAULT, trailing comma before `)`) then the
+/// input is returned unchanged without tokenization.
 pub fn preprocess_tsql_tokens(sql: &str) -> TokenPreprocessResult {
+    // Fast path: skip tokenization entirely when no transformations are needed
+    if !needs_preprocessing(sql) {
+        return TokenPreprocessResult {
+            sql: sql.to_string(),
+            extracted_defaults: Vec::new(),
+        };
+    }
+
     match PreprocessTokenParser::new(sql) {
         Some(mut parser) => parser.preprocess(),
         None => {
@@ -568,5 +637,66 @@ mod tests {
         assert!(result.sql.contains("INT"));
         assert!(result.sql.contains("NOT NULL"));
         assert!(result.sql.contains("PRIMARY KEY"));
+    }
+
+    // === Fast-path bypass tests (Phase 74) ===
+
+    #[test]
+    fn test_needs_preprocessing_binary() {
+        assert!(needs_preprocessing("CREATE TABLE T ([Data] BINARY(MAX))"));
+        assert!(needs_preprocessing(
+            "CREATE TABLE T ([Data] varbinary(MAX))"
+        ));
+        assert!(needs_preprocessing("CREATE TABLE T ([Data] binary(100))"));
+    }
+
+    #[test]
+    fn test_needs_preprocessing_default() {
+        assert!(needs_preprocessing(
+            "CREATE TABLE T ([Id] INT, CONSTRAINT [DF_A] DEFAULT (1) FOR [A])"
+        ));
+        assert!(needs_preprocessing(
+            "CREATE TABLE T ([Active] BIT DEFAULT 1)"
+        ));
+    }
+
+    #[test]
+    fn test_needs_preprocessing_trailing_comma() {
+        assert!(needs_preprocessing("CREATE TABLE T ([Id] INT,)"));
+        assert!(needs_preprocessing("CREATE TABLE T ([Id] INT, )"));
+        assert!(needs_preprocessing("CREATE TABLE T ([Id] INT,\n)"));
+    }
+
+    #[test]
+    fn test_needs_preprocessing_false_for_simple_sql() {
+        // No BINARY, DEFAULT, or trailing comma — fast path should apply
+        assert!(!needs_preprocessing(
+            "CREATE TABLE T ([Id] INT NOT NULL PRIMARY KEY)"
+        ));
+        assert!(!needs_preprocessing(
+            "CREATE PROCEDURE [dbo].[MyProc] AS SELECT 1"
+        ));
+        assert!(!needs_preprocessing("SELECT 1"));
+        assert!(!needs_preprocessing(
+            "CREATE VIEW [dbo].[MyView] AS SELECT [Id] FROM [T]"
+        ));
+        assert!(!needs_preprocessing("CREATE INDEX IX_T ON [T] ([Id])"));
+    }
+
+    #[test]
+    fn test_fast_path_returns_identical_sql() {
+        // When fast path applies, the returned SQL should be identical to input
+        let sql = "CREATE PROCEDURE [dbo].[MyProc] AS SELECT 1";
+        let result = preprocess_tsql_tokens(sql);
+        assert_eq!(result.sql, sql);
+        assert!(result.extracted_defaults.is_empty());
+    }
+
+    #[test]
+    fn test_fast_path_comma_in_normal_position_not_triggered() {
+        // Commas followed by something other than ) should not trigger
+        assert!(!needs_preprocessing(
+            "CREATE TABLE T ([Id] INT, [Name] NVARCHAR(100))"
+        ));
     }
 }

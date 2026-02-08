@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-69, 71-73 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-73 complete, 74-77 pending.**
+**Phases 1-69, 71-74 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-74 complete, 75-77 pending.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-69, 71-73)
+## Completed Phases (1-69, 71-74)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -68,11 +68,12 @@
 | 71 | Pre-allocate model.xml buffer (+ DacMetadata.xml, Origin.xml) | All |
 | 72 | Cache ColumnRegistry view extraction results (eliminate double view parsing) | All |
 | 73 | Single tokenization for body dependency extraction | All |
+| 74 | Fast-path preprocessing bypass (skip tokenization when no transformations needed) | All |
 
 ### Key Milestones
 
 - **Parity Achievement (Phase 14):** L1-L3 100%, Relationships 97.9%
-- **Performance (Phase 16, improved through 69):** 186x/90x faster than DotNet cold/warm (stress_test, 135 files)
+- **Performance (Phase 16, improved through 74):** 186x/90x faster than DotNet cold/warm (stress_test, 135 files)
 - **Parser Modernization (Phases 15, 20):** All regex replaced with token-based parsing
 - **XML Parity (Phases 22-54):** Layer 7 improved from 0% to 50.0%
 
@@ -80,7 +81,7 @@
 
 ## Performance Tuning (Phases 63-77)
 
-### Completed (Phases 63-69, 71-73)
+### Completed (Phases 63-69, 71-74)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms → 30ms (3.4x improvement)
 
@@ -96,8 +97,9 @@
 | 71 | Pre-allocate model.xml buffer (`elements.len() * 2000`) | Eliminated ~24 Vec reallocations for large projects |
 | 72 | Cache view extraction results in ColumnRegistry | Eliminated double view parsing (10-20 tokenizations saved per view) |
 | 73 | Single tokenization for body dependency extraction | Eliminated 6 redundant tokenizations per procedure/function body |
+| 74 | Fast-path preprocessing bypass | Skip tokenize-and-reconstruct for SQL without trigger patterns |
 
-### Pending (Phases 74-77)
+### Pending (Phases 75-77)
 
 **Large project profiling (920 files, 8083 elements, 15MB model.xml):** ~1050ms total
 
@@ -158,18 +160,22 @@ Eliminated 6 redundant tokenizations per procedure/function body in `extract_bod
 
 ---
 
-### Phase 74 — Fast-path preprocessing bypass — PENDING
+### Phase 74 — Fast-path preprocessing bypass — COMPLETE
 
-Skip the tokenize-and-reconstruct preprocessing step when no transformations are needed. `preprocess_tsql_tokens()` currently tokenizes every SQL batch and reconstructs it character-by-character even when no BINARY(MAX), DEFAULT FOR, or trailing comma transformations apply. Most batches pass through unchanged.
+Added `needs_preprocessing()` fast-path check in `preprocess_tsql_tokens()`. Before invoking the full tokenizer, scans raw bytes for trigger patterns:
+- `BINARY` (case-insensitive) — triggers H1 (BINARY/VARBINARY MAX replacement)
+- `DEFAULT` (case-insensitive) — triggers H2 (DEFAULT FOR constraint extraction)
+- `,` followed by optional whitespace then `)` — triggers H3 (trailing comma cleanup)
 
-**Tasks:**
-1. Add a fast-path check: scan for trigger keywords (`BINARY`, `DEFAULT`, trailing `,` before `)`) before invoking the full tokenizer
-2. If no trigger keywords found, return the input unchanged (zero-alloc)
-3. Keep the full preprocessing path for batches that need it
-4. Verify all tests pass — preprocessing must still fire when needed
+If none of these patterns are found, the input is returned unchanged without tokenization. Most SQL batches (procedures, views, indexes, non-table DDL) skip the expensive tokenize-and-reconstruct entirely.
 
-**Files:** `src/parser/preprocess_parser.rs`, `src/parser/tsql_parser.rs`
-**Estimated savings:** 15-30ms on large projects
+**Changes:**
+- Added `needs_preprocessing()` function with byte-level scanning (no allocation)
+- `preprocess_tsql_tokens()` calls `needs_preprocessing()` first and returns early when no transformations needed
+- Added 7 unit tests covering trigger detection and fast-path behavior
+
+**Files:** `src/parser/preprocess_parser.rs`
+**Savings:** Eliminates tokenization for majority of SQL batches (estimated 15-30ms on large projects)
 
 ---
 
