@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-69, 71 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71 complete, 72-77 pending.**
+**Phases 1-69, 71-72 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-72 complete, 73-77 pending.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-69, 71)
+## Completed Phases (1-69, 71-72)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -66,6 +66,7 @@
 | 62 | Dynamic data masking (MASKED WITH column property) | All |
 | 63-69 | Performance tuning: regex caching, ZIP level, dead code, index-based keys, cached names, zero-alloc CI helpers, Arc\<str\> | All |
 | 71 | Pre-allocate model.xml buffer (+ DacMetadata.xml, Origin.xml) | All |
+| 72 | Cache ColumnRegistry view extraction results (eliminate double view parsing) | All |
 
 ### Key Milestones
 
@@ -78,7 +79,7 @@
 
 ## Performance Tuning (Phases 63-77)
 
-### Completed (Phases 63-69, 71)
+### Completed (Phases 63-69, 71-72)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms → 30ms (3.4x improvement)
 
@@ -92,8 +93,9 @@
 | 68 | Zero-alloc case-insensitive helpers (`contains_ci`, `starts_with_ci`) | Eliminated 16 `to_uppercase()` allocations |
 | 69 | `Arc<str>` for SQL definition text | Eliminated deep String copies across pipeline |
 | 71 | Pre-allocate model.xml buffer (`elements.len() * 2000`) | Eliminated ~24 Vec reallocations for large projects |
+| 72 | Cache view extraction results in ColumnRegistry | Eliminated double view parsing (10-20 tokenizations saved per view) |
 
-### Pending (Phases 72-77)
+### Pending (Phases 73-77)
 
 **Large project profiling (920 files, 8083 elements, 15MB model.xml):** ~1050ms total
 
@@ -120,18 +122,19 @@ Pre-allocated `Vec<u8>` buffers in `create_dacpac()`:
 
 ---
 
-### Phase 72 — Cache ColumnRegistry view extraction results — PENDING
+### Phase 72 — Cache ColumnRegistry view extraction results — COMPLETE
 
-Eliminate double view parsing during XML generation. Currently `ColumnRegistry::from_model()` calls `extract_view_query()` + `extract_view_columns_and_deps()` for every view, then `write_view()` calls the exact same functions again. Each view's SQL is tokenized 10-20 times total.
+Eliminated double view parsing during XML generation. `ColumnRegistry::from_model()` now caches `(query_script, columns, query_deps)` per view. `write_view()` and `write_raw_view()` look up cached results via `column_registry.get_cached_view()` instead of re-extracting.
 
-**Tasks:**
-1. Add a cache struct to store per-view extraction results (query text, columns, dependencies)
-2. Populate the cache during `ColumnRegistry::from_model()`
-3. Pass cached results to `write_view()` instead of re-extracting
-4. Verify parity — XML output must be identical
+**Changes:**
+- Added `ViewExtractionResult` struct and `view_cache: HashMap` to `ColumnRegistry`
+- `from_model()` now caches extraction results for both `ViewElement` and `RawElement` views
+- `write_view()` and `write_raw_view()` use cached results, with fallback to fresh extraction
+- Raw views (`ModelElement::Raw` with `sql_type == "SqlView"`) now also populate the column registry
+- Made `contains_ci()` in view_writer.rs `pub(crate)` for reuse in column_registry.rs
 
-**Files:** `src/dacpac/model_xml/column_registry.rs`, `src/dacpac/model_xml/view_writer.rs`, `src/dacpac/model_xml/mod.rs`
-**Estimated savings:** 150-200ms on large projects (largest single optimization)
+**Files:** `src/dacpac/model_xml/column_registry.rs`, `src/dacpac/model_xml/view_writer.rs`
+**Savings:** Eliminates 10-20 tokenizations per view (estimated 150-200ms on large projects)
 
 ---
 

@@ -8,7 +8,19 @@ use std::collections::{HashMap, HashSet};
 
 use crate::model::{DatabaseModel, ModelElement};
 
-use super::view_writer::{extract_view_columns_and_deps, extract_view_query};
+use super::view_writer::{extract_view_columns_and_deps, extract_view_query, ViewColumn};
+
+/// Cached view extraction results to avoid duplicate tokenization.
+///
+/// During model XML generation, each view's SQL is extracted and parsed twice:
+/// once for ColumnRegistry population and once for XML writing. This cache
+/// stores the results from the first extraction for reuse during writing.
+#[derive(Debug, Clone)]
+pub struct ViewExtractionResult {
+    pub query_script: String,
+    pub columns: Vec<ViewColumn>,
+    pub query_deps: Vec<String>,
+}
 
 /// Registry mapping tables and views to their column names.
 ///
@@ -23,6 +35,9 @@ pub struct ColumnRegistry {
     /// Tracks views with SELECT * that have unknown columns (can't be resolved statically)
     /// These views should be excluded from unqualified column resolution
     views_with_wildcard: HashSet<String>,
+    /// Cached view extraction results keyed by lowercase `[schema].[name]`
+    /// Populated during from_model() and consumed by write_view()/write_raw_view()
+    view_cache: HashMap<String, ViewExtractionResult>,
 }
 
 impl ColumnRegistry {
@@ -31,6 +46,7 @@ impl ColumnRegistry {
         Self {
             table_columns: HashMap::new(),
             views_with_wildcard: HashSet::new(),
+            view_cache: HashMap::new(),
         }
     }
 
@@ -66,7 +82,7 @@ impl ColumnRegistry {
 
                     // Extract columns from the view SELECT clause
                     // Pass the model to enable SELECT * expansion
-                    let (view_columns, _query_deps) = extract_view_columns_and_deps(
+                    let (view_columns, query_deps) = extract_view_columns_and_deps(
                         &query_script,
                         default_schema,
                         model,
@@ -87,13 +103,74 @@ impl ColumnRegistry {
                     let columns: HashSet<String> =
                         view_columns.iter().map(|c| c.name.to_lowercase()).collect();
 
-                    registry.table_columns.insert(view_key, columns);
+                    registry.table_columns.insert(view_key.clone(), columns);
+
+                    // Cache extraction results for reuse during XML writing (Phase 72)
+                    registry.view_cache.insert(
+                        view_key,
+                        ViewExtractionResult {
+                            query_script,
+                            columns: view_columns,
+                            query_deps,
+                        },
+                    );
+                }
+                ModelElement::Raw(raw) if raw.sql_type == "SqlView" => {
+                    let view_key = format!("[{}].[{}]", raw.schema, raw.name).to_lowercase();
+
+                    // Extract view properties from raw SQL text (same logic as write_raw_view)
+                    let is_schema_bound = {
+                        let def = &raw.definition;
+                        super::view_writer::contains_ci(def, "WITH SCHEMABINDING")
+                            || super::view_writer::contains_ci(def, ", SCHEMABINDING")
+                            || super::view_writer::contains_ci(def, ",SCHEMABINDING")
+                    };
+
+                    // Extract the SELECT query from the raw view definition
+                    let query_script = extract_view_query(&raw.definition);
+
+                    // Extract columns from the view SELECT clause
+                    let (view_columns, query_deps) = extract_view_columns_and_deps(
+                        &query_script,
+                        default_schema,
+                        model,
+                        is_schema_bound,
+                    );
+
+                    // Check for SELECT * wildcard
+                    let has_wildcard = view_columns.iter().any(|c| c.from_select_star);
+                    if has_wildcard {
+                        registry.views_with_wildcard.insert(view_key.clone());
+                    }
+
+                    // Add column names to the registry
+                    let columns: HashSet<String> =
+                        view_columns.iter().map(|c| c.name.to_lowercase()).collect();
+                    registry.table_columns.insert(view_key.clone(), columns);
+
+                    // Cache extraction results for reuse during XML writing (Phase 72)
+                    registry.view_cache.insert(
+                        view_key,
+                        ViewExtractionResult {
+                            query_script,
+                            columns: view_columns,
+                            query_deps,
+                        },
+                    );
                 }
                 _ => {}
             }
         }
 
         registry
+    }
+
+    /// Look up cached view extraction results.
+    /// Returns None if no cache entry exists for this view key.
+    /// The key should be in format `[schema].[name]` (brackets required, case-insensitive).
+    pub fn get_cached_view(&self, view_key: &str) -> Option<&ViewExtractionResult> {
+        let key = view_key.to_lowercase();
+        self.view_cache.get(&key)
     }
 
     /// Check if a table has a specific column

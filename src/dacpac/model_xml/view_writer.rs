@@ -13,7 +13,7 @@ use std::io::Write;
 use crate::model::{DatabaseModel, ModelElement, RawElement, ViewElement};
 
 /// Case-insensitive substring search without allocating an uppercase copy.
-fn contains_ci(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_ci(haystack: &str, needle: &str) -> bool {
     let needle_bytes = needle.as_bytes();
     let haystack_bytes = haystack.as_bytes();
     if needle_bytes.len() > haystack_bytes.len() {
@@ -56,7 +56,7 @@ pub(crate) fn write_view<W: Write>(
     view: &ViewElement,
     model: &DatabaseModel,
     default_schema: &str,
-    _column_registry: &ColumnRegistry,
+    column_registry: &ColumnRegistry,
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", view.schema, view.name);
 
@@ -76,9 +76,20 @@ pub(crate) fn write_view<W: Write>(
         write_property(writer, "IsMetadataReported", "True")?;
     }
 
+    // Phase 72: Use cached extraction results from ColumnRegistry instead of re-extracting.
+    // The cache is populated during ColumnRegistry::from_model() which already calls
+    // extract_view_query() and extract_view_columns_and_deps() for every view.
+    let cached = column_registry.get_cached_view(&full_name);
+
     // 3. QueryScript
-    let query_script = extract_view_query(&view.definition);
-    write_script_property(writer, "QueryScript", &query_script)?;
+    let query_script_owned;
+    let query_script = if let Some(c) = cached {
+        &c.query_script
+    } else {
+        query_script_owned = extract_view_query(&view.definition);
+        &query_script_owned
+    };
+    write_script_property(writer, "QueryScript", query_script)?;
 
     // 4. IsWithCheckOption (if true)
     if view.is_with_check_option {
@@ -91,25 +102,35 @@ pub(crate) fn write_view<W: Write>(
 
     // Extract view columns and dependencies from the query
     // DotNet emits Columns and QueryDependencies for ALL views
-    // Pass the model to enable SELECT * expansion to actual table columns
-    // Pass is_schema_bound to control GROUP BY duplicate handling
-    // NOTE: Use project's default_schema for unqualified table resolution, NOT the view's schema.
-    // DotNet resolves unqualified table names to the project's default schema (typically [dbo]).
-    let (columns, query_deps) =
-        extract_view_columns_and_deps(&query_script, default_schema, model, view.is_schema_bound);
+    // Phase 72: Use cached results if available, otherwise extract fresh
+    let columns_owned;
+    let query_deps_owned;
+    let (columns, query_deps) = if let Some(c) = cached {
+        (&c.columns, &c.query_deps)
+    } else {
+        let (c, d) = extract_view_columns_and_deps(
+            query_script,
+            default_schema,
+            model,
+            view.is_schema_bound,
+        );
+        columns_owned = c;
+        query_deps_owned = d;
+        (&columns_owned, &query_deps_owned)
+    };
 
     // 6. Write Columns relationship with SqlComputedColumn elements
     if !columns.is_empty() {
-        write_view_columns(writer, &full_name, &columns)?;
+        write_view_columns(writer, &full_name, columns)?;
     }
 
     // 7. Write DynamicObjects relationship for CTEs
     // NOTE: Use project's default_schema for unqualified table resolution, NOT the view's schema.
-    write_view_cte_dynamic_objects(writer, &full_name, &query_script, default_schema)?;
+    write_view_cte_dynamic_objects(writer, &full_name, query_script, default_schema)?;
 
     // 8. Write QueryDependencies relationship
     if !query_deps.is_empty() {
-        write_query_dependencies(writer, &query_deps)?;
+        write_query_dependencies(writer, query_deps)?;
     }
 
     // 9. Schema relationship
@@ -129,7 +150,7 @@ pub(crate) fn write_raw_view<W: Write>(
     raw: &RawElement,
     model: &DatabaseModel,
     default_schema: &str,
-    _column_registry: &ColumnRegistry,
+    column_registry: &ColumnRegistry,
 ) -> anyhow::Result<()> {
     let full_name = format!("[{}].[{}]", raw.schema, raw.name);
 
@@ -161,9 +182,18 @@ pub(crate) fn write_raw_view<W: Write>(
         write_property(writer, "IsMetadataReported", "True")?;
     }
 
+    // Phase 72: Use cached extraction results from ColumnRegistry instead of re-extracting.
+    let cached = column_registry.get_cached_view(&full_name);
+
     // 3. QueryScript
-    let query_script = extract_view_query(&raw.definition);
-    write_script_property(writer, "QueryScript", &query_script)?;
+    let query_script_owned;
+    let query_script = if let Some(c) = cached {
+        &c.query_script
+    } else {
+        query_script_owned = extract_view_query(&raw.definition);
+        &query_script_owned
+    };
+    write_script_property(writer, "QueryScript", query_script)?;
 
     // 4. IsWithCheckOption (if true)
     if is_with_check_option {
@@ -176,23 +206,31 @@ pub(crate) fn write_raw_view<W: Write>(
 
     // Extract view columns and dependencies from the query
     // DotNet emits Columns and QueryDependencies for ALL views
-    // NOTE: Use project's default_schema for unqualified table resolution, NOT the view's schema.
-    // DotNet resolves unqualified table names to the project's default schema (typically [dbo]).
-    let (columns, query_deps) =
-        extract_view_columns_and_deps(&query_script, default_schema, model, is_schema_bound);
+    // Phase 72: Use cached results if available, otherwise extract fresh
+    let columns_owned;
+    let query_deps_owned;
+    let (columns, query_deps) = if let Some(c) = cached {
+        (&c.columns, &c.query_deps)
+    } else {
+        let (c, d) =
+            extract_view_columns_and_deps(query_script, default_schema, model, is_schema_bound);
+        columns_owned = c;
+        query_deps_owned = d;
+        (&columns_owned, &query_deps_owned)
+    };
 
     // 6. Write Columns relationship with SqlComputedColumn elements
     if !columns.is_empty() {
-        write_view_columns(writer, &full_name, &columns)?;
+        write_view_columns(writer, &full_name, columns)?;
     }
 
     // 7. Write DynamicObjects relationship for CTEs
     // NOTE: Use project's default_schema for unqualified table resolution, NOT the view's schema.
-    write_view_cte_dynamic_objects(writer, &full_name, &query_script, default_schema)?;
+    write_view_cte_dynamic_objects(writer, &full_name, query_script, default_schema)?;
 
     // 8. Write QueryDependencies relationship
     if !query_deps.is_empty() {
-        write_query_dependencies(writer, &query_deps)?;
+        write_query_dependencies(writer, query_deps)?;
     }
 
     // 9. Schema relationship
