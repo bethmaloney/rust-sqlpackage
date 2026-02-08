@@ -2,9 +2,9 @@
 
 ---
 
-## Status: PARITY COMPLETE | OLTP FEATURE SUPPORT IN PROGRESS
+## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-62 complete. Full parity: 47/48 (97.9%).**
+**Phases 1-62 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -39,7 +39,7 @@
 | 12-13 | SELECT * expansion, TVF columns, TVP support | 10/10 |
 | 14 | Layer 3 (SqlPackage) parity | 3/3 |
 | 15, 20 | Parser refactoring: replace regex with token-based parsing | 77/77 |
-| 16 | Performance: 116x faster than DotNet cold, 42x faster warm | 18/18 |
+| 16 | Performance optimization (initial): 39x/16x vs DotNet cold/warm | 18/18 |
 | 17-19 | Real-world compatibility: comma-less constraints, SQLCMD, TVP parsing | 11/11 |
 | 21 | Split model_xml.rs into submodules | 10/10 |
 | 22-25 | Layer 7 XML parity, IsMax, dynamic column sources, constraint properties | 27/28 |
@@ -72,6 +72,131 @@
 ### Key Milestones
 
 - **Parity Achievement (Phase 14):** L1-L3 100%, Relationships 97.9%
-- **Performance (Phase 16):** 116x/42x faster than DotNet cold/warm
+- **Performance (Phase 16):** 39x/16x faster than DotNet cold/warm (stress_test, 135 files)
 - **Parser Modernization (Phases 15, 20):** All regex replaced with token-based parsing
 - **XML Parity (Phases 22-54):** Layer 7 improved from 0% to 50.0%
+
+---
+
+## Performance Tuning (Phases 63-70)
+
+**Baseline (stress_test, 135 files, 456 elements):** 103ms total
+
+| Stage | Time | % |
+|-------|------|---|
+| Project parse | 0.3ms | 0.2% |
+| SQL parsing | 3.8ms | 3.6% |
+| **Model building** | **80.6ms** | **75.8%** |
+| XML generation | 9.1ms | 8.5% |
+| Dacpac packaging | 12.6ms | 11.8% |
+
+**Target:** ~40-55ms (2-2.5x improvement), restoring 70-100x speedup vs DotNet.
+
+---
+
+### Phase 63 — Cache regex patterns with LazyLock (~20-40ms)
+
+28 `Regex::new()` calls are compiled on every invocation (only 1 uses `LazyLock`). Regex compilation is the single largest bottleneck.
+
+| Task | Description |
+|------|-------------|
+| 63.1 | Cache static regex patterns in `src/model/builder.rs` (6 patterns at lines 1979, 2501, 2521, 2527, 2559) using `static LazyLock<Regex>` |
+| 63.2 | Cache static regex patterns in `src/parser/index_parser.rs` (1 pattern at line 842) and `src/parser/tsql_parser.rs` (8 patterns at lines 1437, 1783, 1844, 1858, 1879, 1893, 1905, 1916) |
+| 63.3 | Cache static regex patterns in `src/parser/sqlcmd.rs` (4 patterns at lines 71, 87, 93, 331) |
+| 63.4 | Refactor dynamic regex in `builder.rs:2548` (`extract_generated_always_columns`) — pattern uses `format!` with runtime column name. Compile once per call and pass as parameter, or restructure to avoid regex |
+| 63.5 | Refactor dynamic regex in `programmability_writer.rs:919,924` — TVP param/column patterns built at runtime. Compile once per parameter set rather than per-match |
+| 63.6 | Refactor dynamic regex in `tsql_parser.rs:1331,1380,1943` — patterns use runtime table/param names. Compile once per call-site |
+| 63.7 | Run criterion benchmarks, compare model_building and full_pipeline times to baseline |
+
+---
+
+### Phase 64 — Lower ZIP compression level (~4-6ms)
+
+`packager.rs:41` uses deflate level 6 for a ~19KB file. Compression is pure overhead at this size.
+
+| Task | Description |
+|------|-------------|
+| 64.1 | Change `compression_level(Some(6))` to `compression_level(Some(1))` in `src/dacpac/packager.rs` |
+| 64.2 | Verify dacpac output is still valid (run compare test against a level-6 dacpac to confirm identical content after decompression) |
+| 64.3 | Run dacpac_packaging criterion benchmark, compare to baseline 4.2ms |
+
+---
+
+### Phase 65 — Eliminate Debug formatting for feature detection (~5-10ms)
+
+`builder.rs:1843,1850,1857` uses `format!("{:?}", opt.option).to_uppercase().contains(...)` to detect ROWGUIDCOL, SPARSE, FILESTREAM. This Debug-formats entire AST nodes to strings for every column option (~1200 allocations).
+
+| Task | Description |
+|------|-------------|
+| 65.1 | Replace ROWGUIDCOL detection (`builder.rs:1843`) with direct AST `ColumnOption` variant matching or raw SQL text check |
+| 65.2 | Replace SPARSE detection (`builder.rs:1850`) with direct AST variant matching or raw SQL text check |
+| 65.3 | Replace FILESTREAM detection (`builder.rs:1857`) with direct AST variant matching or raw SQL text check |
+| 65.4 | Run model_building criterion benchmark, confirm no regression in existing tests |
+
+---
+
+### Phase 66 — Index-based HashMap keys in disambiguator (~10-15ms)
+
+`assign_inline_constraint_disambiguators()` (builder.rs:1346-1791) makes 6 passes over all elements, building `HashMap<(String, String), ...>` by cloning table_schema/table_name strings. ~320 constraints produce thousands of redundant String allocations.
+
+| Task | Description |
+|------|-------------|
+| 66.1 | Replace `HashMap<(String, String), Vec<...>>` with `HashMap<usize, Vec<...>>` keyed by table element index in Phase 1 (lines 1362-1390) |
+| 66.2 | Update Phase 2 (lines 1395-1488) to use index-based lookups |
+| 66.3 | Update Passes A/B (lines 1490-1620) to use index-based lookups |
+| 66.4 | Update Phase 4-5 (lines 1625-1791) to use index-based lookups |
+| 66.5 | Pre-allocate HashMap capacity using known element counts |
+| 66.6 | Run model_building criterion benchmark, confirm no regression in existing tests |
+
+---
+
+### Phase 67 — Pre-compute element full_name (~3-5ms)
+
+`full_name()` (elements.rs:91-131) allocates via `format!()` on every call. Called during sorting (456 elements x 3 keys), schema deduplication, and disambiguation.
+
+| Task | Description |
+|------|-------------|
+| 67.1 | Add a `cached_full_name: String` field to each `ModelElement` variant's inner struct, populated during element creation |
+| 67.2 | Update `full_name()` to return `&str` referencing the cached field |
+| 67.3 | Update `xml_name_attr()` and `sort_elements()` to use cached names |
+| 67.4 | Run model_building criterion benchmark, confirm improvement |
+
+---
+
+### Phase 68 — Reduce to_uppercase() calls (~2-3ms)
+
+Multiple call sites convert full SQL text to uppercase for case-insensitive matching: `builder.rs:1017,2173,2351,2429,2467`. Called per table (~40x), per constraint (~80x), per proc/func (~50x).
+
+| Task | Description |
+|------|-------------|
+| 68.1 | Replace `to_uppercase().contains()` patterns with case-insensitive regex (already cached from Phase 63) or `str::to_ascii_uppercase` where needed |
+| 68.2 | In `extract_temporal_metadata_from_sql` (builder.rs:2467), compute uppercase once and pass to all sub-functions |
+| 68.3 | In `extract_constraint_clustering` (builder.rs:2173), use case-insensitive matching instead of `to_uppercase()` |
+| 68.4 | In `is_natively_compiled` (builder.rs:2351), use `contains`-style case-insensitive check |
+| 68.5 | Run model_building criterion benchmark, confirm no regression |
+
+---
+
+### Phase 69 — Arc\<str\> for SQL definition text (~2-3ms)
+
+Every model element clones the full SQL definition text (builder.rs:188,212,338,...). For 135 statements, this is 135 deep String copies. Procedures/functions can be kilobytes each.
+
+| Task | Description |
+|------|-------------|
+| 69.1 | Change `definition: String` fields in element structs to `definition: Arc<str>` |
+| 69.2 | Convert `ParsedStatement.sql_text` to `Arc<str>` at parse time so all downstream consumers share the allocation |
+| 69.3 | Update all `definition` consumers (model builders, XML writers) to work with `Arc<str>` |
+| 69.4 | Run full test suite, confirm no regressions |
+
+---
+
+### Phase 70 — ~~Parallelize model building with rayon~~ DEFERRED
+
+**Status:** Deferred — unlikely to provide meaningful gains after Phases 63-69.
+
+**Reasoning:** Phases 63-69 are expected to reduce model building from ~80.6ms to ~5-25ms. At that point:
+
+- **Per-item work is too small:** 135 statements across ~15ms = ~110μs per statement, which is borderline for rayon's per-item overhead. Work distribution + synchronization costs ~0.5-1ms, eating into any gains.
+- **Best case saves ~5-10ms, worst case is slower:** On small projects rayon overhead exceeds the parallelism benefit.
+- **High refactor cost:** The main loop (1019 lines) has shared mutable state (`model.elements` Vec and `schemas` BTreeSet) requiring a 500-800 line extraction into a pure function. This adds ongoing maintenance complexity.
+- **Re-profile after Phase 69:** The bottleneck will likely shift to XML generation or ZIP packaging, where simpler optimizations exist.
