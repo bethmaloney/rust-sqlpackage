@@ -38,7 +38,7 @@ pub fn create_dacpac(
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
-        .compression_level(Some(6));
+        .compression_level(Some(1));
 
     // Write model.xml
     let mut model_buffer = Cursor::new(Vec::new());
