@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-65 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
+**Phases 1-66 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-65)
+## Completed Phases (1-66)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -71,6 +71,7 @@
 | 63 | Cache regex patterns with LazyLock (21 static + 3 dynamic→string ops) | All |
 | 64 | Lower ZIP compression level (deflate 6→1, ~29% packaging speedup) | All |
 | 65 | Eliminate Debug formatting for feature detection (dead code removal) | All |
+| 66 | Index-based HashMap keys in disambiguator (eliminate String clones) | All |
 
 ### Key Milestones
 
@@ -81,7 +82,7 @@
 
 ---
 
-## Performance Tuning (Phases 63-70, 65 complete)
+## Performance Tuning (Phases 63-70, 66 complete)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms total
 
@@ -125,18 +126,17 @@ Removed dead code: `format!("{:?}", opt.option).to_uppercase().contains(...)` fo
 
 ---
 
-### Phase 66 — Index-based HashMap keys in disambiguator (~10-15ms)
+### Phase 66 — Index-based HashMap keys in disambiguator — COMPLETE
 
-`assign_inline_constraint_disambiguators()` (builder.rs:1346-1791) makes 6 passes over all elements, building `HashMap<(String, String), ...>` by cloning table_schema/table_name strings. ~320 constraints produce thousands of redundant String allocations.
+Replaced all `HashMap<(String, String), ...>` with `HashMap<usize, ...>` keyed by table element index in `assign_inline_constraint_disambiguators()`. Also replaced the 3-tuple `HashMap<(String, String, String), Vec<u32>>` (column annotations) with `HashMap<(usize, String), Vec<u32>>`.
 
-| Task | Description |
-|------|-------------|
-| 66.1 | Replace `HashMap<(String, String), Vec<...>>` with `HashMap<usize, Vec<...>>` keyed by table element index in Phase 1 (lines 1362-1390) |
-| 66.2 | Update Phase 2 (lines 1395-1488) to use index-based lookups |
-| 66.3 | Update Passes A/B (lines 1490-1620) to use index-based lookups |
-| 66.4 | Update Phase 4-5 (lines 1625-1791) to use index-based lookups |
-| 66.5 | Pre-allocate HashMap capacity using known element counts |
-| 66.6 | Run model_building criterion benchmark, confirm no regression in existing tests |
+**Approach:** Built a `constraint_to_table: HashMap<usize, usize>` mapping each constraint element index to its parent table element index during Phase 1. This eliminated all `table_schema.clone()` + `table_name.clone()` allocations in Phases 2-5. The `TableConstraintMap` type alias was updated from `HashMap<(String, String), ...>` to `HashMap<usize, ...>`.
+
+**Key insight:** A temporary `HashMap<(&str, &str), usize>` is used only during Pre-phase/Phase 1 to map constraint names to table indices, then dropped before any mutable borrows of `elements`. All later phases use the integer-keyed `constraint_to_table` map.
+
+**Files changed:** `builder.rs` (type alias + ~30 lines changed across 6 phases, net reduction in string allocations).
+
+**Skipped:** Task 66.5 (pre-allocate HashMap capacity) — micro-optimization with minimal gain since HashMap resizing cost is negligible compared to eliminated String clones.
 
 ---
 
