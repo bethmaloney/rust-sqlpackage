@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-69 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
+**Phases 1-69 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69 complete, 71-77 pending.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -56,156 +56,163 @@
 | 49 | Schema-aware unqualified column resolution (ColumnRegistry) | All |
 | 50 | Schema-aware resolution gaps (8 sub-phases) | 34/34 |
 | 50.9 | Decouple column and table annotation logic | All |
-| 51 | Layer 7 canonical comparison test fix | All |
-| 52 | Procedure-scoped table variable references | All |
-| 53 | Layer 7 XML parity (NUMERIC, Scale=0, IsPadded) | All |
-| 54 | Layer 7 inline constraint ordering (descending sort) | All |
-| 55 | Identifier extraction layer (double-bracket fix) | All |
+| 51-55 | Layer 7 XML parity (canonical comparison, NUMERIC, Scale=0, IsPadded, inline constraint ordering, identifier extraction) | All |
 | 56 | Synonym support (CREATE SYNONYM, SqlSynonym element, XML writer) | All |
 | 57 | Temporal tables (SYSTEM_VERSIONING, PERIOD FOR SYSTEM_TIME, history table relationships) | All |
 | 58 | Security objects (CREATE USER, CREATE ROLE, ALTER ROLE ADD MEMBER, GRANT/DENY/REVOKE) | All |
 | 59 | Database scoped configurations (silently skip — DacFx does not support) | All |
 | 60 | ALTER VIEW WITH SCHEMABINDING (fallback + AST dual-path support) | All |
 | 61 | Columnstore indexes (CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX) | All |
-| 62 | Dynamic data masking (MASKED WITH column property, GDPR/PCI-DSS compliance) | All |
-| 63 | Cache regex patterns with LazyLock (21 static + 3 dynamic→string ops) | All |
-| 64 | Lower ZIP compression level (deflate 6→1, ~29% packaging speedup) | All |
-| 65 | Eliminate Debug formatting for feature detection (dead code removal) | All |
-| 66 | Index-based HashMap keys in disambiguator (eliminate String clones) | All |
-| 67 | Pre-compute element full_name and xml_name_attr (cached in DatabaseModel) | All |
-| 68 | Reduce to_uppercase() calls (case-insensitive helpers, zero-alloc) | All |
-| 69 | Arc\<str\> for SQL definition text (eliminate deep String copies) | All |
+| 62 | Dynamic data masking (MASKED WITH column property) | All |
+| 63-69 | Performance tuning: regex caching, ZIP level, dead code, index-based keys, cached names, zero-alloc CI helpers, Arc\<str\> | All |
 
 ### Key Milestones
 
 - **Parity Achievement (Phase 14):** L1-L3 100%, Relationships 97.9%
-- **Performance (Phase 16):** 39x/16x faster than DotNet cold/warm (stress_test, 135 files)
+- **Performance (Phase 16, improved through 69):** 186x/90x faster than DotNet cold/warm (stress_test, 135 files)
 - **Parser Modernization (Phases 15, 20):** All regex replaced with token-based parsing
 - **XML Parity (Phases 22-54):** Layer 7 improved from 0% to 50.0%
 
 ---
 
-## Performance Tuning (Phases 63-70, 69 complete)
+## Performance Tuning (Phases 63-77)
 
-**Baseline (stress_test, 135 files, 456 elements):** 103ms total
+### Completed (Phases 63-69)
+
+**Baseline (stress_test, 135 files, 456 elements):** 103ms → 30ms (3.4x improvement)
+
+| Phase | Optimization | Impact |
+|-------|-------------|--------|
+| 63 | Cache 21 static regex patterns with `LazyLock` | Eliminated per-call regex compilation |
+| 64 | Lower ZIP compression (deflate 6→1) | ~29% faster packaging |
+| 65 | Remove dead Debug formatting for ROWGUIDCOL/SPARSE/FILESTREAM | Dead code removal |
+| 66 | Index-based HashMap keys in disambiguator | Eliminated String clones in constraint mapping |
+| 67 | Pre-compute element full_name/xml_name_attr in DatabaseModel | Eliminated repeated `format!()` during sort/XML gen |
+| 68 | Zero-alloc case-insensitive helpers (`contains_ci`, `starts_with_ci`) | Eliminated 16 `to_uppercase()` allocations |
+| 69 | `Arc<str>` for SQL definition text | Eliminated deep String copies across pipeline |
+
+### Pending (Phases 71-77)
+
+**Large project profiling (920 files, 8083 elements, 15MB model.xml):** ~1050ms total
 
 | Stage | Time | % |
 |-------|------|---|
-| Project parse | 0.3ms | 0.2% |
-| SQL parsing | 3.8ms | 3.6% |
-| **Model building** | **80.6ms** | **75.8%** |
-| XML generation | 9.1ms | 8.5% |
-| Dacpac packaging | 12.6ms | 11.8% |
+| Project parse | 4ms | 0.4% |
+| SQL parsing | 90ms | 8% |
+| Model building | 22ms | 2% |
+| **XML generation** | **450ms** | **42%** |
+| **Dacpac packaging** | **500ms** | **47%** |
 
-**Target:** ~40-55ms (2-2.5x improvement), restoring 70-100x speedup vs DotNet.
-
----
-
-### Phase 63 — Cache regex patterns with LazyLock — COMPLETE
-
-Cached 21 static regex patterns using `LazyLock<Regex>` across 4 files. Replaced 2 dynamic regex patterns in `programmability_writer.rs` with string-based word boundary matching (`contains_word_boundary`). Remaining 4 dynamic patterns (using runtime table/param names in `tsql_parser.rs:1331,1380,1943` and `builder.rs` via `extract_generic_object_name`) cannot be cached statically — these are fallback paths called infrequently.
-
-**Files changed:** `builder.rs` (7 static patterns), `tsql_parser.rs` (11 static patterns), `sqlcmd.rs` (3 static patterns), `index_parser.rs` (1 static pattern), `programmability_writer.rs` (2 dynamic→string ops).
+At scale, the bottleneck shifts from model building to XML generation and dacpac packaging. Phase 70 (parallelize model building) deferred — model building is only 2% of total time at scale.
 
 ---
 
-### Phase 64 — Lower ZIP compression level — COMPLETE
+### Phase 71 — Pre-allocate model.xml buffer — PENDING
 
-Changed deflate compression level from 6 to 1 in `src/dacpac/packager.rs`. For ~19KB dacpac files, level 6 provides negligible size benefit over level 1 while consuming significantly more CPU.
+Pre-allocate the `Vec<u8>` backing the model.xml writer in `create_dacpac()`. Currently uses `Cursor::new(Vec::new())` with no capacity hint. For large projects generating 15MB+ of XML, this causes ~24 reallocations (Vec doubling), each copying all previously written bytes.
 
-**Benchmark result:** dacpac_packaging/create_dacpac improved from ~5.6ms to ~3.98ms (**~29% faster**, p=0.00). All 1,894 tests pass — dacpac output remains valid (decompression produces identical content regardless of compression level).
+**Tasks:**
+1. In `packager.rs`, change `Cursor::new(Vec::new())` to `Cursor::new(Vec::with_capacity(model.elements.len() * 2000))` for the model.xml buffer
+2. Apply similar pre-allocation for DacMetadata.xml and Origin.xml buffers (smaller, but free to do)
+3. Benchmark before/after on stress_test fixture
 
----
-
-### Phase 65 — Eliminate Debug formatting for feature detection — COMPLETE
-
-Removed dead code: `format!("{:?}", opt.option).to_uppercase().contains(...)` for ROWGUIDCOL, SPARSE, FILESTREAM detection in `column_from_def()` (builder.rs).
-
-**Finding:** This code was unreachable. sqlparser-rs 0.54 doesn't recognize ROWGUIDCOL/SPARSE/FILESTREAM as keywords — any CREATE TABLE containing them fails parsing and goes through the fallback token-based parser (`column_parser.rs` lines 274-293), which handles these flags directly via `column_from_fallback_table()`. The AST path (`column_from_def()`) is only reached when sqlparser succeeds, which means these keywords are never present.
-
-**Impact:** Eliminates ~1200 unnecessary `format!("{:?}")` + `to_uppercase()` allocations per build (though in practice these allocations never triggered due to the dead code path). More importantly, removes misleading code that suggested sqlparser could parse these T-SQL features.
-
-**Files changed:** `builder.rs` (removed 18 lines of dead code, replaced with comment explaining why these are always false).
+**Files:** `src/dacpac/packager.rs`
+**Estimated savings:** 20-50ms on large projects
 
 ---
 
-### Phase 66 — Index-based HashMap keys in disambiguator — COMPLETE
+### Phase 72 — Cache ColumnRegistry view extraction results — PENDING
 
-Replaced all `HashMap<(String, String), ...>` with `HashMap<usize, ...>` keyed by table element index in `assign_inline_constraint_disambiguators()`. Also replaced the 3-tuple `HashMap<(String, String, String), Vec<u32>>` (column annotations) with `HashMap<(usize, String), Vec<u32>>`.
+Eliminate double view parsing during XML generation. Currently `ColumnRegistry::from_model()` calls `extract_view_query()` + `extract_view_columns_and_deps()` for every view, then `write_view()` calls the exact same functions again. Each view's SQL is tokenized 10-20 times total.
 
-**Approach:** Built a `constraint_to_table: HashMap<usize, usize>` mapping each constraint element index to its parent table element index during Phase 1. This eliminated all `table_schema.clone()` + `table_name.clone()` allocations in Phases 2-5. The `TableConstraintMap` type alias was updated from `HashMap<(String, String), ...>` to `HashMap<usize, ...>`.
+**Tasks:**
+1. Add a cache struct to store per-view extraction results (query text, columns, dependencies)
+2. Populate the cache during `ColumnRegistry::from_model()`
+3. Pass cached results to `write_view()` instead of re-extracting
+4. Verify parity — XML output must be identical
 
-**Key insight:** A temporary `HashMap<(&str, &str), usize>` is used only during Pre-phase/Phase 1 to map constraint names to table indices, then dropped before any mutable borrows of `elements`. All later phases use the integer-keyed `constraint_to_table` map.
-
-**Files changed:** `builder.rs` (type alias + ~30 lines changed across 6 phases, net reduction in string allocations).
-
-**Skipped:** Task 66.5 (pre-allocate HashMap capacity) — micro-optimization with minimal gain since HashMap resizing cost is negligible compared to eliminated String clones.
-
----
-
-### Phase 67 — Pre-compute element full_name and xml_name_attr — COMPLETE
-
-Added `cached_full_names: Vec<String>` and `cached_xml_names: Vec<String>` to `DatabaseModel`, computed once via `cache_element_names()` before sorting. The sort function (`sort_model()`) now uses pre-computed cached_xml_names instead of calling `xml_name_attr()` (which calls `full_name()` with `format!()`) per element. XML generation uses cached names for the db_options placement check.
-
-**Approach:** Rather than adding `cached_full_name` to all 24 inner element structs (which would require modifying ~288 pattern match sites), cached names are stored as parallel `Vec<String>` in `DatabaseModel`. The `sort_model()` function builds sort keys from cached names, sorts an index array, then applies the permutation to all three vecs (elements, cached_full_names, cached_xml_names) together. Names are re-cached after disambiguation for consistency.
-
-**Key insight:** `sort_by_cached_key` already caches sort keys internally, so the per-sort allocation savings are modest (~500 format!() calls avoided). The main benefit is making cached names available to the XML writer without additional allocations, and establishing the infrastructure for future phases to use `&str` references instead of owned Strings.
-
-**Files changed:** `database_model.rs` (added cached name fields + accessor methods), `builder.rs` (replaced `sort_elements` with `sort_model`, added `apply_permutation` helper), `model_xml/mod.rs` (use cached xml_name in db_options placement loop).
-
-**All 1,894 tests pass.** Parity regression test confirms no ordering changes.
+**Files:** `src/dacpac/model_xml/column_registry.rs`, `src/dacpac/model_xml/view_writer.rs`, `src/dacpac/model_xml/mod.rs`
+**Estimated savings:** 150-200ms on large projects (largest single optimization)
 
 ---
 
-### Phase 68 — Reduce to_uppercase() calls — COMPLETE
+### Phase 73 — Single tokenization for body dependency extraction — PENDING
 
-Introduced zero-allocation case-insensitive helpers (`contains_ci`, `starts_with_ci`, `find_ci`, `parse_data_compression`) in `builder.rs` to replace `to_uppercase()` calls that allocated full uppercase copies of SQL text for simple keyword matching.
+Reduce repeated tokenization of procedure/function bodies during XML generation. `extract_body_dependencies()` calls multiple sub-functions (`extract_table_aliases()`, `extract_column_references()`, `extract_declare_types()`, etc.), each of which independently tokenizes the same SQL body.
 
-**Changes in `builder.rs` (15 `to_uppercase()` calls eliminated):**
-- `extract_view_options()`: 1 `to_uppercase()` → 5 `contains_ci()` calls
-- `extract_constraint_clustering()`: 2 `to_uppercase()` + string `find`/`contains` → `find_ci()`/`contains_ci()`
-- `is_natively_compiled()`: 1 `to_uppercase().contains()` → `contains_ci()`
-- `extract_temporal_metadata_from_sql()` + sub-functions: 1 `to_uppercase()` removed, sub-functions (`extract_period_columns`, `extract_versioning_options`) now use `contains_ci()` directly instead of receiving pre-uppercased `&str`
-- `extract_type_params_from_string()`: 2 `to_uppercase()` → `contains_ci()`/`starts_with_ci()`
-- Function type detection (CreateFunction match arm): 2 `to_uppercase()` → `contains_ci()`
-- `extract_fill_factor()`: 1 `ident.value.to_uppercase() == "FILLFACTOR"` → `eq_ignore_ascii_case()`
-- `extract_data_compression()`: 2 `to_uppercase()` → `eq_ignore_ascii_case()` via `parse_data_compression()`
-- Data compression matching (2 FallbackStatementType arms): 2 `to_uppercase()` match → `parse_data_compression()`
-- Raw statement object type: 1 `to_uppercase()` match → `eq_ignore_ascii_case()`
+**Tasks:**
+1. Tokenize the body once at the start of `extract_body_dependencies()`
+2. Pass the token list to sub-functions instead of raw SQL
+3. Update sub-function signatures to accept `&[TokenWithLocation]`
+4. Verify parity — body dependency output must be identical
 
-**Changes in `view_writer.rs` (1 `to_uppercase()` call eliminated):**
-- Raw view writer: 1 `to_uppercase()` → local `contains_ci()` helper
-
-**Files changed:** `builder.rs` (~50 lines changed, 4 helper functions added), `view_writer.rs` (~15 lines changed, 1 helper function added).
-
-**All 1,623 tests pass.** No parity regressions.
+**Files:** `src/dacpac/model_xml/body_deps.rs`
+**Estimated savings:** 30-50ms on large projects with many procedures/functions
 
 ---
 
-### Phase 69 — Arc\<str\> for SQL definition text — COMPLETE
+### Phase 74 — Fast-path preprocessing bypass — PENDING
 
-Changed `ParsedStatement.sql_text` from `String` to `Arc<str>` and all element struct `definition` fields from `String` to `Arc<str>`. The SQL text is now allocated once at parse time (`Arc::from(trimmed)`) and shared via cheap `Arc::clone()` into all downstream element structs, eliminating deep String copies of the full SQL definition text.
+Skip the tokenize-and-reconstruct preprocessing step when no transformations are needed. `preprocess_tsql_tokens()` currently tokenizes every SQL batch and reconstructs it character-by-character even when no BINARY(MAX), DEFAULT FOR, or trailing comma transformations apply. Most batches pass through unchanged.
 
-**Key design decisions:**
-- `Arc<str>` (not `Arc<String>`) avoids the double indirection of `Arc<String>` and allows direct deref to `&str`
-- Constraint `definition: Option<String>` left unchanged — these are small generated expressions (`expr.to_string()`, extracted defaults), not shared from `ParsedStatement.sql_text`
-- All extraction functions (XML writers, view_query, procedure_body, etc.) accept `&str` and work unchanged via `Deref<Target=str>` on `Arc<str>`
-- The `Arc` is created once per SQL batch in `parse_sql_file()`, before the `for stmt in parsed` loop, so multiple statements from the same batch share the same allocation
-- Test code using `.contains()` on `sql_text` works unchanged via deref
+**Tasks:**
+1. Add a fast-path check: scan for trigger keywords (`BINARY`, `DEFAULT`, trailing `,` before `)`) before invoking the full tokenizer
+2. If no trigger keywords found, return the input unchanged (zero-alloc)
+3. Keep the full preprocessing path for batches that need it
+4. Verify all tests pass — preprocessing must still fire when needed
 
-**Files changed:** `tsql_parser.rs` (struct + 3 factory methods + parse_sql_file call site), `elements.rs` (7 element structs), `column_registry.rs` (1 test helper), `other_writers.rs` (1 test helper).
-
-**All 1,894 tests pass.** No parity regressions.
+**Files:** `src/parser/preprocess_parser.rs`, `src/parser/tsql_parser.rs`
+**Estimated savings:** 15-30ms on large projects
 
 ---
 
-### Phase 70 — ~~Parallelize model building with rayon~~ DEFERRED
+### Phase 75 — Zero-alloc fallback parse dispatch — PENDING
 
-**Status:** Deferred — unlikely to provide meaningful gains after Phases 63-69.
+Replace `sql.to_uppercase()` allocation in `try_fallback_parse()` with zero-allocation case-insensitive matching. Currently every statement that fails sqlparser-rs gets a full uppercase clone of the SQL text, then 300+ lines of `.contains()` checks against the uppercase copy.
 
-**Reasoning:** Phases 63-69 are expected to reduce model building from ~80.6ms to ~5-25ms. At that point:
+**Tasks:**
+1. Replace `let sql_upper = sql.to_uppercase()` with `contains_ci()` / `starts_with_ci()` checks (helpers already exist in `builder.rs`)
+2. Move the case-insensitive helpers to a shared utility module (or reuse existing ones)
+3. Add early-exit based on first keyword token (peek at position 0-3) before scanning full SQL
 
-- **Per-item work is too small:** 135 statements across ~15ms = ~110μs per statement, which is borderline for rayon's per-item overhead. Work distribution + synchronization costs ~0.5-1ms, eating into any gains.
-- **Best case saves ~5-10ms, worst case is slower:** On small projects rayon overhead exceeds the parallelism benefit.
-- **High refactor cost:** The main loop (1019 lines) has shared mutable state (`model.elements` Vec and `schemas` BTreeSet) requiring a 500-800 line extraction into a pure function. This adds ongoing maintenance complexity.
-- **Re-profile after Phase 69:** The bottleneck will likely shift to XML generation or ZIP packaging, where simpler optimizations exist.
+**Files:** `src/parser/tsql_parser.rs`
+**Estimated savings:** 5-15ms on large projects
+
+---
+
+### Phase 76 — Single tokenization for fallback parser chain — PENDING
+
+Eliminate repeated tokenization in the fallback parser chain. When `try_fallback_parse()` is called, each token-based parser (`parse_create_procedure_tokens`, `parse_create_function_tokens`, `parse_create_index_tokens`, etc.) creates a new `TokenParser` which re-tokenizes the SQL from scratch. A single statement can be tokenized 5-10 times as each parser tries and fails.
+
+**Tasks:**
+1. Tokenize once at the top of `try_fallback_parse()`
+2. Create a `TokenParser::from_tokens()` constructor that accepts pre-tokenized tokens
+3. Pass the shared token list to each fallback parser attempt
+4. Verify all tests pass — fallback parsing results must be identical
+
+**Files:** `src/parser/tsql_parser.rs`, `src/parser/token_parser_base.rs`
+**Estimated savings:** 20-40ms on large projects
+
+---
+
+### Phase 77 — HashSet dedup and HashMap index in view writer — PENDING
+
+Fix two algorithmic inefficiencies in the view XML writer:
+
+**77a — HashSet for query_deps deduplication:**
+`extract_view_columns_and_deps()` uses `Vec::contains()` for deduplication, which is O(n) per check. For views with many column references, this becomes O(n^2).
+
+**Tasks:**
+1. Replace `Vec::contains()` checks in `extract_view_columns_and_deps()` with a parallel `HashSet`
+2. Keep the `Vec` for ordered output, use `HashSet` only for O(1) membership checks
+
+**77b — HashMap index for SELECT * expansion:**
+`expand_select_star()` does a linear scan of all model elements to find matching tables. With thousands of elements and multiple table aliases, this is O(elements * aliases) per view.
+
+**Tasks:**
+1. Build a `HashMap<(schema, name), &TableElement>` index before view writing begins
+2. Use O(1) lookups in `expand_select_star()` instead of linear scan
+3. Pass the index through the view writer call chain
+
+**Files:** `src/dacpac/model_xml/view_writer.rs`, `src/dacpac/model_xml/mod.rs`
+**Estimated savings:** 5-10ms on large projects
