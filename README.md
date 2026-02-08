@@ -8,9 +8,9 @@ Benchmarked on a 135-file SQL project (stress_test fixture):
 
 | Build Type | Time | vs rust-sqlpackage |
 |------------|------|-------------------|
-| .NET DacFx (cold build) | 4.05s | 39x slower |
-| .NET DacFx (warm/incremental) | 1.66s | 16x slower |
-| **rust-sqlpackage** | **0.10s** | - |
+| .NET DacFx (cold build) | 5.59s | 186x slower |
+| .NET DacFx (warm/incremental) | 2.70s | 90x slower |
+| **rust-sqlpackage** | **0.03s** | - |
 
 - **Cold build**: Full rebuild after cleaning bin/obj directories
 - **Warm build**: Incremental build with no source changes
