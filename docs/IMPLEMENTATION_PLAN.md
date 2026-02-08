@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-69 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69 complete, 71-77 pending.**
+**Phases 1-69, 71 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71 complete, 72-77 pending.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-69)
+## Completed Phases (1-69, 71)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -65,6 +65,7 @@
 | 61 | Columnstore indexes (CREATE CLUSTERED/NONCLUSTERED COLUMNSTORE INDEX) | All |
 | 62 | Dynamic data masking (MASKED WITH column property) | All |
 | 63-69 | Performance tuning: regex caching, ZIP level, dead code, index-based keys, cached names, zero-alloc CI helpers, Arc\<str\> | All |
+| 71 | Pre-allocate model.xml buffer (+ DacMetadata.xml, Origin.xml) | All |
 
 ### Key Milestones
 
@@ -77,7 +78,7 @@
 
 ## Performance Tuning (Phases 63-77)
 
-### Completed (Phases 63-69)
+### Completed (Phases 63-69, 71)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms → 30ms (3.4x improvement)
 
@@ -90,8 +91,9 @@
 | 67 | Pre-compute element full_name/xml_name_attr in DatabaseModel | Eliminated repeated `format!()` during sort/XML gen |
 | 68 | Zero-alloc case-insensitive helpers (`contains_ci`, `starts_with_ci`) | Eliminated 16 `to_uppercase()` allocations |
 | 69 | `Arc<str>` for SQL definition text | Eliminated deep String copies across pipeline |
+| 71 | Pre-allocate model.xml buffer (`elements.len() * 2000`) | Eliminated ~24 Vec reallocations for large projects |
 
-### Pending (Phases 71-77)
+### Pending (Phases 72-77)
 
 **Large project profiling (920 files, 8083 elements, 15MB model.xml):** ~1050ms total
 
@@ -107,17 +109,14 @@ At scale, the bottleneck shifts from model building to XML generation and dacpac
 
 ---
 
-### Phase 71 — Pre-allocate model.xml buffer — PENDING
+### Phase 71 — Pre-allocate model.xml buffer — COMPLETE
 
-Pre-allocate the `Vec<u8>` backing the model.xml writer in `create_dacpac()`. Currently uses `Cursor::new(Vec::new())` with no capacity hint. For large projects generating 15MB+ of XML, this causes ~24 reallocations (Vec doubling), each copying all previously written bytes.
-
-**Tasks:**
-1. In `packager.rs`, change `Cursor::new(Vec::new())` to `Cursor::new(Vec::with_capacity(model.elements.len() * 2000))` for the model.xml buffer
-2. Apply similar pre-allocation for DacMetadata.xml and Origin.xml buffers (smaller, but free to do)
-3. Benchmark before/after on stress_test fixture
+Pre-allocated `Vec<u8>` buffers in `create_dacpac()`:
+- model.xml: `Vec::with_capacity(model.elements.len() * 2000)` — eliminates ~24 reallocations for large projects
+- DacMetadata.xml: `Vec::with_capacity(4096)` — small fixed allocation
+- Origin.xml: `Vec::with_capacity(4096)` — small fixed allocation
 
 **Files:** `src/dacpac/packager.rs`
-**Estimated savings:** 20-50ms on large projects
 
 ---
 

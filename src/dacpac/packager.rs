@@ -41,13 +41,13 @@ pub fn create_dacpac(
         .compression_level(Some(1));
 
     // Write model.xml
-    let mut model_buffer = Cursor::new(Vec::new());
+    let mut model_buffer = Cursor::new(Vec::with_capacity(model.elements.len() * 2000));
     model_xml::generate_model_xml(&mut model_buffer, model, project)?;
     zip.start_file("model.xml", options)?;
     zip.write_all(model_buffer.get_ref())?;
 
     // Write DacMetadata.xml
-    let mut metadata_buffer = Cursor::new(Vec::new());
+    let mut metadata_buffer = Cursor::new(Vec::with_capacity(4096));
     metadata_xml::generate_metadata_xml(&mut metadata_buffer, project, &project.dac_version)?;
     zip.start_file("DacMetadata.xml", options)?;
     zip.write_all(metadata_buffer.get_ref())?;
@@ -58,7 +58,7 @@ pub fn create_dacpac(
     let model_checksum = format!("{:X}", hasher.finalize());
 
     // Write Origin.xml
-    let mut origin_buffer = Cursor::new(Vec::new());
+    let mut origin_buffer = Cursor::new(Vec::with_capacity(4096));
     origin_xml::generate_origin_xml(&mut origin_buffer, &model_checksum)?;
     zip.start_file("Origin.xml", options)?;
     zip.write_all(origin_buffer.get_ref())?;
