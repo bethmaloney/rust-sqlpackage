@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-64 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
+**Phases 1-65 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-70.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-64)
+## Completed Phases (1-65)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -70,6 +70,7 @@
 | 62 | Dynamic data masking (MASKED WITH column property, GDPR/PCI-DSS compliance) | All |
 | 63 | Cache regex patterns with LazyLock (21 static + 3 dynamic→string ops) | All |
 | 64 | Lower ZIP compression level (deflate 6→1, ~29% packaging speedup) | All |
+| 65 | Eliminate Debug formatting for feature detection (dead code removal) | All |
 
 ### Key Milestones
 
@@ -80,7 +81,7 @@
 
 ---
 
-## Performance Tuning (Phases 63-70)
+## Performance Tuning (Phases 63-70, 65 complete)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms total
 
@@ -112,16 +113,15 @@ Changed deflate compression level from 6 to 1 in `src/dacpac/packager.rs`. For ~
 
 ---
 
-### Phase 65 — Eliminate Debug formatting for feature detection (~5-10ms)
+### Phase 65 — Eliminate Debug formatting for feature detection — COMPLETE
 
-`builder.rs:1843,1850,1857` uses `format!("{:?}", opt.option).to_uppercase().contains(...)` to detect ROWGUIDCOL, SPARSE, FILESTREAM. This Debug-formats entire AST nodes to strings for every column option (~1200 allocations).
+Removed dead code: `format!("{:?}", opt.option).to_uppercase().contains(...)` for ROWGUIDCOL, SPARSE, FILESTREAM detection in `column_from_def()` (builder.rs).
 
-| Task | Description |
-|------|-------------|
-| 65.1 | Replace ROWGUIDCOL detection (`builder.rs:1843`) with direct AST `ColumnOption` variant matching or raw SQL text check |
-| 65.2 | Replace SPARSE detection (`builder.rs:1850`) with direct AST variant matching or raw SQL text check |
-| 65.3 | Replace FILESTREAM detection (`builder.rs:1857`) with direct AST variant matching or raw SQL text check |
-| 65.4 | Run model_building criterion benchmark, confirm no regression in existing tests |
+**Finding:** This code was unreachable. sqlparser-rs 0.54 doesn't recognize ROWGUIDCOL/SPARSE/FILESTREAM as keywords — any CREATE TABLE containing them fails parsing and goes through the fallback token-based parser (`column_parser.rs` lines 274-293), which handles these flags directly via `column_from_fallback_table()`. The AST path (`column_from_def()`) is only reached when sqlparser succeeds, which means these keywords are never present.
+
+**Impact:** Eliminates ~1200 unnecessary `format!("{:?}")` + `to_uppercase()` allocations per build (though in practice these allocations never triggered due to the dead code path). More importantly, removes misleading code that suggested sqlparser could parse these T-SQL features.
+
+**Files changed:** `builder.rs` (removed 18 lines of dead code, replaced with comment explaining why these are always false).
 
 ---
 

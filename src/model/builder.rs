@@ -1861,27 +1861,10 @@ fn column_from_def(col: &ColumnDef, _schema: &str, _table_name: &str) -> ColumnE
         }
     }
 
-    // Check for ROWGUIDCOL - sqlparser doesn't have native support, so check the column options text
-    // This is a T-SQL specific feature that may appear in the original SQL
-    let is_rowguidcol = col.options.iter().any(|opt| {
-        format!("{:?}", opt.option)
-            .to_uppercase()
-            .contains("ROWGUIDCOL")
-    });
-
-    // Check for SPARSE - T-SQL specific feature
-    let is_sparse = col.options.iter().any(|opt| {
-        format!("{:?}", opt.option)
-            .to_uppercase()
-            .contains("SPARSE")
-    });
-
-    // Check for FILESTREAM - T-SQL specific feature for VARBINARY(MAX) columns
-    let is_filestream = col.options.iter().any(|opt| {
-        format!("{:?}", opt.option)
-            .to_uppercase()
-            .contains("FILESTREAM")
-    });
+    // ROWGUIDCOL, SPARSE, FILESTREAM are T-SQL-specific keywords not recognized by sqlparser-rs.
+    // Any CREATE TABLE containing these keywords fails sqlparser parsing and goes through
+    // the fallback token-based parser (column_parser.rs), which sets these flags directly.
+    // This AST path (column_from_def) is only reached when sqlparser succeeds, so these are always false.
 
     let (max_length, precision, scale) = extract_type_params(&col.data_type);
 
@@ -1896,9 +1879,9 @@ fn column_from_def(col: &ColumnDef, _schema: &str, _table_name: &str) -> ColumnE
         data_type: col.data_type.to_string(),
         nullability,
         is_identity,
-        is_rowguidcol,
-        is_sparse,
-        is_filestream,
+        is_rowguidcol: false,
+        is_sparse: false,
+        is_filestream: false,
         default_value,
         max_length,
         precision,
