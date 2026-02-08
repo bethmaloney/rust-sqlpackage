@@ -54,7 +54,7 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
 
 /// Case-insensitive starts_with check without allocating.
 fn starts_with_ci(haystack: &str, needle: &str) -> bool {
-    haystack.as_bytes().len() >= needle.as_bytes().len()
+    haystack.len() >= needle.len()
         && haystack.as_bytes()[..needle.len()].eq_ignore_ascii_case(needle.as_bytes())
 }
 
