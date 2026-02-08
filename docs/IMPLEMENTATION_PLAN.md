@@ -4,7 +4,7 @@
 
 ## Status: PARITY COMPLETE | PERFORMANCE TUNING IN PROGRESS
 
-**Phases 1-69, 71-76 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-76 complete, 77 pending.**
+**Phases 1-69, 71-77 complete. Full parity: 47/48 (97.9%). Performance tuning: Phases 63-69, 71-77 complete.**
 
 | Layer | Passing | Rate |
 |-------|---------|------|
@@ -29,7 +29,7 @@
 
 ---
 
-## Completed Phases (1-69, 71-76)
+## Completed Phases (1-69, 71-77)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -71,6 +71,7 @@
 | 74 | Fast-path preprocessing bypass (skip tokenization when no transformations needed) | All |
 | 75 | Zero-alloc fallback parse dispatch (shared `util` module, eliminate `to_uppercase()`) | All |
 | 76 | Single tokenization for fallback parser chain (eliminate 5-20 re-tokenizations per statement) | All |
+| 77 | HashSet dedup and HashMap index in view writer | All |
 
 ### Key Milestones
 
@@ -81,9 +82,9 @@
 
 ---
 
-## Performance Tuning (Phases 63-77)
+## Performance Tuning (Phases 63-77) — COMPLETE
 
-### Completed (Phases 63-69, 71-76)
+### Completed (Phases 63-69, 71-77)
 
 **Baseline (stress_test, 135 files, 456 elements):** 103ms → 30ms (3.4x improvement)
 
@@ -102,20 +103,7 @@
 | 74 | Fast-path preprocessing bypass | Skip tokenize-and-reconstruct for SQL without trigger patterns |
 | 75 | Zero-alloc fallback parse dispatch | Eliminated `to_uppercase()` in `try_fallback_parse()` and 5 other functions |
 | 76 | Single tokenization for fallback parser chain | Eliminated 5-20 redundant tokenizations per fallback-parsed statement |
-
-### Pending (Phase 77)
-
-**Large project profiling (920 files, 8083 elements, 15MB model.xml):** ~1050ms total
-
-| Stage | Time | % |
-|-------|------|---|
-| Project parse | 4ms | 0.4% |
-| SQL parsing | 90ms | 8% |
-| Model building | 22ms | 2% |
-| **XML generation** | **450ms** | **42%** |
-| **Dacpac packaging** | **500ms** | **47%** |
-
-At scale, the bottleneck shifts from model building to XML generation and dacpac packaging. Phase 70 (parallelize model building) deferred — model building is only 2% of total time at scale.
+| 77 | HashSet dedup + HashMap table index in view writer | Eliminated O(n²) dedup + O(n) table lookup |
 
 ---
 
@@ -225,24 +213,23 @@ Eliminated repeated tokenization in the fallback parser chain. When `try_fallbac
 
 ---
 
-### Phase 77 — HashSet dedup and HashMap index in view writer — PENDING
+### Phase 77 — HashSet dedup and HashMap table index in view writer — COMPLETE
 
-Fix two algorithmic inefficiencies in the view XML writer:
+Two algorithmic improvements to the view XML writer:
 
 **77a — HashSet for query_deps deduplication:**
-`extract_view_columns_and_deps()` uses `Vec::contains()` for deduplication, which is O(n) per check. For views with many column references, this becomes O(n^2).
-
-**Tasks:**
-1. Replace `Vec::contains()` checks in `extract_view_columns_and_deps()` with a parallel `HashSet`
-2. Keep the `Vec` for ordered output, use `HashSet` only for O(1) membership checks
+Replaced `Vec::contains()` O(n) membership checks with a parallel `HashSet` for O(1) lookups in `extract_view_columns_and_deps()`. The `Vec` is kept for ordered output; the `HashSet` provides fast deduplication.
 
 **77b — HashMap index for SELECT * expansion:**
-`expand_select_star()` does a linear scan of all model elements to find matching tables. With thousands of elements and multiple table aliases, this is O(elements * aliases) per view.
+Added `table_index: HashMap<String, usize>` to `ColumnRegistry`, populated in a first-pass over model elements (tables only). `expand_select_star()` now uses O(1) HashMap lookup instead of O(n) linear scan through all model elements. The `from_model()` function was restructured into a two-pass approach: first pass builds table_columns + table_index, second pass processes views (which need the index for SELECT * expansion).
 
-**Tasks:**
-1. Build a `HashMap<(schema, name), &TableElement>` index before view writing begins
-2. Use O(1) lookups in `expand_select_star()` instead of linear scan
-3. Pass the index through the view writer call chain
+**Changes:**
+- `extract_view_columns_and_deps()` now takes `&ColumnRegistry` parameter and uses `HashSet` for dedup
+- `expand_select_star()` now takes `&ColumnRegistry` and uses `get_table_element_index()` for O(1) lookup
+- `ColumnRegistry` gained `table_index` field and `get_table_element_index()` method
+- `ColumnRegistry::from_model()` restructured into two passes (tables first, then views)
+- Removed unused `parse_qualified_name_tokenized` import from view_writer.rs
+- Threaded `column_registry` through `extract_inline_tvf_columns()` in programmability_writer.rs
 
-**Files:** `src/dacpac/model_xml/view_writer.rs`, `src/dacpac/model_xml/mod.rs`
-**Estimated savings:** 5-10ms on large projects
+**Files:** `src/dacpac/model_xml/view_writer.rs`, `src/dacpac/model_xml/column_registry.rs`, `src/dacpac/model_xml/programmability_writer.rs`
+**Savings:** Eliminates O(n²) dedup and O(n) table lookups (estimated 5-10ms on large projects)

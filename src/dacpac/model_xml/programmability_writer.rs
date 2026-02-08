@@ -304,7 +304,7 @@ pub(crate) fn write_function<W: Write>(
         crate::model::FunctionType::InlineTableValued
     ) {
         let inline_tvf_columns =
-            extract_inline_tvf_columns(&body, &full_name, default_schema, model);
+            extract_inline_tvf_columns(&body, &full_name, default_schema, model, column_registry);
         if !inline_tvf_columns.is_empty() {
             write_view_columns(writer, &full_name, &inline_tvf_columns)?;
         }
@@ -1354,6 +1354,7 @@ fn extract_inline_tvf_columns(
     func_full_name: &str,
     default_schema: &str,
     model: &DatabaseModel,
+    column_registry: &ColumnRegistry,
 ) -> Vec<ViewColumn> {
     // Extract the SELECT statement from RETURN clause
     // Pattern: RETURN followed by optional whitespace, optional parenthesis, then SELECT
@@ -1370,8 +1371,13 @@ fn extract_inline_tvf_columns(
         // Now we should have the SELECT statement
         // Use the existing extract_view_columns_and_deps logic
         // TVFs don't have SCHEMABINDING affecting GROUP BY, use false
-        let (mut columns, _deps) =
-            extract_view_columns_and_deps(query_start, default_schema, model, false);
+        let (mut columns, _deps) = extract_view_columns_and_deps(
+            query_start,
+            default_schema,
+            model,
+            false,
+            column_registry,
+        );
 
         // For inline TVFs, handle parameter references in the SELECT list
         // When column expression is a parameter reference like @CustomerId,

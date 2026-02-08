@@ -38,6 +38,9 @@ pub struct ColumnRegistry {
     /// Cached view extraction results keyed by lowercase `[schema].[name]`
     /// Populated during from_model() and consumed by write_view()/write_raw_view()
     view_cache: HashMap<String, ViewExtractionResult>,
+    /// Phase 77b: Maps lowercase `[schema].[table]` to index in model.elements for O(1) table lookup.
+    /// Used by expand_select_star() to avoid linear scan of all elements.
+    table_index: HashMap<String, usize>,
 }
 
 impl ColumnRegistry {
@@ -47,6 +50,7 @@ impl ColumnRegistry {
             table_columns: HashMap::new(),
             views_with_wildcard: HashSet::new(),
             view_cache: HashMap::new(),
+            table_index: HashMap::new(),
         }
     }
 
@@ -58,22 +62,32 @@ impl ColumnRegistry {
     ///
     /// Views with SELECT * are tracked separately as having "unknown columns"
     /// and are excluded from unqualified column resolution.
+    ///
+    /// Phase 77b: Uses a two-pass approach — first pass populates table_columns and
+    /// table_index for all tables, second pass processes views (which may need the
+    /// table_index for SELECT * expansion via expand_select_star()).
     pub fn from_model(model: &DatabaseModel, default_schema: &str) -> Self {
         let mut registry = Self::new();
 
+        // First pass: register all tables and build table_index for O(1) lookups
+        for (idx, element) in model.elements.iter().enumerate() {
+            if let ModelElement::Table(table) = element {
+                let table_key = format!("[{}].[{}]", table.schema, table.name).to_lowercase();
+
+                let columns: HashSet<String> = table
+                    .columns
+                    .iter()
+                    .map(|c| c.name.to_lowercase())
+                    .collect();
+
+                registry.table_columns.insert(table_key.clone(), columns);
+                registry.table_index.insert(table_key, idx);
+            }
+        }
+
+        // Second pass: process views (which may need table_index for SELECT * expansion)
         for element in &model.elements {
             match element {
-                ModelElement::Table(table) => {
-                    let table_key = format!("[{}].[{}]", table.schema, table.name).to_lowercase();
-
-                    let columns: HashSet<String> = table
-                        .columns
-                        .iter()
-                        .map(|c| c.name.to_lowercase())
-                        .collect();
-
-                    registry.table_columns.insert(table_key, columns);
-                }
                 ModelElement::View(view) => {
                     let view_key = format!("[{}].[{}]", view.schema, view.name).to_lowercase();
 
@@ -81,12 +95,13 @@ impl ColumnRegistry {
                     let query_script = extract_view_query(&view.definition);
 
                     // Extract columns from the view SELECT clause
-                    // Pass the model to enable SELECT * expansion
+                    // Pass the registry to enable O(1) table lookups for SELECT * expansion
                     let (view_columns, query_deps) = extract_view_columns_and_deps(
                         &query_script,
                         default_schema,
                         model,
                         view.is_schema_bound,
+                        &registry,
                     );
 
                     // Check if any columns came from SELECT * expansion
@@ -135,6 +150,7 @@ impl ColumnRegistry {
                         default_schema,
                         model,
                         is_schema_bound,
+                        &registry,
                     );
 
                     // Check for SELECT * wildcard
@@ -171,6 +187,14 @@ impl ColumnRegistry {
     pub fn get_cached_view(&self, view_key: &str) -> Option<&ViewExtractionResult> {
         let key = view_key.to_lowercase();
         self.view_cache.get(&key)
+    }
+
+    /// Look up a table's index in model.elements by its qualified name.
+    /// The key should be in format `[schema].[table]` (brackets required, case-insensitive).
+    /// Returns the index into `model.elements` for O(1) table element access.
+    pub fn get_table_element_index(&self, table_ref: &str) -> Option<usize> {
+        let key = table_ref.to_lowercase();
+        self.table_index.get(&key).copied()
     }
 
     /// Check if a table has a specific column

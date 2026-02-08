@@ -8,6 +8,7 @@ use quick_xml::Writer;
 use sqlparser::dialect::MsSqlDialect;
 use sqlparser::keywords::Keyword;
 use sqlparser::tokenizer::{Token, Tokenizer};
+use std::collections::HashSet;
 use std::io::Write;
 
 use crate::model::{DatabaseModel, ModelElement, RawElement, ViewElement};
@@ -20,7 +21,7 @@ use super::xml_helpers::{
 use super::{
     extract_all_column_references, extract_cte_definitions, extract_group_by_columns,
     extract_join_on_columns, extract_select_columns, extract_table_aliases,
-    parse_column_expression, parse_qualified_name_tokenized, reconstruct_tokens, CteColumn,
+    parse_column_expression, reconstruct_tokens, CteColumn,
 };
 
 /// Represents a view column with its name and optional source dependency
@@ -102,6 +103,7 @@ pub(crate) fn write_view<W: Write>(
             default_schema,
             model,
             view.is_schema_bound,
+            column_registry,
         );
         columns_owned = c;
         query_deps_owned = d;
@@ -201,8 +203,13 @@ pub(crate) fn write_raw_view<W: Write>(
     let (columns, query_deps) = if let Some(c) = cached {
         (&c.columns, &c.query_deps)
     } else {
-        let (c, d) =
-            extract_view_columns_and_deps(query_script, default_schema, model, is_schema_bound);
+        let (c, d) = extract_view_columns_and_deps(
+            query_script,
+            default_schema,
+            model,
+            is_schema_bound,
+            column_registry,
+        );
         columns_owned = c;
         query_deps_owned = d;
         (&columns_owned, &query_deps_owned)
@@ -357,43 +364,28 @@ fn write_view_annotation<W: Write>(writer: &mut Writer<W>, definition: &str) -> 
 /// Expand SELECT * to actual table columns using the database model
 /// When a view uses SELECT *, DotNet expands it to the actual columns from the referenced table(s).
 /// Uses token-based parsing for proper handling of table references.
+/// Phase 77b: Uses ColumnRegistry's table_index for O(1) table lookups instead of linear scan.
 fn expand_select_star(
     table_aliases: &[(String, String)],
     model: &DatabaseModel,
+    column_registry: &ColumnRegistry,
 ) -> Vec<ViewColumn> {
     // Estimate ~5 columns per table on average
     let mut columns = Vec::with_capacity(table_aliases.len() * 5);
 
     // For each table in the FROM clause, look up its columns in the model
     for (_alias, table_ref) in table_aliases {
-        // table_ref is like "[dbo].[TableName]"
-        // Parse schema and table name from the reference using tokenization
-        let Some(qn) = parse_qualified_name_tokenized(table_ref) else {
-            continue;
-        };
-
-        let Some((schema, table_name)) = qn.schema_and_table() else {
-            continue;
-        };
-
-        // Find the table in the model
-        for element in &model.elements {
-            if let ModelElement::Table(table) = element {
-                // Case-insensitive comparison for schema and table name
-                if table.schema.eq_ignore_ascii_case(schema)
-                    && table.name.eq_ignore_ascii_case(table_name)
-                {
-                    // Add each column from the table
-                    for col in &table.columns {
-                        // Skip computed columns - their original column name is what we need
-                        let col_ref = format!("{}.[{}]", table_ref, col.name);
-                        columns.push(ViewColumn {
-                            name: col.name.clone(),
-                            source_ref: Some(col_ref),
-                            from_select_star: true, // Mark as expanded from SELECT *
-                        });
-                    }
-                    break;
+        // Phase 77b: O(1) lookup via table_index instead of O(n) linear scan
+        if let Some(idx) = column_registry.get_table_element_index(table_ref) {
+            if let Some(ModelElement::Table(table)) = model.elements.get(idx) {
+                // Add each column from the table
+                for col in &table.columns {
+                    let col_ref = format!("{}.[{}]", table_ref, col.name);
+                    columns.push(ViewColumn {
+                        name: col.name.clone(),
+                        source_ref: Some(col_ref),
+                        from_select_star: true, // Mark as expanded from SELECT *
+                    });
                 }
             }
         }
@@ -412,6 +404,7 @@ pub(crate) fn extract_view_columns_and_deps(
     default_schema: &str,
     model: &DatabaseModel,
     is_schema_bound: bool,
+    column_registry: &ColumnRegistry,
 ) -> (Vec<ViewColumn>, Vec<String>) {
     // Parse table aliases from FROM clause and JOINs
     let table_aliases = extract_table_aliases(query, default_schema);
@@ -423,6 +416,9 @@ pub(crate) fn extract_view_columns_and_deps(
     let mut columns = Vec::with_capacity(select_columns.len());
     // Estimate: tables + columns (~2x select columns + tables)
     let mut query_deps = Vec::with_capacity(table_aliases.len() + select_columns.len() * 2);
+    // Phase 77a: HashSet for O(1) membership checks instead of Vec::contains() O(n)
+    let mut query_deps_set: HashSet<String> =
+        HashSet::with_capacity(table_aliases.len() + select_columns.len() * 2);
 
     for col_expr in select_columns {
         let (col_name, source_ref) =
@@ -431,7 +427,7 @@ pub(crate) fn extract_view_columns_and_deps(
         if col_name == "*" {
             // For SELECT *, expand to actual columns from the referenced table(s)
             // DotNet expands these to the actual table columns
-            let expanded = expand_select_star(&table_aliases, model);
+            let expanded = expand_select_star(&table_aliases, model, column_registry);
             columns.extend(expanded);
             continue;
         }
@@ -451,7 +447,7 @@ pub(crate) fn extract_view_columns_and_deps(
 
     // 1. Add all referenced tables (unique)
     for (_alias, table_ref) in &table_aliases {
-        if !query_deps.contains(table_ref) {
+        if query_deps_set.insert(table_ref.clone()) {
             query_deps.push(table_ref.clone());
         }
     }
@@ -459,13 +455,13 @@ pub(crate) fn extract_view_columns_and_deps(
     // 2. Add JOIN ON condition columns (unique)
     let join_on_cols = extract_join_on_columns(query, &table_aliases, default_schema);
     for col_ref in &join_on_cols {
-        if !query_deps.contains(col_ref) {
+        if query_deps_set.insert(col_ref.clone()) {
             query_deps.push(col_ref.clone());
         }
     }
 
     // Track SELECT columns separately for dedup within SELECT phase
-    let mut select_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut select_seen: HashSet<String> = HashSet::new();
 
     // 3. Add column references from the SELECT columns
     // DotNet allows duplicates of JOIN ON columns (unique within SELECT)
@@ -476,8 +472,7 @@ pub(crate) fn extract_view_columns_and_deps(
         }
         if let Some(ref source_ref) = col.source_ref {
             // Unique within SELECT phase only
-            if !select_seen.contains(source_ref) {
-                select_seen.insert(source_ref.clone());
+            if select_seen.insert(source_ref.clone()) {
                 query_deps.push(source_ref.clone());
             }
         }
@@ -485,9 +480,13 @@ pub(crate) fn extract_view_columns_and_deps(
 
     // 4. Add remaining column references from the query (WHERE, HAVING, etc.)
     // These are unique against all previous (JOIN ON + SELECT)
+    // Update query_deps_set with SELECT columns added in step 3
+    for dep in select_seen.iter() {
+        query_deps_set.insert(dep.clone());
+    }
     let all_column_refs = extract_all_column_references(query, &table_aliases, default_schema);
     for col_ref in &all_column_refs {
-        if !query_deps.contains(col_ref) {
+        if query_deps_set.insert(col_ref.clone()) {
             query_deps.push(col_ref.clone());
         }
     }
@@ -497,16 +496,17 @@ pub(crate) fn extract_view_columns_and_deps(
     // - WITH SCHEMABINDING: GROUP BY adds duplicates for all columns (max 2 total)
     // - Without SCHEMABINDING: GROUP BY only adds duplicates for columns in JOIN ON
     let group_by_cols = extract_group_by_columns(query, &table_aliases, default_schema);
-    let join_on_set: std::collections::HashSet<String> = join_on_cols.iter().cloned().collect();
-    let mut group_by_added: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let join_on_set: HashSet<String> = join_on_cols.iter().cloned().collect();
+    let mut group_by_added: HashSet<String> = HashSet::new();
     for col_ref in group_by_cols {
-        let already_present = query_deps.contains(&col_ref);
+        let already_present = query_deps_set.contains(&col_ref);
         let in_join_on = join_on_set.contains(&col_ref);
 
         if !group_by_added.contains(&col_ref) {
             if !already_present {
                 // Not present yet - add it
                 group_by_added.insert(col_ref.clone());
+                query_deps_set.insert(col_ref.clone());
                 query_deps.push(col_ref);
             } else if is_schema_bound {
                 // SCHEMABINDING views: allow duplicates for all columns (max 2)
