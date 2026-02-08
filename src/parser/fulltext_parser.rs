@@ -60,6 +60,7 @@ pub struct FullTextTokenParser {
 
 impl FullTextTokenParser {
     /// Create a new parser for a fulltext definition string
+    #[allow(dead_code)]
     pub fn new(sql: &str) -> Option<Self> {
         Some(Self {
             base: TokenParser::new(sql)?,
@@ -332,6 +333,7 @@ impl FullTextTokenParser {
 /// Parse CREATE FULLTEXT INDEX using tokens and return index info
 ///
 /// This function replaces the regex-based `extract_fulltext_index_info` function.
+#[allow(dead_code)]
 pub fn parse_fulltext_index_tokens(sql: &str) -> Option<TokenParsedFullTextIndex> {
     let mut parser = FullTextTokenParser::new(sql)?;
     parser.parse_fulltext_index()
@@ -340,6 +342,7 @@ pub fn parse_fulltext_index_tokens(sql: &str) -> Option<TokenParsedFullTextIndex
 /// Parse CREATE FULLTEXT CATALOG using tokens and return catalog info
 ///
 /// This function replaces the regex-based `extract_fulltext_catalog_info` function.
+#[allow(dead_code)]
 pub fn parse_fulltext_catalog_tokens(sql: &str) -> Option<TokenParsedFullTextCatalog> {
     let mut parser = FullTextTokenParser::new(sql)?;
     parser.parse_fulltext_catalog()

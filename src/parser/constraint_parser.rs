@@ -483,6 +483,7 @@ impl ConstraintTokenParser {
 }
 
 /// Parse ALTER TABLE ... ADD CONSTRAINT using tokens
+#[allow(dead_code)]
 pub fn parse_alter_table_add_constraint_tokens(
     sql: &str,
 ) -> Option<TokenParsedAlterTableConstraint> {
@@ -500,6 +501,7 @@ pub fn parse_table_constraint_tokens(
 }
 
 /// Extract schema and table name from ALTER TABLE statement using tokens
+#[allow(dead_code)]
 pub fn parse_alter_table_name_tokens(sql: &str) -> Option<(String, String)> {
     let mut parser = ConstraintTokenParser::new(sql)?;
     parser.base.skip_whitespace();

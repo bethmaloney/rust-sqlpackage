@@ -46,6 +46,7 @@ pub struct TableTypeTokenParser {
 
 impl TableTypeTokenParser {
     /// Create a new parser for a table type definition string
+    #[allow(dead_code)]
     pub fn new(sql: &str) -> Option<Self> {
         Some(Self {
             base: TokenParser::new(sql)?,
@@ -483,6 +484,7 @@ impl TableTypeTokenParser {
 /// - CREATE TYPE [dbo].[TypeName] AS TABLE (columns, constraints)
 /// - CREATE TYPE dbo.TypeName AS TABLE (...)
 /// - CREATE TYPE TypeName AS TABLE (...)
+#[allow(dead_code)]
 pub fn parse_create_table_type_tokens(sql: &str) -> Option<TokenParsedTableType> {
     let mut parser = TableTypeTokenParser::new(sql)?;
     parser.parse_create_table_type()

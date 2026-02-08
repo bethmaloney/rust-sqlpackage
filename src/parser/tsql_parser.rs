@@ -684,12 +684,7 @@ fn try_fallback_parse(sql: &str) -> Option<FallbackStatementType> {
     let shared_tokens = Tokenizer::new(&dialect, sql).tokenize_with_location().ok();
 
     // Helper to clone shared tokens for each parser attempt
-    let tk = || -> Vec<TokenWithSpan> {
-        shared_tokens
-            .as_ref()
-            .map(|t| t.clone())
-            .unwrap_or_default()
-    };
+    let tk = || -> Vec<TokenWithSpan> { shared_tokens.clone().unwrap_or_default() };
 
     // Check for CREATE PROCEDURE or CREATE PROC (T-SQL shorthand)
     if contains_ci(sql, "CREATE PROCEDURE")

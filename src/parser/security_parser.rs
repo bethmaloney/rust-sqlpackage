@@ -80,6 +80,7 @@ pub struct SecurityTokenParser {
 }
 
 impl SecurityTokenParser {
+    #[allow(dead_code)]
     pub fn new(sql: &str) -> Option<Self> {
         Some(Self {
             base: TokenParser::new(sql)?,
@@ -476,6 +477,7 @@ impl SecurityTokenParser {
 }
 
 /// Parse sp_addrolemember 'role', 'member'
+#[allow(dead_code)]
 pub fn parse_sp_addrolemember(sql: &str) -> Option<TokenParsedRoleMembership> {
     let mut parser = TokenParser::new(sql)?;
     parser.skip_whitespace();
@@ -539,24 +541,28 @@ fn parse_string_or_ident(parser: &mut TokenParser) -> Option<String> {
 }
 
 /// Top-level convenience function to parse CREATE USER
+#[allow(dead_code)]
 pub fn parse_create_user_tokens(sql: &str) -> Option<TokenParsedUser> {
     let mut parser = SecurityTokenParser::new(sql)?;
     parser.parse_create_user()
 }
 
 /// Top-level convenience function to parse CREATE ROLE
+#[allow(dead_code)]
 pub fn parse_create_role_tokens(sql: &str) -> Option<TokenParsedRole> {
     let mut parser = SecurityTokenParser::new(sql)?;
     parser.parse_create_role()
 }
 
 /// Top-level convenience function to parse ALTER ROLE ... ADD/DROP MEMBER
+#[allow(dead_code)]
 pub fn parse_alter_role_membership_tokens(sql: &str) -> Option<TokenParsedRoleMembership> {
     let mut parser = SecurityTokenParser::new(sql)?;
     parser.parse_alter_role_membership()
 }
 
 /// Top-level convenience function to parse GRANT/DENY/REVOKE
+#[allow(dead_code)]
 pub fn parse_permission_tokens(sql: &str) -> Option<TokenParsedPermission> {
     let mut parser = SecurityTokenParser::new(sql)?;
     parser.parse_permission()

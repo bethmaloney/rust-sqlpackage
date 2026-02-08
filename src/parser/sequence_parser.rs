@@ -59,6 +59,7 @@ pub struct SequenceTokenParser {
 
 impl SequenceTokenParser {
     /// Create a new parser for a sequence definition string
+    #[allow(dead_code)]
     pub fn new(sql: &str) -> Option<Self> {
         Some(Self {
             base: TokenParser::new(sql)?,
@@ -282,6 +283,7 @@ impl SequenceTokenParser {
 /// - CREATE SEQUENCE [dbo].[SeqName] AS BIGINT START WITH 1 INCREMENT BY 1
 /// - CREATE SEQUENCE [dbo].[SeqName] MINVALUE 0 MAXVALUE 1000000 NO CYCLE
 /// - CREATE SEQUENCE [dbo].[SeqName] AS INT START WITH 100 INCREMENT BY 10 CACHE 50
+#[allow(dead_code)]
 pub fn parse_create_sequence_tokens(sql: &str) -> Option<TokenParsedSequence> {
     let mut parser = SequenceTokenParser::new(sql)?;
     parser.parse_create_sequence()
@@ -293,6 +295,7 @@ pub fn parse_create_sequence_tokens(sql: &str) -> Option<TokenParsedSequence> {
 /// - ALTER SEQUENCE [dbo].[SeqName] RESTART WITH 1000
 /// - ALTER SEQUENCE [dbo].[SeqName] INCREMENT BY 5
 /// - ALTER SEQUENCE [dbo].[SeqName] MINVALUE 1 MAXVALUE 10000 CYCLE
+#[allow(dead_code)]
 pub fn parse_alter_sequence_tokens(sql: &str) -> Option<TokenParsedSequence> {
     let mut parser = SequenceTokenParser::new(sql)?;
     parser.parse_alter_sequence()

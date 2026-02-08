@@ -132,6 +132,7 @@ pub struct StatementTokenParser {
 
 impl StatementTokenParser {
     /// Create a new parser for a SQL statement
+    #[allow(dead_code)]
     pub fn new(sql: &str) -> Option<Self> {
         Some(Self {
             base: TokenParser::new(sql)?,
@@ -513,6 +514,7 @@ impl StatementTokenParser {
 ///
 /// Returns Some(TokenParsedCteDml) if the SQL is a CTE with DELETE, UPDATE, INSERT, or MERGE.
 /// Returns None if it's a regular CTE with SELECT (which sqlparser handles).
+#[allow(dead_code)]
 pub fn try_parse_cte_dml_tokens(sql: &str) -> Option<TokenParsedCteDml> {
     let mut parser = StatementTokenParser::new(sql)?;
     parser.try_parse_cte_dml()
@@ -521,6 +523,7 @@ pub fn try_parse_cte_dml_tokens(sql: &str) -> Option<TokenParsedCteDml> {
 /// Try to parse a MERGE with OUTPUT clause using tokens
 ///
 /// Returns Some(TokenParsedMergeOutput) if the SQL is a MERGE with OUTPUT clause.
+#[allow(dead_code)]
 pub fn try_parse_merge_output_tokens(sql: &str) -> Option<TokenParsedMergeOutput> {
     let mut parser = StatementTokenParser::new(sql)?;
     parser.try_parse_merge_output()
@@ -529,6 +532,7 @@ pub fn try_parse_merge_output_tokens(sql: &str) -> Option<TokenParsedMergeOutput
 /// Try to parse an UPDATE with XML methods using tokens
 ///
 /// Returns Some(TokenParsedXmlUpdate) if the SQL is an UPDATE with .modify() or .value() calls.
+#[allow(dead_code)]
 pub fn try_parse_xml_update_tokens(sql: &str) -> Option<TokenParsedXmlUpdate> {
     let mut parser = StatementTokenParser::new(sql)?;
     parser.try_parse_xml_update()
@@ -538,6 +542,7 @@ pub fn try_parse_xml_update_tokens(sql: &str) -> Option<TokenParsedXmlUpdate> {
 ///
 /// Returns Some(TokenParsedDrop) for DROP SYNONYM, DROP TRIGGER, DROP INDEX ... ON,
 /// and DROP PROC (abbreviated form).
+#[allow(dead_code)]
 pub fn try_parse_drop_tokens(sql: &str) -> Option<TokenParsedDrop> {
     let mut parser = StatementTokenParser::new(sql)?;
     parser.try_parse_drop()
@@ -548,6 +553,7 @@ pub fn try_parse_drop_tokens(sql: &str) -> Option<TokenParsedDrop> {
 /// This is used as a last resort to extract object type, schema, and name
 /// from CREATE statements that aren't handled by more specific parsers.
 /// Returns Some(TokenParsedGenericCreate) with the object type, schema, and name.
+#[allow(dead_code)]
 pub fn try_parse_generic_create_tokens(sql: &str) -> Option<TokenParsedGenericCreate> {
     let mut parser = StatementTokenParser::new(sql)?;
     parser.try_parse_generic_create()
@@ -557,6 +563,7 @@ pub fn try_parse_generic_create_tokens(sql: &str) -> Option<TokenParsedGenericCr
 ///
 /// Returns Some(TokenParsedGenericCreate) with object_type="VIEW" and the schema/name.
 /// Used when sqlparser-rs fails on ALTER VIEW WITH SCHEMABINDING.
+#[allow(dead_code)]
 pub fn try_parse_alter_view_tokens(sql: &str) -> Option<TokenParsedGenericCreate> {
     let mut parser = StatementTokenParser::new(sql)?;
     parser.try_parse_alter_view()

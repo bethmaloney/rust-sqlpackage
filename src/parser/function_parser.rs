@@ -431,6 +431,7 @@ impl FunctionTokenParser {
 /// - CREATE FUNCTION dbo.FuncName
 /// - CREATE OR ALTER FUNCTION [schema].[name]
 /// - CREATE FUNCTION [dbo].[Name&With&Special]
+#[allow(dead_code)]
 pub fn parse_create_function_tokens(sql: &str) -> Option<(String, String)> {
     let mut parser = FunctionTokenParser::new(sql)?;
     let result = parser.parse_create_function()?;
@@ -443,6 +444,7 @@ pub fn parse_create_function_tokens(sql: &str) -> Option<(String, String)> {
 /// Supports:
 /// - ALTER FUNCTION [dbo].[FuncName]
 /// - ALTER FUNCTION dbo.FuncName
+#[allow(dead_code)]
 pub fn parse_alter_function_tokens(sql: &str) -> Option<(String, String)> {
     let mut parser = FunctionTokenParser::new(sql)?;
     let result = parser.parse_alter_function()?;
@@ -462,6 +464,7 @@ pub fn parse_alter_function_full(sql: &str) -> Option<TokenParsedFunction> {
 }
 
 /// Detect function type from SQL using token-based parsing
+#[allow(dead_code)]
 pub fn detect_function_type_tokens(sql: &str) -> TokenParsedFunctionType {
     if let Some(func) = parse_create_function_full(sql).or_else(|| parse_alter_function_full(sql)) {
         func.function_type

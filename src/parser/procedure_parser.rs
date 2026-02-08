@@ -505,6 +505,7 @@ impl ProcedureTokenParser {
 /// - CREATE OR ALTER PROCEDURE [schema].[name]
 /// - CREATE PROC [dbo].[name]
 /// - CREATE PROCEDURE [dbo].[Name&With&Special]
+#[allow(dead_code)]
 pub fn parse_create_procedure_tokens(sql: &str) -> Option<(String, String)> {
     let mut parser = ProcedureTokenParser::new(sql)?;
     let result = parser.parse_create_procedure()?;
@@ -518,6 +519,7 @@ pub fn parse_create_procedure_tokens(sql: &str) -> Option<(String, String)> {
 /// - ALTER PROCEDURE [dbo].[ProcName]
 /// - ALTER PROCEDURE dbo.ProcName
 /// - ALTER PROC [dbo].[name]
+#[allow(dead_code)]
 pub fn parse_alter_procedure_tokens(sql: &str) -> Option<(String, String)> {
     let mut parser = ProcedureTokenParser::new(sql)?;
     let result = parser.parse_alter_procedure()?;

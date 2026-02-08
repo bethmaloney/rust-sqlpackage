@@ -40,6 +40,7 @@ pub struct ParsedPartitionScheme {
 /// Examples:
 /// - ALTER DATABASE [$(DatabaseName)] ADD FILEGROUP [USERDATA];
 /// - ALTER DATABASE MyDB ADD FILEGROUP [WWI_MemoryOptimized_Data] CONTAINS MEMORY_OPTIMIZED_DATA;
+#[allow(dead_code)]
 pub fn parse_filegroup_tokens(sql: &str) -> Option<ParsedFilegroup> {
     let mut parser = TokenParser::new(sql)?;
 
@@ -72,6 +73,7 @@ pub fn parse_filegroup_tokens(sql: &str) -> Option<ParsedFilegroup> {
 /// Examples:
 /// - CREATE PARTITION FUNCTION [PF_TransactionDate](DATE) AS RANGE RIGHT FOR VALUES ('01/01/2014 00:00:00', '01/01/2015 00:00:00');
 /// - CREATE PARTITION FUNCTION PF_Int(INT) AS RANGE LEFT FOR VALUES (100, 200, 300);
+#[allow(dead_code)]
 pub fn parse_partition_function_tokens(sql: &str) -> Option<ParsedPartitionFunction> {
     let mut parser = TokenParser::new(sql)?;
 
@@ -127,6 +129,7 @@ pub fn parse_partition_function_tokens(sql: &str) -> Option<ParsedPartitionFunct
 /// - CREATE PARTITION SCHEME [PS_TransactionDate] AS PARTITION [PF_TransactionDate] TO ([USERDATA], [USERDATA], [USERDATA]);
 /// - CREATE PARTITION SCHEME PS_Int AS PARTITION PF_Int TO (FG1, FG2, FG3, FG4);
 /// - CREATE PARTITION SCHEME PS_All AS PARTITION PF_Range ALL TO ([PRIMARY]);
+#[allow(dead_code)]
 pub fn parse_partition_scheme_tokens(sql: &str) -> Option<ParsedPartitionScheme> {
     let mut parser = TokenParser::new(sql)?;
 
@@ -201,10 +204,8 @@ pub fn parse_partition_function_tokens_with_tokens(
 
     let is_range_right = if parser.try_skip_keyword("RIGHT") {
         true
-    } else if parser.try_skip_keyword("LEFT") {
-        false
     } else {
-        true
+        !parser.try_skip_keyword("LEFT")
     };
 
     parser.skip_keyword("FOR")?;

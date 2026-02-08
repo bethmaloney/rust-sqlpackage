@@ -51,6 +51,7 @@ pub struct TriggerTokenParser {
 
 impl TriggerTokenParser {
     /// Create a new parser for a trigger definition string
+    #[allow(dead_code)]
     pub fn new(sql: &str) -> Option<Self> {
         Some(Self {
             base: TokenParser::new(sql)?,
@@ -194,6 +195,7 @@ impl TriggerTokenParser {
 /// - CREATE TRIGGER [dbo].[TriggerName] ON [dbo].[TableName] FOR INSERT, UPDATE
 /// - CREATE TRIGGER [dbo].[TriggerName] ON [dbo].[ViewName] INSTEAD OF DELETE
 /// - CREATE OR ALTER TRIGGER [dbo].[TriggerName] ON [dbo].[TableName] AFTER INSERT, UPDATE, DELETE
+#[allow(dead_code)]
 pub fn parse_create_trigger_tokens(sql: &str) -> Option<TokenParsedTrigger> {
     let mut parser = TriggerTokenParser::new(sql)?;
     parser.parse_create_trigger()

@@ -40,6 +40,7 @@ pub struct SynonymTokenParser {
 
 impl SynonymTokenParser {
     /// Create a new parser for a synonym definition string
+    #[allow(dead_code)]
     pub fn new(sql: &str) -> Option<Self> {
         Some(Self {
             base: TokenParser::new(sql)?,
@@ -151,6 +152,7 @@ impl SynonymTokenParser {
 }
 
 /// Parse CREATE SYNONYM using tokens and return synonym info
+#[allow(dead_code)]
 pub fn parse_create_synonym_tokens(sql: &str) -> Option<TokenParsedSynonym> {
     let mut parser = SynonymTokenParser::new(sql)?;
     parser.parse_create_synonym()
